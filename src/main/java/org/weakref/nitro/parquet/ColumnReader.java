@@ -24,6 +24,7 @@ import org.apache.parquet.format.Type;
 import org.apache.parquet.format.Util;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -51,6 +52,18 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 public final class ColumnReader
         implements AutoCloseable
 {
+    private static final boolean OWNED_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.ownedDictionaryIds", "true"));
+    private static final boolean FAST_PAGE_HEADER =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.fastPageHeader", "true"));
+    private static final int FAST_PAGE_HEADER_MAX_CHUNKS =
+            Integer.getInteger("nitro.parquet.fastPageHeaderMaxChunks", 64);
+    private static final boolean REUSE_NUMERIC_DICTIONARY_SCRATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseNumericDictionaryScratch", "true"));
+    private static final boolean RECYCLE_BINARY_DICTIONARY_SCRATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.recycleBinaryDictionaryScratch", "true"));
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+
     public enum Kind
     {
         INT, LONG, BINARY
@@ -71,6 +84,12 @@ public final class ColumnReader
     // branchless loop for q20/q45, so keep it opt-in for future JDK/hardware experiments.
     private static final boolean VECTOR_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.vectorDictFilter", "false")) && VectorDictFilter.supported();
     private static final boolean DIRECT_SELECTED_BINARY = Boolean.parseBoolean(System.getProperty("nitro.parquet.directSelectedBinary", "true"));
+    private static final boolean DIRECT_FLAT_BINARY_OUTPUT = Boolean.parseBoolean(System.getProperty("nitro.parquet.directFlatBinaryOutput", "true"));
+    private static final boolean PRESIZE_PLAIN_BINARY_PAGE = Boolean.parseBoolean(System.getProperty("nitro.parquet.presizePlainBinaryPage", "true"));
+    // Selective decoding often produces tiny adjacent runs. Foreign-memory bulk copy bottoms out in libc memcpy;
+    // for those runs its setup costs more than JIT-inlined scalar loads. This is a reader-wide policy, with an A/B
+    // property, rather than a query or physical-column-shape specialization.
+    private static final int PLAIN_COPY_LOOP_MAX_VALUES = Integer.getInteger("nitro.parquet.plainCopyLoopMaxValues", 16);
     private static final int FILTER_TILE = 2048;
     private static final int[] EMPTY_INTS = new int[0];
     private static final long[] EMPTY_LONGS = new long[0];
@@ -88,8 +107,10 @@ public final class ColumnReader
     // 1/9 puts the boundary at ~0.111 with symmetric margin. Below the threshold a query keeps the branchy path, so a
     // misestimate near the boundary only trades ~equal costs.
     private static final int BRANCHLESS_COMPACTION_DENOMINATOR = 9;
+    private static final boolean STREAM_NULLABLE_DICTIONARY_FILTER =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.streamNullableDictionaryFilter", "true"));
 
-    private record Chunk(MemorySegment segment, ColumnMetaData metadata) {}
+    private record Chunk(MemorySegment segment, ColumnMetaData metadata, long rowCount) {}
 
     // Dictionary materialization is a pure gather (out[i] = dictionary[ids[i]]); a Vector-API gather (hardware
     // vpgather) measurably beats the scalar loop on the dict-heavy scans (q82 -3%, q24/q50 -1.6%, byte-identical).
@@ -104,7 +125,6 @@ public final class ColumnReader
     private final List<Chunk> chunks = new ArrayList<>();
     private int cachedDictionarySize = Integer.MIN_VALUE;
 
-    private final Decompressor snappy = SnappyDecompressor.create();
     private final RleReader rle = new RleReader();
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -123,14 +143,29 @@ public final class ColumnReader
     // times). A dense-but-contiguous page (one long run, e.g. a date-clustered range) stays on the cheap skip path.
     private static final int SKIP_PAGE_DENSE_PERCENT = Integer.getInteger("nitro.parquet.skipPageDensePercent", 50);
     private static final int SKIP_PAGE_MIN_AVG_RUN = Integer.getInteger("nitro.parquet.skipPageMinAvgRun", 100);
+    private static final boolean BINARY_SEARCH_PAGE_SURVIVORS =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.binarySearchPageSurvivors", "true"));
+    private static final int BINARY_SEARCH_PAGE_SURVIVOR_MAX_PERCENT =
+            Integer.getInteger("nitro.parquet.binarySearchPageSurvivorMaxPercent", 1);
+    private static final int BINARY_SEARCH_PAGE_MIN_SURVIVORS =
+            Integer.getInteger("nitro.parquet.binarySearchPageMinSurvivors", 64);
+    private static final boolean SKIP_WHOLE_CHUNKS = Boolean.parseBoolean(System.getProperty("nitro.parquet.skipWholeChunks", "true"));
     private boolean pageForceWholeDecode;
 
     // reusable buffers (grow to high-water mark). The decompression target is an off-heap segment from a
     // confined arena so the snappy FFM downcall is native->native (no heap marshalling); the SIMD unpacker
     // loads vectors straight from it via ByteVector.fromMemorySegment.
     private final java.lang.foreign.Arena scratchArena = java.lang.foreign.Arena.ofConfined();
+    private final Decompressor snappy = SnappyDecompressor.create();
     private MemorySegment decompressSegment = scratchArena.allocate(0);
     private long decompressCapacity;
+    private static final boolean DEBUG_DECOMPRESSION =
+            Boolean.getBoolean("nitro.debug.decompression") || Boolean.getBoolean("nitro.parquet.decompressionStats");
+    private long compressedPageCount;
+    private long compressedPageBytes;
+    private long uncompressedPageBytes;
+    private int minimumCompressedPageBytes = Integer.MAX_VALUE;
+    private int maximumCompressedPageBytes;
     private int[] idBuffer = EMPTY_INTS;
     // Fused per-page skip-decode of a dict LONG column: the whole survivor gather (def-null walk + value read) runs as
     // one pass with both RLE cursors in locals, no per-run idBuffer/runDef materialization. These capture the page's
@@ -159,12 +194,14 @@ public final class ColumnReader
     // The chunk dictionary materialized as a BinaryVector, cached by generation so a DictionaryVector can wrap a
     // stable instance across batches and a flat fallback can expand ids of an earlier generation after a chunk change.
     private final java.util.HashMap<Integer, org.weakref.nitro.data.BinaryVector> dictionaryVectorCache = new java.util.HashMap<>();
+    private final java.util.IdentityHashMap<org.weakref.nitro.data.BinaryVector, Boolean> escapedBinaryDictionaries = new java.util.IdentityHashMap<>();
 
     // current chunk dictionary
     private int[] dictionaryInts;
     private long[] dictionaryLongs;
     private byte[] dictionaryBytes;        // BINARY: concatenated dictionary entry bytes
     private int[] dictionaryByteOffsets;   // BINARY: entry i = dictionaryBytes[offsets[i], offsets[i+1])
+    private byte[] reusableDictionaryBytes = EMPTY_BYTES;
     private int dictionarySize;
 
     // current page, fully decoded into these (nulls scattered in place)
@@ -188,6 +225,11 @@ public final class ColumnReader
     // fall back to a full whole-page decode (pageFullyDecoded) and a gather.
     private boolean pageDict;
     private boolean pageFullyDecoded;
+    private boolean pageNumericDictionaryIdsDecoded;
+    private static final boolean BULK_SELECTED_NUMERIC_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.bulkSelectedNumericDictionaryIds", "true"));
+    private static final boolean BULK_SELECTED_NUMERIC_DICTIONARY_IDS_REQUIRE_PAGE_REUSE =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.bulkSelectedNumericDictionaryIdsRequirePageReuse", "true"));
     // pageIdIndex[p] = non-nulls before page position p. Built only on the predicate-over-dictionary lead-filter path
     // (decodeDataPageV1), which tests every position; the skip path streams definition levels instead (see defRle).
     private int[] pageIdIndex = EMPTY_INTS;
@@ -198,6 +240,9 @@ public final class ColumnReader
     private boolean filterScan;
     private boolean pageFilterDict;
     private boolean pageFilterNullable;
+    // Nullable counterpart to pageFilterFused: definition levels and dictionary ids remain as independent RLE
+    // streams and are consumed together in L1-sized tiles. This avoids constructing and rereading pageIdIndex.
+    private boolean pageFilterNullableFused;
     // Fused null-free dict-filter page: the ids were NOT unpacked to idBuffer; the RleReader is left positioned at the
     // id stream and the filter loop tile-reads it. Requires forward-only, in-lockstep consumption of pageCursor.
     private boolean pageFilterFused;
@@ -210,12 +255,21 @@ public final class ColumnReader
 
     // peeked-but-not-yet-decompressed data page (skip-decode page-skip): lets readSelected decide whether to
     // decompress a page or skip it entirely (no decompress) when no survivor falls in its row range.
-    private PageHeader pendingHeader;
     private long pendingBodyPosition;
     private int pendingCompressedSize;
     private int pendingUncompressedSize;
     private long pendingNextPosition;
     private int pendingNumValues;
+    private int pendingEncoding;
+
+    private final FastPageHeaderReader fastPageHeaderReader = new FastPageHeaderReader();
+    private int parsedPageType;
+    private int parsedUncompressedSize;
+    private int parsedCompressedSize;
+    private int parsedValueCount;
+    private int parsedEncoding;
+    private boolean pageHeaderModeDecided;
+    private boolean useFastPageHeader;
 
     public ColumnReader(Type physicalType, boolean optional, int typeLength, boolean decimal)
     {
@@ -239,10 +293,27 @@ public final class ColumnReader
         }
     }
 
-    public void addChunk(MemorySegment fileSegment, ColumnMetaData metadata)
+    public void addChunk(MemorySegment fileSegment, ColumnMetaData metadata, long rowCount)
     {
-        chunks.add(new Chunk(fileSegment, metadata));
+        if (rowCount < 0) {
+            throw new IllegalArgumentException("rowCount is negative");
+        }
+        chunks.add(new Chunk(fileSegment, metadata, rowCount));
         cachedDictionarySize = Integer.MIN_VALUE;
+    }
+
+    /**
+     * Creates an independent reader over the same immutable column chunks. The sibling has its own cursor and
+     * decode scratch, allowing a scan to consume definition levels without disturbing its value reader. No page,
+     * dictionary, or decompression state is shared.
+     */
+    public ColumnReader newSibling()
+    {
+        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal);
+        for (Chunk chunk : chunks) {
+            sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount());
+        }
+        return sibling;
     }
 
     public Kind kind()
@@ -259,7 +330,104 @@ public final class ColumnReader
     @Override
     public void close()
     {
+        arrayPool.release(filterTile);
+        filterTile = null;
+        arrayPool.release(runDef);
+        runDef = EMPTY_INTS;
+        arrayPool.release(idBuffer);
+        idBuffer = EMPTY_INTS;
+        arrayPool.release(nativeSurvivorScratch);
+        nativeSurvivorScratch = EMPTY_INTS;
+        arrayPool.release(filterAcceptInts);
+        filterAcceptInts = EMPTY_INTS;
+        arrayPool.release(nativeNullScratch);
+        nativeNullScratch = EMPTY_BYTES;
+        arrayPool.release(defBuffer);
+        defBuffer = EMPTY_INTS;
+        arrayPool.release(binaryOutOffsets);
+        binaryOutOffsets = EMPTY_INTS;
+        arrayPool.release(binaryOutData);
+        binaryOutData = EMPTY_BYTES;
+        arrayPool.release(binaryBatchIds);
+        binaryBatchIds = EMPTY_INTS;
+        arrayPool.release(pageDictIds);
+        pageDictIds = EMPTY_INTS;
+        arrayPool.release(dictionaryInts);
+        dictionaryInts = null;
+        arrayPool.release(dictionaryLongs);
+        dictionaryLongs = null;
+        arrayPool.release(pageInts);
+        pageInts = EMPTY_INTS;
+        arrayPool.release(pageLongs);
+        pageLongs = EMPTY_LONGS;
+        arrayPool.release(pageNulls);
+        pageNulls = EMPTY_BOOLEANS;
+        arrayPool.release(pageBytes);
+        pageBytes = EMPTY_BYTES;
+        arrayPool.release(pageByteOffsets);
+        pageByteOffsets = EMPTY_INTS;
+        arrayPool.release(pageIdIndex);
+        pageIdIndex = EMPTY_INTS;
+        arrayPool.release(acceptById);
+        acceptById = EMPTY_BOOLEANS;
+        if (RECYCLE_BINARY_DICTIONARY_SCRATCH) {
+            for (org.weakref.nitro.data.BinaryVector dictionary : dictionaryVectorCache.values()) {
+                if (!escapedBinaryDictionaries.containsKey(dictionary)) {
+                    arrayPool.release(dictionary.offsets());
+                    arrayPool.release(dictionary.data());
+                }
+            }
+            arrayPool.release(reusableDictionaryBytes);
+        }
+        dictionaryVectorCache.clear();
+        escapedBinaryDictionaries.clear();
+        dictionaryByteOffsets = null;
+        dictionaryBytes = null;
+        reusableDictionaryBytes = EMPTY_BYTES;
         scratchArena.close();
+    }
+
+    /**
+     * Ends the public batch that may have exposed an immutable binary dictionary. Generations older than the
+     * decoder's current dictionary can no longer be referenced by a future batch; after the consumer closes the
+     * current batch they are also no longer referenced downstream, so their primitive storage becomes reader-owned
+     * capacity-ceiling scratch for a later chunk.
+     */
+    public void finishBatch()
+    {
+        if (!RECYCLE_BINARY_DICTIONARY_SCRATCH || kind != Kind.BINARY || dictionaryVectorCache.size() <= 1) {
+            return;
+        }
+        java.util.Iterator<java.util.Map.Entry<Integer, org.weakref.nitro.data.BinaryVector>> iterator =
+                dictionaryVectorCache.entrySet().iterator();
+        while (iterator.hasNext()) {
+            java.util.Map.Entry<Integer, org.weakref.nitro.data.BinaryVector> entry = iterator.next();
+            if (entry.getKey() >= dictionaryGeneration) {
+                continue;
+            }
+            org.weakref.nitro.data.BinaryVector dictionary = entry.getValue();
+            if (!escapedBinaryDictionaries.containsKey(dictionary)) {
+                arrayPool.release(dictionary.offsets());
+                reusableDictionaryBytes = retainLarger(reusableDictionaryBytes, dictionary.data());
+            }
+            escapedBinaryDictionaries.remove(dictionary);
+            iterator.remove();
+        }
+    }
+
+    /** Marks reader-owned dictionary values that crossed the batch ownership boundary as non-recyclable. */
+    public void markDictionaryValuesEscaped(org.weakref.nitro.data.Vector vector)
+    {
+        if (!RECYCLE_BINARY_DICTIONARY_SCRATCH || kind != Kind.BINARY) {
+            return;
+        }
+        org.weakref.nitro.data.Vector current = vector;
+        while (current instanceof org.weakref.nitro.data.DictionaryVector dictionary) {
+            current = dictionary.values();
+            if (current instanceof org.weakref.nitro.data.BinaryVector binary && dictionaryVectorCache.containsValue(binary)) {
+                escapedBinaryDictionaries.put(binary, Boolean.TRUE);
+            }
+        }
     }
 
     public boolean optional()
@@ -304,6 +472,110 @@ public final class ColumnReader
     }
 
     /**
+     * Reads only SQL nullness from definition levels. This reader instance must be dedicated to the null stream: it
+     * advances past value pages without decoding dictionary ids or gathering values, so it cannot subsequently serve
+     * value reads at the same cursor. A scan uses a sibling reader when values and a direct null mask may both be
+     * requested.
+     */
+    public void readNulls(boolean[] out, int count)
+    {
+        if (!optional) {
+            Arrays.fill(out, 0, count, false);
+            skipNulls(count);
+            return;
+        }
+        int produced = 0;
+        while (produced < count) {
+            if (pageCursor >= pageValueCount && !decodeNextNullDataPage()) {
+                throw new IllegalStateException("Ran out of Parquet nulls: needed " + count + ", got " + produced);
+            }
+            int positions = Math.min(pageValueCount - pageCursor, count - produced);
+            System.arraycopy(pageNulls, pageCursor, out, produced, positions);
+            pageCursor += positions;
+            produced += positions;
+        }
+    }
+
+    /** Advances a dedicated null-only reader without decoding dictionary ids or values. */
+    public void skipNulls(long count)
+    {
+        if (pageCursor < pageValueCount) {
+            int positions = (int) Math.min(pageValueCount - pageCursor, count);
+            pageCursor += positions;
+            count -= positions;
+        }
+        if (SKIP_WHOLE_CHUNKS) {
+            count = skipWholeChunks(count);
+        }
+        while (count > 0) {
+            if (!peekNextDataPage()) {
+                throw new IllegalStateException("Ran out of Parquet nulls (skip): still needed " + count);
+            }
+            if (pendingNumValues <= count) {
+                pagePosition = pendingNextPosition;
+                count -= pendingNumValues;
+                continue;
+            }
+            CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
+            MemorySegment body = decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec);
+            decodeNullDataPageV1(body, pendingNumValues);
+            pagePosition = pendingNextPosition;
+            pageCursor = (int) count;
+            count = 0;
+        }
+    }
+
+    private boolean decodeNextNullDataPage()
+    {
+        while (true) {
+            if (segment == null || pagePosition >= chunkEnd) {
+                if (!advanceChunk()) {
+                    return false;
+                }
+            }
+            long bodyPosition = readPageHeader(segment, pagePosition, chunkEnd);
+            long nextPagePosition = bodyPosition + parsedCompressedSize;
+            if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
+                // Nullness is encoded only in each data page's definition levels; the dictionary body is irrelevant.
+                pagePosition = nextPagePosition;
+                continue;
+            }
+            if (parsedPageType != PageType.DATA_PAGE.getValue()) {
+                throw new IllegalStateException("Unsupported page type for null-only read: " + parsedPageType);
+            }
+            CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
+            MemorySegment body = decompress(segment, bodyPosition, parsedCompressedSize, parsedUncompressedSize, codec);
+            decodeNullDataPageV1(body, parsedValueCount);
+            pagePosition = nextPagePosition;
+            return true;
+        }
+    }
+
+    private void decodeNullDataPageV1(MemorySegment body, int valueCount)
+    {
+        pageValueCount = valueCount;
+        pageCursor = 0;
+        ensurePageNullCapacity(valueCount);
+        if (!optional) {
+            Arrays.fill(pageNulls, 0, valueCount, false);
+            return;
+        }
+
+        // V1 definition levels begin with their byte length and use the bit-width-one hybrid encoding.
+        rle.init(body, Integer.BYTES, 1);
+        if (rle.consumeIfAllOnes(valueCount)) {
+            Arrays.fill(pageNulls, 0, valueCount, false);
+            return;
+        }
+        rle.init(body, Integer.BYTES, 1);
+        ensureDefCapacity(valueCount);
+        rle.read(defBuffer, 0, valueCount);
+        for (int position = 0; position < valueCount; position++) {
+            pageNulls[position] = defBuffer[position] == 0;
+        }
+    }
+
+    /**
      * Fast-forward the full-decode reader by {@code n} rows, byte-skipping any whole data page that lies entirely
      * within the skip (no decompress, no decode) and decoding only the final partial page. Dictionary pages are still
      * decoded so a later value decode sees the current dictionary. Leaves the reader in the same full-decode state a
@@ -319,6 +591,9 @@ public final class ColumnReader
             pageCursor += take;
             n -= take;
         }
+        if (SKIP_WHOLE_CHUNKS) {
+            n = skipWholeChunks(n);
+        }
         // Byte-skip whole data pages; decode only the final partial page.
         while (n > 0) {
             if (!peekNextDataPage()) {
@@ -331,12 +606,42 @@ public final class ColumnReader
             else {
                 CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
                 MemorySegment body = decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec);
-                decodeDataPageV1(body, pendingHeader);
+                decodeDataPageV1(body, pendingNumValues, pendingEncoding);
                 pagePosition = pendingNextPosition;
                 pageCursor = (int) n;
                 n = 0;
             }
         }
+    }
+
+    /** Skip complete row-group chunks without parsing any page headers; partial chunks retain the page-safe path. */
+    private long skipWholeChunks(long rows)
+    {
+        while (rows > 0 && (segment == null || pagePosition >= chunkEnd)) {
+            int nextChunk = chunkIndex + 1;
+            if (nextChunk >= chunks.size()) {
+                break;
+            }
+            Chunk chunk = chunks.get(nextChunk);
+            if (chunk.rowCount() > rows) {
+                break;
+            }
+            chunkIndex = nextChunk;
+            segment = chunk.segment();
+            ColumnMetaData metadata = chunk.metadata();
+            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            chunkEnd = start + metadata.total_compressed_size;
+            pagePosition = chunkEnd;
+            pageValueCount = 0;
+            pageCursor = 0;
+            if (!REUSE_NUMERIC_DICTIONARY_SCRATCH) {
+                dictionaryInts = null;
+                dictionaryLongs = null;
+            }
+            dictionarySize = 0;
+            rows -= chunk.rowCount();
+        }
+        return rows;
     }
 
     /**
@@ -363,7 +668,69 @@ public final class ColumnReader
                     long[] dict = dictionaryLongs;
                     boolean[] accept = acceptByIdLong(predicate);
                     boolean branchlessCompaction = acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionarySize;
-                    if (pageFilterNullable) {
+                    if (pageFilterNullableFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int tileRows = Math.min(FILTER_TILE, pageRows - base);
+                            ensureRunDefCapacity(tileRows);
+                            int nonNullCount = defRle.readRunCountingOnes(runDef, tileRows);
+                            if (nonNullCount > 0) {
+                                rle.read(ids, 0, nonNullCount);
+                            }
+                            int idIndex = 0;
+                            int positionBase = windowPos + base;
+                            if (nonNullCount == tileRows) {
+                                if (branchlessCompaction) {
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = ids[i];
+                                        valuesOut[sc] = dict[id];
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                }
+                                else {
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = ids[i];
+                                        if (accept[id]) {
+                                            valuesOut[sc] = dict[id];
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc++;
+                                        }
+                                    }
+                                }
+                            }
+                            else if (nonNullCount == 0) {
+                                // No dictionary IDs correspond to this definition-level tile.
+                            }
+                            else if (branchlessCompaction) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    valuesOut[sc] = dict[id];
+                                    survivorsOut[sc] = positionBase + i;
+                                    sc += accept[id] ? 1 : 0;
+                                }
+                            }
+                            else {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    if (accept[id]) {
+                                        valuesOut[sc] = dict[id];
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc++;
+                                    }
+                                }
+                            }
+                            base += tileRows;
+                        }
+                    }
+                    else if (pageFilterNullable) {
                         for (int i = 0; i < pageRows; i++) {
                             int pp = pageCursor + i;
                             if (pageIdIndex[pp + 1] == pageIdIndex[pp]) {
@@ -504,7 +871,69 @@ public final class ColumnReader
                     int[] dict = dictionaryInts;
                     boolean[] accept = acceptByIdInt(predicate);
                     boolean branchlessCompaction = acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionarySize;
-                    if (pageFilterNullable) {
+                    if (pageFilterNullableFused) {
+                        int[] ids = filterTile();
+                        int base = 0;
+                        while (base < pageRows) {
+                            int tileRows = Math.min(FILTER_TILE, pageRows - base);
+                            ensureRunDefCapacity(tileRows);
+                            int nonNullCount = defRle.readRunCountingOnes(runDef, tileRows);
+                            if (nonNullCount > 0) {
+                                rle.read(ids, 0, nonNullCount);
+                            }
+                            int idIndex = 0;
+                            int positionBase = windowPos + base;
+                            if (nonNullCount == tileRows) {
+                                if (branchlessCompaction) {
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = ids[i];
+                                        valuesOut[sc] = dict[id];
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc += accept[id] ? 1 : 0;
+                                    }
+                                }
+                                else {
+                                    for (int i = 0; i < tileRows; i++) {
+                                        int id = ids[i];
+                                        if (accept[id]) {
+                                            valuesOut[sc] = dict[id];
+                                            survivorsOut[sc] = positionBase + i;
+                                            sc++;
+                                        }
+                                    }
+                                }
+                            }
+                            else if (nonNullCount == 0) {
+                                // No dictionary IDs correspond to this definition-level tile.
+                            }
+                            else if (branchlessCompaction) {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    valuesOut[sc] = dict[id];
+                                    survivorsOut[sc] = positionBase + i;
+                                    sc += accept[id] ? 1 : 0;
+                                }
+                            }
+                            else {
+                                for (int i = 0; i < tileRows; i++) {
+                                    if (runDef[i] == 0) {
+                                        continue;
+                                    }
+                                    int id = ids[idIndex++];
+                                    if (accept[id]) {
+                                        valuesOut[sc] = dict[id];
+                                        survivorsOut[sc] = positionBase + i;
+                                        sc++;
+                                    }
+                                }
+                            }
+                            base += tileRows;
+                        }
+                    }
+                    else if (pageFilterNullable) {
                         for (int i = 0; i < pageRows; i++) {
                             int pp = pageCursor + i;
                             if (pageIdIndex[pp + 1] == pageIdIndex[pp]) {
@@ -621,7 +1050,7 @@ public final class ColumnReader
     {
         if (acceptByIdChunk != chunkIndex) {
             if (acceptById.length < dictionarySize) {
-                acceptById = new boolean[dictionarySize];
+                acceptById = replaceBooleans(acceptById, dictionarySize);
             }
             long[] dict = dictionaryLongs;
             int accepted = 0;
@@ -641,7 +1070,7 @@ public final class ColumnReader
     {
         if (filterAcceptIntsChunk != chunkIndex) {
             if (filterAcceptInts.length < dictionarySize) {
-                filterAcceptInts = new int[dictionarySize];
+                filterAcceptInts = replaceInts(filterAcceptInts, dictionarySize);
             }
             for (int e = 0; e < dictionarySize; e++) {
                 filterAcceptInts[e] = accept[e] ? 1 : 0;
@@ -654,7 +1083,7 @@ public final class ColumnReader
     private int[] filterTile()
     {
         if (filterTile == null) {
-            filterTile = new int[FILTER_TILE];
+            filterTile = arrayPool.borrowInts(FILTER_TILE);
         }
         return filterTile;
     }
@@ -663,7 +1092,7 @@ public final class ColumnReader
     {
         if (acceptByIdChunk != chunkIndex) {
             if (acceptById.length < dictionarySize) {
-                acceptById = new boolean[dictionarySize];
+                acceptById = replaceBooleans(acceptById, dictionarySize);
             }
             int[] dict = dictionaryInts;
             int accepted = 0;
@@ -687,11 +1116,143 @@ public final class ColumnReader
      */
     public org.weakref.nitro.data.Vector readBinary(boolean[] nullsOut, int count)
     {
+        return readBinaryInternal(null, null, nullsOut, count);
+    }
+
+    /**
+     * Allocator-backed variant of {@link #readBinary(boolean[], int)}. Flat values are assembled directly in their
+     * pooled output vector; the compatibility path retains the reusable reader scratch used by callers without an
+     * allocator. Fully dictionary-encoded batches remain encoded and return the speculative flat vector to the pool.
+     */
+    public org.weakref.nitro.data.Vector readBinary(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
+    {
+        if (allocator == null || allocationContext == null) {
+            throw new IllegalArgumentException("allocator and allocationContext are required");
+        }
+        if (DIRECT_FLAT_BINARY_OUTPUT) {
+            return readBinaryDirect(allocator, allocationContext, nullsOut, count);
+        }
+        return readBinaryInternal(allocator, allocationContext, nullsOut, count);
+    }
+
+    /**
+     * Allocator-backed full binary read that assembles a flat batch directly in its owned output vector. Plain pages
+     * retain their page-level compaction and copy into the output one run at a time; this removes only the final
+     * batch-scratch-to-output copy. Dictionary-only batches release the speculative flat output and stay encoded.
+     */
+    private org.weakref.nitro.data.Vector readBinaryDirect(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
+    {
+        if (binaryBatchIds.length < count) {
+            binaryBatchIds = replaceInts(binaryBatchIds, count);
+        }
+        boolean dictionaryEligible = !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary");
+        int batchGeneration = -1;
+        int produced = 0;
+        int dataLength = 0;
+        boolean flat = false;
+        BinaryVector result = BinaryVector.allocate(allocator, allocationContext, count, initialSelectedBinaryCapacity(count));
+        result.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        int[] offsets = result.offsets();
+        byte[] data = result.data();
+        offsets[0] = 0;
+
+        while (produced < count) {
+            if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
+                throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
+            }
+            int n = Math.min(pageValueCount - pageCursor, count - produced);
+            boolean pageIsDictionary = pageBinaryDeferred;
+            if (!flat && dictionaryEligible && pageIsDictionary && (batchGeneration == -1 || dictionaryGeneration == batchGeneration)) {
+                batchGeneration = dictionaryGeneration;
+                System.arraycopy(pageDictIds, pageCursor, binaryBatchIds, produced, n);
+            }
+            else {
+                if (!flat) {
+                    flat = true;
+                    BinaryVector dictionary = dictionaryVectorCache.get(batchGeneration);
+                    int[] dictionaryOffsets = dictionary == null ? null : dictionary.offsets();
+                    byte[] dictionaryData = dictionary == null ? null : dictionary.data();
+                    for (int i = 0; i < produced; i++) {
+                        if (nullsOut == null || !nullsOut[i]) {
+                            int id = binaryBatchIds[i];
+                            int start = dictionaryOffsets[id];
+                            int length = dictionaryOffsets[id + 1] - start;
+                            if (data.length < dataLength + length) {
+                                result = BinaryVector.allocateOrGrow(allocator, allocationContext, result, count, dataLength + length, dataLength);
+                                offsets = result.offsets();
+                                data = result.data();
+                            }
+                            System.arraycopy(dictionaryData, start, data, dataLength, length);
+                            dataLength += length;
+                        }
+                        offsets[i + 1] = dataLength;
+                    }
+                }
+
+                if (pageIsDictionary) {
+                    for (int j = 0; j < n; j++) {
+                        int position = pageCursor + j;
+                        if (!(optional && pageNulls[position])) {
+                            int id = pageDictIds[position];
+                            int start = dictionaryByteOffsets[id];
+                            int length = dictionaryByteOffsets[id + 1] - start;
+                            if (data.length < dataLength + length) {
+                                result = BinaryVector.allocateOrGrow(allocator, allocationContext, result, count, dataLength + length, dataLength);
+                                offsets = result.offsets();
+                                data = result.data();
+                            }
+                            System.arraycopy(dictionaryBytes, start, data, dataLength, length);
+                            dataLength += length;
+                        }
+                        offsets[produced + j + 1] = dataLength;
+                    }
+                }
+                else {
+                    int runStart = pageByteOffsets[pageCursor];
+                    int runBytes = pageByteOffsets[pageCursor + n] - runStart;
+                    if (data.length < dataLength + runBytes) {
+                        result = BinaryVector.allocateOrGrow(allocator, allocationContext, result, count, dataLength + runBytes, dataLength);
+                        offsets = result.offsets();
+                        data = result.data();
+                    }
+                    System.arraycopy(pageBytes, runStart, data, dataLength, runBytes);
+                    int shift = dataLength - runStart;
+                    for (int j = 1; j <= n; j++) {
+                        offsets[produced + j] = pageByteOffsets[pageCursor + j] + shift;
+                    }
+                    dataLength += runBytes;
+                }
+            }
+            if (nullsOut != null) {
+                System.arraycopy(pageNulls, pageCursor, nullsOut, produced, n);
+            }
+            pageCursor += n;
+            produced += n;
+        }
+
+        if (!flat) {
+            allocator.release(allocationContext, result);
+            if (OWNED_DICTIONARY_IDS) {
+                org.weakref.nitro.data.I32Vector ids = allocator.allocate(
+                        allocationContext,
+                        org.weakref.nitro.data.I32Vector.class,
+                        count,
+                        org.weakref.nitro.data.I32Vector::new);
+                System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
+                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, dictionaryVectorCache.get(batchGeneration));
+            }
+            return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, dictionaryVectorCache.get(batchGeneration));
+        }
+        return result;
+    }
+
+    private org.weakref.nitro.data.Vector readBinaryInternal(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
+    {
         if (binaryOutOffsets.length < count + 1) {
-            binaryOutOffsets = new int[count + 1];
+            binaryOutOffsets = replaceInts(binaryOutOffsets, count + 1);
         }
         if (binaryBatchIds.length < count) {
-            binaryBatchIds = new int[count];
+            binaryBatchIds = replaceInts(binaryBatchIds, count);
         }
         boolean dictionaryEligible = !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary");
         int batchGeneration = -1;
@@ -726,9 +1287,26 @@ public final class ColumnReader
             produced += n;
         }
         if (!flat) {
+            if (OWNED_DICTIONARY_IDS && allocator != null) {
+                org.weakref.nitro.data.I32Vector ids = allocator.allocate(
+                        allocationContext,
+                        org.weakref.nitro.data.I32Vector.class,
+                        count,
+                        org.weakref.nitro.data.I32Vector::new);
+                System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
+                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, dictionaryVectorCache.get(batchGeneration));
+            }
             return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, dictionaryVectorCache.get(batchGeneration));
         }
-        org.weakref.nitro.data.BinaryVector result = new org.weakref.nitro.data.BinaryVector(count, Arrays.copyOf(binaryOutOffsets, count + 1), Arrays.copyOf(binaryOutData, dataLength));
+        org.weakref.nitro.data.BinaryVector result;
+        if (allocator == null) {
+            result = new org.weakref.nitro.data.BinaryVector(count, Arrays.copyOf(binaryOutOffsets, count + 1), Arrays.copyOf(binaryOutData, dataLength));
+        }
+        else {
+            result = org.weakref.nitro.data.BinaryVector.allocate(allocator, allocationContext, count, dataLength);
+            System.arraycopy(binaryOutOffsets, 0, result.offsets(), 0, count + 1);
+            System.arraycopy(binaryOutData, 0, result.data(), 0, dataLength);
+        }
         result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
         return result;
     }
@@ -754,7 +1332,7 @@ public final class ColumnReader
                 int start = dictionaryOffsets[id];
                 int length = dictionaryOffsets[id + 1] - start;
                 if (binaryOutData.length < dataLength + length) {
-                    binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                    binaryOutData = growBytes(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length), dataLength);
                 }
                 System.arraycopy(dictionaryData, start, binaryOutData, dataLength, length);
                 dataLength += length;
@@ -779,7 +1357,7 @@ public final class ColumnReader
                     int start = dictionaryByteOffsets[id];
                     int length = dictionaryByteOffsets[id + 1] - start;
                     if (binaryOutData.length < dataLength + length) {
-                        binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                        binaryOutData = growBytes(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length), dataLength);
                     }
                     System.arraycopy(dictionaryBytes, start, binaryOutData, dataLength, length);
                     dataLength += length;
@@ -791,7 +1369,7 @@ public final class ColumnReader
         int runStart = pageByteOffsets[pageCursor];
         int runBytes = pageByteOffsets[pageCursor + n] - runStart;
         if (binaryOutData.length < dataLength + runBytes) {
-            binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + runBytes));
+            binaryOutData = growBytes(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + runBytes), dataLength);
         }
         System.arraycopy(pageBytes, runStart, binaryOutData, dataLength, runBytes);
         int shift = dataLength - runStart;
@@ -817,6 +1395,21 @@ public final class ColumnReader
             }
             int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
             int pageEnd = batchCursor + pageRows;
+            if (pageNumericDictionaryIdsDecoded) {
+                while (sel < count && survivors[sel] < pageEnd) {
+                    int pagePosition = pageCursor + survivors[sel] - batchCursor;
+                    boolean isNull = optional && pageNulls[pagePosition];
+                    out[produced] = isNull ? 0 : dictionaryLongs[pageDictIds[pagePosition]];
+                    if (nullsOut != null) {
+                        nullsOut[produced] = isNull;
+                    }
+                    produced++;
+                    sel++;
+                }
+                pageCursor += pageRows;
+                batchCursor = pageEnd;
+                continue;
+            }
             if (skipBody != null) {
                 // Fused per-page skip-decode of a dict LONG page. Default: the fully-inlined pure-Java kernel (both RLE
                 // cursors in locals/registers, no per-value method call, no idBuffer/runDef materialization). The Rust
@@ -829,7 +1422,7 @@ public final class ColumnReader
                     if (NativeSkipDecode.ENABLED) {
                         int pageSurvivors = selEnd - sel;
                         if (nativeSurvivorScratch.length < pageSurvivors) {
-                            nativeSurvivorScratch = new int[pageSurvivors];
+                            nativeSurvivorScratch = replaceInts(nativeSurvivorScratch, pageSurvivors);
                         }
                         int base = pageCursor - batchCursor;
                         for (int k = 0; k < pageSurvivors; k++) {
@@ -838,7 +1431,7 @@ public final class ColumnReader
                         byte[] nullScratch = null;
                         if (nullsOut != null) {
                             if (nativeNullScratch.length < pageSurvivors) {
-                                nativeNullScratch = new byte[pageSurvivors];
+                                nativeNullScratch = replaceBytes(nativeNullScratch, pageSurvivors);
                             }
                             nullScratch = nativeNullScratch;
                         }
@@ -1005,7 +1598,7 @@ public final class ColumnReader
             }
         }
         else {
-            MemorySegment.copy(pagePlainBody, LE_LONG, pagePlainOffset + (long) valueIndex * 8, out, produced, n);
+            copyPlainLongs(valueIndex, out, produced, n);
         }
     }
 
@@ -1053,7 +1646,7 @@ public final class ColumnReader
             }
         }
         else {
-            MemorySegment.copy(pagePlainBody, LE_LONG, pagePlainOffset + (long) runStartPage * 8, out, produced, runLen);
+            copyPlainLongs(runStartPage, out, produced, runLen);
             if (nullsOut != null) {
                 Arrays.fill(nullsOut, produced, produced + runLen, false);
             }
@@ -1076,6 +1669,21 @@ public final class ColumnReader
             }
             int pageRows = Math.min(pageValueCount - pageCursor, batchRows - batchCursor);
             int pageEnd = batchCursor + pageRows;
+            if (pageNumericDictionaryIdsDecoded) {
+                while (sel < count && survivors[sel] < pageEnd) {
+                    int pagePosition = pageCursor + survivors[sel] - batchCursor;
+                    boolean isNull = optional && pageNulls[pagePosition];
+                    out[produced] = isNull ? 0 : dictionaryInts[pageDictIds[pagePosition]];
+                    if (nullsOut != null) {
+                        nullsOut[produced] = isNull;
+                    }
+                    produced++;
+                    sel++;
+                }
+                pageCursor += pageRows;
+                batchCursor = pageEnd;
+                continue;
+            }
             while (sel < count && survivors[sel] < pageEnd) {
                 int runStartPage = pageCursor + (survivors[sel] - batchCursor);
                 int runLen = 1;
@@ -1121,7 +1729,7 @@ public final class ColumnReader
                     ensureRunDefCapacity(runLen);
                     int nonNullInRun = defRle.readRunCountingOnes(runDef, runLen);
                     if (nonNullInRun == runLen) {
-                        MemorySegment.copy(pagePlainBody, LE_INT, pagePlainOffset + (long) plainValueCursor * 4, out, produced, runLen);
+                        copyPlainInts(plainValueCursor, out, produced, runLen);
                         plainValueCursor += runLen;
                         if (nullsOut != null) {
                             Arrays.fill(nullsOut, produced, produced + runLen, false);
@@ -1239,11 +1847,35 @@ public final class ColumnReader
             }
         }
         else {
-            MemorySegment.copy(pagePlainBody, LE_INT, pagePlainOffset + (long) runStartPage * 4, out, produced, runLen);
+            copyPlainInts(runStartPage, out, produced, runLen);
             if (nullsOut != null) {
                 Arrays.fill(nullsOut, produced, produced + runLen, false);
             }
         }
+    }
+
+    private void copyPlainInts(int valueIndex, int[] out, int produced, int count)
+    {
+        if (count <= PLAIN_COPY_LOOP_MAX_VALUES) {
+            long offset = pagePlainOffset + (long) valueIndex * Integer.BYTES;
+            for (int i = 0; i < count; i++) {
+                out[produced + i] = pagePlainBody.get(LE_INT, offset + (long) i * Integer.BYTES);
+            }
+            return;
+        }
+        MemorySegment.copy(pagePlainBody, LE_INT, pagePlainOffset + (long) valueIndex * Integer.BYTES, out, produced, count);
+    }
+
+    private void copyPlainLongs(int valueIndex, long[] out, int produced, int count)
+    {
+        if (count <= PLAIN_COPY_LOOP_MAX_VALUES) {
+            long offset = pagePlainOffset + (long) valueIndex * Long.BYTES;
+            for (int i = 0; i < count; i++) {
+                out[produced + i] = pagePlainBody.get(LE_LONG, offset + (long) i * Long.BYTES);
+            }
+            return;
+        }
+        MemorySegment.copy(pagePlainBody, LE_LONG, pagePlainOffset + (long) valueIndex * Long.BYTES, out, produced, count);
     }
 
     /**
@@ -1259,7 +1891,7 @@ public final class ColumnReader
     public org.weakref.nitro.data.Vector readSelectedBinary(int[] survivors, int count, int batchRows, boolean[] nullsOut)
     {
         if (binaryOutOffsets.length < batchRows + 1) {
-            binaryOutOffsets = new int[batchRows + 1];
+            binaryOutOffsets = replaceInts(binaryOutOffsets, batchRows + 1);
         }
         int sel = 0;
         int batchCursor = 0;
@@ -1292,7 +1924,7 @@ public final class ColumnReader
                             int start = dictionaryByteOffsets[id];
                             int length = dictionaryByteOffsets[id + 1] - start;
                             if (binaryOutData.length < dataLength + length) {
-                                binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                                binaryOutData = growBytes(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length), dataLength);
                             }
                             System.arraycopy(dictionaryBytes, start, binaryOutData, dataLength, length);
                             dataLength += length;
@@ -1301,7 +1933,7 @@ public final class ColumnReader
                             int start = pageByteOffsets[pagePos];
                             int length = pageByteOffsets[pagePos + 1] - start;
                             if (binaryOutData.length < dataLength + length) {
-                                binaryOutData = Arrays.copyOf(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length));
+                                binaryOutData = growBytes(binaryOutData, Math.max(binaryOutData.length * 2, dataLength + length), dataLength);
                             }
                             System.arraycopy(pageBytes, start, binaryOutData, dataLength, length);
                             dataLength += length;
@@ -1444,22 +2076,55 @@ public final class ColumnReader
         // Count survivors AND survivor runs in this page. Bulk-decode only a dense, fragmented page (many short runs):
         // there the per-run skip cost dominates. A dense contiguous page (few long runs, e.g. a clustered date range)
         // keeps the skip path. Decided per page (immune to date-clustered DFs where whole windows are in/out of range).
-        int survivorsInPage = 0;
-        int runCount = 0;
-        int prev = -2;
-        for (int s = sel; s < count && survivors[s] < pageEnd; s++) {
-            if (survivors[s] != prev + 1) {
-                runCount++;
-            }
-            prev = survivors[s];
-            survivorsInPage++;
+        int survivorEnd;
+        if (BINARY_SEARCH_PAGE_SURVIVORS &&
+                count >= BINARY_SEARCH_PAGE_MIN_SURVIVORS &&
+                (long) count * 100 <= (long) batchRows * BINARY_SEARCH_PAGE_SURVIVOR_MAX_PERCENT) {
+            survivorEnd = lowerBound(survivors, sel, count, pageEnd);
         }
-        pageForceWholeDecode = (long) survivorsInPage * 100 >= (long) rowsThisBatch * SKIP_PAGE_DENSE_PERCENT
-                && (long) survivorsInPage < (long) runCount * SKIP_PAGE_MIN_AVG_RUN;
+        else {
+            survivorEnd = sel;
+            while (survivorEnd < count && survivors[survivorEnd] < pageEnd) {
+                survivorEnd++;
+            }
+        }
+        int survivorsInPage = survivorEnd - sel;
+        pageForceWholeDecode = false;
+        if ((long) survivorsInPage * 100 >= (long) rowsThisBatch * SKIP_PAGE_DENSE_PERCENT) {
+            int runCount = 0;
+            int previous = -2;
+            for (int survivor = sel; survivor < survivorEnd; survivor++) {
+                if (survivors[survivor] != previous + 1) {
+                    runCount++;
+                }
+                previous = survivors[survivor];
+            }
+            pageForceWholeDecode = (long) survivorsInPage < (long) runCount * SKIP_PAGE_MIN_AVG_RUN;
+        }
         CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
-        loadDataPageForSkip(decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec), pendingHeader);
+        loadDataPageForSkip(
+                decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec),
+                pendingNumValues,
+                pendingEncoding,
+                batchRows);
         pagePosition = pendingNextPosition;
         return -1;
+    }
+
+    private static int lowerBound(int[] sorted, int from, int to, int value)
+    {
+        int low = from;
+        int high = to;
+        while (low < high) {
+            int middle = (low + high) >>> 1;
+            if (sorted[middle] < value) {
+                low = middle + 1;
+            }
+            else {
+                high = middle;
+            }
+        }
+        return low;
     }
 
     /** Read the next data page's header (decompressing/decoding any intervening dictionary page) without decompressing it. */
@@ -1471,45 +2136,37 @@ public final class ColumnReader
                     return false;
                 }
             }
-            PageHeader header;
-            long bodyPosition;
-            try (ParquetFile.SegmentInputStream in = new ParquetFile.SegmentInputStream(segment, pagePosition, chunkEnd - pagePosition)) {
-                header = Util.readPageHeader(in);
-                bodyPosition = in.position();
-            }
-            catch (IOException e) {
-                throw new UncheckedIOException("Unable to read Parquet page header", e);
-            }
-            int compressedSize = header.compressed_page_size;
-            int uncompressedSize = header.uncompressed_page_size;
+            long bodyPosition = readPageHeader(segment, pagePosition, chunkEnd);
+            int compressedSize = parsedCompressedSize;
+            int uncompressedSize = parsedUncompressedSize;
             long nextPagePosition = bodyPosition + compressedSize;
-            if (header.type == PageType.DICTIONARY_PAGE) {
+            if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
                 CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
-                decodeDictionary(decompress(segment, bodyPosition, compressedSize, uncompressedSize, codec), header.dictionary_page_header.num_values);
+                decodeDictionary(decompress(segment, bodyPosition, compressedSize, uncompressedSize, codec), parsedValueCount);
                 pagePosition = nextPagePosition;
                 continue;
             }
-            if (header.type == PageType.DATA_PAGE) {
-                pendingHeader = header;
+            if (parsedPageType == PageType.DATA_PAGE.getValue()) {
                 pendingBodyPosition = bodyPosition;
                 pendingCompressedSize = compressedSize;
                 pendingUncompressedSize = uncompressedSize;
                 pendingNextPosition = nextPagePosition;
-                pendingNumValues = header.data_page_header.num_values;
+                pendingNumValues = parsedValueCount;
+                pendingEncoding = parsedEncoding;
                 return true;
             }
-            throw new IllegalStateException("Unsupported page type for NitroParquet: " + header.type);
+            throw new IllegalStateException("Unsupported page type for NitroParquet: " + parsedPageType);
         }
     }
 
-    private void loadDataPageForSkip(MemorySegment body, PageHeader header)
+    private void loadDataPageForSkip(MemorySegment body, int valueCount, int encodingValue, int selectedBatchRows)
     {
-        int valueCount = header.data_page_header.num_values;
-        Encoding encoding = header.data_page_header.encoding;
+        Encoding encoding = Encoding.findByValue(encodingValue);
         pageValueCount = valueCount;
         pageCursor = 0;
         pageValueCursor = 0;
         pageBinaryDeferred = false;
+        pageNumericDictionaryIdsDecoded = false;
         long offset = 0;
         int nonNullCount = valueCount;
         pageDict = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
@@ -1533,6 +2190,9 @@ public final class ColumnReader
                 }
                 else {
                     // Whole-page decode (binary, or a dense page forced to bulk) needs the per-level array + non-null count.
+                    // consumeIfAllOnes() is a destructive speculative probe when it returns false. Reset the cursor
+                    // before the fallback decode, just as the ordinary full-decode path does below.
+                    rle.init(body, offset, 1);
                     ensureDefCapacity(valueCount);
                     rle.read(defBuffer, 0, valueCount);
                     nonNullCount = 0;
@@ -1619,6 +2279,58 @@ public final class ColumnReader
             }
             pageFullyDecoded = true;
         }
+        // Decode page-wide IDs only when this selected call consumes a strict slice of the page. The retained IDs can
+        // then amortize their one sequential decode across later calls over the same page. A filter window that spans
+        // the whole page has no future reuse; its run-aware streaming cursor does less work by touching survivors only.
+        if (BULK_SELECTED_NUMERIC_DICTIONARY_IDS &&
+                (!BULK_SELECTED_NUMERIC_DICTIONARY_IDS_REQUIRE_PAGE_REUSE || selectedBatchRows < valueCount) &&
+                pageDict && !pageFullyDecoded && kind != Kind.BINARY) {
+            materializeNumericDictionaryIds(streaming);
+        }
+    }
+
+    /**
+     * Decode a selected numeric dictionary page's compact id stream once, but defer the wide dictionary lookup to
+     * actual survivor rows. This keeps compressed-cursor work sequential across the page without materializing every
+     * long/int value. In particular, later output batches no longer restart a stateless skip decoder at the beginning
+     * of the same large Parquet page.
+     */
+    private void materializeNumericDictionaryIds(boolean streamingDefinitions)
+    {
+        if (pageDictIds.length < pageValueCount) {
+            pageDictIds = replaceInts(pageDictIds, pageValueCount);
+        }
+        ensurePageNullCapacity(pageValueCount);
+        if (!streamingDefinitions) {
+            rle.read(pageDictIds, 0, pageValueCount);
+            if (optional) {
+                Arrays.fill(pageNulls, 0, pageValueCount, false);
+            }
+        }
+        else {
+            ensureDefCapacity(pageValueCount);
+            defRle.read(defBuffer, 0, pageValueCount);
+            int nonNullCount = 0;
+            for (int position = 0; position < pageValueCount; position++) {
+                nonNullCount += defBuffer[position];
+            }
+            ensureIdCapacity(nonNullCount);
+            rle.read(idBuffer, 0, nonNullCount);
+            int idPosition = 0;
+            for (int position = 0; position < pageValueCount; position++) {
+                if (defBuffer[position] != 0) {
+                    pageDictIds[position] = idBuffer[idPosition++];
+                    pageNulls[position] = false;
+                }
+                else {
+                    pageDictIds[position] = 0;
+                    pageNulls[position] = true;
+                }
+            }
+        }
+        pageNumericDictionaryIdsDecoded = true;
+        pageDefStreaming = false;
+        skipBody = null;
     }
 
     private boolean advanceChunk()
@@ -1633,8 +2345,10 @@ public final class ColumnReader
         long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
         pagePosition = start;
         chunkEnd = start + metadata.total_compressed_size;
-        dictionaryInts = null;
-        dictionaryLongs = null;
+        if (!REUSE_NUMERIC_DICTIONARY_SCRATCH) {
+            dictionaryInts = null;
+            dictionaryLongs = null;
+        }
         dictionarySize = 0;
         return true;
     }
@@ -1659,14 +2373,9 @@ public final class ColumnReader
             ColumnMetaData metadata = chunk.metadata();
             long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
             long limit = start + metadata.total_compressed_size;
-            try (ParquetFile.SegmentInputStream in = new ParquetFile.SegmentInputStream(chunk.segment(), start, limit - start)) {
-                PageHeader header = Util.readPageHeader(in);
-                if (header.type == PageType.DICTIONARY_PAGE) {
-                    max = Math.max(max, header.dictionary_page_header.num_values);
-                }
-            }
-            catch (IOException e) {
-                throw new UncheckedIOException("Unable to read Parquet dictionary page header", e);
+            readPageHeader(chunk.segment(), start, limit);
+            if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
+                max = Math.max(max, parsedValueCount);
             }
         }
         cachedDictionarySize = max;
@@ -1681,33 +2390,65 @@ public final class ColumnReader
                     return false;
                 }
             }
-            PageHeader header;
-            long bodyPosition;
-            try (ParquetFile.SegmentInputStream in = new ParquetFile.SegmentInputStream(segment, pagePosition, chunkEnd - pagePosition)) {
-                header = Util.readPageHeader(in);
-                bodyPosition = in.position();
-            }
-            catch (IOException e) {
-                throw new UncheckedIOException("Unable to read Parquet page header", e);
-            }
-            int compressedSize = header.compressed_page_size;
-            int uncompressedSize = header.uncompressed_page_size;
+            long bodyPosition = readPageHeader(segment, pagePosition, chunkEnd);
+            int compressedSize = parsedCompressedSize;
+            int uncompressedSize = parsedUncompressedSize;
             CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
             long nextPagePosition = bodyPosition + compressedSize;
 
-            if (header.type == PageType.DICTIONARY_PAGE) {
+            if (parsedPageType == PageType.DICTIONARY_PAGE.getValue()) {
                 MemorySegment body = decompress(segment, bodyPosition, compressedSize, uncompressedSize, codec);
-                decodeDictionary(body, header.dictionary_page_header.num_values);
+                decodeDictionary(body, parsedValueCount);
                 pagePosition = nextPagePosition;
                 continue;
             }
-            if (header.type == PageType.DATA_PAGE) {
+            if (parsedPageType == PageType.DATA_PAGE.getValue()) {
                 MemorySegment body = decompress(segment, bodyPosition, compressedSize, uncompressedSize, codec);
-                decodeDataPageV1(body, header);
+                decodeDataPageV1(body, parsedValueCount, parsedEncoding);
                 pagePosition = nextPagePosition;
                 return true;
             }
-            throw new IllegalStateException("Unsupported page type for NitroParquet: " + header.type);
+            throw new IllegalStateException("Unsupported page type for NitroParquet: " + parsedPageType);
+        }
+    }
+
+    private long readPageHeader(MemorySegment input, long offset, long end)
+    {
+        if (!pageHeaderModeDecided) {
+            useFastPageHeader = FAST_PAGE_HEADER && chunks.size() <= FAST_PAGE_HEADER_MAX_CHUNKS;
+            pageHeaderModeDecided = true;
+        }
+        if (useFastPageHeader) {
+            long bodyPosition = fastPageHeaderReader.read(input, offset, end);
+            parsedPageType = fastPageHeaderReader.type();
+            parsedUncompressedSize = fastPageHeaderReader.uncompressedSize();
+            parsedCompressedSize = fastPageHeaderReader.compressedSize();
+            parsedValueCount = fastPageHeaderReader.valueCount();
+            parsedEncoding = fastPageHeaderReader.encoding();
+            return bodyPosition;
+        }
+
+        try (ParquetFile.SegmentInputStream in = new ParquetFile.SegmentInputStream(input, offset, end - offset)) {
+            PageHeader header = Util.readPageHeader(in);
+            parsedPageType = header.type.getValue();
+            parsedUncompressedSize = header.uncompressed_page_size;
+            parsedCompressedSize = header.compressed_page_size;
+            if (header.type == PageType.DATA_PAGE) {
+                parsedValueCount = header.data_page_header.num_values;
+                parsedEncoding = header.data_page_header.encoding.getValue();
+            }
+            else if (header.type == PageType.DICTIONARY_PAGE) {
+                parsedValueCount = header.dictionary_page_header.num_values;
+                parsedEncoding = header.dictionary_page_header.encoding.getValue();
+            }
+            else {
+                parsedValueCount = -1;
+                parsedEncoding = -1;
+            }
+            return in.position();
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException("Unable to read Parquet page header", e);
         }
     }
 
@@ -1729,13 +2470,35 @@ public final class ColumnReader
         if (codec != CompressionCodec.SNAPPY) {
             throw new IllegalStateException("Unsupported codec for NitroParquet: " + codec);
         }
+        if (DEBUG_DECOMPRESSION) {
+            compressedPageCount++;
+            compressedPageBytes += compressedSize;
+            uncompressedPageBytes += uncompressedSize;
+            minimumCompressedPageBytes = Math.min(minimumCompressedPageBytes, compressedSize);
+            maximumCompressedPageBytes = Math.max(maximumCompressedPageBytes, compressedSize);
+        }
         MemorySegment source = fileSegment.asSlice(offset, compressedSize);
         if (decompressCapacity < uncompressedSize + SLACK) {
             decompressSegment = scratchArena.allocate(uncompressedSize + SLACK);
             decompressCapacity = uncompressedSize + SLACK;
         }
-        snappy.decompress(source, decompressSegment.asSlice(0, uncompressedSize));
+        MemorySegment target = decompressSegment.asSlice(0, uncompressedSize);
+        snappy.decompress(source, target);
         return decompressSegment.asSlice(0, uncompressedSize + SLACK);
+    }
+
+    public String decompressionSummary()
+    {
+        if (compressedPageCount == 0) {
+            return "pages=0";
+        }
+        return "pages=" + compressedPageCount +
+                " compressed=" + compressedPageBytes +
+                " uncompressed=" + uncompressedPageBytes +
+                " compressed_min=" + minimumCompressedPageBytes +
+                " compressed_max=" + maximumCompressedPageBytes +
+                " compressed_avg=" + (compressedPageBytes / compressedPageCount) +
+                " uncompressed_avg=" + (uncompressedPageBytes / compressedPageCount);
     }
 
     // Bumped on every dictionary page; a binary batch can only be emitted as a DictionaryVector if every page it
@@ -1748,13 +2511,13 @@ public final class ColumnReader
         dictionaryGeneration++;
         if (kind == Kind.INT) {
             if (dictionaryInts == null || dictionaryInts.length < numValues) {
-                dictionaryInts = new int[numValues];
+                dictionaryInts = replaceInts(dictionaryInts, numValues);
             }
             MemorySegment.copy(body, LE_INT, 0, dictionaryInts, 0, numValues);
         }
         else if (kind == Kind.LONG) {
             if (dictionaryLongs == null || dictionaryLongs.length < numValues) {
-                dictionaryLongs = new long[numValues];
+                dictionaryLongs = replaceLongs(dictionaryLongs, numValues);
             }
             if (flbaDecimal) {
                 for (int i = 0; i < numValues; i++) {
@@ -1774,8 +2537,8 @@ public final class ColumnReader
                 cursor += 4 + length;
                 total += length;
             }
-            int[] offsets = new int[numValues + 1];
-            byte[] bytes = new byte[total];
+            int[] offsets = arrayPool.borrowInts(numValues + 1);
+            byte[] bytes = borrowDictionaryBytes(total);
             cursor = 0;
             int out = 0;
             for (int i = 0; i < numValues; i++) {
@@ -1801,8 +2564,30 @@ public final class ColumnReader
             // larger than a batch), so emission needs the current dictionary and a flat fallback needs at most the one
             // the batch started under. Without this the cache would retain every chunk's dictionary for the life of the
             // scan -- unbounded for a many-column scan over many row groups.
-            dictionaryVectorCache.keySet().removeIf(generation -> generation < dictionaryGeneration - 3);
+            if (!RECYCLE_BINARY_DICTIONARY_SCRATCH) {
+                dictionaryVectorCache.keySet().removeIf(generation -> generation < dictionaryGeneration - 3);
+            }
         }
+    }
+
+    private byte[] borrowDictionaryBytes(int required)
+    {
+        if (reusableDictionaryBytes.length >= required) {
+            byte[] result = reusableDictionaryBytes;
+            reusableDictionaryBytes = EMPTY_BYTES;
+            return result;
+        }
+        return arrayPool.borrowBytes(required);
+    }
+
+    private byte[] retainLarger(byte[] retained, byte[] candidate)
+    {
+        if (candidate.length > retained.length) {
+            arrayPool.release(retained);
+            return candidate;
+        }
+        arrayPool.release(candidate);
+        return retained;
     }
 
     /** Vectorized dictionary gather: {@code out[outOffset+i] = dict[ids[idOffset+i]]} for {@code i} in [0, n). */
@@ -1847,10 +2632,9 @@ public final class ColumnReader
         return value << shift >> shift; // sign-extend from length*8 bits
     }
 
-    private void decodeDataPageV1(MemorySegment body, PageHeader header)
+    private void decodeDataPageV1(MemorySegment body, int valueCount, int encodingValue)
     {
-        int valueCount = header.data_page_header.num_values;
-        Encoding encoding = header.data_page_header.encoding;
+        Encoding encoding = Encoding.findByValue(encodingValue);
         pageValueCount = valueCount;
         pageCursor = 0;
         pageBinaryDeferred = false;
@@ -1861,6 +2645,7 @@ public final class ColumnReader
         // A predicate-over-dictionary lead-filter scan over a nullable dict page needs the page-position -> id-index
         // prefix (pageIdIndex), not the per-level array; decode the levels straight into that prefix in one pass.
         boolean filterDictPrefixBuilt = false;
+        boolean streamNullableFilter = false;
         if (optional) {
             // V1 definition levels: 4-byte LE length prefix, then RLE(bitWidth=1) of `valueCount` levels.
             int defLength = body.get(LE_INT, 0);
@@ -1870,9 +2655,13 @@ public final class ColumnReader
             // per-level materialization + sum. Only pages that actually contain nulls pay the full decode.
             if (!rle.consumeIfAllOnes(valueCount)) {
                 rle.init(body, offset, 1);
-                if (filterScan && dictionary && kind != Kind.BINARY) {
+                if (STREAM_NULLABLE_DICTIONARY_FILTER && filterScan && dictionary && kind != Kind.BINARY) {
+                    defRle.init(body, offset, 1);
+                    streamNullableFilter = true;
+                }
+                else if (filterScan && dictionary && kind != Kind.BINARY) {
                     if (pageIdIndex.length < valueCount + 1) {
-                        pageIdIndex = new int[valueCount + 1];
+                        pageIdIndex = replaceInts(pageIdIndex, valueCount + 1);
                     }
                     nonNullCount = rle.readNonNullPrefix(pageIdIndex, valueCount);
                     filterDictPrefixBuilt = true;
@@ -1890,13 +2679,21 @@ public final class ColumnReader
         }
 
         pageFilterDict = false;
+        pageFilterNullable = false;
         pageFilterFused = false;
+        pageFilterNullableFused = false;
         if (dictionary) {
             int bitWidth = body.get(ValueLayout.JAVA_BYTE, offset) & 0xFF;
             offset += 1;
             rle.init(body, offset, bitWidth);
             boolean filterDict = filterScan && kind != Kind.BINARY;
             boolean nullFreePage = !optional || nonNullCount == valueCount;
+            if (filterDict && streamNullableFilter) {
+                pageFilterDict = true;
+                pageFilterNullable = false;
+                pageFilterNullableFused = true;
+                return;
+            }
             if (filterDict && FUSED_DICT_FILTER && nullFreePage) {
                 // Fused path: leave the ids unpacked. The RleReader stays positioned at the id stream; the filter loop
                 // unpacks and consumes them one L1 tile at a time. No page-sized idBuffer round-trip to memory.
@@ -1914,7 +2711,7 @@ public final class ColumnReader
                 pageFilterNullable = optional && nonNullCount < valueCount;
                 if (pageFilterNullable && !filterDictPrefixBuilt) {
                     if (pageIdIndex.length < valueCount + 1) {
-                        pageIdIndex = new int[valueCount + 1];
+                        pageIdIndex = replaceInts(pageIdIndex, valueCount + 1);
                     }
                     int running = 0;
                     for (int i = 0; i < valueCount; i++) {
@@ -2084,7 +2881,7 @@ public final class ColumnReader
     private void scatterDictionaryBinaryIds(int nonNullCount)
     {
         if (pageDictIds.length < pageValueCount) {
-            pageDictIds = new int[pageValueCount];
+            pageDictIds = replaceInts(pageDictIds, pageValueCount);
         }
         ensurePageNullCapacity(pageValueCount);
         if (!optional || nonNullCount == pageValueCount) {
@@ -2150,6 +2947,10 @@ public final class ColumnReader
 
     private void decodePlainBinary(MemorySegment body, long offset, int nonNullCount)
     {
+        if (PRESIZE_PLAIN_BINARY_PAGE) {
+            decodePlainBinaryPresized(body, offset, nonNullCount);
+            return;
+        }
         pageBytesUsed = 0;
         long cursor = offset;
         if (!optional || nonNullCount == pageValueCount) {
@@ -2177,6 +2978,46 @@ public final class ColumnReader
         }
     }
 
+    private void decodePlainBinaryPresized(MemorySegment body, long offset, int nonNullCount)
+    {
+        pageBytesUsed = 0;
+        long cursor = offset;
+        long remaining = body.byteSize() - offset;
+        ensurePageBytes((int) Math.min(Integer.MAX_VALUE, remaining));
+        if (!optional || nonNullCount == pageValueCount) {
+            for (int i = 0; i < nonNullCount; i++) {
+                pageByteOffsets[i] = pageBytesUsed;
+                cursor = appendPlainEntryPresized(body, cursor);
+            }
+            pageByteOffsets[nonNullCount] = pageBytesUsed;
+            if (optional) {
+                Arrays.fill(pageNulls, 0, pageValueCount, false);
+            }
+        }
+        else {
+            for (int i = 0; i < pageValueCount; i++) {
+                pageByteOffsets[i] = pageBytesUsed;
+                if (defBuffer[i] != 0) {
+                    cursor = appendPlainEntryPresized(body, cursor);
+                    pageNulls[i] = false;
+                }
+                else {
+                    pageNulls[i] = true;
+                }
+            }
+            pageByteOffsets[pageValueCount] = pageBytesUsed;
+        }
+    }
+
+    private long appendPlainEntryPresized(MemorySegment body, long cursor)
+    {
+        int length = body.get(LE_INT, cursor);
+        cursor += Integer.BYTES;
+        MemorySegment.copy(body, ValueLayout.JAVA_BYTE, cursor, pageBytes, pageBytesUsed, length);
+        pageBytesUsed += length;
+        return cursor + length;
+    }
+
     private long appendPlainEntry(MemorySegment body, long cursor)
     {
         int length = body.get(LE_INT, cursor);
@@ -2190,7 +3031,7 @@ public final class ColumnReader
     private void ensurePageBytes(int needed)
     {
         if (pageBytes.length < needed) {
-            pageBytes = Arrays.copyOf(pageBytes, Math.max(pageBytes.length * 2, needed));
+            pageBytes = growBytes(pageBytes, Math.max(pageBytes.length * 2, needed), pageBytesUsed);
         }
     }
 
@@ -2204,44 +3045,80 @@ public final class ColumnReader
     {
         if (kind == Kind.INT) {
             if (pageInts.length < valueCount) {
-                pageInts = new int[valueCount];
+                pageInts = replaceInts(pageInts, valueCount);
             }
         }
         else if (kind == Kind.LONG) {
             if (pageLongs.length < valueCount) {
-                pageLongs = new long[valueCount];
+                pageLongs = replaceLongs(pageLongs, valueCount);
             }
         }
         else if (pageByteOffsets.length < valueCount + 1) {
-            pageByteOffsets = new int[valueCount + 1];
+            pageByteOffsets = replaceInts(pageByteOffsets, valueCount + 1);
         }
     }
 
     private void ensurePageNullCapacity(int valueCount)
     {
         if (optional && pageNulls.length < valueCount) {
-            pageNulls = new boolean[valueCount];
+            pageNulls = replaceBooleans(pageNulls, valueCount);
         }
     }
 
     private void ensureIdCapacity(int valueCount)
     {
         if (idBuffer.length < valueCount) {
-            idBuffer = new int[valueCount];
+            idBuffer = replaceInts(idBuffer, valueCount);
         }
     }
 
     private void ensureDefCapacity(int valueCount)
     {
         if (defBuffer.length < valueCount) {
-            defBuffer = new int[valueCount];
+            defBuffer = replaceInts(defBuffer, valueCount);
         }
     }
 
     private void ensureRunDefCapacity(int valueCount)
     {
         if (runDef.length < valueCount) {
-            runDef = new int[valueCount];
+            runDef = replaceInts(runDef, valueCount);
         }
+    }
+
+    private int[] replaceInts(int[] previous, int size)
+    {
+        int[] replacement = arrayPool.borrowInts(size);
+        arrayPool.release(previous);
+        return replacement;
+    }
+
+    private long[] replaceLongs(long[] previous, int size)
+    {
+        long[] replacement = arrayPool.borrowLongs(size);
+        arrayPool.release(previous);
+        return replacement;
+    }
+
+    private byte[] replaceBytes(byte[] previous, int size)
+    {
+        byte[] replacement = arrayPool.borrowBytes(size);
+        arrayPool.release(previous);
+        return replacement;
+    }
+
+    private boolean[] replaceBooleans(boolean[] previous, int size)
+    {
+        boolean[] replacement = arrayPool.borrowBooleans(size);
+        arrayPool.release(previous);
+        return replacement;
+    }
+
+    private byte[] growBytes(byte[] previous, int size, int used)
+    {
+        byte[] replacement = arrayPool.borrowBytes(size);
+        System.arraycopy(previous, 0, replacement, 0, used);
+        arrayPool.release(previous);
+        return replacement;
     }
 }

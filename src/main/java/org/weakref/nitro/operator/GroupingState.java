@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -30,16 +31,87 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
+import static java.lang.Math.toIntExact;
+
 final class GroupingState
 {
+    private static final VectorAccess.BooleanValues NEVER_NULL = _ -> false;
+    private static final boolean DEBUG_GROUPING_SHAPES = Boolean.getBoolean("nitro.debug.groupingShapes");
     private static final boolean SHARED_DICTIONARY_COMPOSITE_GROUPING =
             Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryComposite", "true"));
+    // The shared-dictionary shortcut stores owned object keys for materialization. That is excellent for narrow
+    // composites (for example Q45's city/zip pair), but copying and retaining many high-cardinality binary fields
+    // per group overwhelms the saved row hashes. Route wide composites to FlatGroupingTable, whose packed records
+    // and value-id equality are designed for that shape.
+    private static final int SHARED_DICTIONARY_MAX_FIELDS =
+            Integer.getInteger("nitro.group.sharedDictionaryMaxFields", 4);
+    private static final int SHARED_DICTIONARY_SAMPLE_SIZE =
+            Integer.getInteger("nitro.group.sharedDictionarySampleSize", 128);
+    private static final int SHARED_DICTIONARY_MAX_DISTINCT_PERCENT =
+            Integer.getInteger("nitro.group.sharedDictionaryMaxDistinctPercent", 75);
+    private static final boolean PACKED_INT_PAIR_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntPair", "true"));
+    private static final boolean PACKED_INT_TRIPLE_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTriple", "true"));
+    private static final boolean PACKED_INT_TRIPLE_COMBINED_CONTROL =
+            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTripleCombinedControl", "true"));
+    private static final boolean PACKED_INT_TRIPLE_PACKED_TAIL =
+            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTriplePackedTail", "true"));
+    private static final boolean ADAPTIVE_COMPACT_LONG_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveCompactLong", "false"));
+    // Admit the generated compact table by structural arity. Two-key workloads have passed the broad admission
+    // screen (including high-cardinality q65 and q23), while the three-key cohort remains mixed. The same generated
+    // mechanism supports every arity; this flag controls default admission, not a separate pair implementation.
+    private static final boolean GENERATED_COMPACT_LONG_PAIR_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.generatedCompactLongPair", "true"));
+    // Arity two already uses this generator. Arity three retains its more compact packed-tail layout until the
+    // generated equivalent wins its mixed cohort. At arity four and above, signed-32 packed lanes strictly reduce
+    // the full-width generated table; an out-of-domain value still promotes all prior groups exactly.
+    private static final int GENERATED_COMPACT_LONG_MIN_ARITY =
+            Integer.getInteger("nitro.group.generatedCompactLongMinArity", 4);
+    private static final int PACKED_GROUP_ID_MASK = 0x00FF_FFFF;
+    private static final int PACKED_INT_TRIPLE_MIN_THIRD = -(1 << 28);
+    private static final int PACKED_INT_TRIPLE_MAX_THIRD = (1 << 28) - 1;
+    private static final boolean EARLY_REJECT_MIXED_COMPOSITE =
+            Boolean.parseBoolean(System.getProperty("nitro.group.earlyRejectMixedComposite", "true"));
+    private static final boolean FLAT_SINGLE_KEY_RECORD_IDENTITY =
+            Boolean.parseBoolean(System.getProperty("nitro.group.flatSingleKeyRecordIdentity", "true"));
+    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_BATCH_ROWS =
+            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentityMinBatchRows", 1 << 12);
+    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE =
+            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentitySampleSize", 256);
+    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT =
+            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentityMinDistinctPercent", 90);
+    private static final boolean LONG_GROUP_RUN_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.group.longRunCache", "true"));
+    private static final boolean ADAPTIVE_FLAT_GROUP_LOOKAHEAD =
+            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveFlatLookahead", "true"));
+    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_START_BATCH =
+            Integer.getInteger("nitro.group.adaptiveFlatLookaheadStartBatch", 4);
+    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_BATCHES =
+            Integer.getInteger("nitro.group.adaptiveFlatLookaheadBatches", 64);
+    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_ROWS =
+            Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinRows", 1 << 13);
+    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_NEW_PERCENT =
+            Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinNewPercent", 20);
 
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused
     // find-or-insert per row. A slot is empty iff its id is -1; ids are dense, assigned in first-seen
     // scan order (the hash only chooses the slot, never the id). longKeysByGroup is the reverse map.
     private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
+    private static final int LONG_DIRECT_MIN_GROUPS =
+            Integer.getInteger("nitro.group.longDirectMinGroups", 1 << 13);
+    private static final int LONG_DIRECT_MAX_RANGE =
+            Integer.getInteger("nitro.group.longDirectMaxRange", 1 << 17);
+    private static final int LONG_DIRECT_LATEST_ADMISSION_GROUPS =
+            Integer.getInteger("nitro.group.longDirectLatestAdmissionGroups", 1 << 14);
+    private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR =
+            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupNumerator", 23);
+    private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR =
+            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupDenominator", 2);
+    private static final boolean DEBUG_LONG_DIRECT_GROUPING = Boolean.getBoolean("nitro.debug.longDirectGrouping");
     // Package-private so the fused grouped-aggregation kernel (operator package) can inline the probe over
     // this table directly instead of paying a per-row method call.
     long[] longGroupKeys;
@@ -65,13 +137,28 @@ final class GroupingState
     long nextGroupId;
     private long nullGroup = -1;
     private boolean useLongGrouping;
+    private boolean longRunCacheValid;
+    private long longRunCacheKey;
+    private int longRunCacheGroupId;
+    private boolean useLongDirectGrouping;
+    private boolean longDirectGroupingDisabled;
+    private int longDirectNextCheck = LONG_DIRECT_MIN_GROUPS;
+    private boolean usePackedIntPairGrouping;
+    private int packedIntGroupingArity;
+    private byte[] packedIntPairControl;
+    private int[] packedIntTripleThirdByGroup = new int[0];
+    private byte[] packedIntTripleNullMasksByGroup = new byte[0];
+    private int[] packedIntTripleTailByGroup = new int[0];
     private boolean useMultiLongGrouping;
     private int multiLongArity;
     private int[] densePositionsCache = new int[0];
     private boolean useFlatGrouping;
+    private boolean flatSingleIdentityAdmissionDecided;
+    private boolean flatSingleNullInTable;
+    private int flatGroupingBatchCount;
     private boolean useSharedDictionaryGrouping;
     private boolean initialized;
-    private AbstractMultiLongGroupingTable multiLongTable;
+    private LongGroupingTable multiLongTable;
 
     GroupingState()
     {
@@ -95,12 +182,88 @@ final class GroupingState
         return useLongGrouping;
     }
 
+    boolean prepareSingleLongDirectGrouping(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
+    {
+        if (longDirectGroupingDisabled) {
+            return false;
+        }
+        if (!useLongDirectGrouping && nextGroupId < longDirectNextCheck) {
+            return false;
+        }
+        if (!useLongDirectGrouping && nextGroupId > LONG_DIRECT_LATEST_ADMISSION_GROUPS) {
+            longDirectGroupingDisabled = true;
+            return false;
+        }
+
+        long batchMax = -1;
+        for (int position : mask) {
+            int keyPosition = keyIds == null ? position : keyIds[position];
+            long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
+            if (key < 0 || key >= LONG_DIRECT_MAX_RANGE) {
+                disableLongDirectGrouping();
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+            batchMax = Math.max(batchMax, key);
+        }
+
+        if (useLongDirectGrouping) {
+            if (batchMax < longGroupIds.length) {
+                return true;
+            }
+            long possibleGroups = Math.max(1, nextGroupId + mask.count());
+            if ((batchMax + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
+                    > possibleGroups * LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR) {
+                disableLongDirectGrouping();
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+            rebuildLongDirectTable(toPowerOfTwoCapacity(toIntExact(batchMax + 1)), batchMax);
+            return true;
+        }
+
+        longDirectNextCheck = toIntExact(Math.min((long) LONG_DIRECT_MAX_RANGE, Math.max(nextGroupId + 1, nextGroupId * 2)));
+
+        long max = batchMax;
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group == nullGroup) {
+                continue;
+            }
+            long key = longKeysByGroup[group];
+            if (key < 0 || key >= LONG_DIRECT_MAX_RANGE) {
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+            max = Math.max(max, key);
+        }
+        if (max < 0 || (max + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
+                > Math.max(1, nextGroupId) * LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR) {
+            return false;
+        }
+        rebuildLongDirectTable(toPowerOfTwoCapacity(toIntExact(max + 1)), max);
+        return true;
+    }
+
+    boolean usesLongDirectGrouping()
+    {
+        return useLongDirectGrouping;
+    }
+
+    boolean usesFlatSingleRecordIdentity()
+    {
+        return flatSingleNullInTable;
+    }
+
     /**
      * Pre-grows the single-long table so it can absorb {@code additional} more keys without rehashing, so
      * the fused kernel's inlined probe needs no mid-loop rehash branch. Requires {@link #usesSingleLongGrouping}.
      */
     void reserveSingleLongTable(int additional)
     {
+        if (useLongDirectGrouping) {
+            ensureLongGroupingCapacity(nextGroupId + additional);
+            return;
+        }
         while (longGroupCount + additional >= longGroupMaxFill) {
             rehashLongGroupTable();
         }
@@ -165,12 +328,23 @@ final class GroupingState
             assignLongGroups(values[0], nulls[0], mask, result);
             return;
         }
+        if (usePackedIntPairGrouping) {
+            if (packedIntGroupingArity == 2) {
+                assignPackedIntPairGroups(values, nulls, mask, result);
+            }
+            else {
+                assignPackedIntTripleGroups(values, nulls, mask, result);
+            }
+            return;
+        }
         if (useMultiLongGrouping) {
             assignMultiLongGroups(values, nulls, mask, result);
             return;
         }
         if (useFlatGrouping) {
+            long previousGroupCount = nextGroupId;
             assignFlatGroups(values, nulls, mask, result);
+            reserveFlatGroupingLookahead(mask.count(), nextGroupId - previousGroupCount);
             return;
         }
         if (useSharedDictionaryGrouping && assignSharedDictionaryGroups(values, nulls, mask, result)) {
@@ -187,6 +361,33 @@ final class GroupingState
                 probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
             }
             result.values()[position] = groupForKeys(probeKeys);
+        }
+    }
+
+    private void reserveFlatGroupingLookahead(int selectedRows, long newGroups)
+    {
+        if (!ADAPTIVE_FLAT_GROUP_LOOKAHEAD) {
+            return;
+        }
+        flatGroupingBatchCount++;
+        if (flatGroupingBatchCount < ADAPTIVE_FLAT_GROUP_LOOKAHEAD_START_BATCH ||
+                selectedRows < ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_ROWS ||
+                newGroups * 100 < (long) selectedRows * ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_NEW_PERCENT) {
+            return;
+        }
+        // A sustained high-cardinality stream will otherwise discover the same table sizes through repeated
+        // rehashes. Reserve a bounded number of observed batches ahead; short and low-cardinality inputs never
+        // qualify, while an unexpectedly changing distribution remains exact because this is capacity only.
+        long expectedGroups = nextGroupId + newGroups * ADAPTIVE_FLAT_GROUP_LOOKAHEAD_BATCHES;
+        flatGroupingTable.ensureCapacity(expectedGroups);
+        if (DEBUG_GROUPING_SHAPES) {
+            System.err.printf(
+                    "[flat-group-lookahead] batch=%d rows=%d new-groups=%d current=%d expected=%d%n",
+                    flatGroupingBatchCount,
+                    selectedRows,
+                    newGroups,
+                    nextGroupId,
+                    expectedGroups);
         }
     }
 
@@ -276,7 +477,14 @@ final class GroupingState
             return;
         }
         int newSize = Math.max(size, Math.max(16, sharedDictionaryEntriesById.length * 2));
-        sharedDictionaryEntriesById = Arrays.copyOf(sharedDictionaryEntriesById, newSize);
+        long[] previous = sharedDictionaryEntriesById;
+        sharedDictionaryEntriesById = arrayPool.borrowLongs(newSize);
+        System.arraycopy(previous, 0, sharedDictionaryEntriesById, 0, previous.length);
+        // A pooled array retains packed (generation, group-id) entries from its previous owner.
+        // Generations restart for each GroupingState, so stale entries can otherwise look current
+        // and return group ids that this state has never assigned.
+        Arrays.fill(sharedDictionaryEntriesById, previous.length, newSize, 0);
+        arrayPool.release(previous);
     }
 
     private int currentSharedDictionaryGeneration(Vector[] dictionaryValues)
@@ -344,6 +552,19 @@ final class GroupingState
         }
         initialized = true;
 
+        if (DEBUG_GROUPING_SHAPES) {
+            StringBuilder shape = new StringBuilder("[grouping-shape]");
+            for (Vector value : values) {
+                shape.append(' ').append(value.getClass().getSimpleName()).append('(').append(value.length());
+                if (value instanceof DictionaryVector dictionary) {
+                    shape.append("->").append(dictionary.values().getClass().getSimpleName())
+                            .append('(').append(dictionary.values().length()).append(')');
+                }
+                shape.append(')');
+            }
+            System.err.println(shape);
+        }
+
         keyHandlers = new FlatTypeHandler[values.length];
         binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
         for (int index = 0; index < values.length; index++) {
@@ -358,11 +579,32 @@ final class GroupingState
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
         if (values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
+            if (ADAPTIVE_COMPACT_LONG_GROUPING ||
+                    (GENERATED_COMPACT_LONG_PAIR_GROUPING && values.length == 2) ||
+                    values.length >= GENERATED_COMPACT_LONG_MIN_ARITY) {
+                useMultiLongGrouping = true;
+                multiLongArity = values.length;
+                multiLongTable = AdaptiveLongGroupingTable.create(values.length, Math.max(16, values[0].length()));
+                return;
+            }
+            if (values.length == 2 && PACKED_INT_PAIR_GROUPING) {
+                usePackedIntPairGrouping = true;
+                packedIntGroupingArity = 2;
+                initPackedIntPairTable(Math.max(16, values[0].length()));
+                return;
+            }
+            if (values.length == 3 && PACKED_INT_TRIPLE_GROUPING) {
+                usePackedIntPairGrouping = true;
+                packedIntGroupingArity = 3;
+                initPackedIntPairTable(Math.max(16, values[0].length()));
+                return;
+            }
             if (values.length == 2 && Boolean.getBoolean("nitro.experiment.useFlatBigintPairStrategy")) {
                 useFlatGrouping = true;
                 flatGroupingTable = new FlatGroupingTable(
                         BigintPairFlatKeyLayout.create(values, nullableCompositeKeys),
-                        Math.max(16, values[0].length()));
+                        Math.max(16, values[0].length()),
+                        true);
                 return;
             }
             // Generate (once per arity) a grouping table specialized to this many long keys — the row loop
@@ -373,20 +615,73 @@ final class GroupingState
             return;
         }
 
-        if (SHARED_DICTIONARY_COMPOSITE_GROUPING && values.length > 1 && sharedDictionaryIds(values) != null) {
+        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys);
+        if (SHARED_DICTIONARY_COMPOSITE_GROUPING &&
+                values.length > 1 &&
+                values.length <= SHARED_DICTIONARY_MAX_FIELDS &&
+                sharedDictionaryIds(values) != null &&
+                admitsSharedDictionaryGrouping(values, nulls, flatKeyLayout)) {
             useSharedDictionaryGrouping = true;
             initializeObjectKeyGrouping(values);
             return;
         }
 
-        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys);
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
-            flatGroupingTable = new FlatGroupingTable(flatKeyLayout, Math.max(16, values[0].length()));
+            // Single-key grouping assigns NULL a group id outside the table, so its ids can contain a hole.
+            // Composite grouping stores its null combinations in the table and remains insertion-order dense.
+            flatGroupingTable = new FlatGroupingTable(
+                    flatKeyLayout,
+                    Math.max(16, values[0].length()),
+                    values.length > 1);
             return;
         }
 
         initializeObjectKeyGrouping(values);
+    }
+
+    /**
+     * The shared-id cache pays when many rows resolve to the same composite value, but a near-unique dictionary
+     * merely routes every row through object-key construction and hashing. Sample the generic flat layout once at
+     * the batch boundary and retain the shortcut only when there is meaningful value reuse. Hash collisions can
+     * only bias this conservative admission toward the correctness-equivalent shared path.
+     */
+    private boolean admitsSharedDictionaryGrouping(Vector[] values, Vector[] nulls, FlatKeyLayout layout)
+    {
+        if (layout == null || SHARED_DICTIONARY_SAMPLE_SIZE <= 0) {
+            return true;
+        }
+        int sampleSize = Math.min(values[0].length(), SHARED_DICTIONARY_SAMPLE_SIZE);
+        if (sampleSize == 0) {
+            return true;
+        }
+
+        long[] hashes = arrayPool.borrowLongs(sampleSize);
+        try {
+            layout.beginBatch(values, nulls);
+            try {
+                for (int position = 0; position < sampleSize; position++) {
+                    hashes[position] = layout.hash(values, nulls, position);
+                }
+            }
+            finally {
+                layout.endBatch();
+            }
+            Arrays.sort(hashes, 0, sampleSize);
+            int distinct = 1;
+            for (int index = 1; index < sampleSize; index++) {
+                if (hashes[index] != hashes[index - 1]) {
+                    distinct++;
+                }
+            }
+            if (DEBUG_GROUPING_SHAPES) {
+                System.err.printf("[grouping-shared-dictionary] sampled=%d distinct-hashes=%d%n", sampleSize, distinct);
+            }
+            return (long) distinct * 100 <= (long) sampleSize * SHARED_DICTIONARY_MAX_DISTINCT_PERCENT;
+        }
+        finally {
+            arrayPool.release(hashes);
+        }
     }
 
     private void initializeObjectKeyGrouping(Vector[] values)
@@ -403,10 +698,16 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        if (FLAT_SINGLE_KEY_RECORD_IDENTITY &&
+                values.length == 1 &&
+                !flatSingleIdentityAdmissionDecided &&
+                !mask.none()) {
+            decideFlatSingleIdentity(values, nulls, mask);
+        }
         flatGroupingTable.beginBatch(values, nulls);
         flatGroupingTable.prepareBatchHashes(values, nulls, mask);
         try {
-            if (values.length == 1) {
+            if (values.length == 1 && !flatSingleNullInTable) {
                 Vector nullVector = nulls[0];
                 for (int position : mask) {
                     if (OperatorVectorSupport.isNull(nullVector, position)) {
@@ -424,9 +725,12 @@ final class GroupingState
                 return;
             }
 
+            boolean hashedOnly = EARLY_REJECT_MIXED_COMPOSITE && !flatGroupingTable.batchArrayModeEligible();
             for (int position : mask) {
                 long newGroupId = nextGroupId;
-                long groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                long groupId = hashedOnly
+                        ? flatGroupingTable.assignGroupHashed(values, nulls, position, newGroupId)
+                        : flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
                 if (groupId == newGroupId) {
                     nextGroupId++;
                 }
@@ -438,6 +742,77 @@ final class GroupingState
         }
     }
 
+    /** Cold, one-shot admission path kept out of the compiled per-batch assignment kernel. */
+    private void decideFlatSingleIdentity(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        flatSingleIdentityAdmissionDecided = true;
+        // Decide before the first hot row. High-volume, high-cardinality first batches are the sustained grouping
+        // case where the two logical-id maps become material; sparse or categorical pipelines retain the ordinary
+        // representation. The table is still empty, so replace it once with an immutable nullable identity layout.
+        // A later NULL becomes an ordinary record and cannot introduce a logical-id hole or a steady-state mode
+        // branch.
+        boolean largeBatch = mask.count() >= FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_BATCH_ROWS;
+        FlatKeyLayout identityLayout = largeBatch ? FlatKeyLayout.tryCreate(values, true) : null;
+        int sampledDistinct = largeBatch
+                ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
+                : 0;
+        int sampled = largeBatch ? Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE) : 0;
+        if (sampled > 0 &&
+                (long) sampledDistinct * 100 >= (long) sampled * FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT) {
+            flatGroupingTable.releaseBuffers();
+            flatGroupingTable = new FlatGroupingTable(identityLayout, Math.max(16, mask.count()), true);
+            flatSingleNullInTable = true;
+        }
+        if (DEBUG_GROUPING_SHAPES) {
+            System.err.printf(
+                    "[flat-single-identity] selected=%d sampled=%d distinct=%d admitted=%s%n",
+                    mask.count(),
+                    sampled,
+                    sampledDistinct,
+                    flatSingleNullInTable);
+        }
+    }
+
+    /**
+     * Record-identity tables remove two logical/physical id mappings, which pays only when the input actually
+     * creates many groups. A large batch with a tiny categorical domain instead pays for nullable records while
+     * saving no material mapping space. Sample evenly across the selected rows before the first insertion and use
+     * layout hashes as a conservative distinctness estimate: collisions can reject admission but cannot make an
+     * unsafe representation decision. The decision is immutable for the lifetime of this grouping state.
+     */
+    private int sampledDistinctFlatKeys(FlatKeyLayout layout, Vector[] values, Vector[] nulls, Mask mask)
+    {
+        int sampleSize = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        if (sampleSize <= 0) {
+            return 0;
+        }
+
+        long[] hashes = arrayPool.borrowLongs(sampleSize);
+        try {
+            layout.beginBatch(values, nulls);
+            try {
+                for (int sample = 0; sample < sampleSize; sample++) {
+                    int selectedIndex = (int) ((long) sample * mask.count() / sampleSize);
+                    hashes[sample] = layout.hash(values, nulls, mask.position(selectedIndex));
+                }
+            }
+            finally {
+                layout.endBatch();
+            }
+            Arrays.sort(hashes, 0, sampleSize);
+            int distinct = 1;
+            for (int index = 1; index < sampleSize; index++) {
+                if (hashes[index] != hashes[index - 1]) {
+                    distinct++;
+                }
+            }
+            return distinct;
+        }
+        finally {
+            arrayPool.release(hashes);
+        }
+    }
+
     private void assignLongGroups(Vector values, Vector nullVector, Mask mask, I64Vector result)
     {
         // Hoist Vector type dispatch once per batch so the per-position loop body reads
@@ -445,10 +820,94 @@ final class GroupingState
         VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
         VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nullVector);
         long[] out = result.values();
+        if (useLongDirectGrouping) {
+            for (int position : mask) {
+                if (nullValues.value(position)) {
+                    continue;
+                }
+                long key = keyValues.value(position);
+                if (key < 0 || key >= longGroupIds.length) {
+                    disableLongDirectGrouping();
+                    longDirectGroupingDisabled = true;
+                    break;
+                }
+            }
+        }
+        if (useLongDirectGrouping) {
+            int[] directGroups = longGroupIds;
+            for (int position : mask) {
+                if (nullValues.value(position)) {
+                    out[position] = nullGroup();
+                    continue;
+                }
+                int key = toIntExact(keyValues.value(position));
+                int encodedGroup = directGroups[key];
+                if (encodedGroup == 0) {
+                    int groupId = (int) nextGroupId++;
+                    directGroups[key] = groupId + 1;
+                    ensureLongGroupingCapacity(groupId);
+                    longKeysByGroup[groupId] = key;
+                    longGroupCount++;
+                    out[position] = groupId;
+                }
+                else {
+                    out[position] = encodedGroup - 1;
+                }
+            }
+            return;
+        }
         // Hoist the table into locals; refresh after a rehash.
         long[] tableKeys = longGroupKeys;
         int[] tableIds = longGroupIds;
         int tableMask = longGroupMask;
+        boolean cached = longRunCacheValid;
+        long cachedKey = longRunCacheKey;
+        int cachedGroupId = longRunCacheGroupId;
+        boolean useRunCache = LONG_GROUP_RUN_CACHE && hasFrequentLongRuns(keyValues, nullValues, mask, cached, cachedKey);
+        if (!useRunCache) {
+            for (int position : mask) {
+                if (nullValues.value(position)) {
+                    out[position] = nullGroup();
+                    continue;
+                }
+
+                long key = keyValues.value(position);
+                int slot = hashLong(key) & tableMask;
+                while (true) {
+                    int id = tableIds[slot];
+                    if (id == -1) {
+                        int groupId = (int) nextGroupId++;
+                        tableKeys[slot] = key;
+                        tableIds[slot] = groupId;
+                        ensureLongGroupingCapacity(groupId);
+                        longKeysByGroup[groupId] = key;
+                        out[position] = groupId;
+                        cached = true;
+                        cachedKey = key;
+                        cachedGroupId = groupId;
+                        if (++longGroupCount >= longGroupMaxFill) {
+                            rehashLongGroupTable();
+                            tableKeys = longGroupKeys;
+                            tableIds = longGroupIds;
+                            tableMask = longGroupMask;
+                        }
+                        break;
+                    }
+                    if (tableKeys[slot] == key) {
+                        out[position] = id;
+                        cached = true;
+                        cachedKey = key;
+                        cachedGroupId = id;
+                        break;
+                    }
+                    slot = (slot + 1) & tableMask;
+                }
+            }
+            longRunCacheValid = cached;
+            longRunCacheKey = cachedKey;
+            longRunCacheGroupId = cachedGroupId;
+            return;
+        }
         for (int position : mask) {
             if (nullValues.value(position)) {
                 out[position] = nullGroup();
@@ -456,6 +915,10 @@ final class GroupingState
             }
 
             long key = keyValues.value(position);
+            if (cached && key == cachedKey) {
+                out[position] = cachedGroupId;
+                continue;
+            }
             int slot = hashLong(key) & tableMask;
             while (true) {
                 int id = tableIds[slot];
@@ -466,6 +929,9 @@ final class GroupingState
                     ensureLongGroupingCapacity(groupId);
                     longKeysByGroup[groupId] = key;
                     out[position] = groupId;
+                    cached = true;
+                    cachedKey = key;
+                    cachedGroupId = groupId;
                     if (++longGroupCount >= longGroupMaxFill) {
                         rehashLongGroupTable();
                         tableKeys = longGroupKeys;
@@ -476,11 +942,360 @@ final class GroupingState
                 }
                 if (tableKeys[slot] == key) {
                     out[position] = id;
+                    cached = true;
+                    cachedKey = key;
+                    cachedGroupId = id;
                     break;
                 }
                 slot = (slot + 1) & tableMask;
             }
         }
+        longRunCacheValid = cached;
+        longRunCacheKey = cachedKey;
+        longRunCacheGroupId = cachedGroupId;
+    }
+
+    /**
+     * Admit the adjacent-key cache once per batch instead of putting an unpredictable
+     * cache-hit branch into every single-key grouping loop.  The bounded sample is
+     * deliberately independent of key values and query shape: ordered/run-heavy input
+     * takes the cache loop, while high-cardinality shuffled input keeps the plain hash
+     * loop.  Sampling only reads existing vectors and allocates no state.
+     */
+    private static boolean hasFrequentLongRuns(
+            VectorAccess.LongValues keyValues,
+            VectorAccess.BooleanValues nullValues,
+            Mask mask,
+            boolean previousValid,
+            long previousKey)
+    {
+        int comparisons = 0;
+        int hits = 0;
+        boolean havePrevious = previousValid;
+        long lastKey = previousKey;
+        for (int position : mask) {
+            if (nullValues.value(position)) {
+                havePrevious = false;
+                continue;
+            }
+            long key = keyValues.value(position);
+            if (havePrevious) {
+                comparisons++;
+                if (key == lastKey) {
+                    hits++;
+                }
+                if (comparisons == 64) {
+                    break;
+                }
+            }
+            havePrevious = true;
+            lastKey = key;
+        }
+        return comparisons >= 4 && hits * 2 >= comparisons;
+    }
+
+    private void assignPackedIntPairGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+        VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+        VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+        long[] out = result.values();
+        byte[] tableControl = packedIntPairControl;
+        int[] tableIds = longGroupIds;
+        int tableMask = longGroupMask;
+        for (int position : mask) {
+            long first = firstValues.value(position);
+            long second = secondValues.value(position);
+            if (firstNulls.value(position) || secondNulls.value(position) || first != (int) first || second != (int) second) {
+                promotePackedIntGrouping(mask.count());
+                assignMultiLongGroups(values, nulls, mask, result);
+                return;
+            }
+
+            long key = packIntPair((int) first, (int) second);
+            int hash = hashLong(key);
+            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            int slot = hash & tableMask;
+            while (true) {
+                byte control = tableControl[slot];
+                if (control == 0) {
+                    int groupId = (int) nextGroupId++;
+                    tableIds[slot] = groupId;
+                    ensureLongGroupingCapacity(groupId);
+                    longKeysByGroup[groupId] = key;
+                    tableControl[slot] = fragment;
+                    out[position] = groupId;
+                    if (++longGroupCount >= longGroupMaxFill) {
+                        rehashPackedIntPairTable();
+                        tableControl = packedIntPairControl;
+                        tableIds = longGroupIds;
+                        tableMask = longGroupMask;
+                    }
+                    break;
+                }
+                int id = tableIds[slot];
+                if (control == fragment && longKeysByGroup[id] == key) {
+                    out[position] = id;
+                    break;
+                }
+                slot = (slot + 1) & tableMask;
+            }
+        }
+    }
+
+    private void assignPackedIntTripleGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
+        VectorAccess.LongValues thirdValues = VectorAccess.longValues(values[2]);
+        VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
+        VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
+        VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
+        long[] out = result.values();
+        byte[] tableControl = packedIntPairControl;
+        int[] tableIds = longGroupIds;
+        int tableMask = longGroupMask;
+        for (int position : mask) {
+            long first = firstValues.value(position);
+            long second = secondValues.value(position);
+            long third = thirdValues.value(position);
+            boolean firstNull = firstNulls.value(position);
+            boolean secondNull = secondNulls.value(position);
+            boolean thirdNull = thirdNulls.value(position);
+            if ((!firstNull && first != (int) first) ||
+                    (!secondNull && second != (int) second) ||
+                    (!thirdNull && (third != (int) third ||
+                            (PACKED_INT_TRIPLE_PACKED_TAIL &&
+                                    (third < PACKED_INT_TRIPLE_MIN_THIRD || third > PACKED_INT_TRIPLE_MAX_THIRD))))) {
+                promotePackedIntGrouping(mask.count());
+                assignMultiLongGroups(values, nulls, mask, result);
+                return;
+            }
+
+            long pair = packIntPair(firstNull ? 0 : (int) first, secondNull ? 0 : (int) second);
+            int thirdInt = thirdNull ? 0 : (int) third;
+            byte nullMask = (byte) ((firstNull ? 1 : 0) | (secondNull ? 2 : 0) | (thirdNull ? 4 : 0));
+            int hash = hashPackedIntTriple(pair, thirdInt, nullMask);
+            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            int slot = hash & tableMask;
+            while (true) {
+                int encoded = PACKED_INT_TRIPLE_COMBINED_CONTROL ? tableIds[slot] : 0;
+                byte control = PACKED_INT_TRIPLE_COMBINED_CONTROL ? (byte) (encoded >>> 24) : tableControl[slot];
+                if (control == 0) {
+                    if (PACKED_INT_TRIPLE_COMBINED_CONTROL && nextGroupId > PACKED_GROUP_ID_MASK) {
+                        promotePackedIntGrouping(mask.count());
+                        assignMultiLongGroups(values, nulls, mask, result);
+                        return;
+                    }
+                    int groupId = (int) nextGroupId++;
+                    tableIds[slot] = PACKED_INT_TRIPLE_COMBINED_CONTROL
+                            ? (fragment & 0xFF) << 24 | groupId
+                            : groupId;
+                    ensureLongGroupingCapacity(groupId);
+                    longKeysByGroup[groupId] = pair;
+                    if (PACKED_INT_TRIPLE_PACKED_TAIL) {
+                        packedIntTripleTailByGroup[groupId] = packIntTripleTail(thirdInt, nullMask);
+                    }
+                    else {
+                        packedIntTripleThirdByGroup[groupId] = thirdInt;
+                        packedIntTripleNullMasksByGroup[groupId] = nullMask;
+                    }
+                    if (!PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+                        tableControl[slot] = fragment;
+                    }
+                    out[position] = groupId;
+                    if (++longGroupCount >= longGroupMaxFill) {
+                        rehashPackedIntPairTable();
+                        tableControl = packedIntPairControl;
+                        tableIds = longGroupIds;
+                        tableMask = longGroupMask;
+                    }
+                    break;
+                }
+                int id = PACKED_INT_TRIPLE_COMBINED_CONTROL ? encoded & PACKED_GROUP_ID_MASK : tableIds[slot];
+                if (control == fragment &&
+                        longKeysByGroup[id] == pair &&
+                        packedIntTripleThird(id) == thirdInt &&
+                        packedIntTripleNullMask(id) == nullMask) {
+                    out[position] = id;
+                    break;
+                }
+                slot = (slot + 1) & tableMask;
+            }
+        }
+    }
+
+    private void promotePackedIntGrouping(int upcomingRows)
+    {
+        multiLongArity = packedIntGroupingArity;
+        multiLongTable = MultiLongGroupingTableGenerator.create(multiLongArity, Math.max(16, toIntExact(Math.min(Integer.MAX_VALUE, nextGroupId + upcomingRows))));
+        long[] packedByGroup = longKeysByGroup;
+        int[] thirdByGroup = packedIntTripleThirdByGroup;
+        byte[] nullMasksByGroup = packedIntTripleNullMasksByGroup;
+        int[] tailByGroup = packedIntTripleTailByGroup;
+        long migratedGroups = 0;
+        long[] ignoredResults = arrayPool.borrowLongs(10_000);
+        VectorAccess.BooleanValues neverNull = _ -> false;
+        while (migratedGroups < nextGroupId) {
+            int offset = toIntExact(migratedGroups);
+            int count = (int) Math.min(ignoredResults.length, nextGroupId - migratedGroups);
+            VectorAccess.LongValues[] keyAccessors = packedIntGroupingArity == 2
+                    ? new VectorAccess.LongValues[] {
+                            position -> unpackFirstInt(packedByGroup[offset + position]),
+                            position -> unpackSecondInt(packedByGroup[offset + position])}
+                    : new VectorAccess.LongValues[] {
+                            position -> unpackFirstInt(packedByGroup[offset + position]),
+                            position -> unpackSecondInt(packedByGroup[offset + position]),
+                            position -> PACKED_INT_TRIPLE_PACKED_TAIL
+                                    ? unpackIntTripleThird(tailByGroup[offset + position])
+                                    : thirdByGroup[offset + position]};
+            VectorAccess.BooleanValues[] nullAccessors = packedIntGroupingArity == 2
+                    ? new VectorAccess.BooleanValues[] {neverNull, neverNull}
+                    : new VectorAccess.BooleanValues[] {
+                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                                    ? (byte) (tailByGroup[offset + position] >>> 29)
+                                    : nullMasksByGroup[offset + position]) & 1) != 0,
+                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                                    ? (byte) (tailByGroup[offset + position] >>> 29)
+                                    : nullMasksByGroup[offset + position]) & 2) != 0,
+                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                                    ? (byte) (tailByGroup[offset + position] >>> 29)
+                                    : nullMasksByGroup[offset + position]) & 4) != 0};
+            migratedGroups = multiLongTable.assignBatch(
+                    keyAccessors,
+                    nullAccessors,
+                    densePositions(count),
+                    count,
+                    ignoredResults,
+                    migratedGroups);
+        }
+        arrayPool.release(ignoredResults);
+        arrayPool.release(packedIntPairControl);
+        packedIntPairControl = null;
+        arrayPool.release(longGroupIds);
+        longGroupIds = null;
+        arrayPool.release(longKeysByGroup);
+        longKeysByGroup = new long[0];
+        arrayPool.release(packedIntTripleThirdByGroup);
+        packedIntTripleThirdByGroup = new int[0];
+        arrayPool.release(packedIntTripleNullMasksByGroup);
+        packedIntTripleNullMasksByGroup = new byte[0];
+        arrayPool.release(packedIntTripleTailByGroup);
+        packedIntTripleTailByGroup = new int[0];
+        usePackedIntPairGrouping = false;
+        packedIntGroupingArity = 0;
+        useMultiLongGrouping = true;
+    }
+
+    private void initPackedIntPairTable(int expectedSize)
+    {
+        int capacity = 16;
+        while (capacity < expectedSize / LONG_GROUP_LOAD_FACTOR) {
+            capacity <<= 1;
+        }
+        if (packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+            packedIntPairControl = null;
+        }
+        else {
+            packedIntPairControl = arrayPool.borrowBytes(capacity);
+            Arrays.fill(packedIntPairControl, (byte) 0);
+        }
+        longGroupIds = arrayPool.borrowInts(capacity);
+        if (packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+            Arrays.fill(longGroupIds, 0);
+        }
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
+        longGroupCount = 0;
+    }
+
+    private void rehashPackedIntPairTable()
+    {
+        byte[] previousControl = packedIntPairControl;
+        int[] previousIds = longGroupIds;
+        boolean combinedControl = packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL;
+        int previousCapacity = previousIds.length;
+        int capacity = previousCapacity * 2;
+        if (combinedControl) {
+            packedIntPairControl = null;
+        }
+        else {
+            packedIntPairControl = arrayPool.borrowBytes(capacity);
+            Arrays.fill(packedIntPairControl, (byte) 0);
+        }
+        longGroupIds = arrayPool.borrowInts(capacity);
+        if (combinedControl) {
+            Arrays.fill(longGroupIds, 0);
+        }
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
+        for (int index = 0; index < previousCapacity; index++) {
+            int previousEntry = previousIds[index];
+            if (combinedControl ? previousEntry == 0 : previousControl[index] == 0) {
+                continue;
+            }
+            int id = combinedControl ? previousEntry & PACKED_GROUP_ID_MASK : previousEntry;
+            long key = longKeysByGroup[id];
+            int hash = packedIntGroupingArity == 2
+                    ? hashLong(key)
+                    : hashPackedIntTriple(key, packedIntTripleThird(id), packedIntTripleNullMask(id));
+            int slot = hash & longGroupMask;
+            while (combinedControl ? longGroupIds[slot] != 0 : packedIntPairControl[slot] != 0) {
+                slot = (slot + 1) & longGroupMask;
+            }
+            byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
+            longGroupIds[slot] = combinedControl ? (fragment & 0xFF) << 24 | id : id;
+            if (!combinedControl) {
+                packedIntPairControl[slot] = fragment;
+            }
+        }
+        arrayPool.release(previousControl);
+        arrayPool.release(previousIds);
+    }
+
+    private static int hashPackedIntTriple(long firstTwo, int third, byte nullMask)
+    {
+        return hashLong(firstTwo + (long) third * 0xD6E8FEB86659FD93L + nullMask);
+    }
+
+    private int packedIntTripleThird(int groupId)
+    {
+        return PACKED_INT_TRIPLE_PACKED_TAIL
+                ? unpackIntTripleThird(packedIntTripleTailByGroup[groupId])
+                : packedIntTripleThirdByGroup[groupId];
+    }
+
+    private byte packedIntTripleNullMask(int groupId)
+    {
+        return PACKED_INT_TRIPLE_PACKED_TAIL
+                ? (byte) (packedIntTripleTailByGroup[groupId] >>> 29)
+                : packedIntTripleNullMasksByGroup[groupId];
+    }
+
+    private static int packIntTripleTail(int third, byte nullMask)
+    {
+        return (third & 0x1FFF_FFFF) | (nullMask & 0x7) << 29;
+    }
+
+    private static int unpackIntTripleThird(int packed)
+    {
+        return packed << 3 >> 3;
+    }
+
+    private static long packIntPair(int first, int second)
+    {
+        return ((long) first << Integer.SIZE) | (second & 0xFFFF_FFFFL);
+    }
+
+    private static long unpackFirstInt(long packed)
+    {
+        return (int) (packed >> Integer.SIZE);
+    }
+
+    private static long unpackSecondInt(long packed)
+    {
+        return (int) packed;
     }
 
     private void initLongGroupTable(int expectedSize)
@@ -489,8 +1304,8 @@ final class GroupingState
         while (capacity < expectedSize / LONG_GROUP_LOAD_FACTOR) {
             capacity <<= 1;
         }
-        longGroupKeys = new long[capacity];
-        longGroupIds = new int[capacity];
+        longGroupKeys = arrayPool.borrowLongs(capacity);
+        longGroupIds = arrayPool.borrowInts(capacity);
         Arrays.fill(longGroupIds, -1);
         longGroupMask = capacity - 1;
         longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
@@ -502,8 +1317,8 @@ final class GroupingState
         long[] previousKeys = longGroupKeys;
         int[] previousIds = longGroupIds;
         int capacity = previousKeys.length * 2;
-        longGroupKeys = new long[capacity];
-        longGroupIds = new int[capacity];
+        longGroupKeys = arrayPool.borrowLongs(capacity);
+        longGroupIds = arrayPool.borrowInts(capacity);
         Arrays.fill(longGroupIds, -1);
         longGroupMask = capacity - 1;
         longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
@@ -520,10 +1335,89 @@ final class GroupingState
             longGroupKeys[slot] = key;
             longGroupIds[slot] = id;
         }
+        arrayPool.release(previousKeys);
+        arrayPool.release(previousIds);
+    }
+
+    private void rebuildLongDirectTable(int capacity, long observedMax)
+    {
+        int[] previousIds = longGroupIds;
+        long[] previousKeys = longGroupKeys;
+        longGroupIds = arrayPool.borrowInts(capacity);
+        Arrays.fill(longGroupIds, 0);
+        longGroupKeys = new long[0];
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group == nullGroup) {
+                continue;
+            }
+            int key = toIntExact(longKeysByGroup[group]);
+            if (longGroupIds[key] != 0) {
+                throw new IllegalStateException("Duplicate key while building direct grouping table: " + key);
+            }
+            longGroupIds[key] = group + 1;
+        }
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = capacity;
+        useLongDirectGrouping = true;
+        if (DEBUG_LONG_DIRECT_GROUPING) {
+            System.err.printf("[long-direct-grouping] enable groups=%d max=%d capacity=%d%n", nextGroupId, observedMax, capacity);
+        }
+        arrayPool.release(previousIds);
+        arrayPool.release(previousKeys);
+    }
+
+    private void disableLongDirectGrouping()
+    {
+        if (!useLongDirectGrouping) {
+            return;
+        }
+        int capacity = 16;
+        int nonNullGroups = toIntExact(nextGroupId - (nullGroup == -1 ? 0 : 1));
+        while (capacity < nonNullGroups / LONG_GROUP_LOAD_FACTOR) {
+            capacity <<= 1;
+        }
+        int[] previousIds = longGroupIds;
+        longGroupKeys = arrayPool.borrowLongs(capacity);
+        longGroupIds = arrayPool.borrowInts(capacity);
+        Arrays.fill(longGroupIds, -1);
+        longGroupMask = capacity - 1;
+        longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group == nullGroup) {
+                continue;
+            }
+            long key = longKeysByGroup[group];
+            int slot = hashLong(key) & longGroupMask;
+            while (longGroupIds[slot] != -1) {
+                slot = (slot + 1) & longGroupMask;
+            }
+            longGroupKeys[slot] = key;
+            longGroupIds[slot] = group;
+        }
+        useLongDirectGrouping = false;
+        if (DEBUG_LONG_DIRECT_GROUPING) {
+            System.err.printf("[long-direct-grouping] disable groups=%d hashCapacity=%d%n", nextGroupId, capacity);
+        }
+        arrayPool.release(previousIds);
+    }
+
+    private static int toPowerOfTwoCapacity(int needed)
+    {
+        int capacity = 16;
+        while (capacity < needed) {
+            capacity = Math.multiplyExact(capacity, 2);
+        }
+        return capacity;
     }
 
     private int longGroupGet(long key)
     {
+        if (useLongDirectGrouping) {
+            if (key < 0 || key >= longGroupIds.length) {
+                return -1;
+            }
+            return longGroupIds[(int) key] - 1;
+        }
         int slot = hashLong(key) & longGroupMask;
         while (true) {
             int id = longGroupIds[slot];
@@ -558,12 +1452,26 @@ final class GroupingState
     {
         int arity = multiLongArity;
         VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[arity];
-        VectorAccess.BooleanValues[] nullAccessors = new VectorAccess.BooleanValues[arity];
+        int nullableColumns = 0;
+        for (Vector nullVector : nulls) {
+            if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                nullableColumns++;
+            }
+        }
+        VectorAccess.BooleanValues[] nullAccessors = nullableColumns == 0 && multiLongTable.supportsSparseNullAccessors()
+                ? null
+                : new VectorAccess.BooleanValues[arity];
         for (int key = 0; key < arity; key++) {
             keyAccessors[key] = VectorAccess.longValues(values[key]);
-            nullAccessors[key] = VectorAccess.booleanValues(nulls[key]);
+            if (nullAccessors != null) {
+                nullAccessors[key] = VectorAccess.isAllFalseNulls(nulls[key])
+                        ? multiLongTable.supportsSparseNullAccessors() ? null : NEVER_NULL
+                        : VectorAccess.booleanValues(nulls[key]);
+            }
         }
-        int[] positions = mask.all() ? densePositions(mask.size()) : mask.selectedPositions();
+        int[] positions = mask.all()
+                ? multiLongTable.supportsImplicitDensePositions() ? null : densePositions(mask.count())
+                : mask.selectedPositions();
         nextGroupId = multiLongTable.assignBatch(keyAccessors, nullAccessors, positions, mask.count(), result.values(), nextGroupId);
     }
 
@@ -571,10 +1479,12 @@ final class GroupingState
     private int[] densePositions(int size)
     {
         if (densePositionsCache.length < size) {
-            densePositionsCache = new int[size];
+            int[] previous = densePositionsCache;
+            densePositionsCache = arrayPool.borrowInts(size);
             for (int index = 0; index < size; index++) {
                 densePositionsCache[index] = index;
             }
+            arrayPool.release(previous);
         }
         return densePositionsCache;
     }
@@ -608,8 +1518,15 @@ final class GroupingState
             return;
         }
         int newSize = Math.max(size, Math.max(16, dictionaryGroupsById.length * 2));
-        dictionaryGroupsById = Arrays.copyOf(dictionaryGroupsById, newSize);
-        dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, newSize);
+        long[] previousGroups = dictionaryGroupsById;
+        int[] previousGenerations = dictionaryGenerations;
+        dictionaryGroupsById = arrayPool.borrowLongs(newSize);
+        dictionaryGenerations = arrayPool.borrowInts(newSize);
+        System.arraycopy(previousGroups, 0, dictionaryGroupsById, 0, previousGroups.length);
+        System.arraycopy(previousGenerations, 0, dictionaryGenerations, 0, previousGenerations.length);
+        Arrays.fill(dictionaryGenerations, previousGenerations.length, dictionaryGenerations.length, 0);
+        arrayPool.release(previousGroups);
+        arrayPool.release(previousGenerations);
     }
 
     private int currentDictionaryGeneration(Vector dictionaryValues)
@@ -627,6 +1544,13 @@ final class GroupingState
 
     public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
+        if (usePackedIntPairGrouping) {
+            return Streams.ofValuesAndNulls(
+                    materializePackedIntGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
+                    packedIntGroupingArity == 2
+                            ? materializeNonNulls(mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext)
+                            : materializePackedIntTripleNulls(groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+        }
         if (useLongGrouping) {
             return Streams.ofValuesAndNulls(
                     materializeLongGroupedValues(mask, output == null ? null : output.values(), allocator, allocationContext),
@@ -635,7 +1559,7 @@ final class GroupingState
         if (useMultiLongGrouping) {
             return Streams.ofValuesAndNulls(
                     materializeMultiLongGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
-                    materializeCompositeLongNulls(multiLongTable.nullMasksByGroup, groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
+                    materializeMultiLongNulls(groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
         if (useFlatGrouping) {
             return flatGroupingTable.groupedValues(groupedColumnIndex, mask, output, allocator, allocationContext);
@@ -654,6 +1578,56 @@ final class GroupingState
         return Streams.ofValuesAndNulls(values.values(), materializeNulls(size, mask, keysByGroup, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
+    /**
+     * Copies one logical group key into compact caller-owned output. Returning {@code null}
+     * permits a fallback for grouping layouts that do not yet expose a direct copy path.
+     */
+    public Streams copyGroupedValuePosition(int groupedColumnIndex, Streams output, int sourcePosition, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        if (!useLongGrouping && !usePackedIntPairGrouping && !useMultiLongGrouping) {
+            return null;
+        }
+
+        I64Vector values = allocator.allocateOrGrow(
+                allocationContext,
+                output == null ? null : (I64Vector) output.getOrNull(Stream.VALUES),
+                I64Vector.class,
+                size,
+                I64Vector::new);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
+
+        boolean nullValue;
+        long value = 0;
+        if (usePackedIntPairGrouping) {
+            nullValue = sourcePosition >= longKeysByGroup.length;
+            if (!nullValue && packedIntGroupingArity == 3) {
+                nullValue = (packedIntTripleNullMask(sourcePosition) & (1 << groupedColumnIndex)) != 0;
+            }
+            if (!nullValue) {
+                value = packedIntGroupedValue(groupedColumnIndex, sourcePosition);
+            }
+        }
+        else if (useLongGrouping) {
+            nullValue = sourcePosition == nullGroup || sourcePosition >= longKeysByGroup.length;
+            if (!nullValue) {
+                value = longKeysByGroup[sourcePosition];
+            }
+        }
+        else {
+            nullValue = sourcePosition >= nextGroupId || multiLongTable.groupedValueIsNull(groupedColumnIndex, sourcePosition);
+            if (!nullValue) {
+                value = multiLongTable.groupedValue(groupedColumnIndex, sourcePosition);
+            }
+        }
+        values.values()[outputPosition] = value;
+        nulls.values()[outputPosition] = nullValue;
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
     private I64Vector materializeLongGroupedValues(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
@@ -663,6 +1637,51 @@ final class GroupingState
             if (index != nullGroup && index < longKeysByGroup.length) {
                 result.values()[index] = longKeysByGroup[index];
             }
+        }
+        return result;
+    }
+
+    private I64Vector materializePackedIntGroupedValues(int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
+        I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+        Arrays.fill(result.values(), 0);
+        for (int index : mask) {
+            if (index < longKeysByGroup.length) {
+                result.values()[index] = packedIntGroupedValue(groupedColumnIndex, index);
+            }
+        }
+        return result;
+    }
+
+    private long packedIntGroupedValue(int groupedColumnIndex, int groupId)
+    {
+        if (groupedColumnIndex == 0) {
+            return unpackFirstInt(longKeysByGroup[groupId]);
+        }
+        if (groupedColumnIndex == 1) {
+            return unpackSecondInt(longKeysByGroup[groupId]);
+        }
+        return packedIntTripleThird(groupId);
+    }
+
+    private BooleanVector materializeNonNulls(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
+        Arrays.fill(result.values(), 0, size, false);
+        return result;
+    }
+
+    private BooleanVector materializePackedIntTripleNulls(int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    {
+        int size = mask.none() ? 0 : mask.maxPosition() + 1;
+        BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
+        Arrays.fill(result.values(), true);
+        int nullBit = 1 << groupedColumnIndex;
+        for (int index : mask) {
+            result.values()[index] = index >= longKeysByGroup.length ||
+                    (packedIntTripleNullMask(index) & nullBit) != 0;
         }
         return result;
     }
@@ -678,13 +1697,13 @@ final class GroupingState
         return result;
     }
 
-    private BooleanVector materializeCompositeLongNulls(byte[] nullMasksByGroup, int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    private BooleanVector materializeMultiLongNulls(int groupedColumnIndex, Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
         Arrays.fill(result.values(), true);
         for (int index : mask) {
-            result.values()[index] = index < nullMasksByGroup.length && isNull(nullMasksByGroup, index, groupedColumnIndex);
+            result.values()[index] = index < nextGroupId && multiLongTable.groupedValueIsNull(groupedColumnIndex, index);
         }
         return result;
     }
@@ -693,12 +1712,10 @@ final class GroupingState
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
         I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
-        long[] keysByGroup = multiLongTable.keysByGroup[groupedColumnIndex];
-        byte[] nullMasksByGroup = multiLongTable.nullMasksByGroup;
         Arrays.fill(result.values(), 0);
         for (int index : mask) {
-            if (index < keysByGroup.length && !isNull(nullMasksByGroup, index, groupedColumnIndex)) {
-                result.values()[index] = keysByGroup[index];
+            if (index < nextGroupId && !multiLongTable.groupedValueIsNull(groupedColumnIndex, index)) {
+                result.values()[index] = multiLongTable.groupedValue(groupedColumnIndex, index);
             }
         }
         return result;
@@ -758,7 +1775,7 @@ final class GroupingState
     private long nullGroup()
     {
         if (nullGroup == -1) {
-            if (!useFlatGrouping && !useLongGrouping && !useMultiLongGrouping) {
+            if (!useFlatGrouping && !useLongGrouping && !usePackedIntPairGrouping && !useMultiLongGrouping) {
                 for (ArrayList<OperatorKeySemantics.Key> keysByGroup : keysByGroupColumns) {
                     keysByGroup.add(null);
                 }
@@ -838,7 +1855,62 @@ final class GroupingState
         while (groupId >= newSize) {
             newSize *= 2;
         }
-        longKeysByGroup = Arrays.copyOf(longKeysByGroup, newSize);
+        long[] previous = longKeysByGroup;
+        longKeysByGroup = arrayPool.borrowLongs(newSize);
+        System.arraycopy(previous, 0, longKeysByGroup, 0, previous.length);
+        arrayPool.release(previous);
+        if (usePackedIntPairGrouping && packedIntGroupingArity == 3) {
+            if (PACKED_INT_TRIPLE_PACKED_TAIL) {
+                int[] previousTail = packedIntTripleTailByGroup;
+                packedIntTripleTailByGroup = arrayPool.borrowInts(newSize);
+                System.arraycopy(previousTail, 0, packedIntTripleTailByGroup, 0, previousTail.length);
+                arrayPool.release(previousTail);
+            }
+            else {
+                int[] previousThird = packedIntTripleThirdByGroup;
+                packedIntTripleThirdByGroup = arrayPool.borrowInts(newSize);
+                System.arraycopy(previousThird, 0, packedIntTripleThirdByGroup, 0, previousThird.length);
+                arrayPool.release(previousThird);
+                byte[] previousNullMasks = packedIntTripleNullMasksByGroup;
+                packedIntTripleNullMasksByGroup = arrayPool.borrowBytes(newSize);
+                System.arraycopy(previousNullMasks, 0, packedIntTripleNullMasksByGroup, 0, previousNullMasks.length);
+                arrayPool.release(previousNullMasks);
+            }
+        }
+    }
+
+    void releaseBuffers()
+    {
+        arrayPool.release(packedIntPairControl);
+        packedIntPairControl = null;
+        arrayPool.release(longGroupKeys);
+        longGroupKeys = null;
+        arrayPool.release(longGroupIds);
+        longGroupIds = null;
+        arrayPool.release(longKeysByGroup);
+        longKeysByGroup = new long[0];
+        arrayPool.release(packedIntTripleThirdByGroup);
+        packedIntTripleThirdByGroup = new int[0];
+        arrayPool.release(packedIntTripleNullMasksByGroup);
+        packedIntTripleNullMasksByGroup = new byte[0];
+        arrayPool.release(packedIntTripleTailByGroup);
+        packedIntTripleTailByGroup = new int[0];
+        arrayPool.release(dictionaryGroupsById);
+        dictionaryGroupsById = new long[0];
+        arrayPool.release(dictionaryGenerations);
+        dictionaryGenerations = new int[0];
+        arrayPool.release(sharedDictionaryEntriesById);
+        sharedDictionaryEntriesById = new long[0];
+        arrayPool.release(densePositionsCache);
+        densePositionsCache = new int[0];
+        if (multiLongTable != null) {
+            multiLongTable.releaseBuffers();
+            multiLongTable = null;
+        }
+        if (flatGroupingTable != null) {
+            flatGroupingTable.releaseBuffers();
+            flatGroupingTable = null;
+        }
     }
 
     private static boolean isSingleLongGroupingCandidate(Vector values)

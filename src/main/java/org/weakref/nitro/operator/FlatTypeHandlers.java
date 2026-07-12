@@ -82,7 +82,7 @@ final class FlatTypeHandlers
         }
 
         @Override
-        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
         {
             I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
             Arrays.fill(result.values(), 0);
@@ -91,8 +91,8 @@ final class FlatTypeHandlers
                     continue;
                 }
                 int recordIndex = table.recordIndex(index);
-                if (recordIndex >= 0) {
-                    result.values()[index] = readLong(table.fixedChunk(recordIndex), table.fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
+                if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
+                    result.values()[index] = readLong(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }
             return result;
@@ -181,7 +181,7 @@ final class FlatTypeHandlers
         }
 
         @Override
-        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
         {
             BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
             Arrays.fill(result.values(), false);
@@ -191,7 +191,7 @@ final class FlatTypeHandlers
                 }
                 int recordIndex = table.recordIndex(index);
                 if (recordIndex >= 0) {
-                    result.values()[index] = readBoolean(table.fixedChunk(recordIndex), table.fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
+                    result.values()[index] = readBoolean(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }
             return result;
@@ -281,7 +281,7 @@ final class FlatTypeHandlers
         }
 
         @Override
-        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
         {
             F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
             Arrays.fill(result.values(), 0);
@@ -291,7 +291,7 @@ final class FlatTypeHandlers
                 }
                 int recordIndex = table.recordIndex(index);
                 if (recordIndex >= 0) {
-                    result.values()[index] = Double.longBitsToDouble(readDoubleBits(table.fixedChunk(recordIndex), table.fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset()));
+                    result.values()[index] = Double.longBitsToDouble(readDoubleBits(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset()));
                 }
             }
             return result;
@@ -480,7 +480,7 @@ final class FlatTypeHandlers
         }
 
         @Override
-        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
         {
             long totalBytes = 0;
             for (int index : mask) {
@@ -489,7 +489,7 @@ final class FlatTypeHandlers
                 }
                 int recordIndex = table.recordIndex(index);
                 if (recordIndex >= 0) {
-                    totalBytes += binaryLength(table.fixedChunk(recordIndex), table.fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset());
+                    totalBytes += binaryLength(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }
             if (totalBytes > Integer.MAX_VALUE) {
@@ -511,8 +511,8 @@ final class FlatTypeHandlers
                 }
                 else {
                     int recordIndex = table.recordIndex(index);
-                    if (recordIndex >= 0) {
-                        copyBinaryTo(table.fixedChunk(recordIndex), table.fixedOffset(recordIndex) + Long.BYTES + field.fixedOffset(), table.variableWidthArena(), result, index);
+                    if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
+                        copyBinaryTo(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset(), table.variableWidthArena(), result, index);
                     }
                     else {
                         result.setNull(index);

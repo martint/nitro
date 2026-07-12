@@ -39,12 +39,20 @@ import java.util.Set;
 public class ProjectOperator
         implements Operator
 {
+    private static final Object EVALUATOR_BUFFER_POOL = new Object();
+    private static final boolean SHARE_EVALUATOR_BUFFER_POOL =
+            Boolean.parseBoolean(System.getProperty("nitro.project.shareEvaluatorBufferPool", "true"));
     private static final boolean FORWARD_SINGLE_POSITION_ONLY = Boolean.getBoolean("nitro.project.forwardSinglePositionOnly");
+    private static final boolean RECYCLE_EVALUATOR_OUTPUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.project.recycleEvaluatorOutputs", "true"));
+    private static final boolean REUSE_PLAN_EVALUATOR =
+            Boolean.parseBoolean(System.getProperty("nitro.project.reusePlanEvaluator", "true"));
     // Fuse the qualifying outputs of a projection into one monomorphic shared loop (see FusedProjectionCompiler).
-    // Opt-in via -Dnitro.project.compileExpressions=true; the interpreter is the default path. The substitution is
-    // byte-identical and only fires for an output whose slice has at least two operations (a multi-op
-    // arithmetic/comparison/CASE chain the interpreter would materialize intermediates for).
-    private static final boolean COMPILE_EXPRESSIONS = Boolean.getBoolean("nitro.project.compileExpressions");
+    // The substitution is byte-identical and only fires for an output whose slice has at least two operations (a
+    // multi-op arithmetic/comparison/CASE chain the interpreter would materialize intermediates for). Keep a property
+    // opt-out for controlled comparisons and environments where runtime compilation is intentionally unavailable.
+    private static final boolean COMPILE_EXPRESSIONS =
+            Boolean.parseBoolean(System.getProperty("nitro.project.compileExpressions", "true"));
 
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
@@ -52,11 +60,16 @@ public class ProjectOperator
     private final EvaluationPlan evaluationPlan;
     private final PrimitiveRegistry primitiveRegistry;
     private final List<Reference> outputReferences;
+    // A projection made exclusively of direct input references does not own or recompute any vectors: its outputs
+    // are forwarded views of the source batch. Such a projection can safely inherit the source's retention contract.
+    // Any computed producer remains mask-sensitive and must keep the conservative contract below.
+    private final boolean passThroughProjection;
     // One fused monomorphic kernel producing every fusible output in a single shared loop (null if none qualifies);
     // fusedOrdinal maps a fused output's producer to its slot in the kernel's result array.
     private final CompiledMultiProjection fusedProjection;
     private final Map<Producer, Integer> fusedOrdinal = new HashMap<>();
     private final PrimitiveExecutionContext executionContext;
+    private final PlanEvaluator reusablePlanEvaluator;
 
     private final Operator source;
     private BatchState currentBatchState;
@@ -68,7 +81,9 @@ public class ProjectOperator
         this.evaluationPlan = evaluationPlan;
         this.primitiveRegistry = primitiveRegistry;
         this.outputReferences = evaluationPlan.outputs();
+        this.passThroughProjection = outputReferences.stream().allMatch(reference -> reference.producer() instanceof Input);
         this.executionContext = new PrimitiveExecutionContext(allocator);
+        this.reusablePlanEvaluator = REUSE_PLAN_EVALUATOR ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
         CompiledMultiProjection compiled = COMPILE_EXPRESSIONS
                 ? FusedProjectionCompiler.tryCompile(evaluationPlan, outputReferences).orElse(null)
                 : null;
@@ -110,11 +125,21 @@ public class ProjectOperator
                         : selected.forward((stream, vector) -> allocator.transfer(allocationContext, vector), (_, _) -> {});
             }
             else {
-                outputs[outputIndex] = new Output(
-                        exposedStreams(sourceBatch, outputReference),
-                        stream -> evaluateOutput(batchState, outputReference, stream),
-                        (stream, vector) -> allocator.transfer(allocationContext, vector));
+                outputs[outputIndex] = RECYCLE_EVALUATOR_OUTPUTS
+                        ? new Output(
+                                exposedStreams(sourceBatch, outputReference),
+                                stream -> evaluateOutput(batchState, outputReference, stream),
+                                (stream, vector) -> allocator.transfer(allocationContext, batchState.planEvaluator().prepareResultForTransfer(vector)),
+                                (stream, vector) -> batchState.releaseOutput(vector))
+                        : new Output(
+                                exposedStreams(sourceBatch, outputReference),
+                                stream -> evaluateOutput(batchState, outputReference, stream),
+                                (stream, vector) -> allocator.transfer(allocationContext, vector));
             }
+            // Both computed outputs and forwarding wrappers cache their resolved vector. A later constrain must
+            // re-resolve the wrapper: computed values use the new mask, while pass-through values re-borrow from the
+            // correspondingly constrained source batch.
+            outputs[outputIndex].withConstraintSensitiveResolution();
         }
         return new Batch(
                 batchState.mask(),
@@ -158,10 +183,19 @@ public class ProjectOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        // Project outputs are mask-sensitive and can be recomputed after constrain().
-        // Downstream operators that defer payload materialization, such as TopN, must
-        // not retain projected batches across later constrain calls.
-        return false;
+        // Computed project outputs are mask-sensitive and can be recomputed after constrain(). Downstream operators
+        // must not retain those batches across later constrain calls. Pure input selection/reordering forwards the
+        // source vectors unchanged, so it is exactly as retainable as its source.
+        return passThroughProjection && source.supportsRetainedBatches();
+    }
+
+    @Override
+    public boolean supportsStableBatchBorrow()
+    {
+        // Direct references forward the already-open source batch and are stable until this projection batch closes,
+        // even when the source must recycle them on its next advance. Computed evaluator outputs may be recycled by
+        // a later output borrow and therefore remain conservative.
+        return passThroughProjection;
     }
 
     @Override
@@ -191,11 +225,28 @@ public class ProjectOperator
             // A fused output omits the NULLS/ERRORS stream when it is provably all-false; synthesize it at the values'
             // length on demand, exactly as the interpreter's completeRequestedStreams does.
             Vector values = bundle.getOrNull(Stream.VALUES);
-            BooleanVector falseVector = allocator.allocate(allocationContext, BooleanVector.class, values != null ? values.length() : 0, BooleanVector::new);
-            falseVector.markAllFalse();
-            return falseVector;
+            return allocator.borrowAllFalseBoolean(allocationContext, values != null ? values.length() : 0);
         }
         return bundle.get(stream);
+    }
+
+    private Vector resolveEvaluatorInput(Reference reference, Mask mask)
+    {
+        BatchState batchState = currentBatchState;
+        if (batchState == null) {
+            throw new IllegalStateException("No active project batch");
+        }
+        return switch (reference.producer()) {
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> batchState.sourceBatch().output(index).borrowOrNull(reference.stream());
+            default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
+        };
+    }
+
+    private PlanEvaluator newPlanEvaluator(PlanEvaluator.InputResolver inputResolver)
+    {
+        return SHARE_EVALUATOR_BUFFER_POOL
+                ? new PlanEvaluator(evaluationPlan, primitiveRegistry, inputResolver, allocator, EVALUATOR_BUFFER_POOL, true)
+                : new PlanEvaluator(evaluationPlan, primitiveRegistry, inputResolver, allocator, new Object(), true);
     }
 
     // Compute an output's whole stream bundle once: try the fused kernel (a single monomorphic loop over the source
@@ -267,14 +318,12 @@ public class ProjectOperator
                 case 0 -> this.mask;
                 default -> allocator.allocateRangeMask(allocationContext, this.mask.position(0), 1);
             };
-            this.planEvaluator = new PlanEvaluator(
-                    evaluationPlan,
-                    primitiveRegistry,
-                    (reference, currentMask) -> switch (reference.producer()) {
+            this.planEvaluator = reusablePlanEvaluator != null
+                    ? reusablePlanEvaluator
+                    : newPlanEvaluator((reference, currentMask) -> switch (reference.producer()) {
                         case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> sourceBatch.output(index).borrowOrNull(reference.stream());
                         default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
-                    },
-                    allocator);
+                    });
         }
 
         private Mask mask()
@@ -341,10 +390,31 @@ public class ProjectOperator
 
         private void close()
         {
-            planEvaluator.reset();
+            // Batch.close() closes every Output before invoking this action, so all exposed evaluator/fused results
+            // have either been released or transferred. Remaining tracked vectors are scratch/intermediates and are
+            // now safe to return to their pools.
+            if (RECYCLE_EVALUATOR_OUTPUTS) {
+                planEvaluator.resetForReuse();
+                for (Allocator.Context context : executionContext.allocationContexts()) {
+                    allocator.releaseIfPresent(context);
+                }
+                allocator.releaseIfPresent(allocationContext);
+            }
+            else {
+                planEvaluator.reset();
+            }
             evaluatedOutputBundles.clear();
             schemaBundles.clear();
             sourceBatch.close();
+        }
+
+        private void releaseOutput(Vector vector)
+        {
+            planEvaluator.release(vector);
+            for (Allocator.Context context : executionContext.allocationContexts()) {
+                allocator.release(context, vector);
+            }
+            allocator.release(allocationContext, vector);
         }
     }
 }

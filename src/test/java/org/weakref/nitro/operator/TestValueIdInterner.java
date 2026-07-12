@@ -78,6 +78,8 @@ class TestValueIdInterner
         // The same value reached through a different array/offset must collide to the same id.
         assertThat(interner.intern(other, 0, 5)).isEqualTo(hello);
         assertThat(interner.value(hello)).isEqualTo(bytes("hello"));
+        assertThat(interner.groupingHash(hello)).isEqualTo(OperatorVectorSupport.binaryHash(data, 2, 5));
+        assertThat(interner.groupingHash(hello)).isEqualTo(OperatorVectorSupport.binaryHash(other, 0, 5));
     }
 
     @Test
@@ -97,14 +99,15 @@ class TestValueIdInterner
     void overflowsPastTheCeiling()
     {
         ValueIdInterner interner = new ValueIdInterner(3);
-        assertThat(intern(interner, "a")).isEqualTo(0);
-        assertThat(intern(interner, "b")).isEqualTo(1);
-        assertThat(intern(interner, "c")).isEqualTo(2);
+        assertThat(intern(interner, "")).isEqualTo(0);
+        assertThat(intern(interner, "a")).isEqualTo(1);
+        assertThat(intern(interner, "b")).isEqualTo(2);
         assertThat(interner.overflowed()).isFalse();
         // The fourth distinct value exceeds the ceiling.
-        assertThat(intern(interner, "d")).isEqualTo(ValueIdInterner.TOO_MANY);
+        assertThat(intern(interner, "c")).isEqualTo(ValueIdInterner.TOO_MANY);
         assertThat(interner.overflowed()).isTrue();
-        // Once overflowed, even a previously-seen value reports TOO_MANY (caller must fall back wholesale).
+        // The ceiling blocks new ids without another table probe, but the common empty value remains recognizable.
+        assertThat(intern(interner, "")).isZero();
         assertThat(intern(interner, "a")).isEqualTo(ValueIdInterner.TOO_MANY);
     }
 

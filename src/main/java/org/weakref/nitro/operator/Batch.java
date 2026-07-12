@@ -15,7 +15,6 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Mask;
 
-import java.util.Arrays;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -33,11 +32,15 @@ public final class Batch
         implements AutoCloseable
 {
     private Mask mask;
+    private final Mask ownedMask;
     private final Output[] outputs;
+    private final Batch outputDelegate;
     private final Function<Mask, Mask> maskTakeResolver;
     private final Consumer<Mask> maskReleaseResolver;
     private final Consumer<Mask> constrainer;
     private final Runnable closeAction;
+    private final Lifecycle lifecycle;
+    private final BatchBufferScope bufferScope;
     private boolean maskTaken;
     private boolean closed;
 
@@ -58,12 +61,112 @@ public final class Batch
 
     public Batch(Mask mask, Consumer<Mask> constrainer, Function<Mask, Mask> maskTakeResolver, Consumer<Mask> maskReleaseResolver, Runnable closeAction, Output... outputs)
     {
+        this(mask, constrainer, maskTakeResolver, maskReleaseResolver, closeAction, requireNonNull(outputs, "outputs is null"), null);
+    }
+
+    private Batch(
+            Mask mask,
+            Consumer<Mask> constrainer,
+            Function<Mask, Mask> maskTakeResolver,
+            Consumer<Mask> maskReleaseResolver,
+            Runnable closeAction,
+            Output[] outputs,
+            Batch outputDelegate)
+    {
+        this(mask, constrainer, maskTakeResolver, maskReleaseResolver, closeAction, outputs, outputDelegate, null);
+    }
+
+    private Batch(
+            Mask mask,
+            Consumer<Mask> constrainer,
+            Function<Mask, Mask> maskTakeResolver,
+            Consumer<Mask> maskReleaseResolver,
+            Runnable closeAction,
+            Output[] outputs,
+            Batch outputDelegate,
+            Lifecycle lifecycle)
+    {
+        this(mask, constrainer, maskTakeResolver, maskReleaseResolver, closeAction, outputs, outputDelegate, lifecycle, null);
+    }
+
+    private Batch(
+            Mask mask,
+            Consumer<Mask> constrainer,
+            Function<Mask, Mask> maskTakeResolver,
+            Consumer<Mask> maskReleaseResolver,
+            Runnable closeAction,
+            Output[] outputs,
+            Batch outputDelegate,
+            Lifecycle lifecycle,
+            BatchBufferScope bufferScope)
+    {
         this.mask = requireNonNull(mask, "mask is null");
-        this.constrainer = requireNonNull(constrainer, "constrainer is null");
-        this.maskTakeResolver = requireNonNull(maskTakeResolver, "maskTakeResolver is null");
-        this.maskReleaseResolver = requireNonNull(maskReleaseResolver, "maskReleaseResolver is null");
-        this.closeAction = requireNonNull(closeAction, "closeAction is null");
-        this.outputs = Arrays.copyOf(outputs, outputs.length);
+        this.ownedMask = mask;
+        this.lifecycle = lifecycle;
+        this.bufferScope = bufferScope;
+        this.constrainer = lifecycle == null ? requireNonNull(constrainer, "constrainer is null") : null;
+        this.maskTakeResolver = lifecycle == null && bufferScope == null ? requireNonNull(maskTakeResolver, "maskTakeResolver is null") : null;
+        this.maskReleaseResolver = lifecycle == null && bufferScope == null ? requireNonNull(maskReleaseResolver, "maskReleaseResolver is null") : null;
+        this.closeAction = lifecycle == null ? requireNonNull(closeAction, "closeAction is null") : null;
+        // Batch takes ownership of the freshly-created output array. Every production caller builds this array solely
+        // for the batch; cloning it here doubled the per-layer control-plane allocation for no lifetime benefit.
+        this.outputs = outputs;
+        this.outputDelegate = outputDelegate;
+    }
+
+    static Batch owned(Mask mask, Consumer<Mask> constrainer, Runnable closeAction, BatchBufferScope bufferScope, Output[] outputs)
+    {
+        return new Batch(
+                mask,
+                constrainer,
+                null,
+                null,
+                closeAction,
+                requireNonNull(outputs, "outputs is null"),
+                null,
+                null,
+                requireNonNull(bufferScope, "bufferScope is null"));
+    }
+
+    /**
+     * Creates a batch with independent mask ownership whose output streams are forwarded directly from an existing
+     * batch. The supplied close action remains responsible for closing that source batch. This avoids constructing
+     * one forwarding {@link Output} and several capturing callbacks per column for pass-through operators.
+     */
+    public static Batch forwarding(
+            Mask mask,
+            Consumer<Mask> constrainer,
+            Function<Mask, Mask> maskTakeResolver,
+            Consumer<Mask> maskReleaseResolver,
+            Runnable closeAction,
+            Batch outputDelegate)
+    {
+        return new Batch(
+                mask,
+                constrainer,
+                maskTakeResolver,
+                maskReleaseResolver,
+                closeAction,
+                null,
+                requireNonNull(outputDelegate, "outputDelegate is null"));
+    }
+
+    /**
+     * Creates a forwarding batch whose batch-specific ownership operations share one lifecycle object. This is useful
+     * for hot pass-through operators: it preserves a distinct closed generation for every public Batch while avoiding
+     * a graph of capturing callbacks for that generation.
+     */
+    static Batch forwarding(Mask mask, Lifecycle lifecycle, Batch outputDelegate)
+    {
+        return new Batch(
+                mask,
+                null,
+                null,
+                null,
+                null,
+                null,
+                requireNonNull(outputDelegate, "outputDelegate is null"),
+                requireNonNull(lifecycle, "lifecycle is null"));
     }
 
     public Mask borrowMask()
@@ -80,7 +183,12 @@ public final class Batch
         checkOpen();
         Mask borrowedMask = borrowMask();
         maskTaken = true;
-        return requireNonNull(maskTakeResolver.apply(borrowedMask), "maskTakeResolver returned null");
+        Mask taken = lifecycle != null
+                ? lifecycle.takeMask(borrowedMask)
+                : bufferScope != null && borrowedMask == ownedMask
+                        ? bufferScope.take(borrowedMask)
+                        : bufferScope != null ? borrowedMask : maskTakeResolver.apply(borrowedMask);
+        return requireNonNull(taken, "maskTakeResolver returned null");
     }
 
     public void constrain(Mask mask)
@@ -89,13 +197,53 @@ public final class Batch
         if (maskTaken) {
             throw new IllegalStateException("Mask already taken");
         }
+        validateOutputsCanBeInvalidated();
+        invalidateOutputsForConstraint();
         this.mask = requireNonNull(mask, "mask is null");
-        constrainer.accept(mask);
+        if (lifecycle == null) {
+            constrainer.accept(mask);
+        }
+        else {
+            lifecycle.constrain(mask);
+        }
+    }
+
+    private void validateOutputsCanBeInvalidated()
+    {
+        if (outputDelegate != null) {
+            outputDelegate.validateOutputsCanBeInvalidated();
+            return;
+        }
+        if (outputs == null) {
+            return;
+        }
+        for (Output output : outputs) {
+            if (output.hasConstraintSensitiveTakenStreams()) {
+                throw new IllegalStateException("Cannot constrain batch after an output stream was taken");
+            }
+        }
+    }
+
+    private void invalidateOutputsForConstraint()
+    {
+        if (outputDelegate != null) {
+            outputDelegate.invalidateOutputsForConstraint();
+            return;
+        }
+        if (outputs == null) {
+            return;
+        }
+        for (Output output : outputs) {
+            output.invalidateResolvedForConstraint();
+        }
     }
 
     public Output output(int outputIndex)
     {
         checkOpen();
+        if (outputDelegate != null) {
+            return outputDelegate.output(outputIndex);
+        }
         return outputs[checkIndex(outputIndex, outputs.length)];
     }
 
@@ -106,13 +254,38 @@ public final class Batch
             return;
         }
         closed = true;
-        for (Output output : outputs) {
-            output.close();
+        if (outputs != null) {
+            for (Output output : outputs) {
+                output.close();
+            }
         }
-        if (!maskTaken) {
-            maskReleaseResolver.accept(mask);
+        if (bufferScope != null) {
+            if (!maskTaken || mask != ownedMask) {
+                bufferScope.release(ownedMask);
+            }
         }
-        closeAction.run();
+        else if (!maskTaken) {
+            if (lifecycle == null) {
+                maskReleaseResolver.accept(mask);
+            }
+            else {
+                lifecycle.releaseMask(mask);
+            }
+        }
+        if (bufferScope != null) {
+            try {
+                closeAction.run();
+            }
+            finally {
+                bufferScope.endBatch();
+            }
+        }
+        else if (lifecycle == null) {
+            closeAction.run();
+        }
+        else {
+            lifecycle.close();
+        }
     }
 
     private void checkOpen()
@@ -120,5 +293,16 @@ public final class Batch
         if (closed) {
             throw new IllegalStateException("Batch already closed");
         }
+    }
+
+    interface Lifecycle
+    {
+        void constrain(Mask mask);
+
+        Mask takeMask(Mask mask);
+
+        void releaseMask(Mask mask);
+
+        void close();
     }
 }

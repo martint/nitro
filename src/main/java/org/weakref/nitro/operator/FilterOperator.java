@@ -18,16 +18,28 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.Assignment;
+import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 
-import java.util.function.Function;
+import java.util.Optional;
 
 public class FilterOperator
         implements Operator
 {
+    private static final boolean PUSH_STATIC_LONG_EQUALITY =
+            Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongEquality", "true"));
+    private static final boolean RECYCLE_OUTPUT_MASKS =
+            Boolean.parseBoolean(System.getProperty("nitro.filter.recycleOutputMasks", "true"));
     private final Allocator.Context allocationContext = new Allocator.Context("FilterOperator");
 
     private final Operator source;
@@ -67,6 +79,53 @@ public class FilterOperator
             }
         }, allocator);
         this.predicateMask = predicateMask;
+        if (PUSH_STATIC_LONG_EQUALITY) {
+            staticLongEqualityFilter(evaluationPlan, predicateMask).ifPresent(source::pushDynamicFilter);
+        }
+    }
+
+    /**
+     * Extracts an exact {@code BIGINT input = integral literal} predicate as a scan filter. The original filter stays
+     * in this operator, so this is a conservative physical pushdown rather than a semantic rewrite.
+     */
+    static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, MaskExpression predicateMask)
+    {
+        if (!(predicateMask instanceof ReferenceMask(Reference(Variable predicate, Stream stream))) || stream != Stream.VALUES) {
+            return Optional.empty();
+        }
+        Assignment predicateAssignment = assignment(plan, predicate);
+        if (predicateAssignment == null || predicateAssignment.mask() != AllMask.ALL
+                || !(predicateAssignment.operation() instanceof Call(String name, var arguments))
+                || !name.equals("eq") || arguments.size() != 2) {
+            return Optional.empty();
+        }
+
+        Optional<DynamicFilter> filter = staticLongEqualityFilter(plan, arguments.get(0), arguments.get(1));
+        return filter.isPresent() ? filter : staticLongEqualityFilter(plan, arguments.get(1), arguments.get(0));
+    }
+
+    private static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, Reference inputReference, Reference literalReference)
+    {
+        if (!(inputReference instanceof Reference(Input(int input), Stream inputStream)) || inputStream != Stream.VALUES
+                || !(literalReference instanceof Reference(Variable literal, Stream literalStream)) || literalStream != Stream.VALUES) {
+            return Optional.empty();
+        }
+        Assignment literalAssignment = assignment(plan, literal);
+        if (literalAssignment == null || literalAssignment.mask() != AllMask.ALL
+                || !(literalAssignment.operation() instanceof Literal(Long value))) {
+            return Optional.empty();
+        }
+        return Optional.of(DynamicFilter.fromRange(input, value, value));
+    }
+
+    private static Assignment assignment(EvaluationPlan plan, Variable output)
+    {
+        for (Assignment assignment : plan.assignments()) {
+            if (assignment.output().equals(output)) {
+                return assignment;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -85,37 +144,18 @@ public class FilterOperator
     public Batch next()
     {
         Batch sourceBatch = source.next();
-        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
+        BatchState batchState = new BatchState(sourceBatch);
         currentBatchState = batchState;
         Mask batchMask = allocator.copyMask(allocationContext, sourceBatch.borrowMask());
         batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
+        batchState.ownedMask(batchMask);
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
-        planEvaluator.reset();
+        // The predicate result has been reduced to the owned output mask; no evaluator vector escapes this point.
+        planEvaluator.resetForReuse();
         batchState.constrain(batchMask);
 
-        Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Output sourceOutput = sourceBatch.output(outputIndex);
-            outputs[outputIndex] = new Output(
-                    sourceOutput.streams(),
-                    sourceOutput::borrow,
-                    (stream, vector) -> sourceOutput.take(stream),
-                    (_, _) -> {},
-                    sourceOutput::copySinglePosition);
-        }
-        return new Batch(
-                batchMask,
-                batchState::constrain,
-                Function.identity(),
-                _ -> {},
-                () -> {
-                    if (currentBatchState == batchState) {
-                        currentBatchState = null;
-                    }
-                    sourceBatch.close();
-                },
-                outputs);
+        return Batch.forwarding(batchMask, batchState, sourceBatch);
     }
 
     @Override
@@ -155,21 +195,61 @@ public class FilterOperator
             currentBatchState = null;
         }
         source.close();
-        planEvaluator.reset();
+        planEvaluator.resetForReuse();
         allocator.release(allocationContext);
     }
 
-    private record BatchState(Batch sourceBatch, Mask[] maskHolder)
+    private final class BatchState
+            implements Batch.Lifecycle
     {
-        private BatchState(Batch sourceBatch, Mask mask)
+        private final Batch sourceBatch;
+        private Mask ownedMask;
+
+        private BatchState(Batch sourceBatch)
         {
-            this(sourceBatch, new Mask[] {mask});
+            this.sourceBatch = sourceBatch;
         }
 
-        private void constrain(Mask mask)
+        private Batch sourceBatch()
         {
-            maskHolder[0] = mask;
+            return sourceBatch;
+        }
+
+        private void ownedMask(Mask ownedMask)
+        {
+            this.ownedMask = ownedMask;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
             sourceBatch.constrain(mask);
+        }
+
+        @Override
+        public Mask takeMask(Mask mask)
+        {
+            if (RECYCLE_OUTPUT_MASKS && mask == ownedMask) {
+                allocator.transfer(allocationContext, mask);
+            }
+            return mask;
+        }
+
+        @Override
+        public void releaseMask(Mask mask)
+        {
+            if (RECYCLE_OUTPUT_MASKS && mask == ownedMask) {
+                allocator.release(allocationContext, mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (currentBatchState == this) {
+                currentBatchState = null;
+            }
+            sourceBatch.close();
         }
     }
 }

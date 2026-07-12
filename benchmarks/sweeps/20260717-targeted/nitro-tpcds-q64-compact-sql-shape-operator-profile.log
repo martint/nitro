@@ -1,0 +1,127 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query64: 1 iters, 2214.4 ms/iter, rows-sink=1452
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q64.order_by                       SortOperator               2185.090    4.07%      949.279     972061.367     972061.367        1           33
+  next=2172.185  borrow=  0.442  take=  0.000  constrain=  0.000  close= 12.449  alloc[next= 948.986 borrow=   0.107 take=   0.000 constrain=   0.000 close=   0.186] MB
+q64.project.output                 ProjectOperator            2183.725    4.07%      948.795     485783.242     485783.242        2           33
+  next=2170.076  borrow=  0.719  take=  0.000  constrain=  0.000  close= 12.365  alloc[next= 948.551 borrow=   0.077 take=   0.000 constrain=   0.000 close=   0.125] MB
+q64.filter.project.output          FilterOperator             2183.464    4.07%      948.755     485762.516     485762.516        2           33
+  next=2170.062  borrow=  0.708  take=  0.000  constrain=  0.000  close= 12.362  alloc[next= 948.532 borrow=   0.077 take=   0.000 constrain=   0.000 close=   0.124] MB
+q64.join.second_year               HashJoinOperator           2183.017    4.07%      948.711     485740.090     485740.090        2           33
+  next=2169.765  borrow=  0.785  take=  0.000  constrain=  0.002  close= 12.359  alloc[next= 948.388 borrow=   0.199 take=   0.000 constrain=   0.000 close=   0.124] MB
+q64.cross_sales.second.group.cross_sales GroupedAggregationOperator   1097.370    2.04%      473.234     484592.047     484592.047        1          233
+  next=1090.222  borrow=  1.279  take=  0.000  constrain=  0.000  close=  5.868  alloc[next= 473.033 borrow=   0.142 take=   0.000 constrain=   0.000 close=   0.060] MB
+q64.cross_sales.second.project.group_rows ProjectOperator            1093.833    2.04%      472.035       8788.428       8788.428       55          233
+  next=995.556  borrow= 91.512  take=  0.000  constrain=  0.000  close=  6.694  alloc[next= 470.191 borrow=   1.153 take=   0.000 constrain=   0.000 close=   0.689] MB
+q64.cross_sales.second.filter.same_address FilterOperator             1093.046    2.04%      471.691       8782.037       8782.037       55          233
+  next=995.428  borrow= 90.985  take=  0.000  constrain=  0.000  close=  6.587  alloc[next= 469.864 borrow=   1.153 take=   0.000 constrain=   0.000 close=   0.674] MB
+q64.cross_sales.second.join.item   HashJoinOperator           1091.243    2.03%      471.442       8777.386       8777.386       55          288
+  next=993.074  borrow= 91.554  take=  0.000  constrain=  0.056  close=  6.541  alloc[next= 469.427 borrow=   1.351 take=   0.000 constrain=   0.000 close=   0.664] MB
+q64.cross_sales.first.group.cross_sales GroupedAggregationOperator   1084.577    2.02%      474.940     486338.422     486338.422        1          163
+  next=1077.215  borrow=  0.884  take=  0.000  constrain=  0.001  close=  6.477  alloc[next= 474.800 borrow=   0.077 take=   0.000 constrain=   0.000 close=   0.063] MB
+q64.cross_sales.second.join.income_band.current HashJoinOperator           1083.366    2.02%      463.184       8623.646       8623.646       55          288
+  next=986.082  borrow= 91.250  take=  0.000  constrain=  0.000  close=  6.017  alloc[next= 461.296 borrow=   1.292 take=   0.000 constrain=   0.000 close=   0.595] MB
+q64.cross_sales.second.join.income_band.bought HashJoinOperator           1082.312    2.02%      462.169       8604.741       8604.741       55          288
+  next=985.372  borrow= 90.916  take=  0.000  constrain=  0.000  close=  6.007  alloc[next= 460.361 borrow=   1.240 take=   0.000 constrain=   0.000 close=   0.568] MB
+q64.cross_sales.second.join.promotion HashJoinOperator           1081.266    2.01%      461.157       8585.905       8585.905       55          288
+  next=984.704  borrow= 90.562  take=  0.000  constrain=  0.000  close=  5.985  alloc[next= 459.438 borrow=   1.182 take=   0.000 constrain=   0.000 close=   0.538] MB
+q64.cross_sales.first.project.group_rows ProjectOperator            1081.158    2.01%      474.034       8668.046       8668.046       56          163
+  next=998.093  borrow= 75.710  take=  0.000  constrain=  0.000  close=  7.292  alloc[next= 472.190 borrow=   1.155 take=   0.000 constrain=   0.000 close=   0.688] MB
+q64.cross_sales.first.filter.same_address FilterOperator             1080.352    2.01%      473.688       8661.722       8661.722       56          163
+  next=997.923  borrow= 75.173  take=  0.000  constrain=  0.000  close=  7.212  alloc[next= 471.858 borrow=   1.155 take=   0.000 constrain=   0.000 close=   0.675] MB
+q64.cross_sales.second.join.date_dim.first_ship HashJoinOperator           1080.046    2.01%      460.101       8566.238       8566.238       55          288
+  next=983.651  borrow= 90.347  take=  0.000  constrain=  0.000  close=  6.033  alloc[next= 458.420 borrow=   1.164 take=   0.000 constrain=   0.000 close=   0.516] MB
+q64.cross_sales.first.join.item    HashJoinOperator           1078.723    2.01%      473.435       8657.095       8657.095       56          208
+  next=995.809  borrow= 75.682  take=  0.000  constrain=  0.045  close=  7.168  alloc[next= 471.422 borrow=   1.347 take=   0.000 constrain=   0.000 close=   0.666] MB
+q64.cross_sales.second.join.date_dim.first_sales HashJoinOperator           1077.775    2.01%      457.045       8509.344       8509.344       55          289
+  next=981.860  borrow= 89.899  take=  0.000  constrain=  0.000  close=  5.999  alloc[next= 455.481 borrow=   1.082 take=   0.000 constrain=   0.000 close=   0.482] MB
+q64.cross_sales.second.join.date_dim.sold HashJoinOperator           1075.521    2.00%      454.064       8453.839       8453.839       55          292
+  next=980.063  borrow= 89.437  take=  0.000  constrain=  0.000  close=  6.004  alloc[next= 452.605 borrow=   0.994 take=   0.000 constrain=   0.000 close=   0.464] MB
+q64.cross_sales.second.join.customer_address.current HashJoinOperator           1073.644    2.00%      452.729       8428.993       8428.993       55          292
+  next=978.540  borrow= 89.150  take=  0.000  constrain=  0.000  close=  5.937  alloc[next= 451.373 borrow=   0.944 take=   0.000 constrain=   0.000 close=   0.412] MB
+q64.cross_sales.first.join.income_band.current HashJoinOperator           1071.746    2.00%      466.241       8525.541       8525.541       56          208
+  next=989.656  borrow= 75.445  take=  0.000  constrain=  0.000  close=  6.630  alloc[next= 464.356 borrow=   1.288 take=   0.000 constrain=   0.000 close=   0.596] MB
+q64.cross_sales.first.join.income_band.bought HashJoinOperator           1070.722    2.00%      465.220       8506.874       8506.874       56          208
+  next=988.966  borrow= 75.119  take=  0.000  constrain=  0.000  close=  6.624  alloc[next= 463.417 borrow=   1.235 take=   0.000 constrain=   0.000 close=   0.568] MB
+q64.cross_sales.first.join.promotion HashJoinOperator           1069.694    1.99%      464.202       8488.273       8488.273       56          208
+  next=988.317  borrow= 74.767  take=  0.000  constrain=  0.000  close=  6.595  alloc[next= 462.489 borrow=   1.176 take=   0.000 constrain=   0.000 close=   0.538] MB
+q64.cross_sales.first.join.date_dim.first_ship HashJoinOperator           1068.597    1.99%      463.140       8468.854       8468.854       56          208
+  next=987.298  borrow= 74.627  take=  0.000  constrain=  0.000  close=  6.657  alloc[next= 461.468 borrow=   1.156 take=   0.000 constrain=   0.000 close=   0.516] MB
+q64.cross_sales.first.join.date_dim.first_sales HashJoinOperator           1066.223    1.99%      460.091       8413.101       8413.101       56          209
+  next=985.420  borrow= 74.181  take=  0.000  constrain=  0.000  close=  6.608  alloc[next= 458.537 borrow=   1.073 take=   0.000 constrain=   0.000 close=   0.481] MB
+q64.cross_sales.first.join.date_dim.sold HashJoinOperator           1063.958    1.98%      457.106       8358.503       8358.503       56          213
+  next=983.599  borrow= 73.709  take=  0.000  constrain=  0.000  close=  6.635  alloc[next= 455.658 borrow=   0.984 take=   0.000 constrain=   0.000 close=   0.464] MB
+q64.cross_sales.first.join.customer_address.current HashJoinOperator           1062.045    1.98%      455.766       8334.012       8334.012       56          213
+  next=982.116  borrow= 73.404  take=  0.000  constrain=  0.000  close=  6.510  alloc[next= 454.425 borrow=   0.931 take=   0.000 constrain=   0.000 close=   0.410] MB
+q64.cross_sales.second.join.customer_address.bought HashJoinOperator           1058.570    1.97%      404.060       7522.860       7522.860       55          292
+  next=964.010  borrow= 88.726  take=  0.000  constrain=  0.000  close=  5.816  alloc[next= 402.838 borrow=   0.858 take=   0.000 constrain=   0.000 close=   0.363] MB
+q64.cross_sales.first.join.customer_address.bought HashJoinOperator           1047.348    1.95%      407.696       7455.010       7455.010       56          213
+  next=967.924  borrow= 72.973  take=  0.000  constrain=  0.000  close=  6.437  alloc[next= 406.491 borrow=   0.844 take=   0.000 constrain=   0.000 close=   0.361] MB
+q64.cross_sales.second.join.household_demographics.current HashJoinOperator           1043.795    1.94%      356.100       6629.937       6629.937       55          292
+  next=926.411  borrow=111.574  take=  0.000  constrain=  0.000  close=  5.793  alloc[next= 345.215 borrow=  10.541 take=   0.000 constrain=   0.000 close=   0.345] MB
+q64.cross_sales.second.join.household_demographics.bought HashJoinOperator           1041.669    1.94%      354.385       6598.004       6598.004       55          297
+  next=924.709  borrow=111.180  take=  0.000  constrain=  0.000  close=  5.764  alloc[next= 343.608 borrow=  10.464 take=   0.000 constrain=   0.000 close=   0.313] MB
+q64.cross_sales.second.join.customer_demographics.current HashJoinOperator           1039.634    1.94%      352.825       6568.969       6568.969       55          297
+  next=922.872  borrow=110.937  take=  0.000  constrain=  0.000  close=  5.808  alloc[next= 342.113 borrow=  10.424 take=   0.000 constrain=   0.000 close=   0.288] MB
+q64.cross_sales.first.join.household_demographics.current HashJoinOperator           1032.511    1.92%      358.237       6550.627       6550.627       56          213
+  next=932.839  borrow= 93.251  take=  0.000  constrain=  0.000  close=  6.406  alloc[next= 347.374 borrow=  10.522 take=   0.000 constrain=   0.000 close=   0.342] MB
+q64.cross_sales.first.join.household_demographics.bought HashJoinOperator           1030.995    1.92%      355.521       6500.962       6500.962       56          217
+  next=931.758  borrow= 92.850  take=  0.000  constrain=  0.000  close=  6.372  alloc[next= 344.767 borrow=  10.444 take=   0.000 constrain=   0.000 close=   0.310] MB
+q64.cross_sales.first.join.customer_demographics.current HashJoinOperator           1029.525    1.92%      352.961       6454.146       6454.146       56          217
+  next=930.477  borrow= 92.617  take=  0.000  constrain=  0.000  close=  6.417  alloc[next= 342.274 borrow=  10.403 take=   0.000 constrain=   0.000 close=   0.284] MB
+q64.cross_sales.second.join.customer_demographics.bought HashJoinOperator            952.482    1.77%      330.700       6047.080       6047.080       56          310
+  next=836.338  borrow=110.433  take=  0.000  constrain=  0.000  close=  5.691  alloc[next= 320.145 borrow=  10.319 take=   0.000 constrain=   0.000 close=   0.236] MB
+q64.cross_sales.first.join.customer_demographics.bought HashJoinOperator            944.228    1.76%      322.257       5892.708       5892.708       56          224
+  next=845.799  borrow= 92.103  take=  0.000  constrain=  0.000  close=  6.310  alloc[next= 311.722 borrow=  10.300 take=   0.000 constrain=   0.000 close=   0.235] MB
+q64.cross_sales.second.join.customer HashJoinOperator            866.604    1.61%      300.041       5486.461       5486.461       56          311
+  next=720.279  borrow=140.761  take=  0.000  constrain=  0.000  close=  5.543  alloc[next= 279.715 borrow=  20.162 take=   0.000 constrain=   0.000 close=   0.164] MB
+q64.cross_sales.first.join.customer HashJoinOperator            855.935    1.59%      291.606       5332.230       5332.230       56          225
+  next=731.440  borrow=118.342  take=  0.000  constrain=  0.000  close=  6.137  alloc[next= 271.296 borrow=  20.143 take=   0.000 constrain=   0.000 close=   0.168] MB
+q64.cross_sales.second.join.store  HashJoinOperator            845.391    1.58%      236.269       4320.345       4320.345       56          311
+  next=671.945  borrow=168.013  take=  0.000  constrain=  0.000  close=  5.414  alloc[next= 206.208 borrow=  29.934 take=   0.000 constrain=   0.000 close=   0.126] MB
+q64.cross_sales.second.join.eligible_items HashJoinOperator            844.524    1.57%      233.558       4270.781       4270.781       56          311
+  next=671.397  borrow=167.749  take=  0.000  constrain=  0.000  close=  5.361  alloc[next= 203.578 borrow=  29.893 take=   0.000 constrain=   0.000 close=   0.087] MB
+q64.cross_sales.first.join.store   HashJoinOperator            833.380    1.55%      233.813       4275.438       4275.438       56          227
+  next=684.860  borrow=142.517  take=  0.000  constrain=  0.000  close=  5.987  alloc[next= 203.773 borrow=  29.911 take=   0.000 constrain=   0.000 close=   0.129] MB
+q64.cross_sales.first.join.eligible_items HashJoinOperator            832.481    1.55%      231.107       4225.948       4225.948       56          227
+  next=684.239  borrow=142.300  take=  0.000  constrain=  0.000  close=  5.928  alloc[next= 201.149 borrow=  29.868 take=   0.000 constrain=   0.000 close=   0.089] MB
+q64.cross_sales.first.eligible_catalog.project.item_sk ProjectOperator             470.451    0.88%      172.138     176269.297     176269.297        1       100425
+  next=468.606  borrow=  0.323  take=  0.000  constrain=  0.000  close=  1.517  alloc[next= 171.254 borrow=   0.875 take=   0.000 constrain=   0.000 close=   0.009] MB
+q64.cross_sales.first.eligible_catalog.filter.item_sk FilterOperator              470.440    0.88%      172.136     176267.039     176267.039        1       100425
+  next=468.601  borrow=  0.322  take=  0.000  constrain=  0.000  close=  1.514  alloc[next= 171.252 borrow=   0.875 take=   0.000 constrain=   0.000 close=   0.009] MB
+q64.cross_sales.first.eligible_catalog.group.cs_ui GroupedAggregationOperator    469.764    0.88%      170.961     175064.297     175064.297        1       101946
+  next=467.844  borrow=  0.407  take=  0.000  constrain=  0.002  close=  1.509  alloc[next= 168.326 borrow=   2.627 take=   0.000 constrain=   0.000 close=   0.008] MB
+q64.cross_sales.second.eligible_catalog.project.item_sk ProjectOperator             456.531    0.85%      174.288     178470.750     178470.750        1       100425
+  next=455.034  borrow=  0.502  take=  0.000  constrain=  0.000  close=  0.988  alloc[next= 173.152 borrow=   1.128 take=   0.000 constrain=   0.000 close=   0.008] MB
+q64.cross_sales.second.eligible_catalog.filter.item_sk FilterOperator              456.505    0.85%      174.286     178468.398     178468.398        1       100425
+  next=455.016  borrow=  0.501  take=  0.000  constrain=  0.000  close=  0.983  alloc[next= 173.150 borrow=   1.128 take=   0.000 constrain=   0.000 close=   0.008] MB
+q64.cross_sales.second.eligible_catalog.group.cs_ui GroupedAggregationOperator    453.604    0.85%      173.049     177202.039     177202.039        1       101946
+  next=452.001  borrow=  0.616  take=  0.000  constrain=  0.005  close=  0.980  alloc[next= 170.163 borrow=   2.878 take=   0.000 constrain=   0.000 close=   0.008] MB
+q64.cross_sales.first.eligible_catalog.project.sales_refunds ProjectOperator             422.918    0.79%      162.716        115.549        115.549     1442      1439749
+  next=359.279  borrow= 56.033  take=  0.000  constrain=  0.000  close=  6.640  alloc[next=  87.002 borrow=  72.990 take=   0.000 constrain=   0.000 close=   2.718] MB
+q64.cross_sales.second.eligible_catalog.project.sales_refunds ProjectOperator             408.526    0.76%      164.415        116.755        116.755     1442      1439749
+  next=345.369  borrow= 55.689  take=  0.000  constrain=  0.000  close=  6.434  alloc[next=  88.411 borrow=  73.101 take=   0.000 constrain=   0.000 close=   2.880] MB
+q64.cross_sales.first.eligible_catalog.join.catalog_returns HashJoinOperator            391.859    0.73%      142.331        101.073        101.073     1442      1439749
+  next=357.581  borrow= 29.677  take=  0.000  constrain=  0.000  close=  4.112  alloc[next=  84.031 borrow=  56.859 take=   0.000 constrain=   0.000 close=   1.441] MB
+q64.cross_sales.second.join.store_returns HashJoinOperator            386.575    0.72%       58.913       1077.271       1077.271       56          312
+  next=209.502  borrow=172.596  take=  0.000  constrain=  0.000  close=  4.462  alloc[next=  25.474 borrow=  33.359 take=   0.000 constrain=   0.000 close=   0.080] MB
+q64.cross_sales.second.eligible_catalog.join.catalog_returns HashJoinOperator            375.457    0.70%      143.771        102.096        102.096     1442      1439749
+  next=341.928  borrow= 29.457  take=  0.000  constrain=  0.000  close=  3.539  alloc[next=  85.405 borrow=  56.871 take=   0.000 constrain=   0.000 close=   1.496] MB
+q64.cross_sales.first.join.store_returns HashJoinOperator            360.762    0.67%       58.612       1071.768       1071.768       56          227
+  next=208.290  borrow=147.907  take=  0.000  constrain=  0.000  close=  4.550  alloc[next=  25.464 borrow=  33.074 take=   0.000 constrain=   0.000 close=   0.074] MB
+q64.cross_sales.second.scan.store_sales NitroParquetScanOperator    322.180    0.60%       53.715       1000.078       1000.078       55         3268
+  next=  0.445  borrow=212.752  take=  0.000  constrain=  0.023  close=  4.930  alloc[next=   0.076 borrow=  43.849 take=   0.000 constrain=   0.000 close=   0.075] MB
+q64.cross_sales.first.scan.store_sales NitroParquetScanOperator    296.878    0.55%       53.276        991.911        991.911       55         2467
+  next=  0.256  borrow=186.793  take=  0.000  constrain=  0.024  close=  4.671  alloc[next=   0.076 borrow=  43.417 take=   0.000 constrain=   0.000 close=   0.076] MB
+q64.cross_sales.first.eligible_catalog.scan.catalog_sales NitroParquetScanOperator     83.738    0.16%       17.111         12.159         12.159     1441     14401261
+  next=  0.453  borrow= 80.668  take=  0.000  constrain=  0.000  close=  2.179  alloc[next=   0.451 borrow=  16.098 take=   0.000 constrain=   0.000 close=   0.561] MB
+q64.cross_sales.second.eligible_catalog.scan.catalog_sales NitroParquetScanOperator     81.331    0.15%       17.111         12.159         12.159     1441     14401261
+  next=  0.410  borrow= 78.696  take=  0.000  constrain=  0.000  close=  1.709  alloc[next=   0.451 borrow=  16.098 take=   0.000 constrain=   0.000 close=   0.561] MB
+Total attributed cpu_ms: 53669.104
+

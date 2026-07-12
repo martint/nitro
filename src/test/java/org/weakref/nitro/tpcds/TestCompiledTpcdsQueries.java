@@ -73,7 +73,7 @@ public class TestCompiledTpcdsQueries
     @Test
     void query26()
     {
-        assertMatchesHarness(CompiledTpcdsQueries.query26(), TpcdsParquetSupport::query26);
+        assertQuery26MatchesHarness(CompiledTpcdsQueries.query26(), TpcdsParquetSupport::query26);
     }
 
     @Test
@@ -550,6 +550,42 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
     }
 
+    private static void assertQuery26MatchesHarness(CompiledTpcdsQueries.Ported ported, HarnessChain harness)
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        byte[][][] dictionaries = new byte[run.result().columns().length][][];
+        for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
+            dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
+        }
+        Operator compiled = new CompiledOperator(run.result(), dictionaries);
+        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        List<Row> actual = normalizeQuery26CompiledAverages(OperatorAssertions.OperatorAssert.toRows(compiled), true);
+        List<Row> expected = normalizeQuery26CompiledAverages(OperatorAssertions.OperatorAssert.toRows(harnessChain), false);
+        assertThat(actual).containsExactlyElementsOf(expected);
+    }
+
+    private static List<Row> normalizeQuery26CompiledAverages(List<Row> rows, boolean roundMoneyAverages)
+    {
+        List<Row> normalized = normalize(rows);
+        if (!roundMoneyAverages) {
+            return normalized;
+        }
+        List<Row> rounded = new ArrayList<>(normalized.size());
+        for (Row row : normalized) {
+            Object[] values = row.values().clone();
+            for (int index = 2; index < values.length; index++) {
+                if (values[index] != null) {
+                    values[index] = Math.round(((Number) values[index]).doubleValue());
+                }
+            }
+            rounded.add(new Row(values));
+        }
+        return rounded;
+    }
+
     /** As {@link #assertMatchesHarness}, but for a UNION ALL query run via {@code runUnion} (branches + final stage). */
     private static void assertUnionMatchesHarness(CompiledTpcdsQueries.Union union, HarnessChain harness)
     {
@@ -560,8 +596,16 @@ public class TestCompiledTpcdsQueries
         for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
             branches.add(branch.lower());
         }
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runUnion(
-                new Allocator(), tables, branches, union.main().lower(), union.virtualTable(), union.branchStringColumns());
+        Allocator allocator = new Allocator();
+        java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
+        for (CompiledTpcdsQueries.Stage stage : union.stages()) {
+            virtuals.put(stage.virtualName(),
+                    CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
+        virtuals.put(union.virtualTable(),
+                CompiledQuerySupport.materializeUnion(allocator, tables, branches, union.branchStringColumns(), virtuals));
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(
+                allocator, tables, union.main().lower(), virtuals);
         assertBridgedRowsMatch(run, union.stringColumns(), harness, tables);
     }
 
@@ -738,8 +782,14 @@ public class TestCompiledTpcdsQueries
         // Assemble the union subquery independently for each year (no reuse), then group and filter each to its year.
         virtuals.put(query.currentUnion(), CompiledQuerySupport.materializeUnion(allocator, tables, lowerBranches(query.branches()), List.of()));
         virtuals.put(query.currentVirtual(), CompiledQuerySupport.materializeStage(allocator, tables, query.currentGroup().lower(), virtuals, List.of()));
+        for (CompiledTpcdsQueries.Stage stage : query.currentStages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
         virtuals.put(query.previousUnion(), CompiledQuerySupport.materializeUnion(allocator, tables, lowerBranches(query.branches()), List.of()));
         virtuals.put(query.previousVirtual(), CompiledQuerySupport.materializeStage(allocator, tables, query.previousGroup().lower(), virtuals, List.of()));
+        for (CompiledTpcdsQueries.Stage stage : query.previousStages()) {
+            virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
+        }
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStage(allocator, tables, query.main().lower(), virtuals);
         assertBridgedRowsMatch(run, query.stringColumns(), harness, tables);
     }

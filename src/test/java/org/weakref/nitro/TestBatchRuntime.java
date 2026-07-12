@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
@@ -86,6 +87,50 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testConstraintInvalidatesResolvedOutputBeforeReborrow()
+    {
+        List<Vector> resolved = new ArrayList<>();
+        List<Vector> released = new ArrayList<>();
+        Output output = new Output(
+                Set.of(Stream.VALUES),
+                _ -> {
+                    I64Vector vector = new I64Vector(new long[] {resolved.size()});
+                    resolved.add(vector);
+                    return vector;
+                },
+                (_, vector) -> vector,
+                (_, vector) -> released.add(vector))
+                .withConstraintSensitiveResolution();
+        Batch batch = new Batch(Mask.all(1), _ -> {}, Function.identity(), _ -> {}, () -> {}, output);
+
+        Vector first = output.borrow(Stream.VALUES);
+        batch.constrain(Mask.all(1));
+        Vector second = output.borrow(Stream.VALUES);
+
+        assertThat(second).isNotSameAs(first);
+        assertThat(released).containsExactly(first);
+        batch.close();
+        assertThat(released).containsExactly(first, second);
+    }
+
+    @Test
+    void testConstraintRejectsTakenOutputWithoutInvalidatingOtherOutputs()
+    {
+        I64Vector firstValues = new I64Vector(new long[] {1});
+        I64Vector secondValues = new I64Vector(new long[] {2});
+        Output first = Output.of(Streams.ofValues(firstValues)).withConstraintSensitiveResolution();
+        Output second = Output.of(Streams.ofValues(secondValues)).withConstraintSensitiveResolution();
+        Batch batch = new Batch(Mask.all(1), first, second);
+
+        assertThat(first.borrow(Stream.VALUES)).isSameAs(firstValues);
+        assertThat(second.take(Stream.VALUES)).isSameAs(secondValues);
+        assertThatThrownBy(() -> batch.constrain(Mask.all(1)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("output stream was taken");
+        assertThat(first.borrow(Stream.VALUES)).isSameAs(firstValues);
+    }
+
+    @Test
     void testOptionalStreamAccessReturnsNullWhenStreamIsAbsent()
     {
         I64Vector values = new I64Vector(new long[] {11, 12, 13});
@@ -122,6 +167,25 @@ public class TestBatchRuntime
         batch.close();
 
         assertThat(released).containsExactly(mask);
+    }
+
+    @Test
+    void testAllocatorRetainsObservedConcurrentVectorWorkingSet()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("wide-project-working-set");
+        List<I64Vector> firstGeneration = new ArrayList<>();
+        for (int index = 0; index < 90; index++) {
+            firstGeneration.add(allocator.allocate(context, I64Vector.class, 1_024, I64Vector::new));
+        }
+        firstGeneration.forEach(vector -> allocator.release(context, vector));
+
+        List<I64Vector> secondGeneration = new ArrayList<>();
+        for (int index = 0; index < 90; index++) {
+            secondGeneration.add(allocator.allocate(context, I64Vector.class, 1_024, I64Vector::new));
+        }
+
+        assertThat(secondGeneration).containsExactlyInAnyOrderElementsOf(firstGeneration);
     }
 
     @Test
@@ -223,6 +287,35 @@ public class TestBatchRuntime
         assertThat(positions(remaining)).containsExactly(0, 2, 4, 5, 7);
         assertThat(positions(remaining.complement())).containsExactly(1, 3, 6);
         assertThat(allocator.currentBytes(context)).isEqualTo(5L * Integer.BYTES);
+    }
+
+    @Test
+    void testAllocatorSparseMaskTakesOneOwnedCopy()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("SparseMaskCopy");
+        int[] scratch = {1, 3, 6, 99};
+
+        Mask mask = allocator.allocateSparseMask(context, scratch, 3, 8);
+        scratch[0] = 7;
+
+        assertThat(positions(mask)).containsExactly(1, 3, 6);
+        assertThat(mask.positionsArrayForOverwrite(3)).hasSize(3);
+    }
+
+    @Test
+    void testAllocatorReleasesOnlyUnreferencedEncodedChildren()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("ReplacementTree");
+        I32Vector ids = allocator.allocate(context, I32Vector.class, 8, I32Vector::new);
+        I64Vector values = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        DictionaryVector source = allocator.adopt(context, DictionaryVector.wrapOwnedIds(ids, 8, values));
+
+        allocator.releaseUnreferenced(context, source, Set.of(values));
+
+        assertThat(allocator.allocate(context, I32Vector.class, 8, I32Vector::new)).isSameAs(ids);
+        assertThat(allocator.allocate(context, I64Vector.class, 8, I64Vector::new)).isNotSameAs(values);
     }
 
     @Test
@@ -468,7 +561,7 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testAllocatorCapsFlatVectorPoolBucketSize()
+    void testAllocatorRetainsFlatVectorWorkingSetBeyondStaticFamilyDefault()
     {
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("CappedVectorPool");
@@ -487,13 +580,13 @@ public class TestBatchRuntime
             reallocated.add(allocator.allocate(context, I64Vector.class, 8, I64Vector::new));
         }
 
-        // The pool retains at most poolMaxRetained() idle vectors per family, so the oldest of the
-        // maxRetained + 1 released vectors is discarded and exactly maxRetained are reused.
-        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained);
+        // The static family default is a floor. Once this context observes maxRetained + 1 vectors in concurrent
+        // use, it retains that actual working set (subject to the independent byte cap).
+        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained + 1);
     }
 
     @Test
-    void testAllocatorCapsBinaryVectorPoolPerPositionCount()
+    void testAllocatorRetainsBinaryVectorWorkingSetBeyondStaticFamilyDefault()
     {
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("CappedBinaryVectorPool");
@@ -514,10 +607,47 @@ public class TestBatchRuntime
             reallocated.add(BinaryVector.allocate(allocator, context, 8, 16));
         }
 
-        // All vectors share the one position-count pool family, which is capped at poolMaxRetained()
-        // idle instances regardless of byte capacity, so exactly maxRetained of the maxRetained + 1
-        // released vectors are reused.
-        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained);
+        // All vectors share one position-count pool family. The observed maxRetained + 1 concurrent instances form
+        // its working set and remain reusable because they fit under the independent local byte budget.
+        assertThat(reusedCount(pooled, reallocated)).isEqualTo(maxRetained + 1);
+    }
+
+    @Test
+    void testAllocatorReusesLargeVariableWidthVectorWithCeilingCapacity()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("VariableWidthCeilingCapacity");
+
+        // This is large enough to qualify for the process-wide pool. It must nevertheless remain in the
+        // active allocator's local working set, whose ceiling lookup can satisfy a smaller next batch.
+        BinaryVector larger = BinaryVector.allocate(allocator, context, 12_347, 400_000);
+        allocator.release(context);
+
+        BinaryVector smaller = BinaryVector.allocate(allocator, context, 12_347, 350_000);
+
+        assertThat(smaller).isSameAs(larger);
+    }
+
+    @Test
+    void testAllocatorBoundsLocalVariableWidthPoolByBytes()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("BoundedVariableWidthPool");
+
+        List<BinaryVector> released = new ArrayList<>();
+        for (int index = 0; index < 3; index++) {
+            released.add(BinaryVector.allocate(allocator, context, 12_349, 30_000_000));
+        }
+        allocator.release(context);
+
+        List<BinaryVector> borrowed = new ArrayList<>();
+        for (int index = 0; index < 3; index++) {
+            borrowed.add(BinaryVector.allocate(allocator, context, 12_349, 29_000_000));
+        }
+
+        // The default 64 MiB local budget can retain at most two of these buffers. The evicted exact-capacity
+        // vector may enter the shared pool, but cannot satisfy this smaller ceiling-capacity request there.
+        assertThat(reusedCount(released, borrowed)).isLessThanOrEqualTo(2);
     }
 
     @Test
@@ -595,6 +725,24 @@ public class TestBatchRuntime
         assertThat(second).isSameAs(first);
         assertThat(positions(second)).containsExactly(1, 5);
         assertThat(allocator.totalBytes(context)).isEqualTo(totalBytes);
+    }
+
+    @Test
+    void testAllocatorReusesEmptyMaskAndPreservesZeroSizeAllInvariant()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("EmptyMaskPool");
+
+        Mask first = allocator.allocateEmptyMask(context, 7);
+        assertThat(first.none()).isTrue();
+        assertThat(first.all()).isFalse();
+
+        allocator.release(context);
+
+        Mask second = allocator.allocateEmptyMask(context, 0);
+        assertThat(second).isSameAs(first);
+        assertThat(second.none()).isTrue();
+        assertThat(second.all()).isTrue();
     }
 
     @Test

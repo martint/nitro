@@ -300,6 +300,27 @@ public final class QueryLowering
         return this;
     }
 
+    /** Anti-join (NOT EXISTS) on a composite key. */
+    public QueryLowering antiJoin(String table, String[] probeKeys, String[] buildKeys, Column... columns)
+    {
+        if (probeKeys.length != buildKeys.length) {
+            throw new IllegalArgumentException("join key count mismatch: " + probeKeys.length + " probe vs " + buildKeys.length + " build");
+        }
+        Input build = new Input(table, List.of(columns));
+        int[] buildKeyLocals = new int[buildKeys.length];
+        int[] probePositions = new int[probeKeys.length];
+        for (int i = 0; i < buildKeys.length; i++) {
+            buildKeyLocals[i] = indexOf(columns, buildKeys[i]);
+            probePositions[i] = position(probeKeys[i]);
+        }
+        for (Column column : columns) {
+            assign(column.name());
+        }
+        builds.add(build);
+        joins.add(Plan.Join.anti(new Plan.Build(columns.length, buildKeyLocals), probePositions));
+        return this;
+    }
+
     /** Semi-join (EXISTS): keep each probe row that has at least one match in {@code table} on {@code probeKey = buildKey}. */
     public QueryLowering semiJoin(String table, String probeKey, String buildKey, Column... columns)
     {

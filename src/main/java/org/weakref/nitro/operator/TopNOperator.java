@@ -76,8 +76,12 @@ public class TopNOperator
         boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
         while (source.hasNext()) {
             Batch batch = source.next();
+            state.beginBatch();
             state.captureSchema(batch, deferSchemaBorrow);
             Mask mask = batch.borrowMask();
+            // Dense ordering vectors win for modest results. For large lazy grouped results, compact
+            // candidate copies avoid materializing every group merely to retain N rows (ClickBench Q33).
+            boolean compactOrderingCandidates = mask.size() > (1 << 16);
 
             for (int position : mask) {
                 if (queue.size() < n) {
@@ -87,7 +91,7 @@ public class TopNOperator
                 }
                 else {
                     Entry head = queue.peek();
-                    if (state.compareOrderingValue(batch, position, head.position()) > 0) {
+                    if (state.compareOrderingValue(batch, position, head.position(), compactOrderingCandidates) > 0) {
                         queue.poll();
                         state.copyRow(batch, position, head.position());
                         queue.add(new Entry(head.position()));

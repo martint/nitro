@@ -32,6 +32,12 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
  */
 final class RleReader
 {
+    private static final boolean UNROLLED_ULEB128 =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.unrolledUleb128", "true"));
+    private static final boolean SWAR_ULEB128 =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.swarUleb128", "true"));
+    private static final boolean SCAN_ALL_ONE_DEFINITION_RUNS =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.scanAllOneDefinitionRuns", "true"));
     private MemorySegment segment;
     private long segmentLimit;
     private long position;
@@ -145,21 +151,74 @@ final class RleReader
     }
 
     /**
-     * Fast path for bitWidth-1 definition levels: if the next {@code count} levels are a single RLE run of value
-     * {@code 1} (i.e. the page is null-free, by far the common case), consume them and return {@code true} without
-     * materializing each level. Returns {@code false} otherwise, leaving the reader in an undefined position — the
-     * caller must {@link #init} again before a full {@link #read}.
+     * Fast path for bitWidth-1 definition levels: if the next {@code count} levels are all {@code 1} (i.e. the page
+     * is null-free, by far the common case), consume them and return {@code true} without materializing each level.
+     * The stream may contain multiple RLE and bit-packed runs; parquet writers commonly choose bit packing even for
+     * an all-one page. Returns {@code false} otherwise, leaving the reader in an undefined position — the caller must
+     * {@link #init} again before a full {@link #read}.
      */
     boolean consumeIfAllOnes(int count)
     {
         if (rleRemaining == 0 && bitPackedRemaining == 0) {
             loadNextRun();
         }
-        if (rleRemaining >= count && rleValue == 1) {
+        if (!SCAN_ALL_ONE_DEFINITION_RUNS) {
+            if (rleRemaining < count || rleValue != 1) {
+                return false;
+            }
             rleRemaining -= count;
             return true;
         }
-        return false;
+
+        int remaining = count;
+        while (remaining > 0) {
+            if (rleRemaining == 0 && bitPackedRemaining == 0) {
+                loadNextRun();
+            }
+            if (rleRemaining > 0) {
+                int n = Math.min(rleRemaining, remaining);
+                if (rleValue != 1) {
+                    return false;
+                }
+                rleRemaining -= n;
+                remaining -= n;
+                continue;
+            }
+
+            int n = Math.min(bitPackedRemaining, remaining);
+            if (!consumeBitPackedOnes(n)) {
+                return false;
+            }
+            bitPackedRemaining -= n;
+            remaining -= n;
+            if (bitPackedRemaining == 0) {
+                position = bitCursor >>> 3;
+            }
+        }
+        return true;
+    }
+
+    private boolean consumeBitPackedOnes(int count)
+    {
+        if (bitWidth != 1) {
+            throw new IllegalStateException("all-one scan requires bit width 1");
+        }
+        int remaining = count;
+        long cursor = bitCursor;
+        while (remaining > 0) {
+            int shift = (int) cursor & 7;
+            int take = Math.min(Long.SIZE - shift, remaining);
+            long word = segment.get(LE_LONG, cursor >>> 3);
+            long mask = take == Long.SIZE ? -1L : (1L << take) - 1;
+            if (((word >>> shift) & mask) != mask) {
+                bitCursor = cursor;
+                return false;
+            }
+            cursor += take;
+            remaining -= take;
+        }
+        bitCursor = cursor;
+        return true;
     }
 
     /**
@@ -355,6 +414,50 @@ final class RleReader
         // slack so the 8-byte read stays in bounds, with a byte-by-byte fallback at the very end of the segment.
         if (position + 8 <= segmentLimit) {
             long word = segment.get(LE_LONG, position);
+            // Wide dictionary IDs produce varied multi-byte run headers where branch removal wins.
+            // Narrow level/ID streams have highly predictable headers and retain the unrolled path.
+            if (SWAR_ULEB128 && bitWidth >= 16) {
+                // Locate the first byte whose continuation bit is clear, then remove the one-bit gap
+                // between each seven-bit payload. Parquet integer run headers are limited to five bytes.
+                long stops = ~word & 0x0000_0080_8080_8080L;
+                int bytes = (Long.numberOfTrailingZeros(stops) >>> 3) + 1;
+                long packed = (word & 0x7FL) |
+                        ((word >>> 1) & 0x3F80L) |
+                        ((word >>> 2) & 0x1FC000L) |
+                        ((word >>> 3) & 0x0FE00000L) |
+                        ((word >>> 4) & 0xF0000000L);
+                position += bytes;
+                int payloadBits = Math.min(bytes * 7, Integer.SIZE);
+                return (int) (packed & (-1L >>> (Long.SIZE - payloadBits)));
+            }
+            if (UNROLLED_ULEB128) {
+                int first = (int) word & 0xFF;
+                if ((first & 0x80) == 0) {
+                    position++;
+                    return first;
+                }
+                int second = (int) (word >>> 8) & 0xFF;
+                int value = (first & 0x7F) | ((second & 0x7F) << 7);
+                if ((second & 0x80) == 0) {
+                    position += 2;
+                    return value;
+                }
+                int third = (int) (word >>> 16) & 0xFF;
+                value |= (third & 0x7F) << 14;
+                if ((third & 0x80) == 0) {
+                    position += 3;
+                    return value;
+                }
+                int fourth = (int) (word >>> 24) & 0xFF;
+                value |= (fourth & 0x7F) << 21;
+                if ((fourth & 0x80) == 0) {
+                    position += 4;
+                    return value;
+                }
+                int fifth = (int) (word >>> 32) & 0x0F;
+                position += 5;
+                return value | (fifth << 28);
+            }
             int value = 0;
             int shift = 0;
             int consumed = 0;

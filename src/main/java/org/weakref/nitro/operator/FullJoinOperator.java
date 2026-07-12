@@ -21,10 +21,12 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,7 @@ public final class FullJoinOperator
     private static final int NO_MATCH = -1;
 
     private final Allocator allocator;
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     private final Allocator.Context allocationContext = new Allocator.Context("FullJoinOperator");
     private final Operator outer;
     private final Operator inner;
@@ -130,49 +133,56 @@ public final class FullJoinOperator
 
         Map<OperatorKeySemantics.Key, IntArrayList> innerMatches = new HashMap<>();
         int innerRowCount = countRows(innerInput.pages());
-        long[] innerRowReferences = new long[innerRowCount];
-        boolean[] matchedInnerRows = new boolean[innerRowCount];
-        indexInnerRows(innerInput.pages(), innerMatches, innerRowReferences);
+        long[] innerRowReferences = arrayPool.borrowLongs(innerRowCount);
+        boolean[] matchedInnerRows = arrayPool.borrowBooleans(innerRowCount);
+        Arrays.fill(matchedInnerRows, false);
+        try {
+            indexInnerRows(innerInput.pages(), innerMatches, innerRowReferences);
 
-        List<JoinedRow> joinedRows = new ArrayList<>();
-        for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
-            TableOperator.Page page = outerInput.pages().get(outerPageIndex);
-            OperatorKeySemantics.Key[] reusableKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
-            OperatorKeySemantics.CompositeProbeKey reusableCompositeKey = OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length);
-            for (int position = 0; position < page.rows(); position++) {
-                OperatorKeySemantics.Key key = probeKey(page.columns(), outerJoinColumns, position, reusableKeys, reusableCompositeKey);
-                if (key == null) {
-                    joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), NO_MATCH));
-                    continue;
-                }
-                IntArrayList matches = innerMatches.get(key);
-                if (matches == null || matches.isEmpty()) {
-                    joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), NO_MATCH));
-                    continue;
-                }
-                for (int index = 0; index < matches.size(); index++) {
-                    int innerOrdinal = matches.getInt(index);
-                    matchedInnerRows[innerOrdinal] = true;
-                    joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), innerOrdinal));
+            List<JoinedRow> joinedRows = new ArrayList<>();
+            for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
+                TableOperator.Page page = outerInput.pages().get(outerPageIndex);
+                OperatorKeySemantics.Key[] reusableKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
+                OperatorKeySemantics.CompositeProbeKey reusableCompositeKey = OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length);
+                for (int position = 0; position < page.rows(); position++) {
+                    OperatorKeySemantics.Key key = probeKey(page.columns(), outerJoinColumns, position, reusableKeys, reusableCompositeKey);
+                    if (key == null) {
+                        joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), NO_MATCH));
+                        continue;
+                    }
+                    IntArrayList matches = innerMatches.get(key);
+                    if (matches == null || matches.isEmpty()) {
+                        joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), NO_MATCH));
+                        continue;
+                    }
+                    for (int index = 0; index < matches.size(); index++) {
+                        int innerOrdinal = matches.getInt(index);
+                        matchedInnerRows[innerOrdinal] = true;
+                        joinedRows.add(new JoinedRow(packRowReference(outerPageIndex, position), innerOrdinal));
+                    }
                 }
             }
-        }
 
-        for (int innerOrdinal = 0; innerOrdinal < matchedInnerRows.length; innerOrdinal++) {
-            if (!matchedInnerRows[innerOrdinal]) {
-                joinedRows.add(new JoinedRow(NO_MATCH, innerOrdinal));
+            for (int innerOrdinal = 0; innerOrdinal < matchedInnerRows.length; innerOrdinal++) {
+                if (!matchedInnerRows[innerOrdinal]) {
+                    joinedRows.add(new JoinedRow(NO_MATCH, innerOrdinal));
+                }
             }
-        }
 
-        int rowCount = joinedRows.size();
-        materialized = new Streams[outputCount()];
-        for (int outputIndex = 0; outputIndex < outer.outputCount(); outputIndex++) {
-            materialized[outputIndex] = materializeOutputColumn(outerInput.schema()[outputIndex], outerInput.pages(), joinedRows, rowCount, true, outputIndex, innerRowReferences);
+            int rowCount = joinedRows.size();
+            materialized = new Streams[outputCount()];
+            for (int outputIndex = 0; outputIndex < outer.outputCount(); outputIndex++) {
+                materialized[outputIndex] = materializeOutputColumn(outerInput.schema()[outputIndex], outerInput.pages(), joinedRows, rowCount, true, outputIndex, innerRowReferences);
+            }
+            for (int outputIndex = 0; outputIndex < inner.outputCount(); outputIndex++) {
+                materialized[outer.outputCount() + outputIndex] = materializeOutputColumn(innerInput.schema()[outputIndex], innerInput.pages(), joinedRows, rowCount, false, outputIndex, innerRowReferences);
+            }
+            outputMask = allocator.allocateRangeMask(allocationContext, 0, rowCount);
         }
-        for (int outputIndex = 0; outputIndex < inner.outputCount(); outputIndex++) {
-            materialized[outer.outputCount() + outputIndex] = materializeOutputColumn(innerInput.schema()[outputIndex], innerInput.pages(), joinedRows, rowCount, false, outputIndex, innerRowReferences);
+        finally {
+            arrayPool.release(innerRowReferences);
+            arrayPool.release(matchedInnerRows);
         }
-        outputMask = allocator.allocateRangeMask(allocationContext, 0, rowCount);
     }
 
     private void indexInnerRows(List<TableOperator.Page> pages, Map<OperatorKeySemantics.Key, IntArrayList> innerMatches, long[] innerRowReferences)

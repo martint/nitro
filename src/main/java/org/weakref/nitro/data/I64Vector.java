@@ -35,6 +35,12 @@ public class I64Vector
         return values;
     }
 
+    /** Generated aggregation kernels use this common state update shape. */
+    public void increment(int index, long value)
+    {
+        values[index] += value;
+    }
+
     @Override
     public int length()
     {

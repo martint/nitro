@@ -74,32 +74,7 @@ public class OffsetOperator
             source.constrain(currentMask);
             sourceBatch.constrain(currentMask);
 
-            Output[] outputs = new Output[outputCount()];
-            for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-                Output sourceOutput = sourceBatch.output(outputIndex);
-                outputs[outputIndex] = new Output(
-                        sourceOutput.streams(),
-                        sourceOutput::borrow,
-                        (stream, vector) -> sourceOutput.take(stream),
-                        (_, _) -> {},
-                        sourceOutput::copySinglePosition);
-            }
-            return new Batch(
-                    currentMask,
-                    mask -> {
-                        currentMask = mask;
-                        source.constrain(mask);
-                        sourceBatch.constrain(mask);
-                    },
-                    takenMask -> takenMask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                    _ -> {},
-                    () -> {
-                        if (currentBatch == sourceBatch) {
-                            currentBatch = null;
-                        }
-                        sourceBatch.close();
-                    },
-                    outputs);
+            return Batch.forwarding(currentMask, new BatchState(sourceBatch, sourceMask), sourceBatch);
         }
     }
 
@@ -139,5 +114,44 @@ public class OffsetOperator
             sourceBatch.close();
         }
         return false;
+    }
+
+    private final class BatchState
+            implements Batch.Lifecycle
+    {
+        private final Batch sourceBatch;
+        private final Mask sourceMask;
+
+        private BatchState(Batch sourceBatch, Mask sourceMask)
+        {
+            this.sourceBatch = sourceBatch;
+            this.sourceMask = sourceMask;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            currentMask = mask;
+            source.constrain(mask);
+            sourceBatch.constrain(mask);
+        }
+
+        @Override
+        public Mask takeMask(Mask mask)
+        {
+            return mask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, mask);
+        }
+
+        @Override
+        public void releaseMask(Mask mask) {}
+
+        @Override
+        public void close()
+        {
+            if (currentBatch == sourceBatch) {
+                currentBatch = null;
+            }
+            sourceBatch.close();
+        }
     }
 }

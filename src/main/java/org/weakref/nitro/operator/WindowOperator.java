@@ -14,8 +14,16 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -25,8 +33,12 @@ public final class WindowOperator
         implements Operator
 {
     private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 4_096);
+    private static final boolean RADIX_SORT = Boolean.parseBoolean(System.getProperty("nitro.window.radixSort", "true"));
+    private static final boolean BINARY_HASH_PARTITION_SORT =
+            Boolean.parseBoolean(System.getProperty("nitro.window.binaryHashPartitionSort", "true"));
 
     private final Allocator allocator;
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     private final Allocator.Context allocationContext = new Allocator.Context("WindowOperator");
     private final Operator source;
     private final int[] partitionColumns;
@@ -37,6 +49,12 @@ public final class WindowOperator
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
     private List<RowReference> rows;
+    // A retained upstream aggregation commonly produces one large page. Keep its sort order as
+    // primitive positions instead of allocating one RowReference object per row; this also keeps
+    // comparator traffic in two compact int arrays rather than pointer-chasing the Java heap.
+    private int[] singlePageOrder;
+    private int[] batchPositions;
+    private final int[] radixCounts = new int[256];
     private Streams[] windowOutputs;
     private int currentOutputPosition;
     private boolean loaded;
@@ -69,7 +87,7 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        return currentOutputPosition < rows.size();
+        return currentOutputPosition < rowCount();
     }
 
     @Override
@@ -78,10 +96,16 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        int batchSize = Math.min(BATCH_SIZE, rows.size() - currentOutputPosition);
+        int batchSize = Math.min(BATCH_SIZE, rowCount() - currentOutputPosition);
+        if (singlePageOrder != null) {
+            ensureBatchPositions(batchSize);
+            System.arraycopy(singlePageOrder, currentOutputPosition, batchPositions, 0, batchSize);
+        }
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            Streams batchStreams = materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);
+            Streams batchStreams = singlePageOrder == null
+                    ? materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize)
+                    : materializeSinglePageSourceColumnBatch(outputIndex, batchSize);
             outputs[outputIndex] = new Output(
                     batchStreams.streams(),
                     batchStreams::get,
@@ -131,6 +155,10 @@ public final class WindowOperator
     {
         source.close();
         allocator.release(allocationContext);
+        arrayPool.release(singlePageOrder);
+        singlePageOrder = null;
+        arrayPool.release(batchPositions);
+        batchPositions = null;
     }
 
     private void load()
@@ -166,12 +194,422 @@ public final class WindowOperator
             }
         }
 
-        rows = rows(pages);
-        rows.sort(this::compareRows);
         windowOutputs = new Streams[windowFunctions.size()];
-        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-            windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
+        if (pages.size() == 1) {
+            singlePageOrder = selectedPositions(pages.getFirst());
+            stableSortSinglePagePositions(singlePageOrder);
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                windowOutputs[functionIndex] = materializeSinglePageWindow(windowFunctions.get(functionIndex));
+            }
         }
+        else {
+            rows = rows(pages);
+            rows.sort(this::compareRows);
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
+            }
+        }
+    }
+
+    private int rowCount()
+    {
+        return singlePageOrder == null ? rows.size() : singlePageOrder.length;
+    }
+
+    private int[] selectedPositions(TableOperator.Page page)
+    {
+        int[] positions = arrayPool.borrowInts(page.mask().count());
+        if (page.mask().all()) {
+            for (int position = 0; position < positions.length; position++) {
+                positions[position] = position;
+            }
+        }
+        else {
+            for (int index = 0; index < positions.length; index++) {
+                positions[index] = page.mask().position(index);
+            }
+        }
+        return positions;
+    }
+
+    /** Stable bottom-up merge sort over primitive row positions. */
+    private void stableSortSinglePagePositions(int[] positions)
+    {
+        int length = positions.length;
+        if (length < 2) {
+            return;
+        }
+        if (RADIX_SORT && tryStableRadixSortSinglePagePositions(positions)) {
+            return;
+        }
+        int[] scratch = arrayPool.borrowInts(length);
+        try {
+            int[] source = positions;
+            int[] target = scratch;
+            for (int width = 1; width < length; width = width > length / 2 ? length : width * 2) {
+                for (int start = 0; start < length; start += 2 * width) {
+                    int middle = Math.min(start + width, length);
+                    int end = Math.min(start + 2 * width, length);
+                    int left = start;
+                    int right = middle;
+                    int output = start;
+                    while (left < middle && right < end) {
+                        if (compareSinglePagePositions(source[left], source[right]) <= 0) {
+                            target[output++] = source[left++];
+                        }
+                        else {
+                            target[output++] = source[right++];
+                        }
+                    }
+                    while (left < middle) {
+                        target[output++] = source[left++];
+                    }
+                    while (right < end) {
+                        target[output++] = source[right++];
+                    }
+                }
+                int[] swap = source;
+                source = target;
+                target = swap;
+            }
+            if (source != positions) {
+                System.arraycopy(source, 0, positions, 0, length);
+            }
+        }
+        finally {
+            arrayPool.release(scratch);
+        }
+    }
+
+    /**
+     * Stable LSD radix ordering for flat integer window keys. Apply keys from least to most
+     * significant (last ORDER BY key through first PARTITION BY key), preserving lexicographic
+     * SQL order without comparison-sort random reads. Nullable keys get a final stable null bucket
+     * so nulls remain last ascending and first descending, matching OperatorOrderingSemantics.
+     */
+    private boolean tryStableRadixSortSinglePagePositions(int[] positions)
+    {
+        Streams[] columns = pages.getFirst().columns();
+        if (BINARY_HASH_PARTITION_SORT && orderingColumns.length == 0 && partitionColumns.length == 1 &&
+                isBinarySortKey(columns[partitionColumns[0]].values())) {
+            stableHashRadixSortBinaryPartition(positions, columns[partitionColumns[0]]);
+            return true;
+        }
+        for (int column : partitionColumns) {
+            if (!isFlatIntegerSortKey(columns[column])) {
+                return false;
+            }
+        }
+        for (int column : orderingColumns) {
+            if (!isFlatIntegerSortKey(columns[column])) {
+                return false;
+            }
+        }
+
+        int[] scratch = arrayPool.borrowInts(positions.length);
+        try {
+            for (int index = orderingColumns.length - 1; index >= 0; index--) {
+                stableRadixSortColumn(positions, scratch, columns[orderingColumns[index]], descendingByColumn[index]);
+            }
+            for (int index = partitionColumns.length - 1; index >= 0; index--) {
+                stableRadixSortColumn(positions, scratch, columns[partitionColumns[index]], false);
+            }
+        }
+        finally {
+            arrayPool.release(scratch);
+        }
+        return true;
+    }
+
+    private void stableHashRadixSortBinaryPartition(int[] positions, Streams streams)
+    {
+        Vector values = streams.values();
+        Vector nulls = streams.getOrNull(Stream.NULLS);
+        int[] hashes = arrayPool.borrowInts(values.length());
+        int[] scratch = arrayPool.borrowInts(positions.length);
+        try {
+            for (int position : positions) {
+                if (!OperatorVectorSupport.isNull(nulls, position)) {
+                    hashes[position] = OperatorVectorSupport.binaryHash(values, position);
+                }
+            }
+            int[] source = positions;
+            int[] target = scratch;
+            for (int pass = 0; pass < Integer.BYTES + 1; pass++) {
+                java.util.Arrays.fill(radixCounts, 0);
+                int shift = pass * Byte.SIZE;
+                for (int position : source) {
+                    int bucket = pass == Integer.BYTES
+                            ? (OperatorVectorSupport.isNull(nulls, position) ? 1 : 0)
+                            : (hashes[position] >>> shift) & 0xFF;
+                    radixCounts[bucket]++;
+                }
+                int offset = 0;
+                for (int bucket = 0; bucket < radixCounts.length; bucket++) {
+                    int count = radixCounts[bucket];
+                    radixCounts[bucket] = offset;
+                    offset += count;
+                }
+                for (int position : source) {
+                    int bucket = pass == Integer.BYTES
+                            ? (OperatorVectorSupport.isNull(nulls, position) ? 1 : 0)
+                            : (hashes[position] >>> shift) & 0xFF;
+                    target[radixCounts[bucket]++] = position;
+                }
+                int[] swap = source;
+                source = target;
+                target = swap;
+            }
+            if (source != positions) {
+                System.arraycopy(source, 0, positions, 0, positions.length);
+            }
+
+            // Hash equality is only a candidate for SQL equality. Resolve the rare collision run exactly; an
+            // ordinary repeated partition value is detected with one linear equality pass and needs no sorting.
+            int start = 0;
+            while (start < positions.length) {
+                int first = positions[start];
+                boolean firstNull = OperatorVectorSupport.isNull(nulls, first);
+                int hash = hashes[first];
+                int end = start + 1;
+                while (end < positions.length) {
+                    int position = positions[end];
+                    if (OperatorVectorSupport.isNull(nulls, position) != firstNull || hashes[position] != hash) {
+                        break;
+                    }
+                    end++;
+                }
+                if (!firstNull && end - start > 1) {
+                    boolean oneValue = true;
+                    for (int index = start + 1; index < end; index++) {
+                        if (!OperatorVectorSupport.binaryEquals(values, first, values, positions[index])) {
+                            oneValue = false;
+                            break;
+                        }
+                    }
+                    if (!oneValue) {
+                        stableSortBinaryCollisionRange(positions, scratch, start, end, values);
+                    }
+                }
+                start = end;
+            }
+        }
+        finally {
+            arrayPool.release(hashes);
+            arrayPool.release(scratch);
+        }
+    }
+
+    private static void stableSortBinaryCollisionRange(int[] positions, int[] scratch, int start, int end, Vector values)
+    {
+        for (int width = 1; width < end - start; width *= 2) {
+            for (int leftStart = start; leftStart < end; leftStart += 2 * width) {
+                int middle = Math.min(leftStart + width, end);
+                int rightEnd = Math.min(leftStart + 2 * width, end);
+                int left = leftStart;
+                int right = middle;
+                int output = leftStart;
+                while (left < middle && right < rightEnd) {
+                    if (OperatorVectorSupport.binaryCompare(values, positions[left], values, positions[right]) <= 0) {
+                        scratch[output++] = positions[left++];
+                    }
+                    else {
+                        scratch[output++] = positions[right++];
+                    }
+                }
+                while (left < middle) {
+                    scratch[output++] = positions[left++];
+                }
+                while (right < rightEnd) {
+                    scratch[output++] = positions[right++];
+                }
+                System.arraycopy(scratch, leftStart, positions, leftStart, rightEnd - leftStart);
+            }
+        }
+    }
+
+    private static boolean isBinarySortKey(Vector values)
+    {
+        return switch (values) {
+            case BinaryVector _ -> true;
+            case DictionaryVector dictionary -> isBinarySortKey(dictionary.values());
+            case RleVector rle -> isBinarySortKey(rle.values());
+            default -> false;
+        };
+    }
+
+    private static boolean isFlatIntegerSortKey(Streams streams)
+    {
+        Vector values = streams.values();
+        Vector nulls = streams.getOrNull(Stream.NULLS);
+        return (values instanceof I64Vector || values instanceof I32Vector) &&
+                (VectorAccess.isAllFalseNulls(nulls) || nulls instanceof BooleanVector);
+    }
+
+    private void stableRadixSortColumn(int[] positions, int[] scratch, Streams streams, boolean descending)
+    {
+        Vector values = streams.values();
+        Vector nullVector = streams.getOrNull(Stream.NULLS);
+        boolean[] nulls = VectorAccess.isAllFalseNulls(nullVector) ? null : ((BooleanVector) nullVector).values();
+        int bytes = values instanceof I64Vector ? Long.BYTES : Integer.BYTES;
+        long firstKey = 0;
+        long varyingBytes = 0;
+        boolean first = true;
+        for (int position : positions) {
+            if (nulls != null && nulls[position]) {
+                continue;
+            }
+            long key = integerSortKey(values, position, descending);
+            if (first) {
+                firstKey = key;
+                first = false;
+            }
+            else {
+                varyingBytes |= firstKey ^ key;
+            }
+        }
+        if (first) {
+            return;
+        }
+        int[] source = positions;
+        int[] target = scratch;
+        int[] counts = radixCounts;
+        for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
+            int shift = byteIndex * Byte.SIZE;
+            if (((varyingBytes >>> shift) & 0xFF) == 0) {
+                continue;
+            }
+            java.util.Arrays.fill(counts, 0);
+            for (int position : source) {
+                int bucket = nulls != null && nulls[position] ? 0 : integerSortByte(values, position, shift, descending);
+                counts[bucket]++;
+            }
+            int offset = 0;
+            for (int bucket = 0; bucket < counts.length; bucket++) {
+                int count = counts[bucket];
+                counts[bucket] = offset;
+                offset += count;
+            }
+            for (int position : source) {
+                int bucket = nulls != null && nulls[position] ? 0 : integerSortByte(values, position, shift, descending);
+                target[counts[bucket]++] = position;
+            }
+            int[] swap = source;
+            source = target;
+            target = swap;
+        }
+        if (nulls != null) {
+            int nullCount = 0;
+            for (int position : source) {
+                if (nulls[position]) {
+                    nullCount++;
+                }
+            }
+            int nullOffset = descending ? 0 : source.length - nullCount;
+            int valueOffset = descending ? nullCount : 0;
+            for (int position : source) {
+                if (nulls[position]) {
+                    target[nullOffset++] = position;
+                }
+                else {
+                    target[valueOffset++] = position;
+                }
+            }
+            source = target;
+        }
+        if (source != positions) {
+            System.arraycopy(source, 0, positions, 0, positions.length);
+        }
+    }
+
+    private static int integerSortByte(Vector values, int position, int shift, boolean descending)
+    {
+        return (int) ((integerSortKey(values, position, descending) >>> shift) & 0xFF);
+    }
+
+    private static long integerSortKey(Vector values, int position, boolean descending)
+    {
+        long sortable = switch (values) {
+            case I64Vector longs -> longs.values()[position] ^ Long.MIN_VALUE;
+            case I32Vector integers -> (integers.values()[position] ^ Integer.MIN_VALUE) & 0xFFFF_FFFFL;
+            default -> throw new IllegalArgumentException("Expected flat integer sort key");
+        };
+        if (!descending) {
+            return sortable;
+        }
+        return values instanceof I64Vector ? ~sortable : (~sortable) & 0xFFFF_FFFFL;
+    }
+
+    private int compareSinglePagePositions(int leftPosition, int rightPosition)
+    {
+        Streams[] columns = pages.getFirst().columns();
+        for (int partitionColumn : partitionColumns) {
+            int comparison = compareColumn(columns[partitionColumn], leftPosition, rightPosition);
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int comparison = compareColumn(columns[orderingColumns[orderingIndex]], leftPosition, rightPosition);
+            if (descendingByColumn[orderingIndex]) {
+                comparison = -comparison;
+            }
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
+    }
+
+    private Streams materializeSinglePageWindow(RunningWindowFunction function)
+    {
+        Streams[] columns = pages.getFirst().columns();
+        Streams output = function.emptyOutput(allocator, allocationContext, singlePageOrder.length);
+        function.reset();
+        int partitionStart = 0;
+        int previousPosition = -1;
+        for (int outputPosition = 0; outputPosition < singlePageOrder.length; outputPosition++) {
+            int inputPosition = singlePageOrder[outputPosition];
+            if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
+                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
+                function.reset();
+                partitionStart = outputPosition;
+            }
+            output = function.append(allocator, allocationContext, output, columns, inputPosition, outputPosition, singlePageOrder.length);
+            previousPosition = inputPosition;
+        }
+        if (singlePageOrder.length > 0) {
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageOrder.length);
+        }
+        return output;
+    }
+
+    private boolean samePartition(Streams[] columns, int leftPosition, int rightPosition)
+    {
+        for (int partitionColumn : partitionColumns) {
+            Streams streams = columns[partitionColumn];
+            boolean leftNull = OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull != rightNull) {
+                    return false;
+                }
+                continue;
+            }
+            if (!OperatorEqualitySemantics.equal(
+                    streams.values(), streams.getOrNull(Stream.NULLS), leftPosition,
+                    streams.values(), streams.getOrNull(Stream.NULLS), rightPosition)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int compareColumn(Streams streams, int leftPosition, int rightPosition)
+    {
+        return OperatorOrderingSemantics.compare(
+                streams.values(), streams.getOrNull(Stream.NULLS), leftPosition,
+                streams.values(), streams.getOrNull(Stream.NULLS), rightPosition);
     }
 
     private Streams materializeWindow(RunningWindowFunction function, List<RowReference> rows)
@@ -310,25 +748,53 @@ public final class WindowOperator
         return builder.build();
     }
 
+    private Streams materializeSinglePageSourceColumnBatch(int outputIndex, int batchSize)
+    {
+        Streams sourceStreams = pages.getFirst().columns()[outputIndex];
+        Streams.Builder builder = Streams.builder();
+        for (Stream stream : sourceStreams.streams()) {
+            builder.put(stream, sourceStreams.get(stream).copyPositionsInto(
+                    allocator,
+                    allocationContext,
+                    null,
+                    batchPositions,
+                    batchSize,
+                    0,
+                    batchSize));
+        }
+        return builder.build();
+    }
+
     private Streams materializeWindowBatch(int functionIndex, int startPosition, int batchSize)
     {
         Streams fullOutput = windowOutputs[functionIndex];
         Streams.Builder builder = Streams.builder();
         for (Stream stream : fullOutput.streams()) {
-            Vector result = null;
             Vector source = fullOutput.get(stream);
-            for (int outputPosition = 0; outputPosition < batchSize; outputPosition++) {
-                result = source.copySinglePositionInto(
-                        allocator,
-                        allocationContext,
-                        result,
-                        startPosition + outputPosition,
-                        outputPosition,
-                        batchSize);
+            ensureBatchPositions(batchSize);
+            for (int index = 0; index < batchSize; index++) {
+                batchPositions[index] = startPosition + index;
             }
+            Vector result = source.copyPositionsInto(
+                    allocator,
+                    allocationContext,
+                    null,
+                    batchPositions,
+                    batchSize,
+                    0,
+                    batchSize);
             builder.put(stream, result == null ? source.emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
+    }
+
+    private void ensureBatchPositions(int size)
+    {
+        if (batchPositions == null || batchPositions.length < size) {
+            int[] previous = batchPositions;
+            batchPositions = arrayPool.borrowInts(size);
+            arrayPool.release(previous);
+        }
     }
 
     private List<RowReference> rows(List<TableOperator.Page> pages)

@@ -42,10 +42,12 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
+import org.weakref.nitro.operator.NitroParquetScanOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ParquetScanOperator;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -69,6 +71,7 @@ import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -87,6 +90,147 @@ public class TestParquetOperator
 {
     @TempDir
     java.nio.file.Path tempDirectory;
+
+    @Test
+    void testNitroFilteredWindowDefersWidePayloadUntilConstrain()
+            throws IOException
+    {
+        java.nio.file.Path file = writeWideNumericParquetFile("nitro-deferred-filtered-payload.parquet", List.of(
+                new WideNumericRow(1, 11, 12, 13, 14),
+                new WideNumericRow(2, 21, 22, 23, 24),
+                new WideNumericRow(3, 31, 32, 33, 34),
+                new WideNumericRow(4, 41, 42, 43, 44),
+                new WideNumericRow(5, 51, 52, 53, 54),
+                new WideNumericRow(6, 61, 62, 63, 64),
+                new WideNumericRow(7, 71, 72, 73, 74),
+                new WideNumericRow(8, 81, 82, 83, 84),
+                new WideNumericRow(9, 91, 92, 93, 94),
+                new WideNumericRow(10, 101, 102, 103, 104)));
+
+        Allocator allocator = new Allocator();
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                allocator,
+                List.of(file),
+                List.of("key", "p1", "p2", "p3", "p4"))) {
+            // Keep the synthetic window sparse enough to exercise the selective skip/defer path rather than
+            // the deliberately eager bulk path used when more than half of a window survives.
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 2, 6));
+            Batch batch = scan.next();
+            assertThat(batch.borrowMask()).hasSize(5);
+            assertThat(scan.supportsConstrainedReborrow()).isTrue();
+
+            scan.constrain(Mask.sparse(new int[] {2}, 5));
+            I64Vector payload = (I64Vector) batch.output(4).borrow(Stream.VALUES);
+            assertThat(payload.values()[2]).isEqualTo(44L);
+            batch.close();
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testNitroDirectNullMaskKeepsValueReaderIndependent()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-direct-null-mask.parquet", true, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, null),
+                new ParquetRow(13, true, 103L),
+                new ParquetRow(14, false, null)));
+
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("direct-null-mask-test");
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(file), List.of("maybe"))) {
+            Batch batch = scan.next();
+            Mask nullMask = batch.output(0).tryBorrowMask(
+                    Stream.NULLS,
+                    batch.borrowMask(),
+                    true,
+                    allocator,
+                    context);
+            assertThat(nullMask).isNotNull().containsExactly(1, 3);
+
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            assertThat(values.values()).startsWith(101L, 0L, 103L, 0L);
+            assertThat(nulls.values()).startsWith(false, true, false, true);
+            allocator.release(context, nullMask);
+        }
+    }
+
+    @Test
+    void testNitroDirectNullMaskAdvancesAcrossUnresolvedBatches()
+            throws IOException
+    {
+        List<ParquetRow> firstRows = new ArrayList<>();
+        for (int position = 0; position < 10_000; position++) {
+            firstRows.add(new ParquetRow(position, false, (long) position));
+        }
+        java.nio.file.Path first = writeParquetFile("nitro-direct-null-mask-skipped-batch-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeParquetFile("nitro-direct-null-mask-skipped-batch-second.parquet", true, List.of(
+                new ParquetRow(10_000, false, null),
+                new ParquetRow(10_001, false, 10_001L),
+                new ParquetRow(10_002, false, null)));
+
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("direct-null-mask-skipped-batch-test");
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(first, second), List.of("maybe"))) {
+            Batch skipped = scan.next();
+            assertThat(skipped.borrowMask()).hasSize(10_000);
+
+            Batch batch = scan.next();
+            Mask nullMask = batch.output(0).tryBorrowMask(
+                    Stream.NULLS,
+                    batch.borrowMask(),
+                    true,
+                    allocator,
+                    context);
+            assertThat(nullMask).isNotNull().containsExactly(0, 2);
+
+            I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+            assertThat(values.values()).startsWith(0L, 10_001L, 0L);
+            assertThat(nulls.values()).startsWith(true, false, true);
+            allocator.release(context, nullMask);
+        }
+    }
+
+    @Test
+    void testNitroConstrainedEmptyBorrowDefersDecodeAndPreservesNextChunkAlignment()
+            throws IOException
+    {
+        List<ParquetRow> firstRows = new ArrayList<>();
+        for (int position = 0; position < 10_000; position++) {
+            firstRows.add(new ParquetRow(position % 3, false, 100L + (position % 5)));
+        }
+        java.nio.file.Path first = writeParquetFile("nitro-empty-constrained-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeParquetFile("nitro-empty-constrained-second.parquet", true, List.of(
+                new ParquetRow(21, false, 201L),
+                new ParquetRow(22, false, 202L),
+                new ParquetRow(23, false, null)));
+        assertDictionaryEncoding(first, "x");
+        assertDictionaryEncoding(first, "maybe");
+
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                new Allocator(),
+                List.of(first, second),
+                List.of("x", "maybe"))) {
+            Batch empty = scan.next();
+            scan.constrain(Mask.none(10_000));
+            // Schema-only borrows must not decode the empty batch or commit either reader to a page path.
+            assertThat(empty.output(0).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+            assertThat(empty.output(1).borrow(Stream.NULLS)).isInstanceOf(BooleanVector.class);
+
+            Batch selected = scan.next();
+            scan.constrain(Mask.sparse(new int[] {1}, 3));
+            I64Vector x = (I64Vector) selected.output(0).borrow(Stream.VALUES);
+            I64Vector maybe = (I64Vector) selected.output(1).borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) selected.output(1).borrow(Stream.NULLS);
+            assertThat(x.values()[1]).isEqualTo(22L);
+            assertThat(maybe.values()[1]).isEqualTo(202L);
+            assertThat(nulls.values()[1]).isFalse();
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
 
     @Test
     void testParquetScanReadsPlainColumns()
@@ -204,6 +348,61 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroDynamicFilterStreamsNullableDictionaryPages()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        Long[] values = {null, 100L, 200L, 400L, 300L};
+        for (int position = 0; position < 2_000; position++) {
+            rows.add(new ParquetRow(position, (position & 1) == 0, values[position % values.length]));
+        }
+        java.nio.file.Path file = writeParquetFile("nullable-dictionary-filter.parquet", true, rows);
+
+        assertDictionaryEncoding(file, "maybe");
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(file), List.of("maybe"))) {
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
+            try (Batch batch = scan.next()) {
+                assertThat(batch.borrowMask()).hasSize(1_200);
+                I64Vector filtered = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+                for (int position = 0; position < 1_200; position++) {
+                    assertThat(filtered.values()[position]).isIn(100L, 200L, 300L);
+                    assertThat(nulls.values()[position]).isFalse();
+                }
+            }
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testNitroDynamicFilterStreamsHomogeneousNullableDictionaryRuns()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        Long[] values = {100L, 400L, 200L, 300L};
+        for (int position = 0; position < 8_000; position++) {
+            Long value = position < 2_000 ? null : values[position & 3];
+            rows.add(new ParquetRow(position, true, value));
+        }
+        java.nio.file.Path file = writeParquetFile("nullable-dictionary-homogeneous-runs.parquet", true, rows);
+
+        assertDictionaryEncoding(file, "maybe");
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(file), List.of("maybe"))) {
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
+            try (Batch batch = scan.next()) {
+                assertThat(batch.borrowMask()).hasSize(4_500);
+                I64Vector filtered = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                BooleanVector nulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
+                for (int position = 0; position < 4_500; position++) {
+                    assertThat(filtered.values()[position]).isIn(100L, 200L, 300L);
+                    assertThat(nulls.values()[position]).isFalse();
+                }
+            }
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
     void testTrinoParquetScanPreservesDictionaryEncodingForUtf8Columns()
             throws IOException
     {
@@ -246,6 +445,148 @@ public class TestParquetOperator
             assertThat(nulls.values()[0]).isFalse();
             assertThat(nulls.values()[1]).isFalse();
             assertThat(nulls.values()[2]).isFalse();
+        }
+    }
+
+    @Test
+    void testColumnReaderSkipsCompleteChunksWithoutDecodingThem()
+            throws IOException
+    {
+        java.nio.file.Path first = writeParquetFile("skip-chunk-first.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, 102L),
+                new ParquetRow(13, true, 103L)));
+        java.nio.file.Path second = writeParquetFile("skip-chunk-second.parquet", false, List.of(
+                new ParquetRow(21, true, 201L),
+                new ParquetRow(22, false, 202L),
+                new ParquetRow(23, true, 203L)));
+
+        try (org.weakref.nitro.parquet.ParquetFile firstFile = org.weakref.nitro.parquet.ParquetFile.open(first);
+                org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
+            org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
+            try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
+                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
+                    reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+                for (org.apache.parquet.format.RowGroup rowGroup : secondFile.rowGroups()) {
+                    reader.addChunk(secondFile.data(), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+
+                reader.skip(3);
+                long[] values = new long[3];
+                reader.readLongs(values, null, values.length);
+                assertThat(values).containsExactly(21L, 22L, 23L);
+            }
+        }
+    }
+
+    @Test
+    void testColumnReaderReusesNumericDictionaryScratchAcrossChunks()
+            throws IOException
+    {
+        java.nio.file.Path first = writeParquetFile("dictionary-scratch-first.parquet", true, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, 102L),
+                new ParquetRow(11, true, 101L)));
+        java.nio.file.Path second = writeParquetFile("dictionary-scratch-second.parquet", true, List.of(
+                new ParquetRow(21, true, 201L),
+                new ParquetRow(22, false, 202L),
+                new ParquetRow(23, true, 203L),
+                new ParquetRow(21, false, 204L)));
+        assertDictionaryEncoding(first, "x");
+        assertDictionaryEncoding(second, "x");
+
+        try (org.weakref.nitro.parquet.ParquetFile firstFile = org.weakref.nitro.parquet.ParquetFile.open(first);
+                org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
+            org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
+            try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
+                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
+                    reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+                for (org.apache.parquet.format.RowGroup rowGroup : secondFile.rowGroups()) {
+                    reader.addChunk(secondFile.data(), secondFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+
+                long[] values = new long[7];
+                reader.readLongs(values, null, values.length);
+                assertThat(values).containsExactly(11L, 12L, 11L, 21L, 22L, 23L, 21L);
+            }
+        }
+    }
+
+    @Test
+    void testDenseSelectedNullablePageResetsDefinitionReaderAfterAllOnesProbe()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 200; position++) {
+            rows.add(new ParquetRow(position, false, position == 50 ? null : 1_000L + position));
+        }
+        java.nio.file.Path file = writeParquetFile("dense-selected-nullable.parquet", true, rows);
+
+        try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
+            org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
+            try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
+                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
+                    reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+
+                int[] survivors = new int[100];
+                for (int index = 0; index < survivors.length; index++) {
+                    survivors[index] = index * 2;
+                }
+                long[] values = new long[survivors.length];
+                boolean[] nulls = new boolean[survivors.length];
+                reader.readSelectedLongs(survivors, survivors.length, rows.size(), values, nulls);
+
+                for (int index = 0; index < survivors.length; index++) {
+                    int position = survivors[index];
+                    assertThat(nulls[index]).isEqualTo(position == 50);
+                    if (position != 50) {
+                        assertThat(values[index]).isEqualTo(1_000L + position);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void testSelectedNumericDictionaryIdsRemainPageRelativeAcrossOutputBatches()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 1_000; position++) {
+            Long value = position % 97 == 0 ? null : 10_000L + (position % 211);
+            rows.add(new ParquetRow(position % 37, false, value));
+        }
+        java.nio.file.Path file = writeParquetFile("selected-dictionary-multiple-batches.parquet", true, rows);
+        assertDictionaryEncoding(file, "maybe");
+
+        try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
+            org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
+            try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
+                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
+                    reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                }
+
+                int[] survivors = {1, 2, 17, 63, 96, 97, 151, 199};
+                long[] values = new long[survivors.length];
+                boolean[] nulls = new boolean[survivors.length];
+                for (int batch = 0; batch < 5; batch++) {
+                    reader.readSelectedLongs(survivors, survivors.length, 200, values, nulls);
+                    for (int index = 0; index < survivors.length; index++) {
+                        int position = batch * 200 + survivors[index];
+                        assertThat(nulls[index]).isEqualTo(position % 97 == 0);
+                        if (position % 97 != 0) {
+                            assertThat(values[index]).isEqualTo(10_000L + (position % 211));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -583,6 +924,41 @@ public class TestParquetOperator
             assertThat(values.values()[0]).isTrue();
             assertThat(values.values()[1]).isFalse();
         }
+    }
+
+    @Test
+    void testTakenBinaryDictionarySurvivesLaterChunkScratchReuse()
+            throws IOException
+    {
+        List<BinaryParquetRow> firstRows = new ArrayList<>();
+        List<BinaryParquetRow> secondRows = new ArrayList<>();
+        for (int position = 0; position < 12_000; position++) {
+            firstRows.add(new BinaryParquetRow((position & 1) == 0 ? "alpha" : "beta", bytes(position & 0xFF)));
+            secondRows.add(new BinaryParquetRow((position & 1) == 0 ? "gamma" : "delta", bytes(position & 0xFF)));
+        }
+        java.nio.file.Path first = writeBinaryParquetFile("taken-dictionary-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeBinaryParquetFile("taken-dictionary-second.parquet", true, secondRows);
+        assertDictionaryEncoding(first, "name");
+        assertDictionaryEncoding(second, "name");
+
+        org.weakref.nitro.data.Vector retained;
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(first, second), List.of("name"))) {
+            try (Batch firstBatch = scan.next()) {
+                retained = firstBatch.output(0).take(Stream.VALUES);
+            }
+            try (Batch secondBatch = scan.next()) {
+                secondBatch.output(0).borrow(Stream.VALUES);
+            }
+            try (Batch thirdBatch = scan.next()) {
+                thirdBatch.output(0).borrow(Stream.VALUES);
+            }
+
+            DictionaryVector dictionary = (DictionaryVector) retained;
+            BinaryVector values = (BinaryVector) dictionary.values();
+            assertThat(utf8(values, dictionary.ids()[0])).isEqualTo("alpha");
+            assertThat(utf8(values, dictionary.ids()[1])).isEqualTo("beta");
+        }
+        retained.releaseTransferredBuffers();
     }
 
     @Test
@@ -1983,6 +2359,34 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeWideNumericParquetFile(String name, List<WideNumericRow> rows)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .required(INT64).named("key")
+                .required(INT64).named("p1")
+                .required(INT64).named("p2")
+                .required(INT64).named("p3")
+                .required(INT64).named("p4")
+                .named("nitro_wide_numeric_test");
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .withDictionaryEncoding(true)
+                .build()) {
+            for (WideNumericRow row : rows) {
+                writer.write(groups.newGroup()
+                        .append("key", row.key())
+                        .append("p1", row.p1())
+                        .append("p2", row.p2())
+                        .append("p3", row.p3())
+                        .append("p4", row.p4()));
+            }
+        }
+        return file;
+    }
+
     private java.nio.file.Path writeBinaryParquetFile(String name, boolean dictionaryEnabled, List<BinaryParquetRow> rows)
             throws IOException
     {
@@ -2450,6 +2854,8 @@ public class TestParquetOperator
     }
 
     private record ParquetRow(long x, boolean flag, Long maybe) {}
+
+    private record WideNumericRow(long key, long p1, long p2, long p3, long p4) {}
 
     private record BinaryParquetRow(String name, byte[] payload) {}
 

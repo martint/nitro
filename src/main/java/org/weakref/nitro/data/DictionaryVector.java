@@ -21,13 +21,17 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class DictionaryVector
         implements Vector
 {
+    private static final boolean TRANSFERABLE_BUFFER_LEASES =
+            Boolean.parseBoolean(System.getProperty("nitro.transferableBufferLeases", "true"));
     private final int[] ids;
+    private final I32Vector ownedIds;
     private final int length;
     private final Vector values;
+    private Allocator.BufferLeaseOwner transferredIdsOwner;
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, ids.length, values, true, true);
+        this(ids, null, ids.length, values, true, true);
     }
 
     /**
@@ -42,7 +46,7 @@ public final class DictionaryVector
 
     public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, length, values, true, false);
+        return new DictionaryVector(ids, null, length, values, true, false);
     }
 
     /**
@@ -67,7 +71,21 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, length, values, false, false);
+        return new DictionaryVector(ids, null, length, values, false, false);
+    }
+
+    /**
+     * Wraps dictionary ids whose backing storage is owned by an allocator context. The id vector is an ownership
+     * child, so generic allocator transfer/release traversal follows the mapping buffer without treating borrowed
+     * dictionary values as owned by the same producer.
+     * <p>
+     * Unlike {@link #wrap(int[], int, Vector)}, this method deliberately preserves a nested value encoding: composing
+     * ids would require replacing the supplied owned buffer and would sever its lifecycle.
+     */
+    public static DictionaryVector wrapOwnedIds(I32Vector ids, int length, Vector values)
+    {
+        checkArgument(ids != null, "ids is null");
+        return new DictionaryVector(ids.values(), ids, length, values, false, false);
     }
 
     private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
@@ -87,17 +105,18 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, composedIds.length, baseValues, false, false);
+            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, false);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, length, values, copyIds, false);
+        return new DictionaryVector(ids, null, length, values, copyIds, false);
     }
 
-    private DictionaryVector(int[] ids, int length, Vector values, boolean copyIds, boolean validate)
+    private DictionaryVector(int[] ids, I32Vector ownedIds, int length, Vector values, boolean copyIds, boolean validate)
     {
         checkArgument(length >= 0, "length is negative");
         checkArgument(length <= ids.length, "length exceeds ids capacity");
         this.ids = copyIds ? Arrays.copyOf(ids, length) : ids;
+        this.ownedIds = ownedIds;
         this.length = length;
         this.values = values;
         if (validate) {
@@ -115,6 +134,74 @@ public final class DictionaryVector
         return values;
     }
 
+    /**
+     * Returns the first non-dictionary value vector below this wrapper. Consumers that operate on a concrete leaf
+     * representation can resolve the encoding once per batch instead of recursively dispatching once per row.
+     */
+    public Vector baseValues()
+    {
+        Vector base = values;
+        while (base instanceof DictionaryVector dictionary) {
+            base = dictionary.values;
+        }
+        return base;
+    }
+
+    /**
+     * Maps a logical position through every dictionary layer to the corresponding position in {@link #baseValues()}.
+     * No mapping buffer is allocated or composed, so this is safe for borrowed and ownership-carrying dictionaries.
+     */
+    public int basePosition(int position)
+    {
+        int basePosition = ids[position];
+        Vector base = values;
+        while (base instanceof DictionaryVector dictionary) {
+            basePosition = dictionary.ids[basePosition];
+            base = dictionary.values;
+        }
+        return basePosition;
+    }
+
+    public int dictionaryDepth()
+    {
+        int depth = 1;
+        Vector base = values;
+        while (base instanceof DictionaryVector dictionary) {
+            depth++;
+            base = dictionary.values;
+        }
+        return depth;
+    }
+
+    /** Resolves a position using a depth already hoisted by the caller. */
+    public int basePosition(int position, int depth)
+    {
+        int mapped = ids[position];
+        return switch (depth) {
+            case 1 -> mapped;
+            case 2 -> ((DictionaryVector) values).ids[mapped];
+            case 3 -> {
+                DictionaryVector level2 = (DictionaryVector) values;
+                DictionaryVector level3 = (DictionaryVector) level2.values;
+                yield level3.ids[level2.ids[mapped]];
+            }
+            case 4 -> {
+                DictionaryVector level2 = (DictionaryVector) values;
+                DictionaryVector level3 = (DictionaryVector) level2.values;
+                DictionaryVector level4 = (DictionaryVector) level3.values;
+                yield level4.ids[level3.ids[level2.ids[mapped]]];
+            }
+            case 5 -> {
+                DictionaryVector level2 = (DictionaryVector) values;
+                DictionaryVector level3 = (DictionaryVector) level2.values;
+                DictionaryVector level4 = (DictionaryVector) level3.values;
+                DictionaryVector level5 = (DictionaryVector) level4.values;
+                yield level5.ids[level4.ids[level3.ids[level2.ids[mapped]]]];
+            }
+            default -> basePosition(position);
+        };
+    }
+
     @Override
     public int length()
     {
@@ -124,7 +211,13 @@ public final class DictionaryVector
     @Override
     public long retainedBytes()
     {
-        return (long) ids.length * Integer.BYTES;
+        return ownedIds == null ? (long) ids.length * Integer.BYTES : 0;
+    }
+
+    @Override
+    public boolean isVariableWidth()
+    {
+        return values.isVariableWidth();
     }
 
     @Override
@@ -189,7 +282,27 @@ public final class DictionaryVector
     @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
+        if (ownedIds != null) {
+            consumer.accept(ownedIds);
+        }
         consumer.accept(values);
+    }
+
+    @Override
+    public void prepareBufferTransfer(Allocator allocator, Allocator.Context producerContext)
+    {
+        if (TRANSFERABLE_BUFFER_LEASES && ownedIds != null && transferredIdsOwner == null) {
+            transferredIdsOwner = allocator.lease(producerContext, ownedIds);
+        }
+    }
+
+    @Override
+    public void releaseTransferredBuffers()
+    {
+        if (transferredIdsOwner != null) {
+            transferredIdsOwner.releaseLeased(ownedIds);
+            transferredIdsOwner = null;
+        }
     }
 
     @Override

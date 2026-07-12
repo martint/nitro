@@ -1,0 +1,22 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+query22: 1 iters, 1186.6 ms/iter, rows-sink=1200
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q22.topn                           TopNOperator               1182.850   14.91%      135.514     138766.719     138766.719        1          100
+  next=1172.968  borrow=  0.382  take=  0.000  constrain=  0.000  close=  9.474  alloc[next= 135.226 borrow=   0.202 take=   0.000 constrain=   0.000 close=   0.087] MB
+q22.project.output                 ProjectOperator            1147.365   14.46%      133.082     136276.047     136276.047        1       203751
+  next=1087.937  borrow= 21.742  take=  0.000  constrain=  0.000  close=  9.214  alloc[next= 106.307 borrow=  26.660 take=   0.000 constrain=   0.000 close=   0.032] MB
+q22.group.rollup                   GroupedAggregationOperator   1117.104   14.08%      127.825     130892.344     130892.344        1       203751
+  next=1087.902  borrow= 19.524  take=  0.000  constrain=  0.000  close=  9.182  alloc[next= 106.304 borrow=  21.491 take=   0.000 constrain=   0.000 close=   0.030] MB
+q22.group_id                       GroupIdOperator            1072.394   13.52%       81.480       2781.179       2781.179       30       255000
+  next=  0.009  borrow=  0.064  take=  0.000  constrain=  0.000  close=  9.138  alloc[next=   0.000 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.021] MB
+q22.join.item                      HashJoinOperator           1069.203   13.48%       70.003      10240.414      10240.414        7        51000
+  next=1059.351  borrow=  0.699  take=  0.000  constrain=  0.000  close=  9.149  alloc[next=  69.335 borrow=   0.655 take=   0.000 constrain=   0.000 close=   0.013] MB
+q22.group.by_item                  GroupedAggregationOperator   1052.096   13.26%       33.992      34808.273      34808.273        1        51000
+  next=1040.570  borrow=  2.575  take=  0.000  constrain=  0.003  close=  8.945  alloc[next=  31.559 borrow=   2.428 take=   0.000 constrain=   0.000 close=   0.005] MB
+q22.join.date_dim                  HashJoinOperator            669.559    8.44%       15.251          5.878          5.878     2657     26520000
+  next=651.590  borrow=  6.402  take=  0.000  constrain=  0.000  close= 10.568  alloc[next=  13.825 borrow=   0.552 take=   0.000 constrain=   0.000 close=   0.875] MB
+q22.scan.inventory                 NitroParquetScanOperator    623.899    7.86%        5.428          2.093          2.093     2656     26520000
+  next= 18.060  borrow=  2.761  take=  0.000  constrain=  0.000  close= 11.606  alloc[next=   1.667 borrow=   0.000 take=   0.000 constrain=   0.000 close=   1.420] MB
+Total attributed cpu_ms: 7934.471
+

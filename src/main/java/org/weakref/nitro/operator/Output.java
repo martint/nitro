@@ -81,9 +81,12 @@ public final class Output
     private final SinglePositionResolver singlePositionResolver;
     private final int knownAllFalseFlags;
     private final int debugDepth;
-    private final Vector[] resolvedStreams = new Vector[Stream.values().length];
+    private Vector resolvedValues;
+    private Vector resolvedNulls;
+    private Vector resolvedErrors;
     private int resolvedFlags;
     private int takenFlags;
+    private boolean constraintSensitiveResolution;
     private boolean closed;
 
     public static Output of(Streams streams)
@@ -107,6 +110,27 @@ public final class Output
     {
         this(exposedStreams, resolver, takeResolver, releaseResolver, null, null);
         OutputDebug.recordBaseOutput(false, false, false);
+    }
+
+    /** Creates an output whose resolved buffers participate in the supplied reusable batch scope. */
+    public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BatchBufferOwner bufferOwner)
+    {
+        this(exposedStreams, resolver, null, null, requireNonNull(bufferOwner, "bufferOwner is null"), bufferOwner, null, null, 0, 0);
+        OutputDebug.recordBaseOutput(false, false, false);
+    }
+
+    /** Full lazy-resolution form for scoped outputs that support masked resolution and direct copy operations. */
+    public Output(
+            Set<Stream> exposedStreams,
+            Function<Stream, Vector> resolver,
+            MaskedResolver maskedResolver,
+            MaskResolver maskResolver,
+            PositionsResolver positionsResolver,
+            SinglePositionResolver singlePositionResolver,
+            BatchBufferOwner bufferOwner)
+    {
+        this(exposedStreams, resolver, maskedResolver, maskResolver, requireNonNull(bufferOwner, "bufferOwner is null"), bufferOwner, positionsResolver, singlePositionResolver, 0, 0);
+        OutputDebug.recordBaseOutput(false, positionsResolver != null, singlePositionResolver != null);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
@@ -155,7 +179,7 @@ public final class Output
         if (additionalFlags == 0 || (knownAllFalseFlags | additionalFlags) == knownAllFalseFlags) {
             return this;
         }
-        return new Output(
+        Output output = new Output(
                 streams(),
                 resolver,
                 maskedResolver,
@@ -166,6 +190,7 @@ public final class Output
                 singlePositionResolver,
                 debugDepth,
                 knownAllFalseFlags | additionalFlags);
+        return output;
     }
 
     public Vector borrow(Stream stream)
@@ -183,13 +208,13 @@ public final class Output
         if (maskedResolver != null) {
             return resolveMasked(stream, null, flag, index);
         }
-        Vector resolved = resolvedStreams[index];
+        Vector resolved = resolvedStream(index);
         if (resolved != null) {
             OutputDebug.recordBorrow(debugDepth, index, true);
             return resolved;
         }
         resolved = requireNonNull(resolver.apply(stream), "resolver returned null");
-        resolvedStreams[index] = resolved;
+        resolvedStream(index, resolved);
         resolvedFlags |= flag;
         OutputDebug.recordBorrow(debugDepth, index, false);
         return resolved;
@@ -216,12 +241,12 @@ public final class Output
 
     private Vector resolveMasked(Stream stream, Mask mask, int flag, int index)
     {
-        Vector previous = resolvedStreams[index];
+        Vector previous = resolvedStream(index);
         Vector resolved = requireNonNull(maskedResolver.resolve(stream, mask), "maskedResolver returned null");
         if (previous != null && previous != resolved) {
-            releaseResolver.accept(stream, previous);
+            release(stream, previous);
         }
-        resolvedStreams[index] = resolved;
+        resolvedStream(index, resolved);
         resolvedFlags |= flag;
         OutputDebug.recordBorrow(debugDepth, index, previous == resolved && previous != null);
         return resolved;
@@ -378,6 +403,46 @@ public final class Output
         return new Output(streams(), this::borrow, this::borrowMaybeMasked, this::tryBorrowMask, takeResolver, releaseResolver, null, singlePositionResolver, debugDepth + 1, knownAllFalseFlags);
     }
 
+    /** Marks cached streams as mask-sensitive so {@link Batch#constrain(Mask)} releases them before re-borrow. */
+    public Output withConstraintSensitiveResolution()
+    {
+        constraintSensitiveResolution = true;
+        return this;
+    }
+
+    boolean hasConstraintSensitiveTakenStreams()
+    {
+        return constraintSensitiveResolution && takenFlags != 0;
+    }
+
+    /**
+     * Drops mask-sensitive cached streams before a constrained re-borrow. A taken stream belongs to the caller and
+     * cannot be invalidated safely; {@link Batch} checks that invariant for every output before invalidating any of
+     * them. Untaken streams remain owned here and are released through their normal resolver contract.
+     */
+    void invalidateResolvedForConstraint()
+    {
+        if (!constraintSensitiveResolution) {
+            return;
+        }
+        checkOpen();
+        if (takenFlags != 0) {
+            throw new IllegalStateException("Cannot constrain batch after an output stream was taken");
+        }
+        int flags = resolvedFlags;
+        while (flags != 0) {
+            int flag = Integer.lowestOneBit(flags);
+            Stream stream = stream(flag);
+            OutputDebug.recordRelease(debugDepth, streamIndex(stream));
+            release(stream, resolvedStream(streamIndex(stream)));
+            flags &= ~flag;
+        }
+        resolvedValues = null;
+        resolvedNulls = null;
+        resolvedErrors = null;
+        resolvedFlags = 0;
+    }
+
     @Override
     public void close()
     {
@@ -391,12 +456,12 @@ public final class Output
             int flag = Integer.lowestOneBit(flags);
             Stream stream = stream(flag);
             OutputDebug.recordRelease(debugDepth, streamIndex(stream));
-            releaseResolver.accept(stream, resolvedStreams[streamIndex(stream)]);
+            release(stream, resolvedStream(streamIndex(stream)));
             flags &= ~flag;
         }
-        for (int index = 0; index < resolvedStreams.length; index++) {
-            resolvedStreams[index] = null;
-        }
+        resolvedValues = null;
+        resolvedNulls = null;
+        resolvedErrors = null;
         resolvedFlags = 0;
         takenFlags = 0;
     }
@@ -447,6 +512,36 @@ public final class Output
             case ERRORS_FLAG -> Stream.ERRORS;
             default -> throw new IllegalArgumentException("Unknown stream flag: " + flag);
         };
+    }
+
+    private Vector resolvedStream(int index)
+    {
+        return switch (index) {
+            case 0 -> resolvedValues;
+            case 1 -> resolvedNulls;
+            case 2 -> resolvedErrors;
+            default -> throw new IllegalArgumentException("Unknown stream index: " + index);
+        };
+    }
+
+    private void release(Stream stream, Vector vector)
+    {
+        try {
+            releaseResolver.accept(stream, vector);
+        }
+        finally {
+            vector.releaseTransferredBuffers();
+        }
+    }
+
+    private void resolvedStream(int index, Vector vector)
+    {
+        switch (index) {
+            case 0 -> resolvedValues = vector;
+            case 1 -> resolvedNulls = vector;
+            case 2 -> resolvedErrors = vector;
+            default -> throw new IllegalArgumentException("Unknown stream index: " + index);
+        }
     }
 
     private void checkOpen()

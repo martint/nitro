@@ -19,8 +19,10 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
@@ -30,7 +32,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "is_null_i32")
 public final class IsNullI32
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IsNullI32");
 
@@ -44,6 +46,37 @@ public final class IsNullI32
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
         return PrimitiveFunction.nullsOnlyWhenRequested(requestedOutputStreams);
+    }
+
+    @Override
+    public Set<Stream> requiredMaskInputStreams(int inputIndex)
+    {
+        return PrimitiveFunction.NULLS_INPUT_STREAMS;
+    }
+
+    @Override
+    public Reference directMaskInput(List<Reference> arguments)
+    {
+        checkArgument(arguments.size() == 1, "Unexpected argument count for is_null_i32");
+        return new Reference(arguments.getFirst().producer(), Stream.NULLS);
+    }
+
+    @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return false;
+    }
+
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return IsNullMaskSupport.evaluateInPlace(inputs, mask, true);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return IsNullMaskSupport.evaluateInPlace(inputs, mask, false);
     }
 
     @Override

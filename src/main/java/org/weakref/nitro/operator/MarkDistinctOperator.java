@@ -15,23 +15,27 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.function.Function;
+import java.util.Arrays;
 
 public class MarkDistinctOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MarkDistinctOperator");
+    private static final int[] EMPTY_POSITIONS = new int[0];
 
     private final Allocator allocator;
     private final Operator source;
     private final int[] distinctColumns;
     private final boolean retainNulls;
+    private final Vector[] values;
+    private final Vector[] nulls;
 
     private DistinctKeySet distinctKeySet;
-    private int[] distinctPositions = new int[0];
+    private int[] distinctPositions = EMPTY_POSITIONS;
     private BatchState currentBatchState;
 
     public MarkDistinctOperator(Allocator allocator, int distinctColumn, Operator source)
@@ -57,6 +61,8 @@ public class MarkDistinctOperator
         this.source = source;
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
+        this.values = new Vector[distinctColumns.length];
+        this.nulls = new Vector[distinctColumns.length];
     }
 
     @Override
@@ -87,28 +93,7 @@ public class MarkDistinctOperator
         BatchState batchState = new BatchState(sourceBatch, batchMask);
         currentBatchState = batchState;
 
-        Output[] outputs = new Output[outputCount()];
-        for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            Output sourceOutput = sourceBatch.output(outputIndex);
-            outputs[outputIndex] = new Output(
-                    sourceOutput.streams(),
-                    sourceOutput::borrow,
-                    (stream, vector) -> sourceOutput.take(stream),
-                    (_, _) -> {},
-                    sourceOutput::copySinglePosition);
-        }
-        return new Batch(
-                batchMask,
-                batchState::constrain,
-                Function.identity(),
-                _ -> {},
-                () -> {
-                    if (currentBatchState == batchState) {
-                        currentBatchState = null;
-                    }
-                    sourceBatch.close();
-                },
-                outputs);
+        return Batch.forwarding(batchMask, batchState, sourceBatch);
     }
 
     @Override
@@ -142,6 +127,14 @@ public class MarkDistinctOperator
             currentBatchState = null;
         }
         source.close();
+        if (distinctKeySet != null) {
+            distinctKeySet.releaseBuffers();
+            distinctKeySet = null;
+        }
+        PrimitiveArrayPool.shared().release(distinctPositions);
+        distinctPositions = EMPTY_POSITIONS;
+        Arrays.fill(values, null);
+        Arrays.fill(nulls, null);
         allocator.release(ALLOCATION_CONTEXT);
     }
 
@@ -151,40 +144,82 @@ public class MarkDistinctOperator
             return sourceMask;
         }
 
-        Vector[] values = new Vector[distinctColumns.length];
-        Vector[] nulls = new Vector[distinctColumns.length];
-        for (int index = 0; index < distinctColumns.length; index++) {
-            Output output = sourceBatch.output(distinctColumns[index]);
-            values[index] = output.borrow(Stream.VALUES);
-            nulls[index] = output.borrowOrNull(Stream.NULLS);
-        }
-        if (distinctKeySet == null) {
-            distinctKeySet = DistinctKeySet.create(values, retainNulls);
-        }
-        distinctKeySet.reserveAdditional(sourceMask.selectedCount());
-
         if (distinctPositions.length < sourceMask.selectedCount()) {
-            distinctPositions = new int[sourceMask.selectedCount()];
+            int[] previous = distinctPositions;
+            distinctPositions = PrimitiveArrayPool.shared().borrowInts(sourceMask.selectedCount());
+            PrimitiveArrayPool.shared().release(previous);
         }
 
-        int selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);
+        int selectedCount;
+        try {
+            for (int index = 0; index < distinctColumns.length; index++) {
+                Output output = sourceBatch.output(distinctColumns[index]);
+                values[index] = output.borrow(Stream.VALUES);
+                nulls[index] = output.borrowOrNull(Stream.NULLS);
+            }
+            if (distinctKeySet == null) {
+                distinctKeySet = DistinctKeySet.create(values, retainNulls);
+            }
+            distinctKeySet.reserveAdditional(sourceMask.selectedCount());
+            selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);
+        }
+        finally {
+            Arrays.fill(values, null);
+            Arrays.fill(nulls, null);
+        }
         if (selectedCount == sourceMask.selectedCount()) {
             return sourceMask;
         }
         return allocator.allocateSparseMask(ALLOCATION_CONTEXT, distinctPositions, selectedCount, sourceMask.size());
     }
 
-    private record BatchState(Batch sourceBatch, Mask[] maskHolder)
+    private final class BatchState
+            implements Batch.Lifecycle
     {
-        private BatchState(Batch sourceBatch, Mask mask)
+        private final Batch sourceBatch;
+        private final Mask ownedMask;
+
+        private BatchState(Batch sourceBatch, Mask ownedMask)
         {
-            this(sourceBatch, new Mask[] {mask});
+            this.sourceBatch = sourceBatch;
+            this.ownedMask = ownedMask;
         }
 
-        private void constrain(Mask mask)
+        private Batch sourceBatch()
         {
-            maskHolder[0] = mask;
+            return sourceBatch;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
             sourceBatch.constrain(mask);
+        }
+
+        @Override
+        public Mask takeMask(Mask mask)
+        {
+            if (mask == ownedMask) {
+                allocator.transfer(ALLOCATION_CONTEXT, mask);
+            }
+            return mask;
+        }
+
+        @Override
+        public void releaseMask(Mask mask)
+        {
+            if (mask == ownedMask) {
+                allocator.release(ALLOCATION_CONTEXT, mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (currentBatchState == this) {
+                currentBatchState = null;
+            }
+            sourceBatch.close();
         }
     }
 }

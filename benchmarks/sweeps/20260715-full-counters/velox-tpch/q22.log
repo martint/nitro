@@ -1,0 +1,45 @@
+Execution time: 618ms
+OperatorWall: Aggregation=0.1 CallbackSink=0.0 FilterProject=79.6 HashBuild=307.2 HashProbe=1.8 LocalExchange=0.0 LocalPartition=0.1 NestedLoopJoinBuild=0.0 NestedLoopJoinProbe=1.2 OrderBy=0.0 PartialAggregation=1.3 TableScan=221.0
+ScanWall: 221.0ms  ComputeWall: 391.3ms  (sum 612.3ms)
+Splits total: 9, finished: 9
+-- OrderBy[15][country_code ASC NULLS LAST] -> country_code:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+   Output: 7 rows (352B, 1 batches), Cpu time: 15.02us, Wall time: 18.20us, Blocked wall time: 0ns, Peak memory: 128.69KB, Memory allocations: 6, Threads: 1, CPU breakdown: B/I/O/F (2.83us/4.54us/4.09us/3.56us)
+  -- Aggregation[14][FINAL [country_code] numcust := count("numcust"), totacctbal := sum("totacctbal")] -> country_code:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+     Output: 7 rows (383.72KB, 1 batches), Cpu time: 38.43us, Wall time: 40.96us, Blocked wall time: 0ns, Peak memory: 488.38KB, Memory allocations: 9, Threads: 1, CPU breakdown: B/I/O/F (1.80us/22.63us/13.12us/871ns)
+    -- LocalPartition[13][GATHER] -> country_code:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+       Output: 14 rows (767.44KB, 2 batches), Cpu time: 65.22us, Wall time: 87.17us, Blocked wall time: 616.39ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (35.36us/22.71us/4.88us/2.28us)
+       LocalPartition: Input: 7 rows (383.72KB, 1 batches), Output: 7 rows (383.72KB, 1 batches), Cpu time: 61.11us, Wall time: 82.05us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (34.51us/22.71us/1.76us/2.12us)
+       LocalExchange: Input: 7 rows (383.72KB, 1 batches), Output: 7 rows (383.72KB, 1 batches), Cpu time: 4.12us, Wall time: 5.11us, Blocked wall time: 616.39ms, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (850ns/0ns/3.12us/151ns)
+      -- Aggregation[12][PARTIAL [country_code] numcust := count(0), totacctbal := sum(ROW["c_acctbal"])] -> country_code:VARCHAR, numcust:BIGINT, totacctbal:DOUBLE
+         Output: 7 rows (383.72KB, 1 batches), Cpu time: 861.77us, Wall time: 992.58us, Blocked wall time: 0ns, Peak memory: 882.00KB, Memory allocations: 12, Threads: 1, CPU breakdown: B/I/O/F (94.70us/695.18us/47.82us/24.07us)
+        -- Project[11][expressions: (country_code:VARCHAR, substr(ROW["c_phone"],1,2)), (c_acctbal:DOUBLE, ROW["c_acctbal"])] -> country_code:VARCHAR, c_acctbal:DOUBLE
+           Output: 63914 rows (2.78MB, 151 batches), Cpu time: 1.66ms, Wall time: 1.82ms, Blocked wall time: 0ns, Peak memory: 192.00KB, Memory allocations: 151, Threads: 1, CPU breakdown: B/I/O/F (113.37us/25.10us/1.50ms/23.14us)
+          -- HashJoin[10][ANTI c_custkey=o_custkey] -> c_acctbal:DOUBLE, c_phone:VARCHAR
+             Output: 63914 rows (2.78MB, 151 batches), Cpu time: 309.14ms, Wall time: 310.01ms, Blocked wall time: 506.45ms, Peak memory: 255.78MB, Memory allocations: 29, CPU breakdown: B/I/O/F (571.07us/219.35ms/991.26us/88.23ms)
+             HashBuild: Input: 15000000 rows (0B, 1502 batches), Output: 0 rows (0B, 0 batches), Cpu time: 307.26ms, Wall time: 307.97ms, Blocked wall time: 0ns, Peak memory: 255.71MB, Memory allocations: 10, Threads: 1, CPU breakdown: B/I/O/F (450.91us/218.38ms/217.25us/88.21ms)
+             HashProbe: Input: 190691 rows (9.88MB, 151 batches), Output: 63914 rows (2.78MB, 151 batches), Cpu time: 1.89ms, Wall time: 2.04ms, Blocked wall time: 506.45ms, Peak memory: 70.00KB, Memory allocations: 19, Threads: 1, CPU breakdown: B/I/O/F (120.16us/967.44us/774.00us/24.17us)
+            -- Filter[9][expression: gt(ROW["c_acctbal"],ROW["avg_acctbal"])] -> c_acctbal:DOUBLE, avg_acctbal:DOUBLE, c_custkey:BIGINT, c_phone:VARCHAR
+               Output: 190691 rows (9.88MB, 151 batches), Cpu time: 5.25ms, Wall time: 5.40ms, Blocked wall time: 0ns, Peak memory: 13.00KB, Memory allocations: 153, Threads: 1, CPU breakdown: B/I/O/F (113.03us/24.24us/5.09ms/22.48us)
+              -- NestedLoopJoin[8][INNER] -> c_acctbal:DOUBLE, avg_acctbal:DOUBLE, c_custkey:BIGINT, c_phone:VARCHAR
+                 Output: 419974 rows (21.75MB, 151 batches), Cpu time: 1.31ms, Wall time: 1.42ms, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (116.97us/1.05ms/123.24us/26.04us)
+                 NestedLoopJoinBuild: Input: 1 rows (32B, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 6.93us, Wall time: 9.40us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (2.16us/311ns/890ns/3.57us)
+                 NestedLoopJoinProbe: Input: 419974 rows (14.73MB, 151 batches), Output: 419974 rows (21.75MB, 151 batches), Cpu time: 1.30ms, Wall time: 1.41ms, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (114.80us/1.04ms/122.35us/22.48us)
+                -- Filter[7][expression: in(substr(ROW["c_phone"],1,2),{13, 31, 23, 29, 30, ...2 more})] -> c_custkey:BIGINT, c_acctbal:DOUBLE, c_phone:VARCHAR
+                   Output: 419974 rows (14.73MB, 151 batches), Cpu time: 35.40ms, Wall time: 35.51ms, Blocked wall time: 0ns, Peak memory: 243.00KB, Memory allocations: 154, Threads: 1, CPU breakdown: B/I/O/F (89.27us/24.49us/35.26ms/22.55us)
+                  -- TableScan[6][table: customer] -> c_custkey:BIGINT, c_acctbal:DOUBLE, c_phone:VARCHAR
+                     Input: 1500000 rows (77.67MB, 151 batches), Output: 1500000 rows (77.67MB, 151 batches), Cpu time: 61.38ms, Wall time: 62.00ms, Blocked wall time: 0ns, Peak memory: 4.83MB, Memory allocations: 3255, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (25.15us/0ns/61.36ms/210ns)
+                -- Aggregation[5][FINAL avg_acctbal := avg("avg_acctbal")] -> avg_acctbal:DOUBLE
+                   Output: 1 rows (32B, 1 batches), Cpu time: 19.42us, Wall time: 21.92us, Blocked wall time: 0ns, Peak memory: 64.62KB, Memory allocations: 6, Threads: 1, CPU breakdown: B/I/O/F (2.18us/10.40us/5.43us/1.40us)
+                  -- LocalPartition[4][GATHER] -> avg_acctbal:ROW<"":DOUBLE,"":BIGINT>
+                     Output: 2 rows (128B, 2 batches), Cpu time: 57.36us, Wall time: 76.93us, Blocked wall time: 88.16ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (28.62us/23.61us/3.71us/1.42us)
+                     LocalPartition: Input: 1 rows (64B, 1 batches), Output: 1 rows (64B, 1 batches), Cpu time: 53.42us, Wall time: 72.00us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (27.73us/23.61us/871ns/1.20us)
+                     LocalExchange: Input: 1 rows (64B, 1 batches), Output: 1 rows (64B, 1 batches), Cpu time: 3.94us, Wall time: 4.93us, Blocked wall time: 88.16ms, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (883ns/0ns/2.83us/221ns)
+                    -- Aggregation[3][PARTIAL avg_acctbal := avg(ROW["c_acctbal"])] -> avg_acctbal:ROW<"":DOUBLE,"":BIGINT>
+                       Output: 1 rows (64B, 1 batches), Cpu time: 498.58us, Wall time: 620.15us, Blocked wall time: 0ns, Peak memory: 64.88KB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (89.61us/354.63us/30.73us/23.61us)
+                      -- Filter[2][expression: and(gt("c_acctbal",0),in(substr(ROW["c_phone"],1,2),{13, 31, 23, 29, 30, ...2 more}))] -> c_acctbal:DOUBLE, c_phone:VARCHAR
+                         Output: 381776 rows (16.96MB, 151 batches), Cpu time: 37.12ms, Wall time: 37.56ms, Blocked wall time: 0ns, Peak memory: 244.50KB, Memory allocations: 156, Threads: 1, CPU breakdown: B/I/O/F (87.66us/24.54us/36.99ms/22.35us)
+                        -- TableScan[1][table: customer] -> c_acctbal:DOUBLE, c_phone:VARCHAR
+                           Input: 1500000 rows (66.65MB, 151 batches), Output: 1500000 rows (66.65MB, 151 batches), Cpu time: 49.59ms, Wall time: 49.73ms, Blocked wall time: 0ns, Peak memory: 4.06MB, Memory allocations: 1708, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (25.14us/0ns/49.57ms/210ns)
+            -- TableScan[0][table: orders] -> o_custkey:BIGINT
+               Input: 15000000 rows (140.50MB, 1502 batches), Output: 15000000 rows (140.50MB, 1502 batches), Cpu time: 108.98ms, Wall time: 109.71ms, Blocked wall time: 0ns, Peak memory: 1.14MB, Memory allocations: 3139, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (216.14us/0ns/108.76ms/241ns)
+

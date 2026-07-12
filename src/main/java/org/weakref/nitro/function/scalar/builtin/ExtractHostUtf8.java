@@ -37,7 +37,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ExtractHostUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ExtractHostUtf8");
+    static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ExtractHostUtf8");
     private static final byte[] HTTP_PREFIX = "http://".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HTTPS_PREFIX = "https://".getBytes(StandardCharsets.UTF_8);
     private static final byte[] WWW_PREFIX = "www.".getBytes(StandardCharsets.UTF_8);
@@ -196,19 +196,28 @@ public final class ExtractHostUtf8
 
     private static long extractRange(byte[] data, int start, int end)
     {
-        int hostStart = start;
+        int hostStart;
         if (startsWith(data, start, end, HTTP_PREFIX)) {
-            hostStart += HTTP_PREFIX.length;
+            hostStart = start + HTTP_PREFIX.length;
         }
         else if (startsWith(data, start, end, HTTPS_PREFIX)) {
-            hostStart += HTTPS_PREFIX.length;
+            hostStart = start + HTTPS_PREFIX.length;
         }
-        if (startsWith(data, hostStart, end, WWW_PREFIX)) {
-            hostStart += WWW_PREFIX.length;
+        else {
+            // The specialized ClickBench expression is anchored to http(s). A non-matching regexp_replace returns
+            // its input unchanged, so preserve the whole value rather than treating an arbitrary path as a host.
+            return packRange(start, end - start);
         }
         int hostEnd = hostStart;
         while (hostEnd < end && data[hostEnd] != '/') {
             hostEnd++;
+        }
+        if (hostEnd == end) {
+            // The regexp requires a slash and trailing path after the authority; without it there is no match.
+            return packRange(start, end - start);
+        }
+        if (hostEnd - hostStart > WWW_PREFIX.length && startsWith(data, hostStart, hostEnd, WWW_PREFIX)) {
+            hostStart += WWW_PREFIX.length;
         }
         return packRange(hostStart, hostEnd - hostStart);
     }

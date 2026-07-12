@@ -26,6 +26,12 @@ import java.util.Set;
 public final class GroupIdOperator
         implements Operator
 {
+    private static final boolean SHARE_DENSE_DICTIONARY_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.groupId.shareDenseDictionaryIds", "true"));
+    private static final boolean USE_KNOWN_FALSE_METADATA =
+            Boolean.parseBoolean(System.getProperty("nitro.groupId.useKnownFalseMetadata", "true"));
+    private static final boolean COMPACT_ALL_FALSE_STREAMS =
+            Boolean.parseBoolean(System.getProperty("nitro.groupId.compactAllFalseStreams", "true"));
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("GroupIdOperator");
     private final Operator source;
@@ -35,6 +41,7 @@ public final class GroupIdOperator
 
     private Batch currentSourceBatch;
     private Mask currentSourceMask;
+    private boolean currentSourceDense;
     private int currentGroupingSet;
     private Batch stagedBatch;
     private boolean done;
@@ -103,6 +110,7 @@ public final class GroupIdOperator
                 currentSourceBatch.close();
                 currentSourceBatch = null;
                 currentSourceMask = null;
+                currentSourceDense = false;
                 currentSourcePositions = null;
                 currentGroupingSet = 0;
                 continue;
@@ -123,6 +131,7 @@ public final class GroupIdOperator
             }
             currentSourceBatch = batch;
             currentSourceMask = mask;
+            currentSourceDense = mask.all() && mask.count() == mask.size();
             currentSourcePositions = materializedPositions(mask);
             currentGroupingSet = 0;
             return true;
@@ -157,21 +166,31 @@ public final class GroupIdOperator
 
         if (sourceIndex >= 0) {
             if (sourceOutput.streams().contains(Stream.NULLS)) {
-                streams.put(Stream.NULLS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.NULLS), currentSourcePositions));
+                if (USE_KNOWN_FALSE_METADATA && sourceOutput.isKnownAllFalse(Stream.NULLS)) {
+                    if (outputCanBeNullExtended[outputIndex]) {
+                        streams.put(Stream.NULLS, allFalseVector(rowCount));
+                    }
+                }
+                else {
+                    streams.put(Stream.NULLS, copySelectedVector(sourceOutput.borrow(Stream.NULLS)));
+                }
             }
             else if (outputCanBeNullExtended[outputIndex]) {
-                streams.put(Stream.NULLS, booleanVector(rowCount, false));
+                streams.put(Stream.NULLS, allFalseVector(rowCount));
             }
 
             if (sourceOutput.streams().contains(Stream.ERRORS)) {
-                streams.put(Stream.ERRORS, allocator.copyVector(allocationContext, sourceOutput.borrow(Stream.ERRORS), currentSourcePositions));
+                streams.put(Stream.ERRORS,
+                        USE_KNOWN_FALSE_METADATA && sourceOutput.isKnownAllFalse(Stream.ERRORS)
+                                ? allFalseVector(rowCount)
+                                : copySelectedVector(sourceOutput.borrow(Stream.ERRORS)));
             }
             return streams.build();
         }
 
         streams.put(Stream.NULLS, booleanVector(rowCount, true));
         if (sourceOutput.streams().contains(Stream.ERRORS)) {
-            streams.put(Stream.ERRORS, booleanVector(rowCount, false));
+            streams.put(Stream.ERRORS, allFalseVector(rowCount));
         }
         return streams.build();
     }
@@ -187,6 +206,13 @@ public final class GroupIdOperator
     private Vector selectValues(Vector source, int[] positions)
     {
         if (source instanceof DictionaryVector dictionary) {
+            if (SHARE_DENSE_DICTIONARY_IDS && currentSourceDense) {
+                // The source batch stays open until every grouping-set output derived from it has been consumed,
+                // so a dense expansion can safely share its immutable dictionary mapping.  This is the same
+                // BufferPtr-style lifetime used for the dictionary values and avoids allocating/copying the ids
+                // once per grouping set merely to reproduce an identity selection.
+                return allocator.adopt(allocationContext, DictionaryVector.wrap(dictionary.ids(), dictionary.length(), dictionary.values()));
+            }
             int[] sourceIds = dictionary.ids();
             int[] ids = new int[positions.length];
             for (int index = 0; index < positions.length; index++) {
@@ -194,7 +220,12 @@ public final class GroupIdOperator
             }
             return allocator.allocateDictionary(allocationContext, ids, dictionary.values());
         }
-        return allocator.copyVector(allocationContext, source, positions);
+        return copySelectedVector(source);
+    }
+
+    private Vector copySelectedVector(Vector source)
+    {
+        return allocator.copyVector(allocationContext, source, currentSourcePositions);
     }
 
     private static int[] materializedPositions(Mask mask)
@@ -232,6 +263,16 @@ public final class GroupIdOperator
             }
         }
         return vector;
+    }
+
+    private Vector allFalseVector(int size)
+    {
+        if (!COMPACT_ALL_FALSE_STREAMS) {
+            return booleanVector(size, false);
+        }
+        BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+        sentinel.markAllFalse();
+        return allocator.allocateSingleRunRle(allocationContext, size, sentinel);
     }
 
     private static int[][] copyGroupingSetInputs(int[][] groupingSetInputs)

@@ -47,6 +47,16 @@ public sealed interface Vector
     long retainedBytes();
 
     /**
+     * Whether copying this vector's logical values includes variable-size payload storage in addition to its
+     * position metadata. Buffering frameworks use this representation property to decide when eliminating a full
+     * intermediate copy can amortize a different output layout; operators need not recognize concrete data types.
+     */
+    default boolean isVariableWidth()
+    {
+        return false;
+    }
+
+    /**
      * Produces a logical copy of the entire vector in the target allocator context.
      */
     Vector copy(Allocator allocator, Allocator.Context allocationContext);
@@ -179,6 +189,20 @@ public sealed interface Vector
      * The allocator uses this to transfer and release ownership trees recursively.
      */
     default void forEachChildVector(Consumer<Vector> consumer)
+    {
+    }
+
+    /**
+     * Converts producer-context ownership that must survive {@code Output.take()} into a transferable lease.
+     * Implementations should only lease storage they own directly; generic allocator traversal invokes this hook for
+     * every node in the vector tree before detaching the remaining producer-owned nodes.
+     */
+    default void prepareBufferTransfer(Allocator allocator, Allocator.Context producerContext)
+    {
+    }
+
+    /** Releases buffers directly owned by this vector whose ownership crossed an output boundary through take. */
+    default void releaseTransferredBuffers()
     {
     }
 }

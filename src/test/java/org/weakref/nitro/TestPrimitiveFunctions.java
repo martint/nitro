@@ -63,6 +63,7 @@ import org.weakref.nitro.function.scalar.builtin.MapValues;
 import org.weakref.nitro.function.scalar.builtin.ModuloI64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyF64;
 import org.weakref.nitro.function.scalar.builtin.MultiplyI64;
+import org.weakref.nitro.function.scalar.builtin.MultiplyNullAsZeroI64;
 import org.weakref.nitro.function.scalar.builtin.NotBoolean;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
@@ -136,6 +137,7 @@ public final class TestPrimitiveFunctions
                 SubtractI64.class,
                 SubtractExactI64.class,
                 MultiplyI64.class,
+                MultiplyNullAsZeroI64.class,
                 DivideI64.class,
                 DivideI64ToF64.class,
                 DivideRoundI64.class,

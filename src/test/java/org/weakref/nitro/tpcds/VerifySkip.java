@@ -144,7 +144,7 @@ public final class VerifySkip
                 reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal());
             }
             for (var rowGroup : file.rowGroups()) {
-                reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data);
+                reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);
             }
         }
         return reader;

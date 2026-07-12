@@ -116,7 +116,7 @@ public class BatchSliceOperator
     private Mask sliceMask(Mask sourceMask, int offset, int length)
     {
         if (length == 0) {
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], 0, sourceMask.size());
+            return allocator.allocateEmptyMask(ALLOCATION_CONTEXT, sourceMask.size());
         }
 
         int[] positions = new int[length];

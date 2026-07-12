@@ -82,18 +82,33 @@ public final class SubstringUtf8
         }
 
         int totalBytes = 0;
-        VectorAccess.BinaryValues values = null;
+        int fixedWidth = -1;
+        boolean fixedWidthEligible = mask.all();
+        VectorAccess.BinaryRegions values = null;
         VectorAccess.LongValues startValues = null;
         VectorAccess.LongValues lengthValues = null;
         if (requestedStreams.contains(Stream.VALUES)) {
-            values = VectorAccess.binaryValues(inputValues);
+            values = VectorAccess.binaryRegions(inputValues);
             startValues = VectorAccess.longValues(inputs.get(1).values());
             lengthValues = VectorAccess.longValues(inputs.get(2).values());
             for (int position : mask) {
                 if (valueNulls.value(position) || startNulls.value(position) || lengthNulls.value(position)) {
+                    fixedWidthEligible = false;
                     continue;
                 }
-                totalBytes += substringValue(values.value(position), startValues.value(position), lengthValues.value(position)).length;
+                byte[] data = values.data(position);
+                int offset = values.offset(position);
+                int valueLength = values.length(position);
+                long start = startValues.value(position);
+                long length = lengthValues.value(position);
+                int outputLength = (int) Utf8Support.substringSlice(data, offset, valueLength, start, length);
+                totalBytes += outputLength;
+                if (fixedWidth < 0) {
+                    fixedWidth = outputLength;
+                }
+                else if (fixedWidth != outputLength) {
+                    fixedWidthEligible = false;
+                }
             }
         }
 
@@ -117,6 +132,9 @@ public final class SubstringUtf8
                     totalBytes);
             outputValues.clearTraits();
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+            if (fixedWidthEligible && fixedWidth >= 0) {
+                outputValues.setFixedWidth(fixedWidth);
+            }
             applyValues(values, startValues, lengthValues, valueNulls, startNulls, lengthNulls, mask, outputValues, outputNulls);
             result = result.with(Stream.VALUES, outputValues);
         }
@@ -296,22 +314,23 @@ public final class SubstringUtf8
 
     private static BinaryVector deriveBinarySubstrings(BinaryVector values, long start, long length, PrimitiveExecutionContext context)
     {
-        byte[][] substrings = new byte[values.length()][];
         int totalBytes = 0;
         boolean asciiOnly = true;
         for (int position = 0; position < values.length(); position++) {
-            byte[] substring = Utf8Support.substring(values.data(), values.startOffset(position), values.length(position), start, length);
-            substrings[position] = substring;
-            totalBytes += substring.length;
-            if (asciiOnly && !isAsciiOnly(substring)) {
+            long slice = Utf8Support.substringSlice(values.data(), values.startOffset(position), values.length(position), start, length);
+            int sliceOffset = (int) (slice >>> 32);
+            int sliceLength = (int) slice;
+            totalBytes += sliceLength;
+            if (asciiOnly && !isAsciiOnly(values.data(), sliceOffset, sliceLength)) {
                 asciiOnly = false;
             }
         }
 
         BinaryVector output = BinaryVector.allocate(context.allocator(), ALLOCATION_CONTEXT, values.length(), totalBytes);
         output.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
-        for (int position = 0; position < substrings.length; position++) {
-            output.setBytes(position, substrings[position]);
+        for (int position = 0; position < values.length(); position++) {
+            long slice = Utf8Support.substringSlice(values.data(), values.startOffset(position), values.length(position), start, length);
+            output.setBytes(position, values.data(), (int) (slice >>> 32), (int) slice);
         }
         if (asciiOnly) {
             output.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
@@ -327,7 +346,7 @@ public final class SubstringUtf8
         }
     }
 
-    private static void applyValues(VectorAccess.BinaryValues values, VectorAccess.LongValues startValues, VectorAccess.LongValues lengthValues, VectorAccess.BooleanValues valueNulls, VectorAccess.BooleanValues startNulls, VectorAccess.BooleanValues lengthNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
+    private static void applyValues(VectorAccess.BinaryRegions values, VectorAccess.LongValues startValues, VectorAccess.LongValues lengthValues, VectorAccess.BooleanValues valueNulls, VectorAccess.BooleanValues startNulls, VectorAccess.BooleanValues lengthNulls, Mask mask, BinaryVector outputValues, BooleanVector outputNulls)
     {
         int currentOffset = 0;
         int lastPosition = -1;
@@ -342,13 +361,20 @@ public final class SubstringUtf8
                 }
             }
             else {
-                byte[] substring = substringValue(values.value(position), startValues.value(position), lengthValues.value(position));
-                outputValues.setBytes(position, substring);
+                byte[] data = values.data(position);
+                int offset = values.offset(position);
+                int valueLength = values.length(position);
+                long start = startValues.value(position);
+                long length = lengthValues.value(position);
+                long slice = Utf8Support.substringSlice(data, offset, valueLength, start, length);
+                int sliceOffset = (int) (slice >>> 32);
+                int sliceLength = (int) slice;
+                outputValues.setBytes(position, data, sliceOffset, sliceLength);
                 currentOffset = outputValues.endOffset(position);
                 if (outputNulls != null) {
                     outputNulls.values()[position] = false;
                 }
-                if (asciiOnly && !isAsciiOnly(substring)) {
+                if (asciiOnly && !isAsciiOnly(data, sliceOffset, sliceLength)) {
                     asciiOnly = false;
                 }
             }
@@ -360,11 +386,6 @@ public final class SubstringUtf8
         }
     }
 
-    private static byte[] substringValue(VectorAccess.BinarySlice value, long start, long length)
-    {
-        return Utf8Support.substring(value.data(), value.offset(), value.length(), start, length);
-    }
-
     private static void fillOffsets(BinaryVector outputValues, int startInclusive, int endExclusive, int offset)
     {
         for (int index = startInclusive; index <= endExclusive; index++) {
@@ -374,8 +395,14 @@ public final class SubstringUtf8
 
     private static boolean isAsciiOnly(byte[] value)
     {
-        for (byte current : value) {
-            if ((current & 0x80) != 0) {
+        return isAsciiOnly(value, 0, value.length);
+    }
+
+    private static boolean isAsciiOnly(byte[] value, int offset, int length)
+    {
+        int end = offset + length;
+        for (int index = offset; index < end; index++) {
+            if ((value[index] & 0x80) != 0) {
                 return false;
             }
         }

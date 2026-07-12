@@ -85,7 +85,6 @@ public final class RleVector
         if (position < 0 || position >= length) {
             throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
         }
-
         int[] ends = runEnds;
         if (ends == null) {
             ends = computeRunEnds();
@@ -108,7 +107,6 @@ public final class RleVector
         if (position < 0 || position >= length) {
             throw new IndexOutOfBoundsException("Position " + position + " is out of bounds for RLE vector of length " + length);
         }
-
         int[] ends = runEnds;
         if (ends == null) {
             ends = computeRunEnds();
@@ -140,6 +138,12 @@ public final class RleVector
     public long retainedBytes()
     {
         return (long) counts.length * Integer.BYTES;
+    }
+
+    @Override
+    public boolean isVariableWidth()
+    {
+        return values.isVariableWidth();
     }
 
     @Override

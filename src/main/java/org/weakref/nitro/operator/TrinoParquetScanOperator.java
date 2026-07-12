@@ -535,7 +535,7 @@ public final class TrinoParquetScanOperator
             }
             if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
                 Vector values = convertValues(column, runLengthEncodedBlock.getValue(), true);
-                return allocator.allocateRle(ALLOCATION_CONTEXT, new int[] {runLengthEncodedBlock.getPositionCount()}, values);
+                return allocator.allocateSingleRunRle(ALLOCATION_CONTEXT, runLengthEncodedBlock.getPositionCount(), values);
             }
         }
 

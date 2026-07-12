@@ -69,7 +69,7 @@ public final class UpperUtf8
                 if (valueNullValues.value(position)) {
                     continue;
                 }
-                totalBytes += upperValue(values, position).length;
+                totalBytes += upperLength(values, position);
             }
         }
 
@@ -122,13 +122,13 @@ public final class UpperUtf8
                 }
             }
             else {
-                byte[] upper = upperValue(values, position);
-                outputValues.setBytes(position, upper);
-                currentOffset = outputValues.endOffset(position);
+                int startOffset = currentOffset;
+                currentOffset = upperInto(values, position, outputValues.data(), currentOffset);
+                outputValues.offsets()[position + 1] = currentOffset;
                 if (outputNulls != null) {
                     outputNulls.values()[position] = false;
                 }
-                if (asciiOnly && !isAsciiOnly(upper)) {
+                if (asciiOnly && !isAsciiOnly(outputValues.data(), startOffset, currentOffset)) {
                     asciiOnly = false;
                 }
             }
@@ -140,12 +140,22 @@ public final class UpperUtf8
         }
     }
 
-    private static byte[] upperValue(Vector values, int position)
+    private static int upperLength(Vector values, int position)
     {
         return switch (values) {
-            case BinaryVector vector -> Utf8Support.upper(vector, position);
-            case DictionaryVector vector -> upperValue(vector.values(), vector.ids()[position]);
-            case RleVector vector -> upperValue(vector.values(), vector.runIndex(position));
+            case BinaryVector vector -> Utf8Support.upperLength(vector.data(), vector.startOffset(position), vector.length(position));
+            case DictionaryVector vector -> upperLength(vector.values(), vector.ids()[position]);
+            case RleVector vector -> upperLength(vector.values(), vector.runIndex(position));
+            default -> throw new IllegalArgumentException("Unsupported upper_utf8 vector type: " + values.getClass().getSimpleName());
+        };
+    }
+
+    private static int upperInto(Vector values, int position, byte[] output, int outputOffset)
+    {
+        return switch (values) {
+            case BinaryVector vector -> Utf8Support.upperInto(vector.data(), vector.startOffset(position), vector.length(position), output, outputOffset);
+            case DictionaryVector vector -> upperInto(vector.values(), vector.ids()[position], output, outputOffset);
+            case RleVector vector -> upperInto(vector.values(), vector.runIndex(position), output, outputOffset);
             default -> throw new IllegalArgumentException("Unsupported upper_utf8 vector type: " + values.getClass().getSimpleName());
         };
     }
@@ -157,10 +167,10 @@ public final class UpperUtf8
         }
     }
 
-    private static boolean isAsciiOnly(byte[] value)
+    private static boolean isAsciiOnly(byte[] value, int start, int end)
     {
-        for (byte current : value) {
-            if ((current & 0x80) != 0) {
+        for (int index = start; index < end; index++) {
+            if ((value[index] & 0x80) != 0) {
                 return false;
             }
         }

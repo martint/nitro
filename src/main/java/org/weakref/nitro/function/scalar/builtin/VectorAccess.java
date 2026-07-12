@@ -66,17 +66,7 @@ public final class VectorAccess
         return switch (vector) {
             case BooleanVector values -> position -> values.values()[position];
             case ConcatenatedBooleanVector values -> values::value;
-            case DictionaryVector values -> {
-                int[] ids = values.ids();
-                yield switch (values.values()) {
-                    case BooleanVector dictionaryValues -> position -> dictionaryValues.values()[ids[position]];
-                    case ConcatenatedBooleanVector dictionaryValues -> position -> dictionaryValues.value(ids[position]);
-                    default -> {
-                        BooleanValues dictionaryValues = booleanValues(values.values());
-                        yield position -> dictionaryValues.value(ids[position]);
-                    }
-                };
-            }
+            case DictionaryVector values -> dictionaryBooleanValues(values);
             case RleVector values -> {
                 BooleanValues runValues = booleanValues(values.values());
                 int[] hint = {0};
@@ -87,6 +77,32 @@ public final class VectorAccess
                 };
             }
             default -> throw new IllegalArgumentException("Expected boolean-backed null vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static BooleanValues dictionaryBooleanValues(DictionaryVector vector)
+    {
+        int depth = 0;
+        Vector current = vector;
+        while (current instanceof DictionaryVector dictionary) {
+            depth++;
+            current = dictionary.values();
+        }
+
+        int[][] ids = new int[depth][];
+        current = vector;
+        for (int index = 0; index < depth; index++) {
+            DictionaryVector dictionary = (DictionaryVector) current;
+            ids[index] = dictionary.ids();
+            current = dictionary.values();
+        }
+
+        BooleanValues values = booleanValues(current);
+        return position -> {
+            for (int[] mapping : ids) {
+                position = mapping[position];
+            }
+            return values.value(position);
         };
     }
 
@@ -283,6 +299,93 @@ public final class VectorAccess
         };
     }
 
+    /**
+     * Allocation-free binary access for hot batch kernels. Unlike {@link BinaryValues#value(int)}, this exposes the
+     * three slice components independently so a caller does not create one {@link BinarySlice} object per row. Vector
+     * representation is resolved once when the accessor is created.
+     */
+    public static BinaryRegions binaryRegions(Vector vector)
+    {
+        return switch (vector) {
+            case BinaryVector values -> new BinaryRegions()
+            {
+                @Override
+                public byte[] data(int position)
+                {
+                    return values.data();
+                }
+
+                @Override
+                public int offset(int position)
+                {
+                    return values.startOffset(position);
+                }
+
+                @Override
+                public int length(int position)
+                {
+                    return values.length(position);
+                }
+            };
+            case DictionaryVector values -> {
+                BinaryRegions dictionaryValues = binaryRegions(values.values());
+                int[] ids = values.ids();
+                yield new BinaryRegions()
+                {
+                    @Override
+                    public byte[] data(int position)
+                    {
+                        return dictionaryValues.data(ids[position]);
+                    }
+
+                    @Override
+                    public int offset(int position)
+                    {
+                        return dictionaryValues.offset(ids[position]);
+                    }
+
+                    @Override
+                    public int length(int position)
+                    {
+                        return dictionaryValues.length(ids[position]);
+                    }
+                };
+            }
+            case RleVector values -> {
+                BinaryRegions runValues = binaryRegions(values.values());
+                int[] hint = {0};
+                yield new BinaryRegions()
+                {
+                    private int run(int position)
+                    {
+                        int run = values.runIndexFromHint(position, hint[0]);
+                        hint[0] = run;
+                        return run;
+                    }
+
+                    @Override
+                    public byte[] data(int position)
+                    {
+                        return runValues.data(run(position));
+                    }
+
+                    @Override
+                    public int offset(int position)
+                    {
+                        return runValues.offset(run(position));
+                    }
+
+                    @Override
+                    public int length(int position)
+                    {
+                        return runValues.length(run(position));
+                    }
+                };
+            }
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
     @FunctionalInterface
     public interface LongValues
     {
@@ -305,6 +408,15 @@ public final class VectorAccess
     public interface BinaryValues
     {
         BinarySlice value(int position);
+    }
+
+    public interface BinaryRegions
+    {
+        byte[] data(int position);
+
+        int offset(int position);
+
+        int length(int position);
     }
 
     public record BinarySlice(byte[] data, int offset, int length) {}

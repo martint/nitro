@@ -29,26 +29,38 @@ interface FusedGroupingKernel
      *
      * @param positions selected row positions, or {@code null} for a dense {@code 0..count-1} batch
      * @param count number of selected rows
-     * @param keys the long group-key column values
+     * @param keys the primitive group-key base values ({@code int[]} or {@code long[]}); the generated
+     *        implementation is specialized to the concrete array and optional one-level dictionary shape
+     * @param keyIds optional dictionary ids mapping logical positions into {@code keys}
      * @param tableKeys open-addressed table: key per slot
      * @param tableIds open-addressed table: group id per slot ({@code -1} when empty)
      * @param tableMask {@code capacity - 1} bitmask for the table
      * @param keysByGroup reverse map: key by group id
      * @param startNextId the next group id to assign
-     * @param inputs per-accumulator value column ({@code inputs[a]} is {@code null} when accumulator
+     * @param inputs per-accumulator primitive base value column ({@code int[]} or {@code long[]});
+     *        {@code inputs[a]} is {@code null} when accumulator
      *        {@code a} increments by a constant)
+     * @param inputIds optional per-accumulator dictionary ids mapping logical positions into {@code inputs}
+     * @param inputNulls per-accumulator null base column, or {@code null} when that input is known
+     *        null-free (and for constant-increment accumulators)
+     * @param inputNullIds optional per-accumulator dictionary ids mapping logical positions into {@code inputNulls}
      * @param states per-accumulator state vector (each cast to its declared state-vector type)
      * @return the next group id after assigning any new groups encountered
      */
     long accumulate(
             int[] positions,
             int count,
-            long[] keys,
+            Object keys,
+            int[] keyIds,
             long[] tableKeys,
             int[] tableIds,
             int tableMask,
             long[] keysByGroup,
             long startNextId,
-            long[][] inputs,
+            long[] outputGroups,
+            Object[] inputs,
+            int[][] inputIds,
+            boolean[][] inputNulls,
+            int[][] inputNullIds,
             Object[] states);
 }

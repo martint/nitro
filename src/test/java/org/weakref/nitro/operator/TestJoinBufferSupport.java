@@ -16,7 +16,9 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 
@@ -26,6 +28,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJoinBufferSupport
 {
+    @Test
+    void testAllFalseCopyStaysCompactUntilTrueValueArrives()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
+        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+
+        Streams copied = buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(new BooleanVector(new boolean[] {false, false})),
+                new int[] {0, 1},
+                0,
+                2,
+                0,
+                4);
+
+        assertThat(copied.values()).isInstanceOf(RleVector.class);
+
+        copied = buffers.copyPositionsFresh(
+                copied,
+                Streams.ofValues(new BooleanVector(new boolean[] {true, false})),
+                new int[] {0, 1},
+                0,
+                2,
+                2,
+                4);
+
+        assertThat(copied.values()).isInstanceOf(BooleanVector.class);
+        assertThat(((BooleanVector) copied.values()).values()).containsExactly(false, false, true, false);
+
+        allocator.release(context);
+    }
+
     @Test
     void testDictionaryBinaryPositionCopyKeepsCompactDictionaryWhenRepeated()
     {

@@ -118,12 +118,12 @@ public final class IfF64
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector nullValues = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, 1, BooleanVector::new);
             nullValues.values()[0] = false;
-            result = result.with(Stream.NULLS, context.allocator().allocateRle(ALLOCATION_CONTEXT, new int[] {requiredLength}, nullValues));
+            result = result.with(Stream.NULLS, context.allocator().allocateSingleRunRle(ALLOCATION_CONTEXT, requiredLength, nullValues));
         }
         if (trueValue.equals(falseValue)) {
             F64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, F64Vector.class, 1, F64Vector::new);
             values.values()[0] = trueValue;
-            return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateRle(ALLOCATION_CONTEXT, new int[] {requiredLength}, values)) : result;
+            return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateSingleRunRle(ALLOCATION_CONTEXT, requiredLength, values)) : result;
         }
 
         int[] ids = new int[requiredLength];

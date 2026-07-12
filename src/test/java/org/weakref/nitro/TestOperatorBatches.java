@@ -661,6 +661,35 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorHashPartitionsBinaryAndNullKeysExactly()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("sports", 3L),
+                        row((Object) null, 5L),
+                        row("books", 11L),
+                        row("sports", 4L),
+                        row((Object) null, 7L),
+                        row("books", 13L))),
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(1)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactlyInAnyOrder(
+                            row("sports", 3L, 7L),
+                            row("sports", 4L, 7L),
+                            row("books", 11L, 24L),
+                            row("books", 13L, 24L),
+                            row(null, 5L, 12L),
+                            row(null, 7L, 12L));
+        }
+    }
+
+    @Test
     void testWindowOperatorProducesRankWithTies()
     {
         Allocator allocator = new Allocator();
@@ -682,6 +711,33 @@ public class TestOperatorBatches
                             row(1L, "first-b", 1L),
                             row(2L, "second", 3L),
                             row(3L, "third", 4L));
+        }
+    }
+
+    @Test
+    void testWindowOperatorRadixOrdersSignedNullableDescendingKeys()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(
+                        row(-1L, -3L, 4L),
+                        row(-1L, (Object) null, 5L),
+                        row(1L, -8L, 7L),
+                        row(-1L, 2L, 6L),
+                        row(1L, 9L, 8L))),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {true},
+                List.of(new RunningSumI64WindowFunction(2)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(-1L, null, 5L, 5L),
+                            row(-1L, 2L, 6L, 11L),
+                            row(-1L, -3L, 4L, 15L),
+                            row(1L, 9L, 8L, 8L),
+                            row(1L, -8L, 7L, 15L));
         }
     }
 
@@ -1492,6 +1548,30 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorStreamsUnusedUniqueDirectRangeBuildPayload()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
+        for (long key = 1; key <= 200; key++) {
+            innerRows.add(row(key));
+        }
+
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(200L, 20L),
+                        row(201L, 30L))),
+                0,
+                new ConstantTableOperator(allocator, 1, innerRows),
+                0)
+                .withOutputs(1);
+
+        assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                .containsExactly(row(10L), row(20L));
+    }
+
+    @Test
     void testProjectOperatorCountsNonNullI32Zeros()
     {
         Allocator allocator = new Allocator();
@@ -1920,6 +2000,36 @@ public class TestOperatorBatches
                     .containsExactly(
                             row(1L, "matched", 1L, 100L),
                             row(2L, "unmatched", null, null));
+        }
+    }
+
+    @Test
+    void testProbeOuterJoinNullStreamPreservesNullableBuildValues()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator joined = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(1L),
+                        row(2L),
+                        row(3L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(1L, null),
+                        row(2L, null))),
+                0,
+                true);
+                Operator counted = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        List.of(new CountColumn(2)),
+                        joined)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(counted))
+                    .containsExactly(
+                            row(1L, 1L),
+                            row(2L, 0L),
+                            row(3L, 0L));
         }
     }
 

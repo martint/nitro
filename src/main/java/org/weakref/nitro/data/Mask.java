@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.data;
 
+import jdk.incubator.vector.LongVector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
+
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
@@ -24,6 +28,7 @@ public class Mask
         implements Iterable<Integer>
 {
     private static final int[] EMPTY_POSITIONS = new int[0];
+    private static final VectorSpecies<Long> LONG_SPECIES = LongVector.SPECIES_PREFERRED;
 
     private Mask trackedPrevious;
     private Mask trackedNext;
@@ -39,6 +44,12 @@ public class Mask
     {
         checkArgument(size >= 0, "size is negative");
         return new Mask(size, size, true, EMPTY_POSITIONS);
+    }
+
+    public static Mask none(int size)
+    {
+        checkArgument(size >= 0, "size is negative");
+        return new Mask(size, 0, false, EMPTY_POSITIONS);
     }
 
     public static Mask range(int start, int length)
@@ -66,7 +77,7 @@ public class Mask
         }
 
         if (activePositions.length == 0) {
-            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
+            return none(totalPositions);
         }
 
         int[] positions = Arrays.copyOf(activePositions, activePositions.length);
@@ -82,7 +93,7 @@ public class Mask
         checkArgument(activePositions.length >= selectedCount, "activePositions capacity is too small");
 
         if (selectedCount == 0) {
-            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
+            return none(totalPositions);
         }
 
         boolean allSelected = selectedCount == totalPositions && isAllPositions(activePositions, selectedCount);
@@ -388,6 +399,39 @@ public class Mask
         setSelection(size, outputIndex, false);
     }
 
+    /**
+     * Compacts this mask in place against a flat Boolean stream. Dense and selected masks use separate monomorphic
+     * loops so callers can preserve batch shape without allocating an intermediate mask or a predicate object.
+     */
+    public void retainBooleans(boolean[] values, boolean wanted)
+    {
+        if (none()) {
+            return;
+        }
+        checkArgument(values.length > maxPosition(), "Boolean vector is too short for mask domain");
+
+        int rows = selectedCount;
+        int retained = 0;
+        if (allSelected) {
+            int[] positions = positionsArrayForOverwrite(rows);
+            for (int position = 0; position < rows; position++) {
+                if (values[position] == wanted) {
+                    positions[retained++] = position;
+                }
+            }
+        }
+        else {
+            int[] positions = selectedPositions();
+            for (int row = 0; row < rows; row++) {
+                int position = positions[row];
+                if (values[position] == wanted) {
+                    positions[retained++] = position;
+                }
+            }
+        }
+        finishRetain(retained);
+    }
+
     /** Comparison applied by {@link #retainConstantComparison}, in the form {@code column OPERATOR literal}. */
     public enum ComparisonOperator
     {
@@ -437,10 +481,15 @@ public class Mask
                 }
             }
             case LESS_THAN_OR_EQUAL -> {
-                for (int index = 0; index < iterations; index++) {
-                    int position = dense ? index : buffer[index];
-                    if (values[position] <= literal) {
-                        buffer[count++] = position;
+                if (dense) {
+                    count = retainDenseLongVector(values, size, literal, false, buffer);
+                }
+                else {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = buffer[index];
+                        if (values[position] <= literal) {
+                            buffer[count++] = position;
+                        }
                     }
                 }
             }
@@ -453,12 +502,103 @@ public class Mask
                 }
             }
             case GREATER_THAN_OR_EQUAL -> {
-                for (int index = 0; index < iterations; index++) {
-                    int position = dense ? index : buffer[index];
-                    if (values[position] >= literal) {
-                        buffer[count++] = position;
+                if (dense) {
+                    count = retainDenseLongVector(values, size, literal, true, buffer);
+                }
+                else {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = buffer[index];
+                        if (values[position] >= literal) {
+                            buffer[count++] = position;
+                        }
                     }
                 }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    private static int retainDenseLongVector(long[] values, int size, long literal, boolean greater, int[] output)
+    {
+        int count = 0;
+        int position = 0;
+        int vectorLimit = LONG_SPECIES.loopBound(size);
+        for (; position < vectorLimit; position += LONG_SPECIES.length()) {
+            long matches = LongVector.fromArray(LONG_SPECIES, values, position)
+                    .compare(greater ? VectorOperators.GE : VectorOperators.LE, literal)
+                    .toLong();
+            while (matches != 0) {
+                int lane = Long.numberOfTrailingZeros(matches);
+                output[count++] = position + lane;
+                matches &= matches - 1;
+            }
+        }
+        for (; position < size; position++) {
+            if (greater ? values[position] >= literal : values[position] <= literal) {
+                output[count++] = position;
+            }
+        }
+        return count;
+    }
+
+    /** Retains {@code lowerExclusive < values[position] < upperExclusive} in one pass. */
+    public void retainConstantRange(long[] values, long lowerExclusive, long upperExclusive, boolean[] nulls)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        if (dense && nulls == null) {
+            int position = 0;
+            int vectorLimit = LONG_SPECIES.loopBound(size);
+            for (; position < vectorLimit; position += LONG_SPECIES.length()) {
+                LongVector vector = LongVector.fromArray(LONG_SPECIES, values, position);
+                long matches = vector.compare(VectorOperators.GT, lowerExclusive)
+                        .and(vector.compare(VectorOperators.LT, upperExclusive))
+                        .toLong();
+                while (matches != 0) {
+                    int lane = Long.numberOfTrailingZeros(matches);
+                    buffer[count++] = position + lane;
+                    matches &= matches - 1;
+                }
+            }
+            for (; position < size; position++) {
+                long value = values[position];
+                if (value > lowerExclusive && value < upperExclusive) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        else {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                long value = values[position];
+                if ((nulls == null || !nulls[position]) && value > lowerExclusive && value < upperExclusive) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    /** Integer-column overload of {@link #retainConstantRange(long[], long, long, boolean[])}. */
+    public void retainConstantRange(int[] values, long lowerExclusive, long upperExclusive, boolean[] nulls)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        for (int index = 0; index < iterations; index++) {
+            int position = dense ? index : buffer[index];
+            int value = values[position];
+            if ((nulls == null || !nulls[position]) && value > lowerExclusive && value < upperExclusive) {
+                buffer[count++] = position;
             }
         }
         setSelection(size, count, count == size);
@@ -783,6 +923,58 @@ public class Mask
             for (int index = 0; index < iterations; index++) {
                 int position = dense ? index : buffer[index];
                 if (!nulls[position] && keep[ids[position]] == wanted) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        setSelection(size, count, count == size);
+    }
+
+    /**
+     * Single-match specialization of {@link #retainDictionaryComparison(int[], boolean[], boolean[], boolean)}.
+     * When a dictionary predicate matches exactly one dictionary entry, compare the row id directly instead of
+     * loading a second, indirectly indexed boolean array. This is exact for both the matching and complement masks;
+     * nullable positions remain excluded from either SQL predicate result.
+     */
+    public void retainDictionaryIdComparison(int[] ids, int matchingId, boolean[] nulls, boolean wanted)
+    {
+        if (none()) {
+            return;
+        }
+        int[] buffer = positionsArray(allSelected ? size : selectedCount);
+        boolean dense = allSelected;
+        int iterations = dense ? size : selectedCount;
+        int count = 0;
+        if (nulls == null) {
+            if (wanted) {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (ids[position] == matchingId) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (ids[position] != matchingId) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        else if (wanted) {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                if (!nulls[position] && ids[position] == matchingId) {
+                    buffer[count++] = position;
+                }
+            }
+        }
+        else {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                if (!nulls[position] && ids[position] != matchingId) {
                     buffer[count++] = position;
                 }
             }
@@ -1298,10 +1490,24 @@ public class Mask
         return positions;
     }
 
-    int[] positionsArrayForOverwrite(int requiredCapacity)
+    /**
+     * Returns this mask's backing position array for an allocator-controlled direct-fill operation. Callers may only
+     * overwrite the active prefix established by the allocating operation and must not retain the array after release.
+     */
+    public int[] positionsArrayForOverwrite(int requiredCapacity)
     {
         ensureCapacity(requiredCapacity);
         return positions;
+    }
+
+    /**
+     * Completes an in-place retain kernel that compacted selected positions into this mask's existing position
+     * buffer. Dense callers fill a buffer obtained from {@link #positionsArrayForOverwrite}; sparse callers compact
+     * the array returned by {@link #selectedPositions}. The retained positions must remain sorted and in-domain.
+     */
+    public void finishRetain(int retainedCount)
+    {
+        setSelection(size, retainedCount, retainedCount == size);
     }
 
     void setSelection(int size, int selectedCount, boolean allSelected)

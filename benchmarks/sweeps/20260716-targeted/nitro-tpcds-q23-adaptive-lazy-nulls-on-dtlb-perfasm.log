@@ -1,0 +1,1217 @@
+[INFO] Processing build on daemon 20342da6
+[INFO] Scanning for projects...
+[INFO] Njord 0.9.4 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] -------------------------< org.weakref:nitro >--------------------------
+[INFO] Building nitro 1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] 2 problems were encountered while building the effective model for org.apache.yetus:audience-annotations:jar:0.5.0 during dependency collection step for project (use -X to see details)
+[INFO] 
+[INFO] --- exec:3.6.1:exec (benchmark) @ nitro ---
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/root/.m2/repository/org/openjdk/jmh/jmh-core/1.37/jmh-core-1.37.jar)
+[WARNING] [stderr] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] [stdout] # JMH version: 1.37
+[INFO] [stdout] # VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+[INFO] [stdout] # VM invoker: /opt/java/openjdk/bin/java
+[INFO] [stdout] # VM options: --enable-preview --add-modules=jdk.incubator.vector -Dnitro.clickbench.hits.path= -Xmx12g -XX:+UseTransparentHugePages -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10 -Dnitro.tpcds.parquet.schema=sf10 -Dnitro.group.adaptiveCompactLong=true
+[INFO] [stdout] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[INFO] [stdout] # Warmup: 3 iterations, 1 s each
+[INFO] [stdout] # Measurement: 3 iterations, 1 s each
+[INFO] [stdout] # Timeout: 30 min per iteration
+[INFO] [stdout] # Threads: 1 thread, will synchronize iterations
+[INFO] [stdout] # Benchmark mode: Average time, time/op
+[INFO] [stdout] # Benchmark: org.weakref.nitro.tpcds.BenchmarkQueries.query23
+[INFO] [stdout] 
+[INFO] [stdout] # Run progress: 0.00% complete, ETA 00:00:06
+[INFO] [stdout] # Fork: 1 of 1
+[INFO] [stdout] # Preparing profilers: LinuxPerfAsmProfiler 
+[INFO] [stdout] # Profilers consume stdout and stderr from target VM, use -v EXTRA to copy to console
+[INFO] [stdout] # Warmup Iteration   1: 11225.192 ms/op
+[INFO] [stdout] # Warmup Iteration   2: 7335.435 ms/op
+[INFO] [stdout] # Warmup Iteration   3: 6405.043 ms/op
+[INFO] [stdout] Iteration   1: 6112.348 ms/op
+[INFO] [stdout] Iteration   2: 7297.150 ms/op
+[INFO] [stdout] Iteration   3: 5411.782 ms/op
+[INFO] [stdout] # Processing profiler results: LinuxPerfAsmProfiler 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] Result "org.weakref.nitro.tpcds.BenchmarkQueries.query23":
+[INFO] [stdout]   6273.760 ±(99.9%) 17386.124 ms/op [Average]
+[INFO] [stdout]   (min, avg, max) = (5411.782, 6273.760, 7297.150), stdev = 952.992
+[INFO] [stdout]   CI (99.9%): [≈ 0, 23659.884] (assumes normal distribution)
+[INFO] [stdout] 
+[INFO] [stdout] Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query23:asm":
+[INFO] [stdout] PrintAssembly processed: 515401 total address lines.
+[INFO] [stdout] Perf output processed (skipped 26.332 seconds):
+[INFO] [stdout]  Column 1: dTLB-load-misses (15157 events)
+[INFO] [stdout] 
+[INFO] [stdout] Hottest code regions (>1.00% "dTLB-load-misses" events):
+[INFO] [stdout]  Event counts are percents of total event count.
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 1]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows, version 2, compile id 3938 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b8dc: 0000 0000 | 4e8b 44f7 
+[INFO] [stdout]             0x00007794afc0b8e4: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@41 (line 79)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b8e4: 1041 8bd8 | 4c63 d34d | 3bd0 0f85 
+[INFO] [stdout]             0x00007794afc0b8f0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@5 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@42 (line 79)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b8f0: a903 0000 | 448b d341 
+[INFO] [stdout]             0x00007794afc0b8f8: ;*ishr {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@7 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b8f8: c1fa 0c44 | 3b54 2408 | 0f83 7601 | 0000 468b 
+[INFO] [stdout]             0x00007794afc0b908: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@8 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b908: 5491 1081 | e3ff 0f00 
+[INFO] [stdout]             0x00007794afc0b910: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@13 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b910: 0047 8b44 | d40c 49c1 
+[INFO] [stdout]             0x00007794afc0b918: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@8 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b918: e203 413b | d80f 83c1 | 0100 0049 
+[INFO] [stdout]             0x00007794afc0b924: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@18 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b924: ff44 da10 | 4e8b 44f7 
+[INFO] [stdout]             0x00007794afc0b92c: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@41 (line 79)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b92c: 1841 8bd8 | 4c63 d34d | 3bd0 0f85 
+[INFO] [stdout]             0x00007794afc0b938: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@5 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@42 (line 79)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b938: 6603 0000 | 448b d341 
+[INFO] [stdout]             0x00007794afc0b940: ;*ishr {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@7 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b940: c1fa 0c44 | 3b54 2408 | 0f83 3301 | 0000 468b 
+[INFO] [stdout]             0x00007794afc0b950: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@8 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b950: 5491 1081 | e3ff 0f00 
+[INFO] [stdout]             0x00007794afc0b958: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@13 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b958: 0047 8b5c | d40c 49c1 
+[INFO] [stdout]             0x00007794afc0b960: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@8 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b960: e203 413b | db0f 837e | 0100 0049 
+[INFO] [stdout]             0x00007794afc0b96c: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.CountStateVector::increment@18 (line 98)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@52 (line 80)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b96c: ff44 da10 | 458d 5602 | 458b f244 | 3bd6 0f8c 
+[INFO] [stdout]             0x00007794afc0b97c: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@58 (line 78)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b97c: 60ff ffff 
+[INFO] [stdout]             0x00007794afc0b980: ; ImmutableOopMap {rcx=Oop rdi=Oop rax=Oop r13=Oop xmm1=Oop xmm2=Oop xmm4=NarrowOop [40]=NarrowOop [64]=Oop [72]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.aggregation.CountAll::accumulate@58 (line 78)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b980: 4d8b 5730 
+[INFO] [stdout]    0.02%    0x00007794afc0b984: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@58 (line 78)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]    0.02%    0x00007794afc0b984: 4185 0245 | 8bd6 453b | d10f 8c2d | ffff ff45 | 8bda 443b | 5c24 047d 
+[INFO] [stdout]             0x00007794afc0b99c: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@34 (line 79)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows@45 (line 493)
+[INFO] [stdout]             0x00007794afc0b99c: 5966 6690 | 4e8b 44df 
+[INFO] [stdout]             0x00007794afc0b9a4: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.CountAll::accumulate@41 (line 79)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    8.73%  <total for region 1>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 2]..............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    6.33%  <total for region 2>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 3]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.aggregation.Sum::accumulate, version 5, compile id 2391 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@93 (line 134)
+[INFO] [stdout]             0x00007794afb0aabc: fcff ff8b | 5424 0841 | 2bd1 4533 | d28b 7c24 | 0841 3bf9 | 410f 4cd2 | 81fa e803 | 0000 41ba 
+[INFO] [stdout]             0x00007794afb0aadc: e803 0000 | 410f 47d2 | 4103 d1eb | 3344 8864 
+[INFO] [stdout]             0x00007794afb0aaec: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@25 (line 141)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0aaec: 3910 c4c1 | f97e ca45 
+[INFO] [stdout]             0x00007794afb0aaf4: ;*getfield nullGroupCount {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@28 (line 142)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0aaf4: 8b52 1841 | ffca c4e1 | f97e cf44 
+[INFO] [stdout]             0x00007794afb0ab00: ;*putfield nullGroupCount {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@33 (line 142)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0ab00: 8957 180f | 1f80 0000 | 0000 660f 
+[INFO] [stdout]             0x00007794afb0ab0c: ;*return {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@36 (line 144)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0ab0c: 1f44 0000 
+[INFO] [stdout]    0.03%    0x00007794afb0ab10: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@137 (line 133)
+[INFO] [stdout]    0.03%    0x00007794afb0ab10: 41ff c144 
+[INFO] [stdout]             0x00007794afb0ab14: ;*if_icmpgt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@90 (line 133)
+[INFO] [stdout]             0x00007794afb0ab14: 3bca 7d95 
+[INFO] [stdout]             0x00007794afb0ab18: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@93 (line 134)
+[INFO] [stdout]             0x00007794afb0ab18: 8b7c 2408 
+[INFO] [stdout]    0.79%    0x00007794afb0ab1c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@6 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@129 (line 138)
+[INFO] [stdout]    0.79%    0x00007794afb0ab1c: 4d63 e947 | 0fb6 542b 
+[INFO] [stdout]             0x00007794afb0ab24: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@5 (line 67)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d184210::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@97 (line 134)
+[INFO] [stdout]             0x00007794afb0ab24: 1045 85d2 | 0f85 3201 
+[INFO] [stdout]             0x00007794afb0ab2c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@102 (line 134)
+[INFO] [stdout]             0x00007794afb0ab2c: 0000 897c | 2408 4b8b 
+[INFO] [stdout]             0x00007794afb0ab34: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@115 (line 137)
+[INFO] [stdout]             0x00007794afb0ab34: 7ce8 1044 
+[INFO] [stdout]             0x00007794afb0ab38: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@1 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@116 (line 137)
+[INFO] [stdout]             0x00007794afb0ab38: 8bd7 4d63 
+[INFO] [stdout]             0x00007794afb0ab3c: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@2 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@116 (line 137)
+[INFO] [stdout]             0x00007794afb0ab3c: f24c 3bf7 | 0f85 5201 
+[INFO] [stdout]             0x00007794afb0ab44: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@5 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@116 (line 137)
+[INFO] [stdout]             0x00007794afb0ab44: 0000 428b 
+[INFO] [stdout]             0x00007794afb0ab48: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@6 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@129 (line 138)
+[INFO] [stdout]             0x00007794afb0ab48: 7ca8 103b | 3c24 732e | 488b 7cfe 
+[INFO] [stdout]             0x00007794afb0ab54: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@7 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@129 (line 138)
+[INFO] [stdout]             0x00007794afb0ab54: 1044 3b54 | 2404 7364 | 4a01 7cd3 
+[INFO] [stdout]             0x00007794afb0ab60: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@9 (line 139)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0ab60: 1044 3bd5 | 0f83 9e00 | 0000 4963 
+[INFO] [stdout]             0x00007794afb0ab6c: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@15 (line 140)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0ab6c: fa44 0fb6 | 5439 1045 | 85d2 0f85 
+[INFO] [stdout]             0x00007794afb0ab78: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@16 (line 140)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007794afb0ab78: 6dff ffff | eb92 bee4 | ffff ffc4 | e1f9 7ecd | 4489 0c24 | 4489 5424 | 0489 7c24 | 10c5 fb11 
+[INFO] [stdout]             0x00007794afb0ab98: 4424 18c5 | fb11 5424 | 20c5 fb11 | 6c24 28c5 | fa11 7c24 | 14c5 fb11 
+[INFO] [stdout]             0x00007794afb0abb0: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007794afb0abb0: 6424 30e8 
+[INFO] [stdout]             0x00007794afb0abb4: ; ImmutableOopMap {rbp=Oop [20]=NarrowOop [24]=Oop [32]=Oop [40]=Oop [48]=Oop }
+[INFO] [stdout]                                 ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@7 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    6.27%  <total for region 3>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 4]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows, version 4, compile id 3891 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@49 (line 4415)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007794afbe09f4: 3041 8502 | 443b 1c24 | 0f8d 760b 
+[INFO] [stdout]             0x00007794afbe0a00: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@10 (line 4416)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a00: 0000 8b14 | 2441 2bd3 | 448b 1424 | 4533 c045 | 3bd3 410f | 4cd0 81fa | e803 0000 | 41ba e803 
+[INFO] [stdout]             0x00007794afbe0a20: 0000 410f | 47d2 4103 | d3eb 4149 | c7c0 ffff | ffff eb26 | 660f 1f44 | 0000 660f | 1f44 0000 
+[INFO] [stdout]    0.18%    0x00007794afbe0a40: 468b 5495 
+[INFO] [stdout]             0x00007794afbe0a44: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::rowReferenceAt@12 (line 5104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@49 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a44: 1045 8bc2 | 41c1 e810 | 450f b7d2 | 4d63 c049 | c1e0 204d | 0bc2 c4c1 | f97e d24f 
+[INFO] [stdout]             0x00007794afbe0a60: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@45 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a60: 8944 da10 
+[INFO] [stdout]    0.20%    0x00007794afbe0a64: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@46 (line 4415)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]    0.20%    0x00007794afbe0a64: 41ff c344 
+[INFO] [stdout]             0x00007794afbe0a68: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@10 (line 4416)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a68: 3bda 7d85 | c4c1 f97e | ca47 8b54 
+[INFO] [stdout]             0x00007794afbe0a74: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@13 (line 4416)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a74: 9a10 453b | d60f 83a9 | 0000 0046 | 0fb6 4416 | 1045 85c0 | 0f85 8e00 
+[INFO] [stdout]             0x00007794afbe0a8c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@28 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a8c: 0000 453b | d50f 83d9 | 0000 004e 
+[INFO] [stdout]             0x00007794afbe0a98: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@41 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0a98: 8b54 d310 | 4d85 d20f | 8c6b 0400 
+[INFO] [stdout]             0x00007794afbe0aa4: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@10 (line 4460)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0aa4: 004c 3bd1 | 0f8d ae04 
+[INFO] [stdout]             0x00007794afbe0aac: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@21 (line 4460)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0aac: 0000 458b 
+[INFO] [stdout]             0x00007794afbe0ab0: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@33 (line 4463)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0ab0: d245 3bd1 | 0f83 fa00 | 0000 468b 
+[INFO] [stdout]             0x00007794afbe0abc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@34 (line 4463)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0abc: 5490 1041 | 83fa ff0f | 8462 ffff 
+[INFO] [stdout]             0x00007794afbe0ac8: ;*if_icmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@38 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout]             0x00007794afbe0ac8: ff44 3b54 | 2460 0f82 | 6cff ffff | bee4 ffff | ffc4 e1f9 | 7ecd 448b | 0c24 4489 | 4c24 60c5 
+[INFO] [stdout]             0x00007794afbe0ae8: fb11 5424 | 0844 895c | 2410 4489 
+[INFO] [stdout]             0x00007794afbe0af4: ;   {other}
+[INFO] [stdout]             0x00007794afbe0af4: 5424 14c5 | fb11 4424 | 18c5 fa11 | 6424 20c5 | fb11 7424 | 28c5 fa11 
+[INFO] [stdout]             0x00007794afbe0b0c: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007794afbe0b0c: 6c24 24e8 
+[INFO] [stdout]             0x00007794afbe0b10: ; ImmutableOopMap {rbp=Oop [8]=Oop [24]=Oop [32]=NarrowOop [36]=NarrowOop [40]=Oop }
+[INFO] [stdout]                                 ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::rowReferenceAt@12 (line 5104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@49 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleLongRows@42 (line 4417)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@145 (line 3258)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    5.77%  <total for region 4>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 5]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2.0x000000009d190000::assignCompactNullFreeBatch, version 6, compile id 3627 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba15d8: ca10 458b 
+[INFO] [stdout]             0x00007794afba15dc: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba15dc: d34d 63d2 | 4d3b da0f | 850f 0600 
+[INFO] [stdout]             0x00007794afba15e8: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@94
+[INFO] [stdout]             0x00007794afba15e8: 0045 8bd2 | 48c1 e720 
+[INFO] [stdout]    0.03%    0x00007794afba15f0: ;*lor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::packPair@11 (line 312)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@110
+[INFO] [stdout]    0.03%    0x00007794afba15f0: 490b fa48 | 897c 2450 | 4c8b 1424 
+[INFO] [stdout]    0.01%    0x00007794afba15fc: ;*getfield slotMask {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@143
+[INFO] [stdout]    0.01%    0x00007794afba15fc: 458b 5210 | 4c8b df49 | c1eb 214c | 33df 49b8 | cd8c 55ed | d7af 51ff 
+[INFO] [stdout]    0.01%    0x00007794afba1614: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@11 (line 530)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@129
+[INFO] [stdout]    0.01%    0x00007794afba1614: 4d0f afd8 | 4d8b c349 | c1e8 214d | 33c3 49bb | 53ec 851a | feb9 cec4 
+[INFO] [stdout]    0.01%    0x00007794afba162c: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@24 (line 532)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@129
+[INFO] [stdout]    0.01%    0x00007794afba162c: 4d0f afc3 | 4d8b d849 | c1eb 214d | 33d8 458b 
+[INFO] [stdout]             0x00007794afba163c: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@34 (line 534)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@129
+[INFO] [stdout]             0x00007794afba163c: db45 8bcb 
+[INFO] [stdout]    0.07%    0x00007794afba1640: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@146
+[INFO] [stdout]    0.07%    0x00007794afba1640: 4523 ca44 | 894c 244c | 448b 4424 | 4847 8b44 
+[INFO] [stdout]             0x00007794afba1650: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@153
+[INFO] [stdout]             0x00007794afba1650: c40c 4489 | 4424 3441 | c1eb 1841 | 81cb 8000 
+[INFO] [stdout]             0x00007794afba1660: ;*ior {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@139
+[INFO] [stdout]             0x00007794afba1660: 0000 4489 | 5c24 5845 | 3bc8 0f83 | 6c02 0000 | 4c8b 5c24 | 1847 8b44 
+[INFO] [stdout]             0x00007794afba1678: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@153
+[INFO] [stdout]             0x00007794afba1678: 8b10 4585 | c00f 85e2 
+[INFO] [stdout]             0x00007794afba1680: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@158
+[INFO] [stdout]             0x00007794afba1680: fcff ffc4 | c179 7ec1 | e920 fdff | ff41 81e0 
+[INFO] [stdout]             0x00007794afba1690: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@175
+[INFO] [stdout]                                 ;   {other}
+[INFO] [stdout]             0x00007794afba1690: ffff ff00 | 4489 4424 | 5cc4 c179 | 7ec1 478b | 5ccc 0c45 | 3bc3 0f83 | d005 0000 
+[INFO] [stdout]             0x00007794afba16ac: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@34
+[INFO] [stdout]             0x00007794afba16ac: 4b8d 0ccc | 4c8b 4424 | 5044 8b5c | 245c 4e3b | 44d9 100f | 85b7 fcff 
+[INFO] [stdout]             0x00007794afba16c4: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@186
+[INFO] [stdout]             0x00007794afba16c4: ff48 8b84 | 2480 0000 | 00e9 74fd 
+[INFO] [stdout]             0x00007794afba16d0: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009d18b690&apos;)}
+[INFO] [stdout]             0x00007794afba16d0: ffff 4181 | fb90 b618 | 010f 85e5 
+[INFO] [stdout]             0x00007794afba16dc: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba16dc: 0600 0044 
+[INFO] [stdout]             0x00007794afba16e0: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    5.66%  <total for region 5>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 6]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash, version 4, compile id 3637 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@185 (line 522)
+[INFO] [stdout]             0x00007794afba364c: 8b51 3041 
+[INFO] [stdout]             0x00007794afba3650: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@166 (line 519)
+[INFO] [stdout]             0x00007794afba3650: 8b74 d40c | 498d 04d4 | 49be 53ec | 851a feb9 | cec4 49bd | cd8c 55ed | d7af 51ff | 4533 dbeb 
+[INFO] [stdout]             0x00007794afba3670: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@167 (line 519)
+[INFO] [stdout]             0x00007794afba3670: 2741 c1e1 
+[INFO] [stdout]             0x00007794afba3674: ;*ior {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@196 (line 522)
+[INFO] [stdout]             0x00007794afba3674: 1845 0bcb | 3bee 0f83 | 6402 0000 | 4489 4ca8 
+[INFO] [stdout]             0x00007794afba3684: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@181 (line 520)
+[INFO] [stdout]             0x00007794afba3684: 104d 8b57 
+[INFO] [stdout]             0x00007794afba3688: ; ImmutableOopMap {rcx=Oop rbx=NarrowOop rdx=NarrowOop rax=Oop [8]=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@201 (line 504)
+[INFO] [stdout]             0x00007794afba3688: 3041 ffc3 
+[INFO] [stdout]             0x00007794afba368c: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@201 (line 504)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007794afba368c: 4185 0244 | 3bdf 0f8d 
+[INFO] [stdout]             0x00007794afba3694: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@20 (line 505)
+[INFO] [stdout]             0x00007794afba3694: 9b00 0000 | 458b 4cdc 
+[INFO] [stdout]             0x00007794afba369c: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@51 (line 508)
+[INFO] [stdout]             0x00007794afba369c: 1047 8b54 | cc0c 453b | da0f 83ec | 0100 004f | 8d14 cc4f 
+[INFO] [stdout]             0x00007794afba36b0: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@53 (line 508)
+[INFO] [stdout]             0x00007794afba36b0: 8b54 da10 | 4d8b ca49 | c1e9 214d | 33ca 4d0f 
+[INFO] [stdout]             0x00007794afba36c0: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@11 (line 530)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@135 (line 516)
+[INFO] [stdout]             0x00007794afba36c0: afcd 4d8b | d149 c1ea | 214d 33d1 
+[INFO] [stdout]             0x00007794afba36cc: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@24 (line 532)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@135 (line 516)
+[INFO] [stdout]             0x00007794afba36cc: 4d0f afd6 | 4d8b ca49 | c1e9 214d | 33ca 458b 
+[INFO] [stdout]             0x00007794afba36dc: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::mixHash@34 (line 534)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@135 (line 516)
+[INFO] [stdout]             0x00007794afba36dc: c941 8be8 
+[INFO] [stdout]    0.01%    0x00007794afba36e0: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@157 (line 518)
+[INFO] [stdout]    0.01%    0x00007794afba36e0: 4123 e941 | c1e9 1841 | 81c9 8000 
+[INFO] [stdout]             0x00007794afba36ec: ;*ior {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@148 (line 517)
+[INFO] [stdout]             0x00007794afba36ec: 0000 3bee | 0f83 ca01 | 0000 448b | 54a8 1045 | 85d2 0f84 
+[INFO] [stdout]             0x00007794afba3700: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@167 (line 519)
+[INFO] [stdout]             0x00007794afba3700: 6dff ffff | 660f 1f44 | 0000 660f 
+[INFO] [stdout]             0x00007794afba370c: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@181 (line 520)
+[INFO] [stdout]             0x00007794afba370c: 1f44 0000 | 4d8b 5730 | ffc5 4123 
+[INFO] [stdout]             0x00007794afba3718: ; ImmutableOopMap {rcx=Oop rbx=NarrowOop rdx=NarrowOop rax=Oop [8]=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@181 (line 520)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007794afba3718: e841 8502 | 3bee 0f83 | e401 0000 | 448b 54a8 | 1045 85d2 
+[INFO] [stdout]             0x00007794afba372c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@167 (line 519)
+[INFO] [stdout]             0x00007794afba372c: 75e2 e93e 
+[INFO] [stdout]             0x00007794afba3730: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@17 (line 504)
+[INFO] [stdout]             0x00007794afba3730: ffff ff44 
+[INFO] [stdout]             0x00007794afba3734: ;*getfield arrayPool {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@205 (line 524)
+[INFO] [stdout]             0x00007794afba3734: 8b59 2c45 | 85db 0f84 
+[INFO] [stdout]             0x00007794afba373c: ;*invokevirtual release {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash@209 (line 524)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    4.44%  <total for region 6>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 7]..............................................................................
+[INFO] [stdout] snappy6977605595519541394.tmp, [unknown] 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.28%  <total for region 7>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 8]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows, version 4, compile id 3891 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794afbe0dc8: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@80 (line 4436)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0dc8: 008b 5c24 | 0841 2bdb | 448b 4424 | 0833 c045 | 3bc3 0f4c | d881 fbe8 | 0300 00b8 | e803 0000 
+[INFO] [stdout]             0x00007794afbe0de8: 0f47 d841 | 03db eb40 | 48c7 c0ff | ffff ffeb | 250f 1f80 | 0000 0000 | c461 f97e | d046 8b44 
+[INFO] [stdout]             0x00007794afbe0e08: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::rowReferenceAt@12 (line 5104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@49 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e08: 8010 418b | c0c1 e810 | 450f b7c0 | 4863 c048 | c1e0 2049 | 0bc0 4c8b | 4424 604b 
+[INFO] [stdout]             0x00007794afbe0e24: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@119 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e24: 8944 d810 
+[INFO] [stdout]    0.16%    0x00007794afbe0e28: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@120 (line 4435)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]    0.16%    0x00007794afbe0e28: 41ff c344 
+[INFO] [stdout]             0x00007794afbe0e2c: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@80 (line 4436)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e2c: 3bdb 7d87 | c4c1 f97e | c843 8b44 
+[INFO] [stdout]             0x00007794afbe0e38: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@83 (line 4436)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e38: 9810 413b | c20f 8361 | 0100 0044 
+[INFO] [stdout]             0x00007794afbe0e44: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$2@6 (line 72)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13adc8::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@93 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e44: 8b44 8110 | 443b c70f | 839f 0100 | 0046 0fb6 | 4402 1045 | 85c0 0f85 
+[INFO] [stdout]             0x00007794afbe0e5c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@98 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e5c: a400 0000 | 413b c50f | 83d3 0100 | 0044 8b44 
+[INFO] [stdout]             0x00007794afbe0e6c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@114 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e6c: 8610 453b | c60f 8309 | 0200 004f 
+[INFO] [stdout]             0x00007794afbe0e78: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@115 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e78: 8b44 c110 | 4d85 c00f | 8c5b 0400 
+[INFO] [stdout]             0x00007794afbe0e84: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@10 (line 4460)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e84: 004c 3b44 | 2410 0f8d 
+[INFO] [stdout]             0x00007794afbe0e8c: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@21 (line 4460)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e8c: 9c04 0000 
+[INFO] [stdout]             0x00007794afbe0e90: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@33 (line 4463)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0e90: 458b c044 | 3bc5 0f83 | 2802 0000 | c461 f97e | c846 8b44 
+[INFO] [stdout]             0x00007794afbe0ea4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@34 (line 4463)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0ea4: 8010 4183 | f8ff 0f84 
+[INFO] [stdout]             0x00007794afbe0eac: ;*if_icmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@38 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout]             0x00007794afbe0eac: 40ff ffff | 443b 0424 | 0f82 46ff 
+[INFO] [stdout]             0x00007794afbe0eb8: ;   {other}
+[INFO] [stdout]             0x00007794afbe0eb8: ffff bee4 | ffff ffc4 | e1f9 7ecd | 448b 4c24 | 0844 890c | 2444 895c | 2410 4489 | 4424 14c5 
+[INFO] [stdout]             0x00007794afbe0ed8: fb11 4424 | 18c5 fb11 | 7424 20c5 | fa11 6c24 | 28c5 fa11 | 5c24 2cc5 | fa11 6424 
+[INFO] [stdout]             0x00007794afbe0ef4: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007794afbe0ef4: 3066 90e8 
+[INFO] [stdout]             0x00007794afbe0ef8: ; ImmutableOopMap {rbp=Oop [24]=Oop [32]=Oop [40]=NarrowOop [44]=NarrowOop [48]=NarrowOop [96]=Oop }
+[INFO] [stdout]                                 ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::rowReferenceAt@12 (line 5104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef@49 (line 4464)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleDictionaryRows@116 (line 4437)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows@196 (line 3260)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.05%  <total for region 8>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 9]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2.0x000000009d190000::assignCompactNullFreeBatch, version 6, compile id 3627 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba1340: cc49 c1e2 
+[INFO] [stdout]             0x00007794afba1344: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1344: 0333 ffc4 | c179 6ec1 | e95d 0100 | 000f 1f84 | 0000 0000 | 000f 1f80 | 0000 0000 | c4c1 796e 
+[INFO] [stdout]             0x00007794afba1364: ;*iload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@161
+[INFO] [stdout]             0x00007794afba1364: c145 8bd8 | 41c1 eb18 | 443b 5c24 | 580f 8416 
+[INFO] [stdout]             0x00007794afba1374: ;*if_icmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@168
+[INFO] [stdout]             0x00007794afba1374: 0300 00c4 
+[INFO] [stdout]             0x00007794afba1378: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@307
+[INFO] [stdout]             0x00007794afba1378: c179 7ec1 | 4d8b 4730 | 448b 5c24 | 4c41 ffc3 
+[INFO] [stdout]    0.06%    0x00007794afba1388: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@304
+[INFO] [stdout]    0.06%    0x00007794afba1388: 4523 da44 
+[INFO] [stdout]             0x00007794afba138c: ; ImmutableOopMap {r9=NarrowOop [0]=Oop [8]=Oop [24]=Oop [32]=Oop [40]=Oop [56]=Oop [64]=NarrowOop [72]=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@307
+[INFO] [stdout]             0x00007794afba138c: 895c 244c 
+[INFO] [stdout]    0.03%    0x00007794afba1390: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@307
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]    0.03%    0x00007794afba1390: 4185 0044 | 3b5c 2434 | 0f83 1d04 | 0000 4c8b | 4424 1847 
+[INFO] [stdout]             0x00007794afba13a4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@153
+[INFO] [stdout]             0x00007794afba13a4: 8b44 9810 | 4585 c075 
+[INFO] [stdout]             0x00007794afba13ac: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@158
+[INFO] [stdout]             0x00007794afba13ac: b34c 8b14 | 2445 8b42 | 1c4c 8b94 | 2480 0000 
+[INFO] [stdout]             0x00007794afba13bc: ;*l2i {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@194
+[INFO] [stdout]             0x00007794afba13bc: 0045 8bd2 | 4489 5424 | 5c45 3bd0 | 0f8d bb03 
+[INFO] [stdout]             0x00007794afba13cc: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@221
+[INFO] [stdout]             0x00007794afba13cc: 0000 478b | 5ccc 0c44 | 8b54 245c | 453b d30f | 8307 0700 | 0044 8b54 | 2458 41c1 | e218 440b 
+[INFO] [stdout]             0x00007794afba13ec: ;*ior {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@239
+[INFO] [stdout]             0x00007794afba13ec: 5424 5c4b 
+[INFO] [stdout]             0x00007794afba13f0: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@221
+[INFO] [stdout]             0x00007794afba13f0: 8d0c cc44 | 8b44 245c | 4c8b 5c24 | 504e 895c 
+[INFO] [stdout]             0x00007794afba1400: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@227
+[INFO] [stdout]             0x00007794afba1400: c110 448b | 5c24 4c44 | 3b5c 2434 | 0f83 5a07 | 0000 4c8b | 5c24 188b | 5c24 4c45 
+[INFO] [stdout]             0x00007794afba141c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@240
+[INFO] [stdout]             0x00007794afba141c: 8954 9b10 | 4c8b 1424 | 418b 5a18 
+[INFO] [stdout]    0.05%    0x00007794afba1428: ;*iadd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@247
+[INFO] [stdout]    0.05%    0x00007794afba1428: ffc3 4189 
+[INFO] [stdout]             0x00007794afba142c: ;*putfield size {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@249
+[INFO] [stdout]             0x00007794afba142c: 5a18 458b 
+[INFO] [stdout]             0x00007794afba1430: ;*getfield maxFill {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@253
+[INFO] [stdout]             0x00007794afba1430: 4214 413b | d80f 8de1 
+[INFO] [stdout]             0x00007794afba1438: ;*if_icmplt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@256
+[INFO] [stdout]             0x00007794afba1438: 0700 0048 | 8b84 2480 | 0000 0048 
+[INFO] [stdout]             0x00007794afba1444: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@282
+[INFO] [stdout]             0x00007794afba1444: ffc0 4c63 
+[INFO] [stdout]             0x00007794afba1448: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@288
+[INFO] [stdout]             0x00007794afba1448: 4c24 5c44 | 8b54 2444 | 443b 5424 | 140f 83e1 | 0400 004c | 8b74 2438 | 4f89 4cd6 
+[INFO] [stdout]             0x00007794afba1464: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@289
+[INFO] [stdout]             0x00007794afba1464: 108b 7c24 
+[INFO] [stdout]             0x00007794afba1468: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@290
+[INFO] [stdout]             0x00007794afba1468: 30ff c73b | 7c24 100f | 8d04 0300 | 004c 8bc9 | 49c1 e903 | 4c8b 4424 | 0844 8b6c | 2410 8b5c 
+[INFO] [stdout]             0x00007794afba1488: 2448 8b4c 
+[INFO] [stdout]             0x00007794afba148c: ;   {other}
+[INFO] [stdout]             0x00007794afba148c: 2440 8b54 | 2414 4c8b | 5c24 1848 | 8b6c 2428 | 4c8b 5424 | 2048 8984 | 2480 0000 | 00c4 c179 
+[INFO] [stdout]             0x00007794afba14ac: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@34
+[INFO] [stdout]             0x00007794afba14ac: 6ec1 418b 
+[INFO] [stdout]             0x00007794afba14b0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@37
+[INFO] [stdout]             0x00007794afba14b0: 44b8 1045 
+[INFO] [stdout]             0x00007794afba14b4: ;*getfield arg$2 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba14b4: 8b4a 1043 
+[INFO] [stdout]             0x00007794afba14b8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@3 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba14b8: 8b74 cc0c | 8944 2444 | 897c 2430 | 4c89 5424 | 2048 896c | 2428 4c89 | 5c24 1889 | 5424 1489 
+[INFO] [stdout]             0x00007794afba14d8: 4c24 4089 | 5c24 484c | 8974 2438 | 4489 6c24 | 104c 8944 | 2408 458b 
+[INFO] [stdout]             0x00007794afba14f0: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba14f0: 420c 3bc6 | 0f83 3603 | 0000 4f8d | 1ccc 458b 
+[INFO] [stdout]             0x00007794afba1500: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@3 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1500: 4c83 1047 | 8b5c c408 | 4b8d 1cc4 
+[INFO] [stdout]             0x00007794afba150c: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009d13a260&apos;)}
+[INFO] [stdout]             0x00007794afba150c: 4181 fb60 | a213 010f | 85b9 0100 
+[INFO] [stdout]             0x00007794afba1518: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1518: 0044 8b5b 
+[INFO] [stdout]             0x00007794afba151c: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba151c: 0c47 8b54 
+[INFO] [stdout]             0x00007794afba1520: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.I64Vector::values@1 (line 35)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@1 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1520: dc0c 8b5b 
+[INFO] [stdout]             0x00007794afba1524: ;*getfield arg$2 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1524: 1045 8b44 | dc0c 453b | c80f 8369 | 0400 004d | 8d1c dc47 
+[INFO] [stdout]             0x00007794afba1538: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@6 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1538: 8b5c 8b10 
+[INFO] [stdout]    0.01%    0x00007794afba153c: ; implicit exception: dispatches to 0x00007794afba1fe8
+[INFO] [stdout]    0.01%    0x00007794afba153c: 478b 4cd4 | 0c45 3bd9 | 0f83 9e04 | 0000 49c1 | e203 4f8b 
+[INFO] [stdout]             0x00007794afba1550: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@7 (line 40)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1550: 54da 1045 
+[INFO] [stdout]             0x00007794afba1554: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@50
+[INFO] [stdout]             0x00007794afba1554: 8bca 4d63 
+[INFO] [stdout]             0x00007794afba1558: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@62
+[INFO] [stdout]             0x00007794afba1558: d949 8bfb | 4d3b d30f | 856f 0600 
+[INFO] [stdout]             0x00007794afba1564: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@64
+[INFO] [stdout]             0x00007794afba1564: 004c 8b54 | 2428 418b 
+[INFO] [stdout]             0x00007794afba156c: ;*getfield arg$2 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba156c: 4a10 458b 
+[INFO] [stdout]             0x00007794afba1570: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@3 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba1570: 5ccc 0c45 
+[INFO] [stdout]             0x00007794afba1574: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba1574: 8b52 0c41 | 3bc3 0f83 | fc02 0000 | 4d8d 1ccc | 418b 4c83 
+[INFO] [stdout]             0x00007794afba1588: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@3 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba1588: 1047 8b44 | d408 4f8d 
+[INFO] [stdout]             0x00007794afba1590: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009d13a260&apos;)}
+[INFO] [stdout]             0x00007794afba1590: 1cd4 4181 | f860 a213 | 010f 8582 
+[INFO] [stdout]             0x00007794afba159c: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba159c: 0100 0045 
+[INFO] [stdout]             0x00007794afba15a0: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a260::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$4@4 (line 44)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009d13a490::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2/0x000000009d190000::assignCompactNullFreeBatch@80
+[INFO] [stdout]             0x00007794afba15a0: 8b43 0c47 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.96%  <total for region 9>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 10].............................................................................
+[INFO] [stdout]  [kernel.kallsyms], lock_vma_under_rcu 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.47%  <total for region 10>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 11].............................................................................
+[INFO] [stdout] runtime stub, StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794af4344e0: 2bc3 4983 | f818 0f8c | a5fd ffff | 4983 e818 | 0f1f 8400 | 0000 0000 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007794af434500: c5fe 6f0c | cfc5 fe7f | 0cce c5fe | 6f4c cf20 | c5fe 7f4c | ce20 c5fe | 6f4c cf40 | c5fe 7f4c 
+[INFO] [stdout]             0x00007794af434520: ce40 c5fe | 6f4c cf60 | c5fe 7f4c | ce60 c5fe | 6f8c cf80 | 0000 00c5 | fe7f 8cce | 8000 0000 
+[INFO] [stdout]             0x00007794af434540: c5fe 6f8c | cfa0 0000 | 00c5 fe7f | 8cce a000 | 0000 4883 | c118 4983 | e818 7fa4 | 4983 c018 
+[INFO] [stdout]             0x00007794af434560: e92c fdff | ff4d 8bd8 | 488b c648 | 8bf7 488b | f84c 8bc6 | 488b c749 | 8bcb f348 | a549 c1e3 
+[INFO] [stdout]             0x00007794af434580: 0349 c1eb | 0348 8bf0 | 498b f849 | 8bcb 4c8b | c24d 2bc3 | e9f8 fcff | ff4c 8bde | 4983 e33f 
+[INFO] [stdout]             0x00007794af4345a0: 0f84 4300 | 0000 49f7 | db49 83c3 | 4049 c1eb | 0349 8bc3 | 49b8 ffff | ffff ffff | ffff c442 
+[INFO] [stdout]             0x00007794af4345c0: f8f5 c0c4 | c1fb 92d0 | 62f1 feca | 6f0c cf62 | f1fe 4a7f | 0cce 498b | cb4c 8bc2 | 4d2b c349 
+[INFO] [stdout]             0x00007794af4345e0: 83f8 180f | 8c59 0000 | 0049 83e8 | 1866 660f | 1f84 0000 | 0000 0066 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007794af434600: 62f1 fe48 | 6f0c cf62 | f1fe 487f | 0cce 62f1 | fe48 6f4c | cf01 62f1 | fe48 7f4c | ce01 62f1 
+[INFO] [stdout]             0x00007794af434620: fe48 6f4c | cf02 62f1 | fe48 7f4c | ce02 4883 | c118 4983 | e818 7fc8 | 4983 c018 | 0f8e a001 
+[INFO] [stdout]             0x00007794af434640: 0000 4983 | f804 7f27 | 48b8 ffff | ffff ffff | ffff c4e2 | b8f5 c0c4 | e1fb 92d0 | 62f1 feaa 
+[INFO] [stdout]             0x00007794af434660: 6f0c cf62 | f1fe 2a7f | 0cce e973 | 0100 0049 | 83f8 087f | 2748 b8ff | ffff ffff | ffff ffc4 
+[INFO] [stdout]             0x00007794af434680: e2b8 f5c0 | c4e1 fb92 | d062 f1fe | ca6f 0ccf | 62f1 fe4a | 7f0c cee9 | 4601 0000 | 4983 f80c 
+[INFO] [stdout]             0x00007794af4346a0: 7f3b 62f1 | fe48 6f0c | cf62 f1fe | 487f 0cce | 4983 e808 | 48b8 ffff | ffff ffff | ffff c4e2 
+[INFO] [stdout]             0x00007794af4346c0: b8f5 c0c4 | e1fb 92d0 | 62f1 feaa | 6f4c cf02 | 62f1 fe2a | 7f4c ce02 | e905 0100 | 0049 83f8 
+[INFO] [stdout]             0x00007794af4346e0: 107f 4762 | f1fe 486f | 0ccf 62f1 | fe48 7f0c | cec5 fe6f | 4ccf 40c5 | fe7f 4cce | 4049 83e8 
+[INFO] [stdout]             0x00007794af434700: 0c48 b8ff | ffff ffff | ffff ffc4 | e2b8 f5c0 | c4e1 fb92 | d062 f1fe | aa6f 4ccf | 0362 f1fe 
+[INFO] [stdout]             0x00007794af434720: 2a7f 4cce | 03e9 b800 | 0000 4983 | f814 7f4b | 62f1 fe48 | 6f0c cf62 | f1fe 487f | 0cce 62f1 
+[INFO] [stdout]             0x00007794af434740: fe48 6f4c | cf01 62f1 | fe48 7f4c | ce01 4983 | e810 48b8 | ffff ffff | ffff ffff | c4e2 b8f5 
+[INFO] [stdout]             0x00007794af434760: c0c4 e1fb | 92d0 62f1 | feaa 6f4c | cf04 62f1 | fe2a 7f4c | ce04 e967 | 0000 0049 | 83f8 180f 
+[INFO] [stdout]             0x00007794af434780: 8ff6 fcff | ff62 f1fe | 486f 0ccf | 62f1 fe48 | 7f0c ce62 | f1fe 486f | 4ccf 0162 | f1fe 487f 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.22%  <total for region 11>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 12].............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.04%  <total for region 12>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 13].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupingState::assignLongGroups, version 18, compile id 3769 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794afb41188: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@68 (line 1025)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1004)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@55 (line 540)
+[INFO] [stdout]             0x00007794afb41188: 9a10 4489 | 5424 3ceb | 0489 5c24 
+[INFO] [stdout]             0x00007794afb41194: ;*getfield value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Integer::intValue@1 (line 1041)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@63 (line 540)
+[INFO] [stdout]             0x00007794afb41194: 3c44 895c 
+[INFO] [stdout]             0x00007794afb41198: ;   {other}
+[INFO] [stdout]             0x00007794afb41198: 2448 4889 | 4424 2848 | 894c 2408 | 4489 4424 | 3489 6c24 | 1844 896c | 2424 4489 | 4c24 2048 
+[INFO] [stdout]             0x00007794afb411b8: 8954 2410 | 4889 7c24 | 504c 8934 
+[INFO] [stdout]             0x00007794afb411c4: ;*invokevirtual next {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1004)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@55 (line 540)
+[INFO] [stdout]             0x00007794afb411c4: 2448 8bf2 | 8b54 243c | 6690 c5f8 | 7748 b810 | cc5d 5494 
+[INFO] [stdout]             0x00007794afb411d8: ;   {virtual_call}
+[INFO] [stdout]             0x00007794afb411d8: 7700 00e8 
+[INFO] [stdout]             0x00007794afb411dc: ; ImmutableOopMap {rbp=NarrowOop [0]=Oop [8]=Oop [16]=Oop [24]=NarrowOop [32]=NarrowOop [40]=Oop [52]=NarrowOop [80]=Oop [112]=Oop }
+[INFO] [stdout]                                 ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@72 (line 541)
+[INFO] [stdout]             0x00007794afb411dc: 00e1 90ff 
+[INFO] [stdout]    0.05%    0x00007794afb411e0: ;   {post_call_nop}
+[INFO] [stdout]    0.05%    0x00007794afb411e0: 0f1f 8400 
+[INFO] [stdout]             0x00007794afb411e4: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@72 (line 541)
+[INFO] [stdout]             0x00007794afb411e4: 5803 0000 | 85c0 0f85 
+[INFO] [stdout]             0x00007794afb411ec: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@77 (line 541)
+[INFO] [stdout]             0x00007794afb411ec: d809 0000 | 488b 7424 | 708b 5424 | 3c90 c5f8 | 7748 b838 | cc5d 5494 
+[INFO] [stdout]             0x00007794afb41204: ;   {virtual_call}
+[INFO] [stdout]             0x00007794afb41204: 7700 00e8 
+[INFO] [stdout]             0x00007794afb41208: ; ImmutableOopMap {rbp=NarrowOop [0]=Oop [8]=Oop [16]=Oop [24]=NarrowOop [32]=NarrowOop [40]=Oop [52]=NarrowOop [80]=Oop [112]=Oop }
+[INFO] [stdout]                                 ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@96 (line 546)
+[INFO] [stdout]             0x00007794afb41208: d4e0 90ff 
+[INFO] [stdout]    0.01%    0x00007794afb4120c: ;   {post_call_nop}
+[INFO] [stdout]    0.01%    0x00007794afb4120c: 0f1f 8400 
+[INFO] [stdout]             0x00007794afb41210: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@96 (line 546)
+[INFO] [stdout]             0x00007794afb41210: 8403 0001 | 4889 4424 | 404c 8bd0 | 49c1 ea21 | 4c33 d049 | bbcd 8c55 | edd7 af51 | ff4d 0faf 
+[INFO] [stdout]             0x00007794afb41230: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::hashLong@11 (line 934)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@105 (line 547)
+[INFO] [stdout]             0x00007794afb41230: d34d 8bda | 49c1 eb21 | 4d33 da49 | ba53 ec85 | 1afe b9ce | c44d 0faf 
+[INFO] [stdout]             0x00007794afb41248: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::hashLong@24 (line 936)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@105 (line 547)
+[INFO] [stdout]             0x00007794afb41248: da4d 8bd3 | 49c1 ea21 | 4d33 d345 | 8bd2 4423 
+[INFO] [stdout]             0x00007794afb41258: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@110 (line 547)
+[INFO] [stdout]             0x00007794afb41258: 5424 2445 
+[INFO] [stdout]             0x00007794afb4125c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@117 (line 549)
+[INFO] [stdout]             0x00007794afb4125c: 8b4c ec0c | 453b d10f | 8377 0700 | 0089 6c24 | 304d 8d1c 
+[INFO] [stdout]             0x00007794afb41270: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@53 (line 540)
+[INFO] [stdout]             0x00007794afb41270: ec4c 895c | 2418 438b 
+[INFO] [stdout]             0x00007794afb41278: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@117 (line 549)
+[INFO] [stdout]             0x00007794afb41278: 4c93 1083 | f9ff 0f84 
+[INFO] [stdout]             0x00007794afb41280: ;*if_icmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@123 (line 550)
+[INFO] [stdout]             0x00007794afb41280: 8f00 0000 | 448b 4424 | 3447 8b5c 
+[INFO] [stdout]             0x00007794afb4128c: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@225 (line 565)
+[INFO] [stdout]             0x00007794afb4128c: c40c 453b | d30f 833b | 0800 0049 
+[INFO] [stdout]             0x00007794afb41298: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@53 (line 540)
+[INFO] [stdout]             0x00007794afb41298: c1e0 0349 | 8bd8 4f8b | 44d0 104c | 3bc0 0f84 
+[INFO] [stdout]             0x00007794afb412a8: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignLongGroups@229 (line 565)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.69%  <total for region 13>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 14].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong, version 6, compile id 2506 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794afb19558: 0600 0085 | db0f 84f9 | fdff ff48 | 8b74 2470 | 4883 c610 | 498b fd48 | 83c7 1048 | 8bd5 c5f8 
+[INFO] [stdout]             0x00007794afb19578: ;   {runtime_call Stub::Stub Generator jbyte_disjoint_arraycopy_stub}
+[INFO] [stdout]             0x00007794afb19578: 7749 bae0 | 1a43 af94 | 7700 0041 
+[INFO] [stdout]             0x00007794afb19584: ;   {post_call_nop}
+[INFO] [stdout]             0x00007794afb19584: ffd2 0f1f | 8400 0000 | 0000 e9c9 | fdff ff0f | 1f80 0000 | 0000 660f | 1f44 0000 
+[INFO] [stdout]             0x00007794afb195a0: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@48 (line 1113)
+[INFO] [stdout]             0x00007794afb195a0: c5f9 7edb 
+[INFO] [stdout]    0.09%    0x00007794afb195a4: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@88 (line 1116)
+[INFO] [stdout]    0.09%    0x00007794afb195a4: 4963 cac4 | c1f9 7ed0 | 458b 4c88 
+[INFO] [stdout]             0x00007794afb195b0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@51 (line 1113)
+[INFO] [stdout]             0x00007794afb195b0: 1044 3bca | 0f83 9101 | 0000 c5f9 | 6edb c4c1 | f97e c04f | 8b44 c810 | 4c89 44cf 
+[INFO] [stdout]             0x00007794afb195cc: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@62 (line 1114)
+[INFO] [stdout]             0x00007794afb195cc: 1044 3bc8 | 0f83 e901 | 0000 c4c1 | f97e c847 | 0fb6 4408 | 104c 8b4c | 2470 4588 
+[INFO] [stdout]             0x00007794afb195e8: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@88 (line 1116)
+[INFO] [stdout]             0x00007794afb195e8: 4409 10c4 | c1f9 7ed0 | 458b 4c88 
+[INFO] [stdout]             0x00007794afb195f4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@51 (line 1113)
+[INFO] [stdout]             0x00007794afb195f4: 1444 3bca | 0f83 4a01 | 0000 c4c1 | f97e c04f | 8b44 c810 | 4c89 44cf 
+[INFO] [stdout]             0x00007794afb1960c: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@62 (line 1114)
+[INFO] [stdout]             0x00007794afb1960c: 1844 3bc8 | 0f83 a601 | 0000 c4c1 | f97e c847 | 0fb6 4c08 | 104c 8b44 | 2470 4588 
+[INFO] [stdout]             0x00007794afb19628: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@88 (line 1116)
+[INFO] [stdout]             0x00007794afb19628: 4c08 1141 
+[INFO] [stdout]             0x00007794afb1962c: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@89 (line 1112)
+[INFO] [stdout]             0x00007794afb1962c: 83c2 0244 | 3bd5 0f8c 
+[INFO] [stdout]             0x00007794afb19634: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@92 (line 1112)
+[INFO] [stdout]             0x00007794afb19634: 68ff ffff 
+[INFO] [stdout]             0x00007794afb19638: ; ImmutableOopMap {rdi=Oop xmm0=Oop xmm1=Oop xmm2=Oop [112]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@92 (line 1112)
+[INFO] [stdout]             0x00007794afb19638: 4d8b 4730 
+[INFO] [stdout]             0x00007794afb1963c: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@92 (line 1112)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007794afb1963c: 4185 0045 | 3bd3 0f8d | d404 0000 | c4c1 f97e | d0c5 f97e | dbe9 cc00 | 0000 458b | d945 85c9 
+[INFO] [stdout]             0x00007794afb1965c: 0f8e fafc 
+[INFO] [stdout]             0x00007794afb19660: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@45 (line 1112)
+[INFO] [stdout]             0x00007794afb19660: ffff 4863 | cb48 3be9 | 480f 4ccd | 48c7 c600 | 0000 8048 | 8bc2 4885 | d20f 8466 | 0200 0085 
+[INFO] [stdout]             0x00007794afb19680: db0f 866d | 0500 0045 
+[INFO] [stdout]             0x00007794afb19688: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong@51 (line 1113)
+[INFO] [stdout]             0x00007794afb19688: 8b48 10c4 | e1f9 7ec5 
+[INFO] [stdout]             0x00007794afb19690: ; implicit exception: dispatches to 0x00007794afb19dfc
+[INFO] [stdout]             0x00007794afb19690: 8b55 0c44 | 3bca 0f83 | 4805 0000 | c4e1 f96e | c844 895c | 2418 4a8b 
+[INFO] [stdout]             0x00007794afb196a8: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.50%  <total for region 14>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 15].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1, version 2, compile id 2189 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794afaec158: 3041 8502 | c4c1 797e | eb45 3bc3 
+[INFO] [stdout]             0x00007794afaec164: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@220 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec164: 7d8c c5f9 | 7eed 2b2c | 2445 33c0 | 458b d0c4 | c179 7ee8 | 443b 0424 | 410f 4cea | 81fd d007 
+[INFO] [stdout]             0x00007794afaec184: 0000 41b8 | d007 0000 | 410f 47e8 | 032c 24eb | 2b44 8b04 | 24e9 8000 | 0000 6690 | 4f8b 54d5 
+[INFO] [stdout]             0x00007794afaec1a4: 104c 8954 
+[INFO] [stdout]             0x00007794afaec1a8: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@248 (line 2225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1a8: c118 4588 | 6401 1144 | 8b04 2441 
+[INFO] [stdout]             0x00007794afaec1b4: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@276 (line 2223)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1b4: 83c0 0244 | 8904 2444 
+[INFO] [stdout]             0x00007794afaec1bc: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@220 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1bc: 3bc5 7d95 | 4863 0424 | 448b 4486 
+[INFO] [stdout]             0x00007794afaec1c8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@226 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1c8: 1045 85c0 | 0f84 8a00 
+[INFO] [stdout]             0x00007794afaec1d0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@227 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1d0: 0000 448d | 5a01 3bd3 | 0f83 a100 | 0000 448b 
+[INFO] [stdout]             0x00007794afaec1e0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@246 (line 2225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1e0: 5497 1045 | 3bd6 73ad | 4f8b 54d5 | 104c 8954 
+[INFO] [stdout]             0x00007794afaec1f0: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@248 (line 2225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1f0: c110 4588 
+[INFO] [stdout]             0x00007794afaec1f4: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@276 (line 2223)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1f4: 6401 1044 
+[INFO] [stdout]             0x00007794afaec1f8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@226 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec1f8: 8b44 8614 | 4585 c074 
+[INFO] [stdout]             0x00007794afaec200: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@227 (line 2224)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec200: 6b41 8d53 | 0144 3bdb | 737b 468b 
+[INFO] [stdout]             0x00007794afaec20c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@246 (line 2225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec20c: 549f 1045 | 3bd6 728c | 448b 0424 
+[INFO] [stdout]             0x00007794afaec218: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@276 (line 2223)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout]             0x00007794afaec218: 41ff c044 | 8bda 4489 | 1c24 c4e1 | f97e c5c4 | c179 7ec9 | c4c1 797e | e3be e4ff | ffff 4489 
+[INFO] [stdout]             0x00007794afaec238: 5424 0444 | 895c 240c | 4489 4c24 | 1044 8944 | 2418 6690 
+[INFO] [stdout]             0x00007794afaec24c: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007794afaec24c: c5f8 77e8 
+[INFO] [stdout]             0x00007794afaec250: ; ImmutableOopMap {rbp=Oop [12]=NarrowOop [16]=NarrowOop }
+[INFO] [stdout]                                 ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@247 (line 2225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1@538 (line 2168)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.48%  <total for region 15>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 16].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.parquet.ColumnReader::filterDictLongs, version 2, compile id 2099 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794afadd008: 4185 0044 | 3b54 2438 | 0f8d e314 
+[INFO] [stdout]             0x00007794afadd014: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@132 (line 455)
+[INFO] [stdout]             0x00007794afadd014: 0000 8b54 | 2438 412b | d244 8b44 | 2438 33ff | 453b c20f | 4cd7 81fa | e803 0000 | bfe8 0300 
+[INFO] [stdout]             0x00007794afadd034: 000f 47d7 | 4103 d2eb | 2466 6690 | 488b 7c24 | 68c4 c179 | 7ed8 4289 
+[INFO] [stdout]             0x00007794afadd04c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@203 (line 462)
+[INFO] [stdout]             0x00007794afadd04c: 4487 10c5 | f97e dfff 
+[INFO] [stdout]             0x00007794afadd054: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@204 (line 463)
+[INFO] [stdout]             0x00007794afadd054: c7c5 f96e 
+[INFO] [stdout]             0x00007794afadd058: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@207 (line 454)
+[INFO] [stdout]             0x00007794afadd058: df41 ffc2 | 443b d27d 
+[INFO] [stdout]             0x00007794afadd060: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@132 (line 455)
+[INFO] [stdout]             0x00007794afadd060: a34d 63c2 | 4d03 c343 
+[INFO] [stdout]             0x00007794afadd068: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@156 (line 456)
+[INFO] [stdout]             0x00007794afadd068: 8b7c 8110 | 4d63 c24c | 03c3 478b | 4481 1444 
+[INFO] [stdout]             0x00007794afadd078: ;*if_icmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@157 (line 456)
+[INFO] [stdout]             0x00007794afadd078: 3bc7 74dd | 3bfd 0f83 | bc02 0000 
+[INFO] [stdout]             0x00007794afadd084: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@174 (line 459)
+[INFO] [stdout]             0x00007794afadd084: 8b7c be10 | 413b fe0f | 8317 0300 | 0044 0fb6 | 4439 1045 
+[INFO] [stdout]             0x00007794afadd098: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@182 (line 460)
+[INFO] [stdout]             0x00007794afadd098: 85c0 74bd | 3b3c 240f | 8367 0300 | 004d 8b44 
+[INFO] [stdout]             0x00007794afadd0a8: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@193 (line 461)
+[INFO] [stdout]             0x00007794afadd0a8: fd10 c5f9 | 7edf 3b7c | 2404 0f83 | b803 0000 | 488b 4424 | 604c 8944 
+[INFO] [stdout]             0x00007794afadd0c0: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@194 (line 461)
+[INFO] [stdout]             0x00007794afadd0c0: f810 418b | c203 4424 
+[INFO] [stdout]             0x00007794afadd0c8: ;*iadd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@202 (line 462)
+[INFO] [stdout]             0x00007794afadd0c8: 303b 7c24 | 100f 826d | ffff ffbe | e4ff ffff | c4e1 f97e | cd4c 8b5c | 2408 4c89 | 1c24 c5fa 
+[INFO] [stdout]             0x00007794afadd0e8: 1144 2408 | 4c8b 5c24 | 284c 895c | 2420 448b | 5c24 3044 | 895c 2428 | 448b 4424 
+[INFO] [stdout]             0x00007794afadd104: ;   {other}
+[INFO] [stdout]             0x00007794afadd104: 3844 8944 | 242c c5fa | 116c 2430 | c5fa 1154 | 2434 4489 | 5424 38c5 | fa11 5c24 | 3c89 4424 
+[INFO] [stdout]             0x00007794afadd124: 4866 6690 
+[INFO] [stdout]             0x00007794afadd128: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007794afadd128: c5f8 77e8 
+[INFO] [stdout]             0x00007794afadd12c: ; ImmutableOopMap {rbp=Oop [0]=Oop [32]=Oop [48]=NarrowOop [52]=NarrowOop [96]=Oop [104]=Oop }
+[INFO] [stdout]                                 ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::filterDictLongs@203 (line 462)
+[INFO] [stdout]             0x00007794afadd12c: b0c2 a5ff 
+[INFO] [stdout]             0x00007794afadd130: ;   {post_call_nop}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.46%  <total for region 16>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 17].............................................................................
+[INFO] [stdout]  [kernel.kallsyms], copy_mc_enhanced_fast_string 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.43%  <total for region 17>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 18].............................................................................
+[INFO] [stdout]  [kernel.kallsyms], asm_exc_page_fault 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.13%  <total for region 18>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 19].............................................................................
+[INFO] [stdout] runtime stub, StubRoutines::Stub Generator jint_disjoint_arraycopy_stub 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007794af4337e0: 2bc3 4983 | f830 0f8c | a5fd ffff | 4983 e830 | 0f1f 8400 | 0000 0000 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007794af433800: c5fe 6f0c | 8fc5 fe7f | 0c8e c5fe | 6f4c 8f20 | c5fe 7f4c | 8e20 c5fe | 6f4c 8f40 | c5fe 7f4c 
+[INFO] [stdout]             0x00007794af433820: 8e40 c5fe | 6f4c 8f60 | c5fe 7f4c | 8e60 c5fe | 6f8c 8f80 | 0000 00c5 | fe7f 8c8e | 8000 0000 
+[INFO] [stdout]             0x00007794af433840: c5fe 6f8c | 8fa0 0000 | 00c5 fe7f | 8c8e a000 | 0000 4883 | c130 4983 | e830 7fa4 | 4983 c030 
+[INFO] [stdout]             0x00007794af433860: e92c fdff | ff4d 8bd8 | 488b c648 | 8bf7 488b | f84c 8bc6 | 488b c749 | d1eb 498b | cbf3 48a5 
+[INFO] [stdout]             0x00007794af433880: 49c1 e303 | 49c1 eb02 | 488b f049 | 8bf8 498b | cb4c 8bc2 | 4d2b c3e9 | f5fc ffff | 4c8b de49 
+[INFO] [stdout]             0x00007794af4338a0: 83e3 3f0f | 8443 0000 | 0049 f7db | 4983 c340 | 49c1 eb02 | 498b c349 | b8ff ffff | ffff ffff 
+[INFO] [stdout]             0x00007794af4338c0: ffc4 42f8 | f5c0 c4c1 | fb92 d062 | f17e ca6f | 0c8f 62f1 | 7e4a 7f0c | 8e49 8bcb | 4c8b c24d 
+[INFO] [stdout]             0x00007794af4338e0: 2bc3 4983 | f830 0f8c | 5600 0000 | 4983 e830 | 0f1f 8400 | 0000 0000 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007794af433900: 62f1 fe48 | 6f0c 8f62 | f1fe 487f | 0c8e 62f1 | fe48 6f4c | 8f01 62f1 | fe48 7f4c | 8e01 62f1 
+[INFO] [stdout]             0x00007794af433920: fe48 6f4c | 8f02 62f1 | fe48 7f4c | 8e02 4883 | c130 4983 | e830 7fc8 | 4983 c030 | 0f8e a001 
+[INFO] [stdout]             0x00007794af433940: 0000 4983 | f808 7f27 | 48b8 ffff | ffff ffff | ffff c4e2 | b8f5 c0c4 | e1fb 92d0 | 62f1 7eaa 
+[INFO] [stdout]             0x00007794af433960: 6f0c 8f62 | f17e 2a7f | 0c8e e973 | 0100 0049 | 83f8 107f | 2748 b8ff | ffff ffff | ffff ffc4 
+[INFO] [stdout]             0x00007794af433980: e2b8 f5c0 | c4e1 fb92 | d062 f17e | ca6f 0c8f | 62f1 7e4a | 7f0c 8ee9 | 4601 0000 | 4983 f818 
+[INFO] [stdout]             0x00007794af4339a0: 7f3b 62f1 | fe48 6f0c | 8f62 f1fe | 487f 0c8e | 4983 e810 | 48b8 ffff | ffff ffff | ffff c4e2 
+[INFO] [stdout]             0x00007794af4339c0: b8f5 c0c4 | e1fb 92d0 | 62f1 7eaa | 6f4c 8f02 | 62f1 7e2a | 7f4c 8e02 | e905 0100 | 0049 83f8 
+[INFO] [stdout]             0x00007794af4339e0: 207f 4762 | f1fe 486f | 0c8f 62f1 | fe48 7f0c | 8ec5 fe6f | 4c8f 40c5 | fe7f 4c8e | 4049 83e8 
+[INFO] [stdout]             0x00007794af433a00: 1848 b8ff | ffff ffff | ffff ffc4 | e2b8 f5c0 | c4e1 fb92 | d062 f17e | aa6f 4c8f | 0362 f17e 
+[INFO] [stdout]             0x00007794af433a20: 2a7f 4c8e | 03e9 b800 | 0000 4983 | f828 7f4b | 62f1 fe48 | 6f0c 8f62 | f1fe 487f | 0c8e 62f1 
+[INFO] [stdout]             0x00007794af433a40: fe48 6f4c | 8f01 62f1 | fe48 7f4c | 8e01 4983 | e820 48b8 | ffff ffff | ffff ffff | c4e2 b8f5 
+[INFO] [stdout]             0x00007794af433a60: c0c4 e1fb | 92d0 62f1 | 7eaa 6f4c | 8f04 62f1 | 7e2a 7f4c | 8e04 e967 | 0000 0049 | 83f8 300f 
+[INFO] [stdout]             0x00007794af433a80: 8ff6 fcff | ff62 f1fe | 486f 0c8f | 62f1 fe48 | 7f0c 8e62 | f1fe 486f | 4c8f 0162 | f1fe 487f 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.03%  <total for region 19>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 20].............................................................................
+[INFO] [stdout] snappy6977605595519541394.tmp, [unknown] 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.00%  <total for region 20>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Regions]...............................................................................
+[INFO] [stdout]    8.73%                    c2, level 4  org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows, version 2, compile id 3938 
+[INFO] [stdout]    6.33%                                 <unknown> 
+[INFO] [stdout]    6.27%                    c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 5, compile id 2391 
+[INFO] [stdout]    5.77%                    c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows, version 4, compile id 3891 
+[INFO] [stdout]    5.66%                    c2, level 4  org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2.0x000000009d190000::assignCompactNullFreeBatch, version 6, compile id 3627 
+[INFO] [stdout]    4.44%                    c2, level 4  org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash, version 4, compile id 3637 
+[INFO] [stdout]    3.28%  snappy6977605595519541394.tmp  [unknown] 
+[INFO] [stdout]    3.05%                    c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows, version 4, compile id 3891 
+[INFO] [stdout]    2.96%                    c2, level 4  org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2.0x000000009d190000::assignCompactNullFreeBatch, version 6, compile id 3627 
+[INFO] [stdout]    2.47%              [kernel.kallsyms]  lock_vma_under_rcu 
+[INFO] [stdout]    2.22%                   runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    2.04%                                 <unknown> 
+[INFO] [stdout]    1.69%                    c2, level 4  org.weakref.nitro.operator.GroupingState::assignLongGroups, version 18, compile id 3769 
+[INFO] [stdout]    1.50%                    c2, level 4  org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong, version 6, compile id 2506 
+[INFO] [stdout]    1.48%                    c2, level 4  org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1, version 2, compile id 2189 
+[INFO] [stdout]    1.46%                    c2, level 4  org.weakref.nitro.parquet.ColumnReader::filterDictLongs, version 2, compile id 2099 
+[INFO] [stdout]    1.43%              [kernel.kallsyms]  copy_mc_enhanced_fast_string 
+[INFO] [stdout]    1.13%              [kernel.kallsyms]  asm_exc_page_fault 
+[INFO] [stdout]    1.03%                   runtime stub  StubRoutines::Stub Generator jint_disjoint_arraycopy_stub 
+[INFO] [stdout]    1.00%  snappy6977605595519541394.tmp  [unknown] 
+[INFO] [stdout]   36.03%  <...other 1233 warm regions...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.99%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Methods (after inlining)]..............................................................
+[INFO] [stdout]   12.89%                                 <unknown> 
+[INFO] [stdout]    9.01%                    c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::matchSingleRows, version 4, compile id 3891 
+[INFO] [stdout]    8.77%                    c2, level 4  org.weakref.nitro.operator.GroupedAggregationOperator::accumulateGroupedRows, version 2, compile id 3938 
+[INFO] [stdout]    8.69%                    c2, level 4  org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable2.0x000000009d190000::assignCompactNullFreeBatch, version 6, compile id 3627 
+[INFO] [stdout]    6.29%                    c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 5, compile id 2391 
+[INFO] [stdout]    5.59%  snappy6977605595519541394.tmp  [unknown] 
+[INFO] [stdout]    4.44%                    c2, level 4  org.weakref.nitro.operator.AdaptiveLongGroupingTable::rehash, version 4, compile id 3637 
+[INFO] [stdout]    2.66%                    c2, level 4  org.weakref.nitro.operator.GroupingState::assignLongGroups, version 18, compile id 3769 
+[INFO] [stdout]    2.57%              [kernel.kallsyms]  lock_vma_under_rcu 
+[INFO] [stdout]    2.38%                    c2, level 4  org.weakref.nitro.parquet.ColumnReader::decodeDataPageV1, version 2, compile id 2189 
+[INFO] [stdout]    2.22%                   runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    1.73%                    c2, level 4  org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong, version 6, compile id 2506 
+[INFO] [stdout]    1.60%                    c2, level 4  org.weakref.nitro.data.Allocator::allocate, version 4, compile id 3943 
+[INFO] [stdout]    1.46%                    c2, level 4  org.weakref.nitro.parquet.ColumnReader::filterDictLongs, version 2, compile id 2099 
+[INFO] [stdout]    1.43%              [kernel.kallsyms]  copy_mc_enhanced_fast_string 
+[INFO] [stdout]    1.29%              [kernel.kallsyms]  handle_mm_fault 
+[INFO] [stdout]    1.29%              [kernel.kallsyms]  mas_walk 
+[INFO] [stdout]    1.13%              [kernel.kallsyms]  asm_exc_page_fault 
+[INFO] [stdout]    1.04%                   runtime stub  StubRoutines::Stub Generator jint_disjoint_arraycopy_stub 
+[INFO] [stdout]    0.85%              [kernel.kallsyms]  isolate_migratepages_block 
+[INFO] [stdout]   22.66%  <...other 625 warm methods...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.99%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Distribution by Source]........................................................................
+[INFO] [stdout]   54.75%                    c2, level 4
+[INFO] [stdout]   16.36%              [kernel.kallsyms]
+[INFO] [stdout]   12.89%                               
+[INFO] [stdout]    5.59%  snappy6977605595519541394.tmp
+[INFO] [stdout]    4.70%                   runtime stub
+[INFO] [stdout]    2.82%                      libjvm.so
+[INFO] [stdout]    0.82%               perf-2233114.map
+[INFO] [stdout]    0.70%                    c1, level 3
+[INFO] [stdout]    0.63%                    interpreter
+[INFO] [stdout]    0.25%                      libc.so.6
+[INFO] [stdout]    0.16%                         [vdso]
+[INFO] [stdout]    0.13%                    c1, level 1
+[INFO] [stdout]    0.09%               Unknown, level 0
+[INFO] [stdout]    0.03%                 [nf_conntrack]
+[INFO] [stdout]    0.03%                    [nf_tables]
+[INFO] [stdout]    0.02%                          [kvm]
+[INFO] [stdout]    0.01%            libstdc++.so.6.0.33
+[INFO] [stdout]    0.01%                       [rfcomm]
+[INFO] [stdout]    0.01%           ld-linux-x86-64.so.2
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.99%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] # Run complete. Total time: 00:00:47
+[INFO] [stdout] 
+[INFO] [stdout] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[INFO] [stdout] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[INFO] [stdout] experiments, perform baseline and negative tests that provide experimental control, make sure
+[INFO] [stdout] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[INFO] [stdout] Do not assume the numbers tell you what you want them to tell.
+[INFO] [stdout] 
+[INFO] [stdout] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[INFO] [stdout] extra caution when trusting the results, look into the generated code to check the benchmark still
+[INFO] [stdout] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[INFO] [stdout] different JVMs are already problematic, the performance difference caused by different Blackhole
+[INFO] [stdout] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[INFO] [stdout] 
+[INFO] [stdout] Benchmark                     Mode  Cnt     Score       Error  Units
+[INFO] [stdout] BenchmarkQueries.query23      avgt    3  6273.760 ± 17386.124  ms/op
+[INFO] [stdout] BenchmarkQueries.query23:asm  avgt            NaN                ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  48.753 s (Wall Clock)
+[INFO] Finished at: 2026-07-16T20:34:31Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed

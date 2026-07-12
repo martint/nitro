@@ -35,11 +35,15 @@ import java.util.Arrays;
  *
  * <p>Adaptive ceiling: once the distinct count would exceed {@code maxDistinct}, {@link #intern} returns
  * {@link #TOO_MANY} and the interner is marked {@link #overflowed()}. Callers use that to fall back to a general
- * (hash-of-value) grouping strategy rather than letting a high-cardinality key defeat the dense-id path.
+ * (hash-of-value) grouping strategy rather than letting a high-cardinality key defeat the dense-id path. The
+ * already-interned empty value remains addressable after overflow without probing the table; this preserves the
+ * dominant sentinel's compact representation while every non-empty value takes the constant-time fallback.
  */
 final class ValueIdInterner
 {
     static final int TOO_MANY = -1;
+    private static final boolean RECOGNIZE_EMPTY_AFTER_OVERFLOW =
+            Boolean.parseBoolean(System.getProperty("nitro.group.recognizeEmptyAfterOverflow", "true"));
 
     private final int maxDistinct;
 
@@ -59,8 +63,14 @@ final class ValueIdInterner
     private int[] valueOffset;
     private int[] valueLength;
     private long[] valueHash;
+    // Hash used by the surrounding operator hash tables. This deliberately uses
+    // OperatorVectorSupport.binaryHash rather than the interner's private slot hash so a value
+    // has the same hash whether it arrives flat, dictionary encoded, or after this interner has
+    // overflowed. Dictionary consumers can read it by stable id without touching the bytes again.
+    private int[] valueGroupingHash;
     private int distinct;
     private boolean overflowed;
+    private int emptyId = TOO_MANY;
 
     ValueIdInterner(int maxDistinct)
     {
@@ -78,6 +88,7 @@ final class ValueIdInterner
         this.valueOffset = new int[16];
         this.valueLength = new int[16];
         this.valueHash = new long[16];
+        this.valueGroupingHash = new int[16];
     }
 
     int distinctCount()
@@ -93,12 +104,12 @@ final class ValueIdInterner
     /**
      * The dense id for {@code value[offset, offset + length)}, assigning a new one (the next ordinal) on first
      * sight. Returns {@link #TOO_MANY} once assigning would exceed the configured ceiling; the interner then
-     * stays {@link #overflowed()} and every later {@link #intern} also returns {@link #TOO_MANY}.
+     * stays {@link #overflowed()} and every later non-empty {@link #intern} also returns {@link #TOO_MANY}.
      */
     int intern(byte[] value, int offset, int length)
     {
         if (overflowed) {
-            return TOO_MANY;
+            return RECOGNIZE_EMPTY_AFTER_OVERFLOW && length == 0 ? emptyId : TOO_MANY;
         }
         long hash = hash(value, offset, length);
         byte tag = (byte) ((hash >>> 56) | 0x80L);
@@ -143,9 +154,24 @@ final class ValueIdInterner
         return length;
     }
 
+    void copyValue(int id, org.weakref.nitro.data.BinaryVector output, int outputPosition)
+    {
+        output.setBytes(outputPosition, data, valueOffset[id], valueLength[id]);
+    }
+
     int valueLength(int id)
     {
         return valueLength[id];
+    }
+
+    int groupingHash(int id)
+    {
+        return valueGroupingHash[id];
+    }
+
+    boolean valueEquals(int id, byte[] value, int offset, int length)
+    {
+        return id >= 0 && id < distinct && regionEquals(id, value, offset, length);
     }
 
     /** A fresh copy of the interned value with the given id (for materialization / tests). */
@@ -181,6 +207,7 @@ final class ValueIdInterner
             valueOffset = Arrays.copyOf(valueOffset, newLength);
             valueLength = Arrays.copyOf(valueLength, newLength);
             valueHash = Arrays.copyOf(valueHash, newLength);
+            valueGroupingHash = Arrays.copyOf(valueGroupingHash, newLength);
         }
         if (dataSize + length > data.length) {
             int newLength = data.length * 2;
@@ -193,6 +220,10 @@ final class ValueIdInterner
         valueOffset[id] = dataSize;
         valueLength[id] = length;
         valueHash[id] = hash;
+        valueGroupingHash[id] = OperatorVectorSupport.binaryHash(value, offset, length);
+        if (length == 0) {
+            emptyId = id;
+        }
         dataSize += length;
     }
 

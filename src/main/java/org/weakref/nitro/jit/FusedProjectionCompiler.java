@@ -40,14 +40,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * interpreter pays walking a subtree and invoking one atomic batch primitive per node.
  * <p>
  * Values are computed with three-valued (value, is-null) pairs so nullable inputs are handled without a separate
- * boolean-vector pipeline. Scope: integer inputs (read as {@code long}, I32 widened once) and double inputs (read as
- * {@code double}); the {@code long}/{@code double} arithmetic, comparison, boolean and {@code if_i64}/{@code if_f64}
- * operator set; and {@code long}-typed (I64) or {@code double}-typed (F64) outputs. Any output outside that set is left
- * to the interpreter, so this is a speedup-only substitution behind the same ABI.
+ * boolean-vector pipeline. Scope: integer inputs (read as {@code long}, I32 widened once), double inputs (read as
+ * {@code double}), and UTF-8 input-to-literal categorical equality; the {@code long}/{@code double} arithmetic,
+ * comparison, boolean and {@code if_i64}/{@code if_f64} operator set; and {@code long}-typed (I64) or
+ * {@code double}-typed (F64) outputs. Any output outside that set is left to the interpreter, so this is a
+ * speedup-only substitution behind the same ABI.
  */
 public final class FusedProjectionCompiler
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
+    private static final boolean COMPILE_UTF8_IN =
+            Boolean.parseBoolean(System.getProperty("nitro.project.compileUtf8In", "true"));
     private static final AtomicInteger COUNTER = new AtomicInteger();
     // Kernels are stateless, so identical projection shapes share one compiled class (amortizing javac cost across
     // operators / benchmark iterations). Keyed by the fully-rendered source with a stable placeholder class name.
@@ -55,10 +58,10 @@ public final class FusedProjectionCompiler
 
     private FusedProjectionCompiler() {}
 
-    private enum ValueType { LONG, DOUBLE, BOOL }
+    private enum ValueType { LONG, DOUBLE, BOOL, UTF8 }
 
     private sealed interface Operand
-            permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant {}
+            permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant, Utf8Constant {}
 
     private record ColumnOperand(int slot, ValueType type) implements Operand {}
 
@@ -69,6 +72,8 @@ public final class FusedProjectionCompiler
     private record DoubleConstant(double value) implements Operand {}
 
     private record BoolConstant(boolean value) implements Operand {}
+
+    private record Utf8Constant(String value) implements Operand {}
 
     /** One shared assignment in the fused program: {@code step<id> = op(operands)}. */
     private record Step(int id, String op, List<Operand> operands, ValueType type) {}
@@ -199,7 +204,7 @@ public final class FusedProjectionCompiler
             Producer producer = reference.producer();
             if (producer instanceof Input input) {
                 if (expected == null || expected == ValueType.BOOL) {
-                    // A raw column can only feed a numeric operator; a bool-typed column input is out of scope.
+                    // A raw column can feed a numeric or UTF-8 operator; bool-typed column input is out of scope.
                     throw new Unsupported();
                 }
                 int slot = columnSlots.computeIfAbsent(input.index(), index -> {
@@ -238,8 +243,13 @@ public final class FusedProjectionCompiler
             }
             if (operation instanceof Call call) {
                 String op = call.name();
+                if (op.equals("in_utf8") && !COMPILE_UTF8_IN) {
+                    throw new Unsupported();
+                }
                 ValueType type = resultType(op);
-                List<ValueType> argTypes = argumentTypes(op);
+                List<ValueType> argTypes = op.equals("in_utf8")
+                        ? java.util.Collections.nCopies(call.arguments().size(), ValueType.UTF8)
+                        : argumentTypes(op);
                 if (call.arguments().size() != argTypes.size()) {
                     throw new Unsupported();
                 }
@@ -247,11 +257,41 @@ public final class FusedProjectionCompiler
                 for (int index = 0; index < call.arguments().size(); index++) {
                     operands.add(operand(call.arguments().get(index), argTypes.get(index)));
                 }
+                if (op.equals("eq_utf8") && !isUtf8ColumnLiteralEquality(operands)) {
+                    // Rendering deliberately supports categorical column-to-literal tests only. Reject other
+                    // syntactically valid UTF-8 equalities here so tryCompile cleanly falls back instead of failing
+                    // later while rendering an otherwise accepted slice.
+                    throw new Unsupported();
+                }
+                if (op.equals("in_utf8") && !isUtf8ColumnLiteralSet(operands)) {
+                    // The generated categorical dispatch is intentionally column-to-constant only. This covers the
+                    // common SQL IN-list shape while preserving the interpreter fallback for dynamic list members.
+                    throw new Unsupported();
+                }
                 int id = nextStep.getAndIncrement();
                 steps.add(new Step(id, op, operands, type));
                 return new StepOperand(id, type);
             }
             throw new Unsupported();
+        }
+
+        private static boolean isUtf8ColumnLiteralEquality(List<Operand> operands)
+        {
+            return (operands.get(0) instanceof ColumnOperand && operands.get(1) instanceof Utf8Constant) ||
+                    (operands.get(1) instanceof ColumnOperand && operands.get(0) instanceof Utf8Constant);
+        }
+
+        private static boolean isUtf8ColumnLiteralSet(List<Operand> operands)
+        {
+            if (operands.size() < 2 || !(operands.getFirst() instanceof ColumnOperand)) {
+                return false;
+            }
+            for (int index = 1; index < operands.size(); index++) {
+                if (!(operands.get(index) instanceof Utf8Constant)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static Operand literalOperand(Object value)
@@ -271,6 +311,9 @@ public final class FusedProjectionCompiler
             if (value instanceof Boolean boolValue) {
                 return new BoolConstant(boolValue);
             }
+            if (value instanceof String stringValue) {
+                return new Utf8Constant(stringValue);
+            }
             throw new Unsupported();
         }
     }
@@ -282,7 +325,7 @@ public final class FusedProjectionCompiler
             case "add_f64", "subtract_f64", "multiply_f64", "if_f64" -> ValueType.DOUBLE;
             case "lt", "gt", "lte", "gte", "eq",
                  "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64",
-                 "and", "or", "not" -> ValueType.BOOL;
+                 "eq_utf8", "in_utf8", "and", "or", "not" -> ValueType.BOOL;
             default -> throw new Unsupported();
         };
     }
@@ -296,6 +339,7 @@ public final class FusedProjectionCompiler
                     List.of(ValueType.DOUBLE, ValueType.DOUBLE);
             case "and", "or" -> List.of(ValueType.BOOL, ValueType.BOOL);
             case "not" -> List.of(ValueType.BOOL);
+            case "eq_utf8" -> List.of(ValueType.UTF8, ValueType.UTF8);
             case "if_i64" -> List.of(ValueType.BOOL, ValueType.LONG, ValueType.LONG);
             case "if_f64" -> List.of(ValueType.BOOL, ValueType.DOUBLE, ValueType.DOUBLE);
             default -> throw new Unsupported();
@@ -310,6 +354,7 @@ public final class FusedProjectionCompiler
             case LongConstant ignored -> ValueType.LONG;
             case DoubleConstant ignored -> ValueType.DOUBLE;
             case BoolConstant ignored -> ValueType.BOOL;
+            case Utf8Constant ignored -> ValueType.UTF8;
         };
     }
 
@@ -326,6 +371,7 @@ public final class FusedProjectionCompiler
             case LongConstant ignored -> true;
             case DoubleConstant ignored -> true;
             case BoolConstant ignored -> true;
+            case Utf8Constant ignored -> true;
             case ColumnOperand ignored -> false;
             case StepOperand stepOperand -> {
                 Step step = steps.get(stepOperand.stepId());
@@ -367,6 +413,21 @@ public final class FusedProjectionCompiler
         out.append("import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;\n");
         out.append("import org.weakref.nitro.operator.evaluator.ir.Stream;\n");
         out.append("public final class ").append(simpleName).append(" implements org.weakref.nitro.jit.FusedMultiProjection {\n");
+        Map<String, Integer> utf8Constants = utf8Constants(slice);
+        for (Map.Entry<String, Integer> entry : utf8Constants.entrySet()) {
+            byte[] bytes = entry.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            out.append("  private static final byte[] U").append(entry.getValue()).append(" = new byte[] {");
+            for (int index = 0; index < bytes.length; index++) {
+                if (index > 0) {
+                    out.append(", ");
+                }
+                out.append(bytes[index]);
+            }
+            out.append("};\n");
+        }
+        if (!utf8Constants.isEmpty()) {
+            out.append("  private static boolean eqUtf8(byte[] data, int start, int length, byte[] expected) { return length == expected.length && java.util.Arrays.equals(data, start, start + length, expected, 0, length); }\n");
+        }
         out.append("  private static final Stream V = Stream.VALUES;\n");
         out.append("  private static final Stream N = Stream.NULLS;\n");
         out.append("  private static final Stream E = Stream.ERRORS;\n");
@@ -379,6 +440,9 @@ public final class FusedProjectionCompiler
             if (slice.columnTypes().get(slot) == ValueType.DOUBLE) {
                 appendDoubleColumn(out, slot);
             }
+            else if (slice.columnTypes().get(slot) == ValueType.UTF8) {
+                appendUtf8Column(out, slot);
+            }
             else {
                 appendLongColumn(out, slot);
             }
@@ -387,7 +451,8 @@ public final class FusedProjectionCompiler
             // into a per-row boolean[] so the loop stays monomorphic; bail on any other layout.
             out.append("    Vector nv").append(slot).append(" = inputs.get(").append(slot).append(").getOrNull(N);\n");
             out.append("    boolean[] nul").append(slot).append(";\n");
-            out.append("    if (nv").append(slot).append(" == null) { nul").append(slot).append(" = null; }\n");
+            out.append("    if (org.weakref.nitro.function.scalar.builtin.VectorAccess.isAllFalseNulls(nv").append(slot)
+                    .append(")) { nul").append(slot).append(" = null; }\n");
             out.append("    else if (nv").append(slot).append(" instanceof BooleanVector bv").append(slot)
                     .append(") { nul").append(slot).append(" = bv").append(slot).append(".values(); }\n");
             out.append("    else if (nv").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector ndv").append(slot)
@@ -395,7 +460,10 @@ public final class FusedProjectionCompiler
                     .append(") { int[] nids = ndv").append(slot).append(".ids(); int nlen = ndv").append(slot).append(".length(); boolean[] nb = nbase").append(slot).append(".values();")
                     .append(" nul").append(slot).append(" = new boolean[nlen]; for (int j = 0; j < nlen; j++) { nul").append(slot)
                     .append("[j] = nb[nids[j]]; } }\n");
-            out.append("    else { return null; }\n");
+            out.append("    else { int nlen = nv").append(slot).append(".length(); nul").append(slot)
+                    .append(" = new boolean[nlen]; var na = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nv")
+                    .append(slot).append("); for (int j = 0; j < nlen; j++) { nul").append(slot)
+                    .append("[j] = na.value(j); } }\n");
         }
 
         out.append("    int required = mask.maxPosition() + 1;\n");
@@ -418,7 +486,7 @@ public final class FusedProjectionCompiler
             }
         }
 
-        String body = loopBody(slice, nullable);
+        String body = loopBody(slice, nullable, utf8Constants);
         out.append("    if (mask.all()) {\n");
         out.append("      int n = mask.count();\n");
         out.append("      for (int i = 0; i < n; i++) {\n").append(body).append("      }\n");
@@ -456,12 +524,10 @@ public final class FusedProjectionCompiler
                 .append("[j] = s[j]; } }\n");
         // Join outputs arrive dictionary-wrapped; gather the base values through the ids into a flat long[] once so the
         // per-row loop stays monomorphic (and auto-vectorizable) instead of the interpreter's per-position peel.
-        out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
-                .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
-                .append(" int len = dv").append(slot).append(".length(); col").append(slot).append(" = new long[len];")
-                .append(" if (base instanceof I64Vector bi) { long[] bv = bi.values(); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
-                .append(" else if (base instanceof I32Vector bw) { int[] bv = bw.values(); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
-                .append(" else { return null; } }\n");
+        out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector) { int len = vals")
+                .append(slot).append(".length(); col").append(slot).append(" = new long[len]; var a = ")
+                .append("org.weakref.nitro.function.scalar.builtin.VectorAccess.longValues(vals").append(slot)
+                .append("); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = a.value(j); } }\n");
         out.append("    else { return null; }\n");
     }
 
@@ -479,17 +545,44 @@ public final class FusedProjectionCompiler
         out.append("    else { return null; }\n");
     }
 
+    private static void appendUtf8Column(StringBuilder out, int slot)
+    {
+        out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
+        out.append("    org.weakref.nitro.function.scalar.builtin.VectorAccess.BinaryValues bin").append(slot)
+                .append("; try { bin").append(slot).append(" = org.weakref.nitro.function.scalar.builtin.VectorAccess.binaryValues(vals")
+                .append(slot).append("); } catch (IllegalArgumentException e) { return null; }\n");
+    }
+
     /** The per-position body: one local (value, is-null) pair per shared step, then each output's writes. */
-    private static String loopBody(Slice slice, boolean[] nullable)
+    private static String loopBody(Slice slice, boolean[] nullable, Map<String, Integer> utf8Constants)
     {
         StringBuilder body = new StringBuilder();
+        for (int slot = 0; slot < slice.columnTypes().size(); slot++) {
+            if (slice.columnTypes().get(slot) == ValueType.UTF8) {
+                body.append("        var bx").append(slot).append(" = bin").append(slot).append(".value(i);\n");
+                body.append("        byte[] bd").append(slot).append(" = bx").append(slot).append(".data();\n");
+                body.append("        int bs").append(slot).append(" = bx").append(slot).append(".offset();\n");
+                body.append("        int bl").append(slot).append(" = bx").append(slot).append(".length();\n");
+            }
+        }
+        for (Map.Entry<Integer, List<Integer>> entry : utf8Categories(slice, utf8Constants).entrySet()) {
+            int slot = entry.getKey();
+            body.append("        int bt").append(slot).append(" = -1;\n");
+            for (int index = 0; index < entry.getValue().size(); index++) {
+                int category = entry.getValue().get(index);
+                body.append("        ").append(index == 0 ? "if" : "else if")
+                        .append(" (eqUtf8(bd").append(slot).append(", bs").append(slot).append(", bl").append(slot)
+                        .append(", U").append(category).append(")) { bt").append(slot).append(" = ").append(category).append("; }\n");
+            }
+        }
         for (Step step : slice.steps()) {
             String javaType = switch (step.type()) {
                 case LONG -> "long";
                 case DOUBLE -> "double";
                 case BOOL -> "boolean";
+                case UTF8 -> throw new Unsupported();
             };
-            body.append("        ").append(javaType).append(" sv").append(step.id()).append(" = ").append(valueExpr(step)).append(";\n");
+            body.append("        ").append(javaType).append(" sv").append(step.id()).append(" = ").append(valueExpr(step, utf8Constants)).append(";\n");
             // A step's is-null local is only needed when some output (or a downstream step) reads it; the null-free
             // outputs still need the internal nulls of their inputs (e.g. a null condition steering an if), so the
             // is-null locals are always emitted -- the JIT drops the dead ones.
@@ -505,7 +598,7 @@ public final class FusedProjectionCompiler
         return body.toString();
     }
 
-    private static String valueExpr(Step step)
+    private static String valueExpr(Step step, Map<String, Integer> utf8Constants)
     {
         List<Operand> args = step.operands();
         return switch (step.op()) {
@@ -517,6 +610,8 @@ public final class FusedProjectionCompiler
             case "lte", "lte_f64" -> "(" + value(args.get(0)) + " <= " + value(args.get(1)) + ")";
             case "gte", "gte_f64" -> "(" + value(args.get(0)) + " >= " + value(args.get(1)) + ")";
             case "eq", "eq_f64" -> "(" + value(args.get(0)) + " == " + value(args.get(1)) + ")";
+            case "eq_utf8" -> utf8Equals(args.get(0), args.get(1), utf8Constants);
+            case "in_utf8" -> utf8In(args, utf8Constants);
             case "and" -> "(" + value(args.get(0)) + " && " + value(args.get(1)) + ")";
             case "or" -> "(" + value(args.get(0)) + " || " + value(args.get(1)) + ")";
             case "not" -> "(!" + value(args.get(0)) + ")";
@@ -533,6 +628,9 @@ public final class FusedProjectionCompiler
             case "add", "subtract", "multiply", "add_f64", "subtract_f64", "multiply_f64",
                  "lt", "gt", "lte", "gte", "eq", "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64" ->
                     "(" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + ")";
+            case "eq_utf8" -> "(" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + ")";
+            // The accepted IN shape has one nullable column followed only by non-null constants.
+            case "in_utf8" -> isNull(args.getFirst());
             // Three-valued AND: false if either operand is (non-null) false; else null if any operand is null.
             case "and" -> "(!((!" + isNull(args.get(0)) + " && !" + value(args.get(0)) + ") || (!" + isNull(args.get(1)) + " && !" + value(args.get(1)) + "))"
                     + " && (" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + "))";
@@ -553,6 +651,7 @@ public final class FusedProjectionCompiler
             case LongConstant constant -> constant.value() + "L";
             case DoubleConstant constant -> Double.toString(constant.value()) + "d";
             case BoolConstant constant -> Boolean.toString(constant.value());
+            case Utf8Constant ignored -> throw new Unsupported();
         };
     }
 
@@ -564,6 +663,85 @@ public final class FusedProjectionCompiler
             case LongConstant ignored -> "false";
             case DoubleConstant ignored -> "false";
             case BoolConstant ignored -> "false";
+            case Utf8Constant ignored -> "false";
         };
+    }
+
+    private static String utf8Equals(Operand left, Operand right, Map<String, Integer> constants)
+    {
+        if (left instanceof ColumnOperand column && right instanceof Utf8Constant constant) {
+            return "(bt" + column.slot() + " == " + constants.get(constant.value()) + ")";
+        }
+        if (right instanceof ColumnOperand column && left instanceof Utf8Constant constant) {
+            return "(bt" + column.slot() + " == " + constants.get(constant.value()) + ")";
+        }
+        throw new Unsupported();
+    }
+
+    private static String utf8In(List<Operand> operands, Map<String, Integer> constants)
+    {
+        ColumnOperand column = (ColumnOperand) operands.getFirst();
+        StringBuilder expression = new StringBuilder("(");
+        for (int index = 1; index < operands.size(); index++) {
+            if (index > 1) {
+                expression.append(" || ");
+            }
+            expression.append("bt").append(column.slot()).append(" == ")
+                    .append(constants.get(((Utf8Constant) operands.get(index)).value()));
+        }
+        return expression.append(')').toString();
+    }
+
+    private static Map<String, Integer> utf8Constants(Slice slice)
+    {
+        Map<String, Integer> constants = new LinkedHashMap<>();
+        for (Step step : slice.steps()) {
+            for (Operand operand : step.operands()) {
+                if (operand instanceof Utf8Constant constant) {
+                    constants.computeIfAbsent(constant.value(), _ -> constants.size());
+                }
+            }
+        }
+        return constants;
+    }
+
+    private static Map<Integer, List<Integer>> utf8Categories(Slice slice, Map<String, Integer> constants)
+    {
+        Map<Integer, List<Integer>> categories = new LinkedHashMap<>();
+        for (Step step : slice.steps()) {
+            if (!step.op().equals("eq_utf8") && !step.op().equals("in_utf8")) {
+                continue;
+            }
+            if (step.op().equals("in_utf8")) {
+                ColumnOperand column = (ColumnOperand) step.operands().getFirst();
+                List<Integer> columnCategories = categories.computeIfAbsent(column.slot(), _ -> new ArrayList<>());
+                for (int index = 1; index < step.operands().size(); index++) {
+                    int category = constants.get(((Utf8Constant) step.operands().get(index)).value());
+                    if (!columnCategories.contains(category)) {
+                        columnCategories.add(category);
+                    }
+                }
+                continue;
+            }
+            ColumnOperand column;
+            Utf8Constant constant;
+            if (step.operands().get(0) instanceof ColumnOperand candidateColumn && step.operands().get(1) instanceof Utf8Constant candidateConstant) {
+                column = candidateColumn;
+                constant = candidateConstant;
+            }
+            else if (step.operands().get(1) instanceof ColumnOperand candidateColumn && step.operands().get(0) instanceof Utf8Constant candidateConstant) {
+                column = candidateColumn;
+                constant = candidateConstant;
+            }
+            else {
+                throw new Unsupported();
+            }
+            List<Integer> columnCategories = categories.computeIfAbsent(column.slot(), _ -> new ArrayList<>());
+            int category = constants.get(constant.value());
+            if (!columnCategories.contains(category)) {
+                columnCategories.add(category);
+            }
+        }
+        return categories;
     }
 }

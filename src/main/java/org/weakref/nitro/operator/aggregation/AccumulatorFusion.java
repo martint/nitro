@@ -49,6 +49,27 @@ public final class AccumulatorFusion
         List<Accumulator> result = new ArrayList<>(accumulators);
         boolean[] paired = new boolean[accumulators.size()];
         for (int firstIndex = 0; firstIndex < accumulators.size(); firstIndex++) {
+            if (paired[firstIndex] || !(accumulators.get(firstIndex) instanceof ConditionalSum first)) {
+                continue;
+            }
+            List<Integer> compatible = new ArrayList<>();
+            compatible.add(firstIndex);
+            for (int candidate = firstIndex + 1; candidate < accumulators.size(); candidate++) {
+                if (!paired[candidate] && accumulators.get(candidate) instanceof ConditionalSum conditional &&
+                        conditional.discriminatorColumn() == first.discriminatorColumn() &&
+                        conditional.valueColumn() == first.valueColumn() &&
+                        compatible.stream().noneMatch(index -> sameLiteral(((ConditionalSum) accumulators.get(index)).literal(), conditional.literal()))) {
+                    compatible.add(candidate);
+                }
+            }
+            if (compatible.size() > 1) {
+                FusedConditionalSums.fuse(result, compatible);
+                for (int index : compatible) {
+                    paired[index] = true;
+                }
+            }
+        }
+        for (int firstIndex = 0; firstIndex < accumulators.size(); firstIndex++) {
             if (paired[firstIndex]) {
                 continue;
             }
@@ -64,6 +85,15 @@ public final class AccumulatorFusion
             }
         }
         return result;
+    }
+
+    private static boolean sameLiteral(ConditionalSum.Literal left, ConditionalSum.Literal right)
+    {
+        return switch (left) {
+            case ConditionalSum.LongLiteral value when right instanceof ConditionalSum.LongLiteral other -> value.value() == other.value();
+            case ConditionalSum.BinaryLiteral value when right instanceof ConditionalSum.BinaryLiteral other -> java.util.Arrays.equals(value.value(), other.value());
+            default -> false;
+        };
     }
 
     private static boolean tryFuseMinMax(List<Accumulator> accumulators, int firstIndex, int secondIndex)

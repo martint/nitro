@@ -465,7 +465,7 @@ public class NestedLoopJoinOperator
     private Mask matchedOuterMask()
     {
         if (currentOutputMask.none()) {
-            return allocator.allocateSparseMask(ALLOCATION_CONTEXT, new int[0], currentOuterMask.size());
+            return allocator.allocateEmptyMask(ALLOCATION_CONTEXT, currentOuterMask.size());
         }
 
         int[] positions = new int[Math.min(currentOutputMask.count(), currentOuterMask.count())];

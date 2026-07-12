@@ -196,6 +196,12 @@ public class BenchmarkCompiledQueries
     /** A UNION ALL of independently computed branches feeding a final stage. */
     private void union(String name, CompiledTpcdsQueries.Union union)
     {
+        record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
+
+        List<StagePlan> stages = new ArrayList<>();
+        for (CompiledTpcdsQueries.Stage stage : union.stages()) {
+            stages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        }
         List<Lowered> branches = new ArrayList<>();
         for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
             branches.add(branch.lower());
@@ -203,7 +209,16 @@ public class BenchmarkCompiledQueries
         Lowered main = union.main().lower();
         String virtualTable = union.virtualTable();
         List<CompiledTpcdsQueries.DictRef> branchStringColumns = union.branchStringColumns();
-        runners.put(name, () -> CompiledQuerySupport.runUnion(allocator, tables, branches, main, virtualTable, branchStringColumns));
+        runners.put(name, () -> {
+            Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
+            for (StagePlan stage : stages) {
+                virtuals.put(stage.virtualName(),
+                        CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            }
+            virtuals.put(virtualTable,
+                    CompiledQuerySupport.materializeUnion(allocator, tables, branches, branchStringColumns, virtuals));
+            return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
+        });
     }
 
     /** A UNION ALL materialized into a virtual table that downstream stages then consume (union feeding an aggregate). */
@@ -235,6 +250,8 @@ public class BenchmarkCompiledQueries
     /** A year-over-year union self-join (Q75): the union-aggregate subquery assembled twice and self-joined. */
     private void unionSelfJoin(String name, CompiledTpcdsQueries.UnionSelfJoin query)
     {
+        record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
+
         List<org.weakref.nitro.jit.QueryLowering> branchPlans = query.branches();
         String currentUnion = query.currentUnion();
         String previousUnion = query.previousUnion();
@@ -242,6 +259,14 @@ public class BenchmarkCompiledQueries
         Lowered previousGroup = query.previousGroup().lower();
         String currentVirtual = query.currentVirtual();
         String previousVirtual = query.previousVirtual();
+        List<StagePlan> currentStages = new ArrayList<>();
+        for (CompiledTpcdsQueries.Stage stage : query.currentStages()) {
+            currentStages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        }
+        List<StagePlan> previousStages = new ArrayList<>();
+        for (CompiledTpcdsQueries.Stage stage : query.previousStages()) {
+            previousStages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
+        }
         Lowered main = query.main().lower();
         runners.put(name, () -> {
             Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
@@ -251,12 +276,18 @@ public class BenchmarkCompiledQueries
             }
             virtuals.put(currentUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesCurrent, List.of()));
             virtuals.put(currentVirtual, CompiledQuerySupport.materializeStage(allocator, tables, currentGroup, virtuals, List.of()));
+            for (StagePlan stage : currentStages) {
+                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            }
             List<Lowered> branchesPrevious = new ArrayList<>();
             for (org.weakref.nitro.jit.QueryLowering branch : branchPlans) {
                 branchesPrevious.add(branch.lower());
             }
             virtuals.put(previousUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesPrevious, List.of()));
             virtuals.put(previousVirtual, CompiledQuerySupport.materializeStage(allocator, tables, previousGroup, virtuals, List.of()));
+            for (StagePlan stage : previousStages) {
+                virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
+            }
             return CompiledQuerySupport.runStage(allocator, tables, main, virtuals);
         });
     }

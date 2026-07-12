@@ -26,13 +26,19 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import static java.lang.Math.toIntExact;
 
 public class Avg
-        implements Accumulator
+        implements Accumulator, FusedAggregator
 {
     private final int inputColumn;
 
     public Avg(int inputColumn)
     {
         this.inputColumn = inputColumn;
+    }
+
+    @Override
+    public FusedAccumulatorSpec fusedSpec()
+    {
+        return new FusedAccumulatorSpec(AvgStateVector.class, inputColumn);
     }
 
     @Override

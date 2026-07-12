@@ -1,0 +1,57 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query57: 1 iters, 1766.4 ms/iter, rows-sink=2000
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q57.project.final                  ProjectOperator            1747.246    8.34%      440.157     450720.453     450720.453        1          100
+  next=1743.795  borrow=  0.502  take=  0.000  constrain=  0.000  close=  2.919  alloc[next= 439.078 borrow=   0.707 take=   0.000 constrain=   0.000 close=   0.372] MB
+q57.topn                           TopNOperator               1747.197    8.34%      440.152     450715.953     450715.953        1          100
+  next=1743.780  borrow=  0.499  take=  0.000  constrain=  0.000  close=  2.914  alloc[next= 439.074 borrow=   0.707 take=   0.000 constrain=   0.000 close=   0.372] MB
+q57.project.sort_key               ProjectOperator            1737.422    8.30%      435.812      13945.980      13945.980       32       111762
+  next=1728.082  borrow=  2.426  take=  0.000  constrain=  0.000  close=  2.688  alloc[next= 433.265 borrow=   2.139 take=   0.000 constrain=   0.000 close=   0.117] MB
+q57.project.output                 ProjectOperator            1733.625    8.28%      433.454      13870.524      13870.524       32       111762
+  next=1728.006  borrow=  0.179  take=  0.000  constrain=  0.000  close=  2.560  alloc[next= 433.162 borrow=   0.008 take=   0.000 constrain=   0.000 close=   0.089] MB
+q57.filter.deviation               FilterOperator             1732.334    8.27%      433.209      13862.690      13862.690       32       111762
+  next=1727.938  borrow=  0.119  take=  0.000  constrain=  0.000  close=  2.536  alloc[next= 433.021 borrow=   0.008 take=   0.000 constrain=   0.000 close=   0.082] MB
+q57.join.next                      HashJoinOperator           1727.409    8.25%      417.937      13373.981      13373.981       32       122150
+  next=1724.056  borrow=  0.206  take=  0.000  constrain=  0.039  close=  2.504  alloc[next= 417.839 borrow=   0.021 take=   0.000 constrain=   0.000 close=   0.077] MB
+q57.project.ranked_sales           ProjectOperator            1648.937    7.87%      328.963       3034.756       3034.756      111       442719
+  next= 16.583  borrow=  0.483  take=  1.377  constrain=  0.282  close=  2.835  alloc[next=  48.378 borrow=   0.000 take=   0.027 constrain=   0.040 close=   0.216] MB
+q57.rank.monthly_sales             TopNRankingOperator        1646.673    7.86%      328.588       3031.302       3031.302      111       442719
+  next= 16.349  borrow=  0.195  take=  0.000  constrain=  0.044  close=  2.742  alloc[next=  48.102 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.186] MB
+q57.group.monthly_sales            GroupedAggregationOperator   1422.805    6.79%      223.795      76388.544      76388.544        3       442719
+  next=1404.361  borrow= 16.002  take=  0.080  constrain=  0.000  close=  2.352  alloc[next= 181.919 borrow=  41.848 take=   0.001 constrain=   0.000 close=   0.027] MB
+q57.join.previous                  HashJoinOperator           1131.664    5.40%      279.247       8935.916       8935.916       32       122499
+  next=1129.676  borrow=  0.205  take=  0.000  constrain=  0.000  close=  1.774  alloc[next= 279.164 borrow=   0.021 take=   0.000 constrain=   0.000 close=   0.063] MB
+q57.project.current                ProjectOperator             567.542    2.71%      138.303       4568.460       4568.460       31       126302
+  next=  3.820  borrow=  0.160  take=  0.000  constrain=  0.000  close=  1.298  alloc[next=   9.334 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.084] MB
+q57.project.next                   ProjectOperator             567.451    2.71%      102.448       2835.320       2835.320       37       147573
+  next=  5.325  borrow=  0.863  take=  0.000  constrain=  0.000  close=  1.039  alloc[next=  11.359 borrow=   0.110 take=   0.000 constrain=   0.000 close=   0.152] MB
+q57.window.current_avg             WindowOperator              567.352    2.71%      138.210       4565.397       4565.397       31       126302
+  next=  3.761  borrow=  0.064  take=  0.000  constrain=  0.000  close=  1.273  alloc[next=   9.248 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.076] MB
+q57.filter.current_year            FilterOperator              543.808    2.60%      122.971       3403.317       3403.317       37       126302
+  next=  7.362  borrow=  0.282  take=  1.543  constrain=  0.000  close=  1.243  alloc[next=  26.551 borrow=   0.000 take=   0.038 constrain=   0.000 close=   0.032] MB
+q57.project.previous               ProjectOperator             540.762    2.58%      104.739       2898.731       2898.731       37       147573
+  next=  5.347  borrow=  0.703  take=  0.000  constrain=  0.000  close=  0.862  alloc[next=  11.356 borrow=   0.105 take=   0.000 constrain=   0.000 close=   0.153] MB
+q57.project.joined_facts           ProjectOperator             409.787    1.96%      164.541        155.577        155.577     1083     10404588
+  next=387.214  borrow= 16.429  take=  0.000  constrain=  0.000  close=  5.380  alloc[next= 120.591 borrow=  42.076 take=   0.000 constrain=   0.000 close=   1.858] MB
+q57.join.call_center               HashJoinOperator            402.368    1.92%      160.876        152.111        152.111     1083     10404588
+  next=385.086  borrow= 12.925  take=  0.000  constrain=  0.000  close=  4.007  alloc[next= 117.272 borrow=  42.049 take=   0.000 constrain=   0.000 close=   1.555] MB
+q57.join.date_dim                  HashJoinOperator            377.986    1.80%      106.936        101.110        101.110     1083     10404588
+  next=367.101  borrow=  7.371  take=  0.000  constrain=  0.000  close=  3.195  alloc[next= 103.909 borrow=   1.659 take=   0.000 constrain=   0.000 close=   1.368] MB
+q57.join.item                      HashJoinOperator            353.006    1.69%       86.573         81.857         81.857     1083     10404588
+  next=345.447  borrow=  4.556  take=  0.000  constrain=  0.000  close=  2.690  alloc[next=  85.242 borrow=   0.652 take=   0.000 constrain=   0.000 close=   0.679] MB
+q57.scan.catalog_sales             NitroParquetScanOperator    326.394    1.56%       32.902         31.196         31.196     1080     10404588
+  next=  7.849  borrow=  1.555  take=  0.000  constrain=  0.000  close=  3.131  alloc[next=   0.832 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.819] MB
+q57.scan.date_dim                  ProjectOperator               7.619    0.04%       11.496        490.482        490.482       24         1281
+  next=  5.852  borrow=  1.592  take=  0.000  constrain=  0.000  close=  0.145  alloc[next=  11.170 borrow=   0.312 take=   0.000 constrain=   0.000 close=   0.014] MB
+q57.scan.item                      NitroParquetScanOperator      4.135    0.02%        5.057        156.920        156.920       33       306000
+  next=  0.064  borrow=  3.907  take=  0.000  constrain=  0.000  close=  0.142  alloc[next=   0.015 borrow=   5.017 take=   0.000 constrain=   0.000 close=   0.025] MB
+q57.scan.call_center               NitroParquetScanOperator      0.429    0.00%        0.015          5.286          5.286        3           72
+  next=  0.038  borrow=  0.323  take=  0.000  constrain=  0.000  close=  0.061  alloc[next=   0.003 borrow=   0.009 take=   0.000 constrain=   0.000 close=   0.003] MB
+Total attributed cpu_ms: 20943.951
+

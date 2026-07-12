@@ -15,10 +15,13 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
@@ -38,14 +41,26 @@ final class TopNState
     private final boolean[] orderingColumnFlags;
     private Streams[][] slotColumns;
     private final Streams[] comparisonColumns;
+    private final Vector[] candidateNullVectors;
+    private final VectorAccess.BooleanValues[] candidateNullAccessors;
+    private final boolean[] candidateNullInitialized;
+    private final boolean[] candidateNullAllFalse;
+    private final Vector[] candidateValueVectors;
+    private final Vector[] candidateBaseValues;
+    private final VectorAccess.LongValues[] candidateLongAccessors;
+    private final VectorAccess.BinaryRegions[] candidateBinaryAccessors;
+    private final boolean[] candidateValueInitialized;
     private final Streams[] schema;
     private final Set<Stream>[] exposedStreams;
     private final JoinBufferSupport buffers;
     private Batch[] pendingBatches;
     private int[] pendingPositions;
     private List<Integer> orderedSlots = List.of();
+    private int[] primitiveOrderedSlots;
+    private int primitiveOrderedSlotCount;
     private Mask outputMask;
     private Streams[] materialized;
+    private Streams[] denseColumns;
     private Batch fallbackBatch;
 
     @SuppressWarnings("unchecked")
@@ -61,11 +76,36 @@ final class TopNState
         }
         this.slotColumns = new Streams[outputCount][capacity];
         this.comparisonColumns = new Streams[outputCount];
+        this.candidateNullVectors = new Vector[outputCount];
+        this.candidateNullAccessors = new VectorAccess.BooleanValues[outputCount];
+        this.candidateNullInitialized = new boolean[outputCount];
+        this.candidateNullAllFalse = new boolean[outputCount];
+        this.candidateValueVectors = new Vector[outputCount];
+        this.candidateBaseValues = new Vector[outputCount];
+        this.candidateLongAccessors = new VectorAccess.LongValues[outputCount];
+        this.candidateBinaryAccessors = new VectorAccess.BinaryRegions[outputCount];
+        this.candidateValueInitialized = new boolean[outputCount];
         this.schema = new Streams[outputCount];
         this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
         this.pendingBatches = new Batch[capacity];
         this.pendingPositions = new int[capacity];
+    }
+
+    public void beginBatch()
+    {
+        // Accessors over RLE streams carry monotonic run-index hints. A pooled vector can be reused
+        // by a later batch whose positions start at zero, so reset the accessors at every batch
+        // boundary even when the vector identity happens to be unchanged.
+        Arrays.fill(candidateNullVectors, null);
+        Arrays.fill(candidateNullAccessors, null);
+        Arrays.fill(candidateNullInitialized, false);
+        Arrays.fill(candidateNullAllFalse, false);
+        Arrays.fill(candidateValueVectors, null);
+        Arrays.fill(candidateBaseValues, null);
+        Arrays.fill(candidateLongAccessors, null);
+        Arrays.fill(candidateBinaryAccessors, null);
+        Arrays.fill(candidateValueInitialized, false);
     }
 
     public void ensureCapacity(int requiredCapacity)
@@ -114,15 +154,48 @@ final class TopNState
         }
     }
 
-    public int compareOrderingValue(Batch batch, int position, int slot)
+    public void appendDenseBatch(Batch batch, Mask mask, int outputStart, int capacity)
+    {
+        captureSchema(batch, true);
+        if (denseColumns == null) {
+            denseColumns = new Streams[slotColumns.length];
+        }
+        int copied = mask.count();
+        for (int outputIndex = 0; outputIndex < denseColumns.length; outputIndex++) {
+            denseColumns[outputIndex] = buffers.copyAndCompact(
+                    batch.output(outputIndex),
+                    mask,
+                    0,
+                    denseColumns[outputIndex],
+                    outputStart,
+                    copied,
+                    capacity);
+            schema[outputIndex] = denseColumns[outputIndex];
+        }
+        if (fallbackBatch != batch) {
+            releaseFallbackBatch();
+        }
+        fallbackBatch = null;
+    }
+
+    public int compareOrderingValue(Batch batch, int position, int slot, boolean compactCandidate)
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
             Streams slotOrdering = slotColumns[orderingColumn][slot];
+            Streams currentOrdering = null;
+            if (compactCandidate) {
+                // Prefer the producer's compact single-position path for very large lazy results.
+                // Borrowing VALUES here would materialize every group merely to compare one candidate.
+                comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
+                currentOrdering = comparisonColumns[orderingColumn];
+            }
             // NULLS LAST regardless of sort direction (matches Trino/SQL default); direction flips only the
             // comparison of non-null values.
-            boolean currentNull = OperatorVectorSupport.isNull(output.borrowOrNull(Stream.NULLS), position);
+            boolean currentNull = compactCandidate
+                    ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
+                    : candidateIsNull(orderingColumn, output, position);
             boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), 0);
             int comparison;
             if (currentNull || slotNull) {
@@ -131,10 +204,7 @@ final class TopNState
                 }
                 return currentNull ? -1 : 1;
             }
-            comparison = tryCompareDirectOrderingValue(output, position, slotOrdering);
-            if (comparison == Integer.MIN_VALUE) {
-                comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
-                Streams currentOrdering = comparisonColumns[orderingColumn];
+            if (compactCandidate) {
                 comparison = OperatorOrderingSemantics.compare(
                         currentOrdering.values(),
                         currentOrdering.getOrNull(Stream.NULLS),
@@ -142,6 +212,20 @@ final class TopNState
                         slotOrdering.values(),
                         slotOrdering.getOrNull(Stream.NULLS),
                         0);
+            }
+            else {
+                comparison = tryCompareDirectOrderingValue(orderingColumn, output, position, slotOrdering);
+                if (comparison == Integer.MIN_VALUE) {
+                    comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
+                    currentOrdering = comparisonColumns[orderingColumn];
+                    comparison = OperatorOrderingSemantics.compare(
+                            currentOrdering.values(),
+                            currentOrdering.getOrNull(Stream.NULLS),
+                            0,
+                            slotOrdering.values(),
+                            slotOrdering.getOrNull(Stream.NULLS),
+                            0);
+                }
             }
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
             if (comparison != 0) {
@@ -151,31 +235,56 @@ final class TopNState
         return 0;
     }
 
-    private int tryCompareDirectOrderingValue(Output output, int position, Streams slotOrdering)
+    private boolean candidateIsNull(int orderingColumn, Output output, int position)
     {
-        Vector currentValues = output.borrow(Stream.VALUES);
-        Vector slotValues = slotOrdering.values();
-        Vector currentNulls = output.borrowOrNull(Stream.NULLS);
-        Vector slotNulls = slotOrdering.getOrNull(Stream.NULLS);
-        boolean currentNull = OperatorVectorSupport.isNull(currentNulls, position);
-        boolean slotNull = OperatorVectorSupport.isNull(slotNulls, 0);
-        if (currentNull || slotNull) {
-            if (currentNull == slotNull) {
-                return 0;
+        if (!candidateNullInitialized[orderingColumn]) {
+            Vector nulls = output.borrowOrNull(Stream.NULLS);
+            candidateNullVectors[orderingColumn] = nulls;
+            candidateNullAllFalse[orderingColumn] = VectorAccess.isAllFalseNulls(nulls);
+            if (!candidateNullAllFalse[orderingColumn]) {
+                candidateNullAccessors[orderingColumn] = VectorAccess.booleanValues(nulls);
             }
-            return currentNull ? 1 : -1;
+            candidateNullInitialized[orderingColumn] = true;
         }
+        Vector nulls = candidateNullVectors[orderingColumn];
+        if (nulls == null || candidateNullAllFalse[orderingColumn]) {
+            return false;
+        }
+        return candidateNullAccessors[orderingColumn].value(position);
+    }
 
-        Vector flattenedCurrent = OperatorVectorSupport.flatten(currentValues);
+    private int tryCompareDirectOrderingValue(int orderingColumn, Output output, int position, Streams slotOrdering)
+    {
+        if (!candidateValueInitialized[orderingColumn]) {
+            candidateValueVectors[orderingColumn] = output.borrow(Stream.VALUES);
+            candidateBaseValues[orderingColumn] = OperatorVectorSupport.flatten(candidateValueVectors[orderingColumn]);
+            candidateValueInitialized[orderingColumn] = true;
+        }
+        Vector currentValues = candidateValueVectors[orderingColumn];
+        Vector slotValues = slotOrdering.values();
+
+        Vector flattenedCurrent = candidateBaseValues[orderingColumn];
         Vector flattenedSlot = OperatorVectorSupport.flatten(slotValues);
         if ((flattenedCurrent instanceof I64Vector || flattenedCurrent instanceof I32Vector) &&
                 (flattenedSlot instanceof I64Vector || flattenedSlot instanceof I32Vector)) {
+            if (candidateLongAccessors[orderingColumn] == null) {
+                candidateLongAccessors[orderingColumn] = VectorAccess.longValues(currentValues);
+                candidateBinaryAccessors[orderingColumn] = null;
+            }
             return Long.compare(
-                    OperatorVectorSupport.longValue(currentValues, position),
+                    candidateLongAccessors[orderingColumn].value(position),
                     OperatorVectorSupport.longValue(slotValues, 0));
         }
         if (flattenedCurrent instanceof BinaryVector && flattenedSlot instanceof BinaryVector) {
-            return OperatorVectorSupport.binaryCompare(currentValues, position, slotValues, 0);
+            if (candidateBinaryAccessors[orderingColumn] == null) {
+                candidateBinaryAccessors[orderingColumn] = VectorAccess.binaryRegions(currentValues);
+                candidateLongAccessors[orderingColumn] = null;
+            }
+            VectorAccess.BinaryRegions current = candidateBinaryAccessors[orderingColumn];
+            byte[] data = current.data(position);
+            int offset = current.offset(position);
+            int length = current.length(position);
+            return -OperatorVectorSupport.binaryCompare(slotValues, 0, data, offset, length);
         }
         return Integer.MIN_VALUE;
     }
@@ -184,6 +293,30 @@ final class TopNState
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
+            if (denseColumns != null) {
+                Streams ordering = denseColumns[orderingColumn];
+                Vector nulls = ordering.getOrNull(Stream.NULLS);
+                boolean leftNull = OperatorVectorSupport.isNull(nulls, leftSlot);
+                boolean rightNull = OperatorVectorSupport.isNull(nulls, rightSlot);
+                if (leftNull || rightNull) {
+                    if (leftNull == rightNull) {
+                        continue;
+                    }
+                    return leftNull ? -1 : 1;
+                }
+                int comparison = OperatorOrderingSemantics.compare(
+                        ordering.values(),
+                        nulls,
+                        leftSlot,
+                        ordering.values(),
+                        nulls,
+                        rightSlot);
+                comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
+                if (comparison != 0) {
+                    return comparison;
+                }
+                continue;
+            }
             Streams leftOrdering = slotColumns[orderingColumn][leftSlot];
             Streams rightOrdering = slotColumns[orderingColumn][rightSlot];
             // NULLS LAST regardless of sort direction (matches Trino/SQL); direction flips only non-null values.
@@ -208,6 +341,55 @@ final class TopNState
             }
         }
         return 0;
+    }
+
+    public boolean hasSingleFixedWidthNonNullOrdering(int slotCount)
+    {
+        if (orderingColumns.length != 1) {
+            return false;
+        }
+        int orderingColumn = orderingColumns[0];
+        if (denseColumns != null) {
+            Streams ordering = denseColumns[orderingColumn];
+            if (!VectorAccess.isAllFalseNulls(ordering.getOrNull(Stream.NULLS))) {
+                return false;
+            }
+            Vector values = OperatorVectorSupport.flatten(ordering.values());
+            return values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector;
+        }
+        for (int slot = 0; slot < slotCount; slot++) {
+            Streams ordering = slotColumns[orderingColumn][slot];
+            if (OperatorVectorSupport.isNull(ordering.getOrNull(Stream.NULLS), 0)) {
+                return false;
+            }
+            Vector values = OperatorVectorSupport.flatten(ordering.values());
+            if (!(values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public long singleFixedWidthSortKey(int slot)
+    {
+        Vector values = denseColumns == null
+                ? slotColumns[orderingColumns[0]][slot].values()
+                : denseColumns[orderingColumns[0]].values();
+        int position = denseColumns == null ? 0 : slot;
+        return switch (OperatorVectorSupport.flatten(values)) {
+            case I64Vector ignored -> OperatorVectorSupport.longValue(values, position) ^ Long.MIN_VALUE;
+            case I32Vector ignored -> (OperatorVectorSupport.longValue(values, position) ^ Integer.MIN_VALUE) & 0xFFFF_FFFFL;
+            case F64Vector ignored -> {
+                long bits = Double.doubleToLongBits(OperatorVectorSupport.doubleValue(values, position));
+                yield bits < 0 ? ~bits : bits ^ Long.MIN_VALUE;
+            }
+            default -> throw new IllegalStateException("Ordering value is not fixed width");
+        };
+    }
+
+    public boolean singleOrderingDescending()
+    {
+        return descendingByColumn[0];
     }
 
     public void copyRow(Batch batch, int position, int slot)
@@ -244,10 +426,41 @@ final class TopNState
         }
     }
 
+    public void flushPendingBatch(Batch batch, int[] retainedSlots, int start, int end)
+    {
+        for (int index = start; index < end; index++) {
+            int slot = retainedSlots[index];
+            if (pendingBatches[slot] != batch) {
+                continue;
+            }
+            for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+                if (isOrderingColumn(outputIndex)) {
+                    continue;
+                }
+                slotColumns[outputIndex][slot] = buffers.copyPosition(batch.output(outputIndex), slotColumns[outputIndex][slot], pendingPositions[slot]);
+                if (schema[outputIndex] == null) {
+                    schema[outputIndex] = slotColumns[outputIndex][slot];
+                }
+            }
+            pendingBatches[slot] = null;
+        }
+    }
+
     public void setOrderedSlots(List<Integer> orderedSlots)
     {
         this.orderedSlots = orderedSlots;
+        this.primitiveOrderedSlots = null;
+        this.primitiveOrderedSlotCount = 0;
         this.outputMask = allocator.allocateAllMask(allocationContext, orderedSlots.size());
+        this.materialized = new Streams[schema.length];
+    }
+
+    public void setOrderedSlots(int[] orderedSlots, int count)
+    {
+        this.orderedSlots = List.of();
+        this.primitiveOrderedSlots = orderedSlots;
+        this.primitiveOrderedSlotCount = count;
+        this.outputMask = allocator.allocateAllMask(allocationContext, count);
         this.materialized = new Streams[schema.length];
     }
 
@@ -264,9 +477,12 @@ final class TopNState
             return output;
         }
 
-        if (orderedSlots.isEmpty()) {
+        if (orderedSlotCount() == 0) {
             Streams columnSchema = ensureEmptySchema(index);
             output = buffers.emptyLike(columnSchema);
+        }
+        else if (denseColumns != null) {
+            output = materializeDenseSortedColumn(index);
         }
         else {
             ensurePendingOutputMaterialized(index);
@@ -315,7 +531,8 @@ final class TopNState
             return;
         }
         constrainPendingBatches();
-        for (int slot : orderedSlots) {
+        for (int index = 0; index < orderedSlotCount(); index++) {
+            int slot = orderedSlot(index);
             Batch batch = pendingBatches[slot];
             if (batch == null) {
                 continue;
@@ -330,7 +547,8 @@ final class TopNState
     private void constrainPendingBatches()
     {
         IdentityHashMap<Batch, List<Integer>> retainedPositionsByBatch = new IdentityHashMap<>();
-        for (int slot : orderedSlots) {
+        for (int index = 0; index < orderedSlotCount(); index++) {
+            int slot = orderedSlot(index);
             Batch batch = pendingBatches[slot];
             if (batch == null) {
                 continue;
@@ -367,7 +585,7 @@ final class TopNState
             return columnSchema;
         }
         int firstOutputPosition = outputMask == null || outputMask.none() ? 0 : outputMask.position(0);
-        columnSchema = slotColumns[outputIndex][orderedSlots.get(firstOutputPosition)];
+        columnSchema = slotColumns[outputIndex][orderedSlot(firstOutputPosition)];
         if (columnSchema == null) {
             throw new IllegalStateException("TopN output column was not materialized: " + outputIndex);
         }
@@ -378,12 +596,12 @@ final class TopNState
     private Streams materializeColumn(Streams columnSchema, int outputIndex)
     {
         if (outputMask == null || outputMask.all()) {
-            return materializeDenseColumn(columnSchema, outputIndex, orderedSlots);
+            return materializeDenseColumn(columnSchema, outputIndex);
         }
 
         Streams result = null;
         for (int outputPosition : outputMask) {
-            int slot = orderedSlots.get(outputPosition);
+            int slot = orderedSlot(outputPosition);
             result = buffers.copySinglePosition(
                     result,
                     slotColumns[outputIndex][slot],
@@ -394,17 +612,39 @@ final class TopNState
         return result == null ? buffers.emptyLike(columnSchema) : result;
     }
 
-    private Streams materializeDenseColumn(Streams columnSchema, int outputIndex, List<Integer> orderedSlots)
+    private Streams materializeDenseSortedColumn(int outputIndex)
+    {
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : denseColumns[outputIndex].asMap().entrySet()) {
+            result.put(entry.getKey(), DictionaryVector.wrap(
+                    primitiveOrderedSlots,
+                    primitiveOrderedSlotCount,
+                    entry.getValue()));
+        }
+        return result.build();
+    }
+
+    private Streams materializeDenseColumn(Streams columnSchema, int outputIndex)
     {
         Streams.Builder result = Streams.builder();
         for (Map.Entry<Stream, Vector> entry : columnSchema.asMap().entrySet()) {
-            Vector[] rows = new Vector[orderedSlots.size()];
-            for (int rowIndex = 0; rowIndex < orderedSlots.size(); rowIndex++) {
-                rows[rowIndex] = slotColumns[outputIndex][orderedSlots.get(rowIndex)].get(entry.getKey());
+            Vector[] rows = new Vector[orderedSlotCount()];
+            for (int rowIndex = 0; rowIndex < orderedSlotCount(); rowIndex++) {
+                rows[rowIndex] = slotColumns[outputIndex][orderedSlot(rowIndex)].get(entry.getKey());
             }
             result.put(entry.getKey(), buffers.materializeStream(entry.getValue(), rows));
         }
         return result.build();
+    }
+
+    private int orderedSlotCount()
+    {
+        return primitiveOrderedSlots == null ? orderedSlots.size() : primitiveOrderedSlotCount;
+    }
+
+    private int orderedSlot(int index)
+    {
+        return primitiveOrderedSlots == null ? orderedSlots.get(index) : primitiveOrderedSlots[index];
     }
 
     private boolean isOrderingColumn(int outputIndex)

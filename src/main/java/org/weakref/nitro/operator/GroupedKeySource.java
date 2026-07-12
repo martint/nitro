@@ -18,4 +18,9 @@ import org.weakref.nitro.data.Allocator;
 interface GroupedKeySource
 {
     Streams groupedKeyOutput(int outputIndex, org.weakref.nitro.data.Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext);
+
+    default Streams copyGroupedKeyPosition(int outputIndex, Streams output, int sourcePosition, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return null;
+    }
 }

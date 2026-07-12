@@ -416,7 +416,7 @@ public class Sum
         // short-circuit their per-row null-or loop.
         if (!stateVector.hasAnyNull()) {
             BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
-            Vector nulls = allocator.allocateRle(allocationContext, new int[] {visibleCount}, sentinel);
+            Vector nulls = allocator.allocateSingleRunRle(allocationContext, visibleCount, sentinel);
             return Streams.ofValues(values).with(Stream.NULLS, nulls);
         }
         BooleanVector nulls = VectorAccess.writableBooleanVector(

@@ -862,7 +862,7 @@ public final class PipelineCompiler
         out.append("    int[] keep = new int[n]; int w = 0;\n");
         out.append("    for (int r = 0; r < n; r++) {\n");
         IntFunction<String> havingNull = index -> "(hn != null && hn[" + index + "] != null && hn[" + index + "][r])";
-        out.append("      if (").append(condition(having, index -> resultColumnAccess(index, types, "r"), havingNull)).append(") { keep[w++] = r; }\n");
+        out.append("      if (").append(decodedCondition(having, index -> resultColumnAccess(index, types, "r"), havingNull)).append(") { keep[w++] = r; }\n");
         out.append("    }\n");
         out.append("    long[][] kept = new long[cols.length][w];\n");
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
@@ -1021,14 +1021,15 @@ public final class PipelineCompiler
             String compare = stringSources.containsKey(col)
                     ? "java.util.Arrays.compareUnsigned(orderingDictionary" + col + "[(int) cols[" + col + "][a]], orderingDictionary" + col + "[(int) cols[" + col + "][b]])"
                     : types.get(col).compare("cols[" + col + "][a]", "cols[" + col + "][b]");
-            // Null ordering mirrors the operator path (OperatorOrderingSemantics): a null compares as greater than
-            // any value (so ascending puts nulls last), and the descending flip then yields nulls first for DESC.
+            // Null ordering mirrors the operator/Trino path: nulls remain last regardless of direction; descending
+            // reverses only the comparison of two non-null values.
             out.append("      { boolean an = on != null && on[").append(col).append("] != null && on[").append(col).append("][a];")
                     .append(" boolean bn = on != null && on[").append(col).append("] != null && on[").append(col).append("][b];\n");
-            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append("; }");
+            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append(";");
             if (key.descending()) {
                 out.append(" c = -c;");
             }
+            out.append(" }");
             out.append(" if (c != 0) { return c; } }\n");
         }
         out.append("      return Integer.compare(a, b);\n");
@@ -1787,7 +1788,9 @@ public final class PipelineCompiler
         out.append(bodyIndent).append("}\n");
         for (int column = 0; column < columnCount; column++) {
             out.append(bodyIndent).append("w").append(column).append("[rows] = ")
-                    .append(encodeSlot(resultTypes.get(column), resolver.apply(column))).append(";\n");
+                    // Scan columns already use the compiler's long-slot representation; F64 lanes are raw bits.
+                    // Re-encoding them here treats those bits as a numeric double and destroys their ordering.
+                    .append(resolver.apply(column)).append(";\n");
             if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
                 out.append(bodyIndent).append("wN").append(column).append("[rows] = ").append(nullResolver.apply(column)).append(";\n");
             }
@@ -2094,16 +2097,19 @@ public final class PipelineCompiler
     {
         String compare = resultTypes.get(column).compare("fw" + column + "[pa]", "fw" + column + "[pb]");
         if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
-            // Mirror OperatorOrderingSemantics: a null compares greater (ascending puts nulls last; the descending
-            // flip then yields nulls first), and two nulls are equal.
+            // Mirror OperatorOrderingSemantics: nulls remain last regardless of direction, and two nulls are equal.
             out.append("      { boolean an = fwN").append(column).append("[pa]; boolean bn = fwN").append(column).append("[pb];\n");
-            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append("; }");
+            out.append("        if (an || bn) { c = (an == bn) ? 0 : (an ? 1 : -1); } else { c = ").append(compare).append(";");
+            if (descending) {
+                out.append(" c = -c;");
+            }
+            out.append(" }");
         }
         else {
             out.append("      { c = ").append(compare).append(";");
-        }
-        if (descending) {
-            out.append(" c = -c;");
+            if (descending) {
+                out.append(" c = -c;");
+            }
         }
         out.append(" if (c != 0) { return c; } }\n");
     }
@@ -5295,6 +5301,44 @@ public final class PipelineCompiler
                     decodedExpr(bin.left(), resolver, nullResolver),
                     decodedExpr(bin.right(), resolver, nullResolver)));
             default -> expr(expr, resolver, nullResolver);
+        };
+    }
+
+    /** Condition rendering for post-aggregation rows, whose DOUBLE lanes have already been decoded to Java doubles. */
+    private static String decodedCondition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    {
+        return switch (condition) {
+            case Plan.Predicate predicate -> {
+                String comparison = "(" + decodedExpr(predicate.left(), resolver, nullResolver) + " " + decodedComparison(predicate.op()) + " " +
+                        decodedExpr(predicate.right(), resolver, nullResolver) + ")";
+                String guard = notNullGuard(orNull(nullExpr(predicate.left(), resolver, nullResolver), nullExpr(predicate.right(), resolver, nullResolver)));
+                yield guard.isEmpty() ? comparison : "(" + guard + " && " + comparison + ")";
+            }
+            case Plan.And and -> and.conditions().isEmpty() ? "true"
+                    : "(" + and.conditions().stream().map(child -> decodedCondition(child, resolver, nullResolver)).collect(joining(" && ")) + ")";
+            case Plan.Or or -> or.conditions().isEmpty() ? "false"
+                    : "(" + or.conditions().stream().map(child -> decodedCondition(child, resolver, nullResolver)).collect(joining(" || ")) + ")";
+            case Plan.Not not -> "(!" + decodedCondition(not.condition(), resolver, nullResolver) + ")";
+            case Plan.IsNull isNull -> isNull.negated()
+                    ? "(!(" + nullResolver.apply(isNull.column()) + "))"
+                    : "(" + nullResolver.apply(isNull.column()) + ")";
+            case Plan.StringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.LikeMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.SubstringMatch ignored -> throw new UnsupportedOperationException("string match is only supported in WHERE filters");
+            case Plan.StringColumnCompare ignored -> throw new UnsupportedOperationException("string column compare is only supported in WHERE filters");
+        };
+    }
+
+    private static String decodedComparison(String operator)
+    {
+        return switch (operator) {
+            case "lt_f64" -> "<";
+            case "lte_f64" -> "<=";
+            case "gt_f64" -> ">";
+            case "gte_f64" -> ">=";
+            case "eq_f64" -> "==";
+            case "neq_f64" -> "!=";
+            default -> comparison(operator);
         };
     }
 

@@ -67,6 +67,17 @@ public final class UnionAllOperator
     }
 
     @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        // UNION ALL preserves the output schema, so the same column filter applies independently to every remaining
+        // branch. This is normally called before consumption, but starting at sourceIndex also handles a late filter
+        // without touching sources that have already been closed.
+        for (int index = sourceIndex; index < sources.size(); index++) {
+            sources.get(index).pushDynamicFilter(filter);
+        }
+    }
+
+    @Override
     public void close()
     {
         for (Operator source : sources) {

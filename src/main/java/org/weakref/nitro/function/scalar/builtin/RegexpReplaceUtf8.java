@@ -42,11 +42,18 @@ public final class RegexpReplaceUtf8
         implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("RegexpReplaceUtf8");
+    private static final boolean CONSTANT_ARGUMENTS =
+            Boolean.parseBoolean(System.getProperty("nitro.regexp.constantArguments", "true"));
+    private static final boolean SPECIALIZE_HOST_EXTRACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.regexp.specializeHostExtraction", "true"));
+    private static final Slice HOST_PATTERN = Slices.utf8Slice("^https?://(?:www\\.)?([^/]+)/.*$");
+    private static final Slice HOST_REPLACEMENT = Slices.utf8Slice("\\1");
+    private static final ExtractHostUtf8 HOST_EXTRACTOR = new ExtractHostUtf8();
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(ALLOCATION_CONTEXT, ExtractHostUtf8.ALLOCATION_CONTEXT);
     }
 
     @Override
@@ -66,6 +73,15 @@ public final class RegexpReplaceUtf8
         Vector valuesNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector patternNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector replacementNulls = inputs.get(2).getOrNull(Stream.NULLS);
+
+        if (SPECIALIZE_HOST_EXTRACTION &&
+                patternValues instanceof RleVector patternRle && patternRle.counts().length == 1 &&
+                replacementValues instanceof RleVector replacementRle && replacementRle.counts().length == 1 &&
+                VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls) &&
+                utf8Slice(patternRle.values(), 0).equals(HOST_PATTERN) &&
+                utf8Slice(replacementRle.values(), 0).equals(HOST_REPLACEMENT)) {
+            return HOST_EXTRACTOR.apply(List.of(inputs.getFirst()), mask, requestedStreams, output, context);
+        }
 
         int requiredLength = maxLength(mask, values, patternValues, replacementValues);
 
@@ -106,7 +122,16 @@ public final class RegexpReplaceUtf8
         VectorAccess.BooleanValues patternNullValues = VectorAccess.booleanValues(patternNulls);
         VectorAccess.BooleanValues replacementNullValues = VectorAccess.booleanValues(replacementNulls);
         byte[][] rewritten = new byte[mask.selectedCount()][];
-        Map<Slice, Regex> patterns = new HashMap<>();
+        Slice constantReplacement = null;
+        Regex constantPattern = null;
+        if (CONSTANT_ARGUMENTS &&
+                patternValues instanceof RleVector patternRle && patternRle.counts().length == 1 &&
+                replacementValues instanceof RleVector replacementRle && replacementRle.counts().length == 1 &&
+                VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls)) {
+            constantPattern = JoniRegexpSupport.compile(utf8Slice(patternRle.values(), 0));
+            constantReplacement = translateReplacement(utf8Slice(replacementRle.values(), 0));
+        }
+        Map<Slice, Regex> patterns = constantPattern == null ? new HashMap<>() : null;
         int totalBytes = 0;
         boolean asciiOnly = true;
         int index = 0;
@@ -117,9 +142,13 @@ public final class RegexpReplaceUtf8
             }
 
             Slice input = utf8Slice(values, position);
-            Slice patternValue = utf8Slice(patternValues, position);
-            Slice replacementValue = translateReplacement(utf8Slice(replacementValues, position));
-            Regex pattern = patterns.computeIfAbsent(patternValue, JoniRegexpSupport::compile);
+            Slice replacementValue = constantReplacement;
+            Regex pattern = constantPattern;
+            if (pattern == null) {
+                Slice patternValue = utf8Slice(patternValues, position);
+                replacementValue = translateReplacement(utf8Slice(replacementValues, position));
+                pattern = patterns.computeIfAbsent(patternValue, JoniRegexpSupport::compile);
+            }
             byte[] bytes = JoniRegexpSupport.replace(input, pattern, replacementValue).getBytes();
             rewritten[index++] = bytes;
             totalBytes += bytes.length;

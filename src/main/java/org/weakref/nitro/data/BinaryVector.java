@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -25,6 +26,8 @@ import static java.util.Objects.requireNonNull;
 public final class BinaryVector
         implements FlatVector
 {
+    private static final String FIXED_WIDTH_TRAIT = "fixed_width";
+
     public static final class Trait
     {
         private final String name;
@@ -85,6 +88,10 @@ public final class BinaryVector
     private final int[] offsets;
     private final byte[] data;
     private Set<Trait> traits = Set.of();
+    // Object identity is not a content identity for pooled vectors. Consumers that retain derived state across
+    // batches (for example dictionary-entry caches) pair this generation with the vector identity; it advances
+    // whenever the allocator begins a new logical lifetime for the same backing storage.
+    private long contentGeneration;
 
     public BinaryVector(int positionCount, int byteCapacity)
     {
@@ -94,7 +101,7 @@ public final class BinaryVector
     public BinaryVector(int positionCount, int[] offsets, byte[] data)
     {
         checkArgument(positionCount >= 0, "positionCount is negative");
-        checkArgument(offsets.length == positionCount + 1, "offsets length (%s) must equal positionCount + 1 (%s)", offsets.length, positionCount + 1);
+        checkArgument(offsets.length == positionCount + 1, "offsets length (%s) does not match positionCount + 1 (%s)", offsets.length, positionCount + 1);
         this.positionCount = positionCount;
         this.offsets = offsets;
         this.data = data;
@@ -108,6 +115,11 @@ public final class BinaryVector
     public byte[] data()
     {
         return data;
+    }
+
+    public long contentGeneration()
+    {
+        return contentGeneration;
     }
 
     public static Object poolFamily(int positionCount)
@@ -178,6 +190,19 @@ public final class BinaryVector
                 .filter(trait -> trait.name().equals(name))
                 .findFirst()
                 .flatMap(Trait::value);
+    }
+
+    /** Declares that every physical position occupies exactly {@code width} contiguous bytes. */
+    public void setFixedWidth(int width)
+    {
+        checkArgument(width >= 0, "width is negative");
+        addTrait(Trait.of(FIXED_WIDTH_TRAIT, width));
+    }
+
+    public OptionalInt fixedWidth()
+    {
+        Object width = traitValue(FIXED_WIDTH_TRAIT).orElse(null);
+        return width == null ? OptionalInt.empty() : OptionalInt.of((int) width);
     }
 
     public void addTrait(Trait trait)
@@ -269,6 +294,12 @@ public final class BinaryVector
     public long retainedBytes()
     {
         return (long) offsets.length * Integer.BYTES + data.length;
+    }
+
+    @Override
+    public boolean isVariableWidth()
+    {
+        return true;
     }
 
     @Override
@@ -467,6 +498,7 @@ public final class BinaryVector
     @Override
     public void clearForReuse()
     {
+        contentGeneration++;
         clearTraits();
         Arrays.fill(offsets, 0);
     }

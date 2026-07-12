@@ -70,6 +70,28 @@ public interface Operator
     }
 
     /**
+     * Returns whether repeated output borrows from the current open batch remain stable until that batch is closed.
+     * <p>
+     * This is deliberately weaker than {@link #supportsRetainedBatches()}: an operator may reuse its buffers when
+     * advanced while still providing ordinary stable batch-lifetime views. Consumers that copy all outputs before
+     * closing and advancing (for example a columnar sort buffer) should use this capability instead of requiring the
+     * batch to outlive an advance.
+     */
+    default boolean supportsStableBatchBorrow()
+    {
+        return supportsRetainedBatches();
+    }
+
+    /**
+     * Returns the exact number of rows this operator will produce when that is known without executing it, or
+     * {@code -1} otherwise. Consumers may use this only as a capacity hint; it must never affect query semantics.
+     */
+    default long exactOutputRows()
+    {
+        return -1;
+    }
+
+    /**
      * Returns whether the most recent batch can be re-borrowed after a {@link #constrain(Mask)}
      * narrows it, yielding values for the constrained positions.
      * <p>

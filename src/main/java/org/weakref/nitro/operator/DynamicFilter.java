@@ -34,12 +34,17 @@ public final class DynamicFilter
 
     private final int column;
     private final LongSet values;
+    private final int distinctSize;
     private final long min;
     private final long max;
     // Velox-style membership representation: for a dense small integer domain, a bitset indexed by (value - min)
     // tests membership with a single array read -- no hashing -- which matters because the probe runs once per
     // scanned row. Null when the domain is too wide; then {@link #values} (a hash set) is consulted instead.
     private final boolean[] present;
+    // Immutable exact membership supplied directly by a join index for a large sparse bounded domain.  Sharing this
+    // pooled bitset avoids rebuilding a multi-million-entry LongSet merely to push the same membership to a scan.
+    // Its lifetime is owned by the join, which closes the probe source before releasing index storage.
+    private final long[] presentBits;
 
     /** Build a filter over the distinct build-side key values for the given probe column. */
     public static DynamicFilter fromValues(int column, LongSet values)
@@ -60,16 +65,37 @@ public final class DynamicFilter
                 }
             }
         }
-        return new DynamicFilter(column, values, min, max, present);
+        return new DynamicFilter(column, values, values.size(), min, max, present, null);
     }
 
-    private DynamicFilter(int column, LongSet values, long min, long max, boolean[] present)
+    /**
+     * Build an exact inclusive range filter. This lets a scan test a dictionary once and filter dictionary ids
+     * without materializing every row value, for both static predicates and runtime filters.
+     */
+    public static DynamicFilter fromRange(int column, long min, long max)
+    {
+        if (max < min) {
+            return new DynamicFilter(column, LongSet.of(), 0, Long.MAX_VALUE, Long.MIN_VALUE, null, null);
+        }
+        long span = max - min + 1;
+        int distinctSize = span > Integer.MAX_VALUE || span <= 0 ? Integer.MAX_VALUE : (int) span;
+        return new DynamicFilter(column, null, distinctSize, min, max, null, null);
+    }
+
+    static DynamicFilter fromExactBitset(int column, long min, long max, long[] presentBits, int distinctSize)
+    {
+        return new DynamicFilter(column, null, distinctSize, min, max, null, presentBits);
+    }
+
+    private DynamicFilter(int column, LongSet values, int distinctSize, long min, long max, boolean[] present, long[] presentBits)
     {
         this.column = column;
         this.values = values;
+        this.distinctSize = distinctSize;
         this.min = min;
         this.max = max;
         this.present = present;
+        this.presentBits = presentBits;
     }
 
     public int column()
@@ -80,12 +106,30 @@ public final class DynamicFilter
     /** The number of distinct build-side values; a proxy for selectivity used to order filter application. */
     public int size()
     {
-        return values.size();
+        return distinctSize;
     }
 
     public boolean isEmpty()
     {
-        return values.isEmpty();
+        return distinctSize == 0;
+    }
+
+    /**
+     * Fraction of the filter's own numeric range occupied by accepted values. This is a conservative selectivity
+     * proxy when the probe column has no dictionary cardinality: a sparse filter spanning a broad surrogate-key
+     * domain should lead a multi-filter scan, while a clustered filter with a narrow range returns a value near one
+     * and is not incorrectly assumed selective outside that observed range.
+     */
+    public double rangeDensity()
+    {
+        if (distinctSize == 0) {
+            return 0;
+        }
+        long span = max - min + 1;
+        if (span <= 0) {
+            return 1;
+        }
+        return Math.min(1.0, (double) distinctSize / span);
     }
 
     /** Whether {@code value} can join: a range gate, then a bitset read (small domains) or hash-set probe. */
@@ -97,13 +141,20 @@ public final class DynamicFilter
         if (present != null) {
             return present[(int) (value - min)];
         }
+        if (presentBits != null) {
+            int ordinal = (int) (value - min);
+            return (presentBits[ordinal >>> 6] & (1L << ordinal)) != 0;
+        }
+        if (values == null) {
+            return true;
+        }
         return values.contains(value);
     }
 
     /** The same filter retargeted to {@code newColumn} in a source operator's output space. */
     public DynamicFilter withColumn(int newColumn)
     {
-        return new DynamicFilter(newColumn, values, min, max, present);
+        return new DynamicFilter(newColumn, values, distinctSize, min, max, present, presentBits);
     }
 
     /** A defensive snapshot helper for collecting distinct build keys. */

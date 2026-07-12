@@ -68,7 +68,7 @@ interface FlatTypeHandler
         throw new UnsupportedOperationException();
     }
 
-    default Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+    default Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         throw new UnsupportedOperationException();
     }

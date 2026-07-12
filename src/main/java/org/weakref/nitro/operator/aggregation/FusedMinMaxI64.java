@@ -46,6 +46,9 @@ import static java.lang.Math.toIntExact;
  */
 final class FusedMinMaxI64
 {
+    private static final boolean GROUPED_RUN_REDUCTION =
+            Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedMinMaxGroupedRuns", "true"));
+
     private FusedMinMaxI64() {}
 
     static final class SharedState
@@ -274,14 +277,23 @@ final class FusedMinMaxI64
             Streams minState = kind == Kind.MIN ? state : peer;
             Streams maxState = kind == Kind.MAX ? state : peer;
 
+            Vector inputVector = streams.values(inputColumn);
+            Vector inputNullVector = streams.stream(inputColumn, Stream.NULLS);
+            if (GROUPED_RUN_REDUCTION
+                    && inputVector instanceof I64Vector inputValues
+                    && VectorAccess.isAllFalseNulls(inputNullVector)
+                    && accumulateNullFreeGroupedRuns(minState, maxState, (I64Vector) groups, mask, inputValues)) {
+                return;
+            }
+
             I64Vector minValues = (I64Vector) minState.values();
             BooleanVector minNulls = (BooleanVector) minState.get(Stream.NULLS);
             I64Vector maxValues = (I64Vector) maxState.values();
             BooleanVector maxNulls = (BooleanVector) maxState.get(Stream.NULLS);
             I64Vector groupVector = (I64Vector) groups;
 
-            VectorAccess.LongValues inputValues = VectorAccess.longValues(streams.values(inputColumn));
-            VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
+            VectorAccess.LongValues inputValues = VectorAccess.longValues(inputVector);
+            VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullVector);
 
             for (int position : mask) {
                 if (inputNulls.value(position)) {
@@ -304,6 +316,75 @@ final class FusedMinMaxI64
                     }
                 }
             }
+        }
+
+        /**
+         * Collapses adjacent equal group ids before touching min/max state. Admission is decided
+         * once from a bounded sample; unordered batches retain the ordinary row loop. This is an
+         * exact structural specialization: a group that appears in multiple runs reloads its
+         * accumulated state at each run boundary.
+         */
+        private static boolean accumulateNullFreeGroupedRuns(
+                Streams minState,
+                Streams maxState,
+                I64Vector groups,
+                Mask mask,
+                I64Vector inputs)
+        {
+            int count = mask.count();
+            // Keep the generated-shape boundary explicit. Sparse masks can be stored as selected
+            // or excluded positions and materializing them here erases the locality win; their
+            // ordinary accumulator loop already consumes the representation directly.
+            if (!mask.all() || count < 5 || !hasFrequentGroupRuns(groups.values(), count)) {
+                return false;
+            }
+
+            long[] groupIds = groups.values();
+            long[] input = inputs.values();
+            long[] minValues = ((I64Vector) minState.values()).values();
+            boolean[] minNulls = ((BooleanVector) minState.get(Stream.NULLS)).values();
+            long[] maxValues = ((I64Vector) maxState.values()).values();
+            boolean[] maxNulls = ((BooleanVector) maxState.get(Stream.NULLS)).values();
+
+            int index = 0;
+            while (index < count) {
+                int position = index;
+                int group = toIntExact(groupIds[position]);
+                long min = minNulls[group] ? Long.MAX_VALUE : minValues[group];
+                long max = maxNulls[group] ? Long.MIN_VALUE : maxValues[group];
+                do {
+                    long value = input[position];
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                    index++;
+                    if (index == count) {
+                        break;
+                    }
+                    position = index;
+                }
+                while (groupIds[position] == group);
+
+                minValues[group] = min;
+                maxValues[group] = max;
+                minNulls[group] = false;
+                maxNulls[group] = false;
+            }
+            return true;
+        }
+
+        private static boolean hasFrequentGroupRuns(long[] groups, int count)
+        {
+            int comparisons = Math.min(count - 1, 64);
+            int hits = 0;
+            long previous = groups[0];
+            for (int index = 1; index <= comparisons; index++) {
+                long group = groups[index];
+                if (group == previous) {
+                    hits++;
+                }
+                previous = group;
+            }
+            return hits * 2 >= comparisons;
         }
     }
 

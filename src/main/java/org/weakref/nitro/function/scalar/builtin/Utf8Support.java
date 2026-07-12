@@ -33,9 +33,18 @@ public final class Utf8Support
 
     public static byte[] substring(byte[] data, int offset, int length, long start, long count)
     {
+        long slice = substringSlice(data, offset, length, start, count);
+        int startOffset = (int) (slice >>> 32);
+        int endOffset = startOffset + (int) slice;
+        return java.util.Arrays.copyOfRange(data, startOffset, endOffset);
+    }
+
+    /** Returns the exact UTF-8 substring as {@code (sourceOffset << 32) | byteLength}, without copying bytes. */
+    public static long substringSlice(byte[] data, int offset, int length, long start, long count)
+    {
         int startOffset = substringStartOffset(data, offset, length, start, count);
         int endOffset = substringEndOffset(data, offset, length, count, startOffset);
-        return java.util.Arrays.copyOfRange(data, startOffset, endOffset);
+        return ((long) startOffset << 32) | ((endOffset - startOffset) & 0xFFFF_FFFFL);
     }
 
     public static boolean substringMatchesAny(byte[] data, int offset, int length, long start, long count, byte[][] values)
@@ -82,6 +91,44 @@ public final class Utf8Support
             outputOffset = appendCodePoint(output, outputOffset, upperCodePoint);
         }
         return java.util.Arrays.copyOf(output, outputOffset);
+    }
+
+    public static int upperLength(byte[] data, int offset, int length)
+    {
+        int end = offset + length;
+        int outputLength = 0;
+        while (offset < end) {
+            int upperCodePoint = Character.toUpperCase(codePoint(data, offset, end));
+            offset = nextCodePointOffset(data, offset, end);
+            outputLength += utf8Length(upperCodePoint);
+        }
+        return outputLength;
+    }
+
+    /** Writes the upper-cased value into {@code output} and returns the first offset after it. */
+    public static int upperInto(byte[] data, int offset, int length, byte[] output, int outputOffset)
+    {
+        int end = offset + length;
+        while (offset < end) {
+            int upperCodePoint = Character.toUpperCase(codePoint(data, offset, end));
+            offset = nextCodePointOffset(data, offset, end);
+            outputOffset = appendCodePoint(output, outputOffset, upperCodePoint);
+        }
+        return outputOffset;
+    }
+
+    private static int utf8Length(int codePoint)
+    {
+        if (codePoint < 0x80) {
+            return 1;
+        }
+        if (codePoint < 0x800) {
+            return 2;
+        }
+        if (codePoint < 0x10000) {
+            return 3;
+        }
+        return 4;
     }
 
     public static int javaStringHash(BinaryVector vector, int position)

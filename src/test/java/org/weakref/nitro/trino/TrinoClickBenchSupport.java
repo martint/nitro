@@ -27,9 +27,9 @@ import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.LimitOperator.LimitOperatorFactory;
 import io.trino.operator.MarkDistinctOperator.MarkDistinctOperatorFactory;
 import io.trino.operator.Operator;
+import io.trino.operator.OperatorContext;
 import io.trino.operator.OperatorFactory;
 import io.trino.operator.TopNOperator;
-import io.trino.operator.ValuesOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.spi.Page;
 import io.trino.spi.connector.SortOrder;
@@ -989,63 +989,113 @@ public final class TrinoClickBenchSupport
     private MaterializedResult execute(Path input, List<String> columns, List<OperatorFactory> factories, List<Type> outputTypes, boolean collectOutput)
     {
         List<Page> outputPages = collectOutput ? new ArrayList<>() : null;
-        try (TrinoClickBenchPageReader reader = new TrinoClickBenchPageReader(input, columns)) {
-            List<Page> inputPages = readPages(reader);
-            DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
-                    .setQueryMaxMemory(queryMaxMemory)
-                    .setMemoryPoolSize(queryMaxMemory)
-                    .build()
-                    .addPipelineContext(0, true, true, false)
-                    .addDriverContext();
+        DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
+                .setQueryMaxMemory(queryMaxMemory)
+                .setMemoryPoolSize(queryMaxMemory)
+                .build()
+                .addPipelineContext(0, true, true, false)
+                .addDriverContext();
 
-            List<Operator> operators = new ArrayList<>();
-            ValuesOperator.ValuesOperatorFactory sourceFactory = new ValuesOperator.ValuesOperatorFactory(0, new PlanNodeId("source"), inputPages);
-            operators.add(sourceFactory.createOperator(driverContext));
-            sourceFactory.noMoreOperators();
+        List<Operator> operators = new ArrayList<>();
+        operators.add(new ParquetPageSourceOperator(
+                driverContext.addOperatorContext(0, new PlanNodeId("source"), ParquetPageSourceOperator.class.getSimpleName()),
+                input,
+                columns));
 
-            for (OperatorFactory factory : factories) {
-                operators.add(factory.createOperator(driverContext));
-                factory.noMoreOperators();
-            }
-
-            operators.add(new PageConsumerOperator(
-                    driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
-                    page -> {
-                        if (collectOutput) {
-                            outputPages.add(page);
-                        }
-                    },
-                    java.util.function.Function.identity()));
-
-            try (Driver driver = Driver.createDriver(driverContext, operators)) {
-                while (!driver.isFinished()) {
-                    var blocked = driver.processUntilBlocked();
-                    if (!blocked.isDone()) {
-                        waitForBlocked(driver, operators, blocked);
-                    }
-                }
-            }
-            catch (Exception exception) {
-                throw new RuntimeException("Unable to execute Trino ClickBench pipeline", exception);
-            }
-
-            MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
-            if (collectOutput) {
-                for (Page page : outputPages) {
-                    result.page(page);
-                }
-            }
-            return result.build();
+        for (OperatorFactory factory : factories) {
+            operators.add(factory.createOperator(driverContext));
+            factory.noMoreOperators();
         }
+
+        operators.add(new PageConsumerOperator(
+                driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                page -> {
+                    if (collectOutput) {
+                        outputPages.add(page);
+                    }
+                },
+                java.util.function.Function.identity()));
+
+        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+            while (!driver.isFinished()) {
+                var blocked = driver.processUntilBlocked();
+                if (!blocked.isDone()) {
+                    waitForBlocked(driver, operators, blocked);
+                }
+            }
+        }
+        catch (Exception exception) {
+            throw new RuntimeException("Unable to execute Trino ClickBench pipeline", exception);
+        }
+
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
+        if (collectOutput) {
+            for (Page page : outputPages) {
+                result.page(page);
+            }
+        }
+        return result.build();
     }
 
-    private static List<Page> readPages(TrinoClickBenchPageReader reader)
+    private static final class ParquetPageSourceOperator
+            implements Operator
     {
-        List<Page> pages = new ArrayList<>();
-        while (reader.hasNext()) {
-            pages.add(reader.nextPage());
+        private final OperatorContext operatorContext;
+        private final TrinoClickBenchPageReader reader;
+        private boolean finished;
+
+        private ParquetPageSourceOperator(OperatorContext operatorContext, Path input, List<String> columns)
+        {
+            this.operatorContext = operatorContext;
+            this.reader = new TrinoClickBenchPageReader(input, columns);
         }
-        return pages;
+
+        @Override
+        public OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finished = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finished || !reader.hasNext();
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return false;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            if (finished || !reader.hasNext()) {
+                return null;
+            }
+            Page page = reader.nextPage();
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            return page;
+        }
+
+        @Override
+        public void close()
+        {
+            reader.close();
+        }
     }
 
     private AggregationOperatorFactory aggregationFactory(int operatorId, io.trino.operator.aggregation.AggregatorFactory... aggregators)

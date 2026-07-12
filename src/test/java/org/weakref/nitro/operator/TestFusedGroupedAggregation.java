@@ -16,11 +16,15 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -32,10 +36,10 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Exercises the generated fused single-long-key path in {@link GroupedAggregationOperator} (flat I64,
- * null-free) against a reference map. Covers the multi-accumulator set ({@code SUM, COUNT(*)}), the
+ * Exercises the generated fused single-long-key path in {@link GroupedAggregationOperator} (flat I32/I64 keys and
+ * values) against a reference map. Covers the multi-accumulator set ({@code SUM, COUNT(*)}), the
  * high-cardinality crossover where the operator transitions from the fused pass to the staged pass, and
- * per-batch fallback when a value column carries nulls. The broader suites don't hit these shapes.
+ * nullable-input fused path. The broader suites don't hit these shapes.
  */
 class TestFusedGroupedAggregation
 {
@@ -56,6 +60,30 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void fusedIntKeyAndValueShapeMatchesReference()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 100_000; start += 4_096) {
+            int size = Math.min(4_096, 100_000 - start);
+            int[] keys = new int[size];
+            int[] values = new int[size];
+            for (int index = 0; index < size; index++) {
+                int row = start + index;
+                int key = row % 2_000;
+                int value = row * 7 - 3;
+                keys[index] = key;
+                values[index] = value;
+                long[] state = reference.computeIfAbsent((long) key, ignored -> new long[2]);
+                state[0] += value;
+                state[1]++;
+            }
+            pages.add(TableOperator.Page.values(size, new Vector[] {new I32Vector(keys), new I32Vector(values)}, Mask.all(size)));
+        }
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
     void fusedHighCardinalityCrossesToStaged()
     {
         // More distinct groups than GroupedAggregationOperator.FUSE_GROUP_LIMIT (1<<15), so the operator
@@ -67,10 +95,99 @@ class TestFusedGroupedAggregation
     }
 
     @Test
-    void fusedFallsBackOnNullValueBatches()
+    void fusedHighCardinalityMappedKeysRemainFused()
     {
-        // Alternate null-free batches (fused) with batches whose value column has nulls (staged fallback),
-        // so the operator interleaves the two paths. Sum skips nulls; the reference does too.
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 100_000; start += 4_096) {
+            int size = Math.min(4_096, 100_000 - start);
+            long[] keys = new long[size];
+            long[] values = new long[size];
+            int[] ids = new int[size];
+            for (int index = 0; index < size; index++) {
+                int id = (index * 37 + 11) % size;
+                ids[index] = id;
+                long key = start + id;
+                long value = key * 7 - 3;
+                keys[id] = key;
+                values[id] = value;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                state[0] += value;
+                state[1]++;
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(keys)),
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(values))},
+                    Mask.all(size)));
+        }
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
+    void fusedHighCardinalityAdjacentRunsRemainFused()
+    {
+        int rows = 100_000;
+        int batch = 4_096;
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < rows; start += batch) {
+            int size = Math.min(batch, rows - start);
+            long[] keys = new long[size];
+            long[] values = new long[size];
+            for (int index = 0; index < size; index++) {
+                long row = start + index;
+                long key = row / 2;
+                long value = row * 7 - 3;
+                keys[index] = key;
+                values[index] = value;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                state[0] += value;
+                state[1]++;
+            }
+            pages.add(TableOperator.Page.values(size, new Vector[] {new I64Vector(keys), new I64Vector(values)}, Mask.all(size)));
+        }
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
+    void fusedMappedDirectGroupingFallsBackForWiderKeys()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 60_000; start += 4_096) {
+            int size = Math.min(4_096, 60_000 - start);
+            long[] keys = new long[size];
+            long[] values = new long[size];
+            int[] ids = new int[size];
+            for (int index = 0; index < size; index++) {
+                int id = (index * 37 + 11) % size;
+                ids[index] = id;
+                long row = start + id;
+                long key = row < 36_000 ? row : (row % 2 == 0 ? row % 20_000 : 200_000 + row);
+                long value = row * 7 - 3;
+                keys[id] = key;
+                values[id] = value;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                state[0] += value;
+                state[1]++;
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(keys)),
+                            DictionaryVector.ofTrustedIds(ids, new I64Vector(values))},
+                    Mask.all(size)));
+        }
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
+    void fusedHandlesNullValueBatches()
+    {
+        // Alternate null-free and nullable batches. Both stay fused; SUM skips nulls while COUNT(*)
+        // still counts every row.
         int rows = 120_000;
         int groups = 2_000;
         int batch = 4_096;
@@ -112,6 +229,84 @@ class TestFusedGroupedAggregation
         assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
     }
 
+    @Test
+    void fusedCountColumnSkipsNullValues()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 120_000; start += 4_096) {
+            int size = Math.min(4_096, 120_000 - start);
+            long[] keys = new long[size];
+            long[] values = new long[size];
+            boolean[] nulls = new boolean[size];
+            for (int index = 0; index < size; index++) {
+                long row = start + index;
+                long key = row % 2_000;
+                long value = row * 7 - 3;
+                boolean isNull = row % 5 == 0;
+                keys[index] = key;
+                values[index] = value;
+                nulls[index] = isNull;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                if (!isNull) {
+                    state[0] += value;
+                    state[1]++;
+                }
+            }
+            pages.add(new TableOperator.Page(
+                    size,
+                    new Streams[] {
+                            Streams.ofValues(new I64Vector(keys)),
+                            Streams.ofValuesAndNulls(new I64Vector(values), new BooleanVector(nulls))},
+                    Mask.all(size)));
+        }
+
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountColumn(1)), reference, true);
+    }
+
+    @Test
+    void fusedDictionaryInputsMatchReference()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 80_000; start += 4_096) {
+            int size = Math.min(4_096, 80_000 - start);
+            int baseSize = size + 17;
+            long[] baseKeys = new long[baseSize];
+            long[] baseValues = new long[baseSize];
+            boolean[] baseNulls = new boolean[baseSize];
+            boolean[] logicalNulls = new boolean[size];
+            int[] ids = new int[size];
+            for (int index = 0; index < baseSize; index++) {
+                long row = start + index;
+                baseKeys[index] = row % 2_000;
+                baseValues[index] = row * 11 - 7;
+                baseNulls[index] = row % 7 == 0;
+            }
+            for (int position = 0; position < size; position++) {
+                int id = (position * 37 + 11) % baseSize;
+                ids[position] = id;
+                logicalNulls[position] = baseNulls[id];
+                long key = baseKeys[id];
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                if (!baseNulls[id]) {
+                    state[0] += baseValues[id];
+                    state[1]++;
+                }
+            }
+            pages.add(new TableOperator.Page(
+                    size,
+                    new Streams[] {
+                            Streams.ofValues(DictionaryVector.ofTrustedIds(ids, new I64Vector(baseKeys))),
+                            Streams.ofValuesAndNulls(
+                                    DictionaryVector.ofTrustedIds(ids, new I64Vector(baseValues)),
+                                    new BooleanVector(logicalNulls))},
+                    Mask.all(size)));
+        }
+
+        assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountColumn(1)), reference, true);
+    }
+
     private static List<TableOperator.Page> buildNullFreePages(int rows, int groups, int batch, Map<Long, long[]> reference)
     {
         List<TableOperator.Page> pages = new ArrayList<>();
@@ -149,11 +344,11 @@ class TestFusedGroupedAggregation
             while (operator.hasNext()) {
                 try (var result = operator.next()) {
                     Mask mask = result.borrowMask();
-                    I64Vector keyColumn = (I64Vector) result.output(0).borrow(Stream.VALUES);
+                    VectorAccess.LongValues keyColumn = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
                     I64Vector sumColumn = (I64Vector) result.output(1).borrow(Stream.VALUES);
                     I64Vector countColumn = checkCount ? (I64Vector) result.output(2).borrow(Stream.VALUES) : null;
                     for (int position : mask) {
-                        long key = keyColumn.values()[position];
+                        long key = keyColumn.value(position);
                         actualSum.put(key, sumColumn.values()[position]);
                         if (checkCount) {
                             actualCount.put(key, countColumn.values()[position]);

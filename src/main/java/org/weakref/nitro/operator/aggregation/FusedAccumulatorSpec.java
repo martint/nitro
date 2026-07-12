@@ -23,14 +23,39 @@ package org.weakref.nitro.operator.aggregation;
  *
  * @param stateVectorType the concrete state vector class; must expose {@code increment(int, long)}
  *        (e.g. {@code SumStateVector}, {@code CountStateVector})
- * @param valueColumn the input column whose value is the per-row increment amount, or {@code -1} to
- *        increment by a constant {@code 1} (e.g. {@code count(*)}). When non-negative the kernel only
- *        runs if that column is a null-free {@code I64Vector}.
+ * @param inputColumn the input column read by this accumulator, or {@code -1} when it reads no input
+ *        (for example {@code count(*)}). An input may carry a flat null stream; the generated kernel
+ *        skips that accumulator, but not the row, when it is null.
+ * @param update whether a non-null row contributes its input value or the constant {@code 1}
  */
-public record FusedAccumulatorSpec(Class<?> stateVectorType, int valueColumn)
+public record FusedAccumulatorSpec(Class<?> stateVectorType, int inputColumn, Update update)
 {
+    public enum Update
+    {
+        INPUT_VALUE,
+        CONSTANT_ONE
+    }
+
+    public FusedAccumulatorSpec(Class<?> stateVectorType, int inputColumn)
+    {
+        this(stateVectorType, inputColumn, inputColumn < 0 ? Update.CONSTANT_ONE : Update.INPUT_VALUE);
+    }
+
+    public static FusedAccumulatorSpec countNonNull(Class<?> stateVectorType, int inputColumn)
+    {
+        if (inputColumn < 0) {
+            throw new IllegalArgumentException("inputColumn is negative");
+        }
+        return new FusedAccumulatorSpec(stateVectorType, inputColumn, Update.CONSTANT_ONE);
+    }
+
+    public boolean readsInput()
+    {
+        return inputColumn >= 0;
+    }
+
     public boolean readsValue()
     {
-        return valueColumn >= 0;
+        return update == Update.INPUT_VALUE;
     }
 }

@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static io.trino.parquet.ParquetTypeUtils.constructField;
@@ -1555,16 +1556,30 @@ public final class CompiledQuerySupport
     private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
             org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
     {
+        return streamCapturingBuilds(allocator, tables, lowered, streaming, lazyProbe, Map.of());
+    }
+
+    private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
+            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe,
+            Map<String, Materialized> virtuals)
+    {
         List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
         int buildCount = sources.size() - 1;
         org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
         int[] buildRowCounts = new int[buildCount];
         for (int b = 0; b < buildCount; b++) {
             org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
-            DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
-            builds[b] = loaded.columns;
-            buildRowCounts[b] = loaded.rows;
+            Materialized virtual = virtuals.get(source.table());
+            if (virtual != null) {
+                builds[b] = virtual.columns();
+                buildRowCounts[b] = virtual.rows();
+            }
+            else {
+                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+                DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
+                builds[b] = loaded.columns;
+                buildRowCounts[b] = loaded.rows;
+            }
         }
         org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
         // The skip-decode source only helps when something narrows the batch before payload columns decode (a join
@@ -2651,6 +2666,14 @@ public final class CompiledQuerySupport
     public static Materialized materializeUnion(Allocator allocator, ParquetTables tables,
             List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
+        return materializeUnion(allocator, tables, branches, branchStringColumns, Map.of());
+    }
+
+    /** As {@link #materializeUnion(Allocator, ParquetTables, List, List)}, resolving branch build inputs from virtual pre-stages. */
+    public static Materialized materializeUnion(Allocator allocator, ParquetTables tables,
+            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns,
+            Map<String, Materialized> virtuals)
+    {
         List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
         int[] counts = new int[branches.size()];
         int width = 0;
@@ -2660,7 +2683,7 @@ public final class CompiledQuerySupport
             // output, not its whole fact -- draining an ungrouped branch's fact eagerly was the dominant cost.
             org.weakref.nitro.jit.StreamingPipeline streaming =
                     PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
-            StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true);
+            StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true, virtuals);
             CompiledPipeline.Result result = streamed.result();
             org.weakref.nitro.jit.Column[][] dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
             for (int b = 0; b < streamed.builds().length; b++) {
@@ -3178,25 +3201,22 @@ public final class CompiledQuerySupport
      */
     private static final class GlobalStringDictionary
     {
-        private final java.util.IdentityHashMap<Object, int[]> pageRemaps = new java.util.IdentityHashMap<>();
+        // A source advances monotonically. The same page dictionary can be requested by multiple materialization
+        // stages while that page is current, but an older page is never revisited after advance. Retaining every
+        // dictionary identity pins all of its encoded bytes for the lifetime of a large query; one identity slot
+        // preserves the useful within-page reuse without turning the remap cache into a second copy of the scan.
+        private org.weakref.nitro.data.BinaryVector lastPageDictionary;
+        private int[] lastPageRemap;
         // An optional per-value derivation (e.g. a regexp host extraction) applied before interning, so the
         // dictionary holds the DERIVED values; it runs once per distinct RAW value (the raw intern dedups first).
-        private final java.util.function.UnaryOperator<byte[]> transform;
+        private final ByteTransform transform;
         private final BytesInternTable index = new BytesInternTable();
-        private final BytesInternTable rawIndex;
         private byte[][] entries = new byte[16][];
         private int size;
-        // The raw-value table maps each distinct raw value to its DERIVED entry id (parallel to its own entries).
-        private byte[][] rawEntries;
-        private int[] rawDerived;
-        private int rawSize;
 
-        GlobalStringDictionary(java.util.function.UnaryOperator<byte[]> transform)
+        GlobalStringDictionary(ByteTransform transform)
         {
             this.transform = transform;
-            this.rawIndex = transform == null ? null : new BytesInternTable();
-            this.rawEntries = transform == null ? null : new byte[16][];
-            this.rawDerived = transform == null ? null : new int[16];
         }
 
         int intern(byte[] data, int offset, int length)
@@ -3204,21 +3224,11 @@ public final class CompiledQuerySupport
             if (transform == null) {
                 return internDerived(data, offset, length);
             }
-            int rawSlot = rawIndex.find(data, offset, length, rawEntries, rawSize);
-            if (rawSlot >= 0) {
-                return rawDerived[rawIndex.idAt(rawSlot)];
-            }
-            byte[] raw = java.util.Arrays.copyOfRange(data, offset, offset + length);
-            byte[] derivedValue = transform.apply(raw);
-            int derived = internDerived(derivedValue, 0, derivedValue.length);
-            if (rawSize == rawEntries.length) {
-                rawEntries = java.util.Arrays.copyOf(rawEntries, rawSize * 2);
-                rawDerived = java.util.Arrays.copyOf(rawDerived, rawSize * 2);
-            }
-            rawEntries[rawSize] = raw;
-            rawDerived[rawSize] = derived;
-            rawIndex.insertAt(rawSlot, rawSize++);
-            return derived;
+            // Only derived values cross batch boundaries. Keeping a second global raw-value intern duplicates a
+            // high-cardinality source column merely to avoid recomputing a transform; dictionary pages already
+            // amortize the transform through remap(), and plain pages must prefer bounded memory over raw retention.
+            byte[] derivedValue = transform.apply(data, offset, length);
+            return internDerived(derivedValue, 0, derivedValue.length);
         }
 
         private int internDerived(byte[] data, int offset, int length)
@@ -3238,13 +3248,16 @@ public final class CompiledQuerySupport
         /** Map a dictionary page's entries to global ids, computed once per distinct page dictionary. */
         int[] remap(org.weakref.nitro.data.BinaryVector pageDictionary)
         {
-            return pageRemaps.computeIfAbsent(pageDictionary, ignored -> {
-                int[] remap = new int[pageDictionary.length()];
-                for (int e = 0; e < remap.length; e++) {
-                    remap[e] = intern(pageDictionary.data(), pageDictionary.startOffset(e), pageDictionary.length(e));
-                }
-                return remap;
-            });
+            if (pageDictionary == lastPageDictionary) {
+                return lastPageRemap;
+            }
+            int[] remap = new int[pageDictionary.length()];
+            for (int e = 0; e < remap.length; e++) {
+                remap[e] = intern(pageDictionary.data(), pageDictionary.startOffset(e), pageDictionary.length(e));
+            }
+            lastPageDictionary = pageDictionary;
+            lastPageRemap = remap;
+            return remap;
         }
 
         byte[][] backing()
@@ -3381,18 +3394,27 @@ public final class CompiledQuerySupport
      * ids (group keys, masks, the captured dictionary) all see the derived values -- mirroring the eager loader's
      * {@code adaptString}.
      */
-    private static java.util.function.UnaryOperator<byte[]> regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
+    @FunctionalInterface
+    private interface ByteTransform
+    {
+        byte[] apply(byte[] data, int offset, int length);
+    }
+
+    private static ByteTransform regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
     {
         if (spec.regexpPattern() != null) {
             io.airlift.joni.Regex pattern = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.compile(
                     io.airlift.slice.Slices.utf8Slice(spec.regexpPattern()));
             io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
                     io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
-            return value -> org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
-                    io.airlift.slice.Slices.wrappedBuffer(value), pattern, replacement).getBytes();
+            return (data, offset, length) -> org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
+                    io.airlift.slice.Slices.wrappedBuffer(data, offset, length), pattern, replacement).getBytes();
         }
         if (spec.substringLength() >= 0) {
-            return value -> utf8Substring(value, spec.substringStart(), spec.substringLength());
+            return (data, offset, length) -> utf8Substring(
+                    java.util.Arrays.copyOfRange(data, offset, offset + length),
+                    spec.substringStart(),
+                    spec.substringLength());
         }
         return null;
     }

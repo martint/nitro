@@ -32,6 +32,7 @@ public final class EqualUtf8
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
+    private static final boolean IN_PLACE_MASK = Boolean.parseBoolean(System.getProperty("nitro.utf8.equalsInPlaceMask", "true"));
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -82,13 +83,13 @@ public final class EqualUtf8
     public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetTrueMaskInPlace("eq_utf8", inputs, mask);
+        return IN_PLACE_MASK && Utf8BinaryDispatch.tryEvaluateEqualsTrueMaskInPlace("eq_utf8", inputs, mask);
     }
 
     @Override
     public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetFalseMaskInPlace("eq_utf8", inputs, mask);
+        return IN_PLACE_MASK && Utf8BinaryDispatch.tryEvaluateEqualsFalseMaskInPlace("eq_utf8", inputs, mask);
     }
 }

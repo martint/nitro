@@ -27,13 +27,19 @@ import java.util.Arrays;
 import static java.lang.Math.toIntExact;
 
 public class CountColumn
-        implements Accumulator
+        implements FusedAggregator
 {
     private final int inputColumn;
 
     public CountColumn(int inputColumn)
     {
         this.inputColumn = inputColumn;
+    }
+
+    @Override
+    public FusedAccumulatorSpec fusedSpec()
+    {
+        return FusedAccumulatorSpec.countNonNull(I64Vector.class, inputColumn);
     }
 
     @Override

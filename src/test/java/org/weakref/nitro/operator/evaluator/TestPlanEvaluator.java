@@ -34,6 +34,7 @@ import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -68,6 +69,28 @@ import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
 public class TestPlanEvaluator
 {
     @Test
+    void testFlatBooleanReferenceCompactsOwnedMaskInPlaceWithoutTemporaryMask()
+    {
+        Allocator allocator = new Allocator();
+        Reference valuesReference = new Reference(new Input(0), Stream.VALUES);
+        PlanEvaluator evaluator = new PlanEvaluator(
+                new EvaluationPlan(List.of(), List.of()),
+                primitiveRegistry(),
+                inputResolver(Map.of(valuesReference, new BooleanVector(new boolean[] {false, true, true, false, true, false}))),
+                allocator);
+        Mask owned = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
+
+        Mask result = evaluator.evaluateInPlace(new ReferenceMask(valuesReference), owned);
+
+        assertThat(result).isSameAs(owned);
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(1);
+        assertThat(result.position(1)).isEqualTo(2);
+        assertThat(result.position(2)).isEqualTo(4);
+        assertThat(allocator.totalBytes(new Allocator.Context("PlanEvaluator"))).isZero();
+    }
+
+    @Test
     void testEvaluatesSimpleAddPlan()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
@@ -85,6 +108,34 @@ public class TestPlanEvaluator
 
         I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result.values()).containsExactly(11L, 22L, 33L);
+    }
+
+    @Test
+    void testValuesProjectionPropagatesNullsThroughIntermediateArithmetic()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable firstPair = new Variable(0);
+        Variable total = new Variable(1);
+        Reference totalValues = new Reference(total, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(firstPair, new Call("add", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(total, new Call("add", List.of(
+                                new Reference(firstPair, Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(totalValues));
+
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+                new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 0, 3}),
+                new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}),
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}),
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300}))), new Allocator(), new Object(), true);
+
+        Streams result = evaluator.evaluate(totalValues, Mask.all(3));
+        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(111L, 220L, 333L);
+        assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
     }
 
     @Test
@@ -303,8 +354,9 @@ public class TestPlanEvaluator
                 plan,
                 builtinPrimitiveRegistry(),
                 inputResolver(Map.of(
-                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {62, 62, 63, 62}),
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {62, 62, 62, 62}),
                         new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1_372_636_800L, 1_373_000_000L, 1_373_000_000L, 1_375_315_200L}),
+                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, false}),
                         new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {0, 0, 0, 1}),
                         new Reference(new Input(2), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, true}))),
                 new Allocator());
@@ -360,6 +412,43 @@ public class TestPlanEvaluator
 
         Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, false, true);
+    }
+
+    @Test
+    void testContainsProbesOnlySelectedDictionaryIdsForSparseMask()
+    {
+        Variable needle = new Variable(0);
+        Variable contains = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(needle, new Literal("google"), AllMask.ALL),
+                        new Assignment(
+                                contains,
+                                new Call("contains_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(needle, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(contains, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(3, 64);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "google.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(1, "example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionary.setBytes(2, "maps.google.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new DictionaryVector(new int[] {0, 1, 2, 0, 2}, dictionary))),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(
+                new Reference(contains, Stream.VALUES),
+                Mask.sparse(new int[] {1, 4}, 5));
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, false, false, false, true);
     }
 
     @Test
@@ -442,13 +531,16 @@ public class TestPlanEvaluator
                 List.of(new Reference(contains, Stream.VALUES)),
                 Map.of(new Reference(contains, Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
-        BinaryVector input = new BinaryVector(4, 512);
+        BinaryVector input = new BinaryVector(6, 512);
         input.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         input.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         input.setBytes(0, ("x".repeat(31) + "aaab" + "tail").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(1, ("x".repeat(63) + "aaab").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(2, ("a".repeat(96) + "b").getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(3, ("a".repeat(95) + "c").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // A candidate formed only by concatenating adjacent rows must not count as a match.
+        input.setBytes(4, "aaa".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        input.setBytes(5, "b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         PlanEvaluator evaluator = new PlanEvaluator(
                 plan,
@@ -456,8 +548,8 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
                 new Allocator());
 
-        Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(4));
-        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, true, true, false);
+        Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(6));
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, true, true, false, false, false);
     }
 
     @Test
@@ -473,15 +565,18 @@ public class TestPlanEvaluator
                         new Reference(host, Stream.VALUES),
                         new Reference(host, Stream.NULLS)));
 
-        BinaryVector dictionaryValues = new BinaryVector(3, 128);
+        BinaryVector dictionaryValues = new BinaryVector(6, 256);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionaryValues.setBytes(0, "https://www.google.com/search".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(1, "http://news.ycombinator.com/item".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionaryValues.setBytes(2, "https://www.google.com/maps".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(3, "https://www.example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(4, "ftp://www.example.com/path".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(5, "http://www./path".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 0}, dictionaryValues);
-        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false});
+        DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 4, 5}, dictionaryValues);
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, false, false});
 
         PlanEvaluator evaluator = new PlanEvaluator(
                 plan,
@@ -491,15 +586,18 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.NULLS), nulls)),
                 new Allocator());
 
-        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(4));
+        Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(6));
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
 
         DictionaryVector hosts = (DictionaryVector) result.values();
-        assertThat(hosts.ids()).containsExactly(0, 1, 2, 0);
+        assertThat(hosts.ids()).containsExactly(0, 1, 2, 3, 4, 5);
         BinaryVector extractedValues = (BinaryVector) hosts.values();
         assertThat(utf8(extractedValues, 0)).isEqualTo("google.com");
         assertThat(utf8(extractedValues, 1)).isEqualTo("news.ycombinator.com");
         assertThat(utf8(extractedValues, 2)).isEqualTo("google.com");
+        assertThat(utf8(extractedValues, 3)).isEqualTo("https://www.example.com");
+        assertThat(utf8(extractedValues, 4)).isEqualTo("ftp://www.example.com/path");
+        assertThat(utf8(extractedValues, 5)).isEqualTo("www.");
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
     }
@@ -1495,8 +1593,8 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}))),
                 new Allocator());
 
-        assertThat(((BooleanVector) evaluator.evaluate(inputNulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, false, false);
-        assertThat(((BooleanVector) evaluator.evaluate(inputErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, false, false);
+        assertThat(readBooleans(evaluator.evaluate(inputNulls, Mask.all(3)).get(Stream.NULLS))).containsExactly(false, false, false);
+        assertThat(readBooleans(evaluator.evaluate(inputErrors, Mask.all(3)).get(Stream.ERRORS))).containsExactly(false, false, false);
     }
 
     @Test
@@ -2103,6 +2201,36 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testMultiplyNullAsZeroI64CoalescesEitherNullInput()
+    {
+        Variable value = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        value,
+                        new Call("multiply_null_as_zero_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(
+                        new Reference(value, Stream.VALUES),
+                        new Reference(value, Stream.NULLS)));
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, true}),
+                        new Reference(new Input(1), Stream.VALUES), new I32Vector(new int[] {2, 3, 4, 5}),
+                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, true}))),
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(4));
+        assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(20L, 0L, 0L, 0L);
+        assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(false, false, false, false);
+    }
+
+    @Test
     void testCastI64ToI32ProjectsDictionaryEncodedValues()
     {
         Variable castValue = new Variable(0);
@@ -2113,7 +2241,8 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(castValue, Stream.VALUES)));
 
-        DictionaryVector values = DictionaryVector.wrap(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {7L, 11L, 13L}));
+        int[] ids = {2, 0, 1, 2};
+        DictionaryVector values = DictionaryVector.wrap(ids, new I64Vector(new long[] {7L, 11L, 13L}));
 
         PlanEvaluator evaluator = new PlanEvaluator(
                 plan,
@@ -2125,8 +2254,14 @@ public class TestPlanEvaluator
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
 
         DictionaryVector encoded = (DictionaryVector) result.values();
+        assertThat(encoded.ids()).isSameAs(ids);
         assertThat(encoded.ids()).containsExactly(2, 0, 1, 2);
         assertThat(((I32Vector) encoded.values()).values()).containsExactly(7, 11, 13);
+
+        DictionaryVector transferable = (DictionaryVector) evaluator.prepareResultForTransfer(encoded);
+        assertThat(transferable.ids()).isNotSameAs(ids);
+        ids[0] = 0;
+        assertThat(transferable.ids()).containsExactly(2, 0, 1, 2);
     }
 
     @Test
@@ -2205,6 +2340,100 @@ public class TestPlanEvaluator
         Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, true, false);
         assertThat(requestedValues).isFalse();
+    }
+
+    @Test
+    void testIsNullI64CompactsTrueAndFalseMasksInPlaceFromFlatNulls()
+    {
+        Variable isNull = new Variable(0);
+        Reference resultReference = new Reference(isNull, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        isNull,
+                        new Call("is_null_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(resultReference));
+        AtomicBoolean requestedValues = new AtomicBoolean();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> {
+                    if (reference.equals(new Reference(new Input(0), Stream.VALUES))) {
+                        requestedValues.set(true);
+                        return new I64Vector(6);
+                    }
+                    if (reference.equals(new Reference(new Input(0), Stream.NULLS))) {
+                        return new BooleanVector(new boolean[] {false, true, false, true, true, false});
+                    }
+                    return null;
+                },
+                new Allocator());
+
+        Mask nullRows = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
+        assertThat(evaluator.evaluateInPlace(new ReferenceMask(resultReference), nullRows)).isSameAs(nullRows);
+        assertThat(nullRows.selectedCount()).isEqualTo(2);
+        assertThat(nullRows.position(0)).isEqualTo(1);
+        assertThat(nullRows.position(1)).isEqualTo(4);
+
+        Mask nonNullRows = Mask.all(6);
+        assertThat(evaluator.evaluateInPlace(new NotMask(new ReferenceMask(resultReference)), nonNullRows)).isSameAs(nonNullRows);
+        assertThat(nonNullRows.selectedCount()).isEqualTo(3);
+        assertThat(nonNullRows.position(0)).isEqualTo(0);
+        assertThat(nonNullRows.position(1)).isEqualTo(2);
+        assertThat(nonNullRows.position(2)).isEqualTo(5);
+        assertThat(requestedValues).isFalse();
+    }
+
+    @Test
+    void testIsNullI64DelegatesInPlaceMaskToPhysicalInputNullStream()
+    {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Boolean.parseBoolean(System.getProperty("nitro.expression.inputMaskResolver", "true")));
+        org.junit.jupiter.api.Assumptions.assumeTrue(Boolean.parseBoolean(System.getProperty("nitro.expression.directPrimitiveInputMask", "true")));
+
+        Variable isNull = new Variable(0);
+        Reference resultReference = new Reference(isNull, Stream.VALUES);
+        Reference inputNulls = new Reference(new Input(0), Stream.NULLS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        isNull,
+                        new Call("is_null_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(resultReference));
+        AtomicInteger vectorResolveCount = new AtomicInteger();
+        AtomicInteger maskResolveCount = new AtomicInteger();
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                new PlanEvaluator.InputResolver()
+                {
+                    @Override
+                    public org.weakref.nitro.data.Vector resolve(Reference reference, Mask mask)
+                    {
+                        vectorResolveCount.incrementAndGet();
+                        throw new AssertionError("direct IS NULL mask evaluation must not resolve a vector");
+                    }
+
+                    @Override
+                    public Mask resolveMask(Reference reference, Mask mask, boolean selectTrue, Allocator allocator, Allocator.Context context)
+                    {
+                        assertThat(reference).isEqualTo(inputNulls);
+                        maskResolveCount.incrementAndGet();
+                        return selectTrue
+                                ? allocator.allocateSparseMask(context, new int[] {1, 4}, 2, mask.size())
+                                : allocator.allocateSparseMask(context, new int[] {0, 2, 5}, 3, mask.size());
+                    }
+                },
+                new Allocator());
+
+        Mask nullRows = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
+        assertThat(evaluator.evaluateInPlace(new ReferenceMask(resultReference), nullRows)).isSameAs(nullRows);
+        assertThat(nullRows).containsExactly(1, 4);
+
+        Mask nonNullRows = Mask.all(6);
+        assertThat(evaluator.evaluateInPlace(new NotMask(new ReferenceMask(resultReference)), nonNullRows)).isSameAs(nonNullRows);
+        assertThat(nonNullRows).containsExactly(0, 2, 5);
+        assertThat(vectorResolveCount).hasValue(0);
+        assertThat(maskResolveCount).hasValue(2);
     }
 
     @Test
@@ -2640,7 +2869,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testInUtf8DictionaryLiteralReferenceMaskUsesPrimitiveTrueMask()
+    void testInUtf8OversizedDictionaryLiteralReferenceMaskFallsBackToActiveRows()
     {
         Variable firstLiteral = new Variable(0);
         Variable secondLiteral = new Variable(1);
@@ -2658,7 +2887,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of());
 
-        BinaryVector dictionary = new BinaryVector(4, 48);
+        BinaryVector dictionary = new BinaryVector(8, 48);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         dictionary.setBytes(0, "apple".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -2682,6 +2911,45 @@ public class TestPlanEvaluator
         assertThat(result.position(0)).isEqualTo(0);
         assertThat(result.position(1)).isEqualTo(2);
         assertThat(result.position(2)).isEqualTo(4);
+    }
+
+    @Test
+    void testInUtf8FlatSameWidthShortValuesUseExactMembership()
+    {
+        List<Assignment> assignments = new java.util.ArrayList<>();
+        List<Reference> arguments = new java.util.ArrayList<>();
+        arguments.add(new Reference(new Input(0), Stream.VALUES));
+        for (int index = 0; index < 7; index++) {
+            Variable literal = new Variable(index);
+            assignments.add(new Assignment(literal, new Literal(Integer.toString(10 + index)), AllMask.ALL));
+            arguments.add(new Reference(literal, Stream.VALUES));
+        }
+        Variable matches = new Variable(7);
+        assignments.add(new Assignment(matches, new Call("in_utf8", arguments), AllMask.ALL));
+        EvaluationPlan plan = new EvaluationPlan(assignments, List.of(new Reference(matches, Stream.VALUES)));
+
+        BinaryVector values = new BinaryVector(7, 14);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        values.setBytes(0, "10".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(1, "16".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(2, "17".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(3, "01".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(4, "12".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(5, "99".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        values.setBytes(6, "15".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true, false, false});
+
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator());
+
+        BooleanVector result = (BooleanVector) evaluator.evaluate(new Reference(matches, Stream.VALUES), Mask.all(7)).values();
+        assertThat(result.values()).containsExactly(true, true, false, false, false, false, true);
     }
 
     @Test
@@ -3100,6 +3368,16 @@ public class TestPlanEvaluator
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
+    }
+
+    private static boolean[] readBooleans(org.weakref.nitro.data.Vector vector)
+    {
+        VectorAccess.BooleanValues values = VectorAccess.booleanValues(vector);
+        boolean[] result = new boolean[vector.length()];
+        for (int position = 0; position < result.length; position++) {
+            result[position] = values.value(position);
+        }
+        return result;
     }
 
     private static String decodeUtf8(org.weakref.nitro.data.Vector vector, int position)

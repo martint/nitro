@@ -25,7 +25,8 @@ import java.lang.reflect.Method;
 
 /**
  * Runs one named interpreted TPC-DS query (the same operator tree the JMH harness uses) in a warmed loop so it can be
- * wrapped in {@code sudo perf record}/{@code stat} to bucket scan vs compute and read IPC. Args: queryNN warmup measured.
+ * wrapped in {@code sudo perf record}/{@code stat} to bucket scan vs compute and read IPC. The first argument is a
+ * query number or a diagnostic method name, followed by warmup and measured iteration counts.
  * Pass -Dnitro.skipScan -Dnitro.dynamicFilter to exercise the dynamic-filter path.
  */
 public final class QueryDriver
@@ -35,17 +36,18 @@ public final class QueryDriver
     public static void main(String[] args)
             throws Exception
     {
-        int q = Integer.parseInt(args[0]);
+        String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 5;
         int measured = args.length > 2 ? Integer.parseInt(args[2]) : 20;
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         Method method = TpcdsParquetSupport.class.getDeclaredMethod(
-                String.format("query%02d", q), Allocator.class, PrimitiveRegistry.class, TpcdsParquetTables.class);
+                query, Allocator.class, PrimitiveRegistry.class, TpcdsParquetTables.class);
         method.setAccessible(true);
 
         boolean rowSink = Boolean.getBoolean("nitro.queryDriver.rowSink");
         boolean operatorCpuProfile = Boolean.getBoolean("nitro.operatorCpuProfile");
+        boolean steadyStateAllocationProfile = Boolean.getBoolean("nitro.steadyStateAllocationProfile");
         long sink = 0;
         for (int i = 0; i < warmup; i++) {
             sink += run(method, registry, tables, rowSink);
@@ -57,8 +59,19 @@ public final class QueryDriver
                 sink += TpcdsParquetSupport.withOperatorCpuProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
             }
             long nanos = System.nanoTime() - start;
-            System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
+            System.out.printf("%s: %d iters, %.1f ms/iter, rows-sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
             System.out.println(profile.formatReport());
+            return;
+        }
+        if (steadyStateAllocationProfile) {
+            int highWaterBatches = Integer.getInteger("nitro.allocationProfile.highWaterBatches", 8);
+            for (int i = 0; i < measured; i++) {
+                SteadyStateAllocationProfile.Report report = SteadyStateAllocationProfile.measure(
+                        () -> constructUnchecked(method, registry, tables),
+                        highWaterBatches);
+                sink += report.sink();
+                System.out.printf("%s allocation pass %d: %s%n", query, i + 1, report.formatReport());
+            }
             return;
         }
         if (Boolean.getBoolean("nitro.joinMaterializationProfile")) {
@@ -68,7 +81,7 @@ public final class QueryDriver
                 sink += HashJoinOperator.withMaterializationProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
             }
             long nanos = System.nanoTime() - start;
-            System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
+            System.out.printf("%s: %d iters, %.1f ms/iter, rows-sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
             System.out.println(profile.formatReport());
             return;
         }
@@ -77,17 +90,33 @@ public final class QueryDriver
             sink += run(method, registry, tables, rowSink);
         }
         long nanos = System.nanoTime() - start;
-        System.out.printf("q%d: %d iters, %.1f ms/iter, rows-sink=%d%n", q, measured, nanos / 1e6 / measured, sink);
+        System.out.printf("%s: %d iters, %.1f ms/iter, rows-sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
     }
 
     private static long run(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables, boolean rowSink)
             throws Exception
     {
-        Operator operator = (Operator) method.invoke(null, new Allocator(), registry, tables);
+        Operator operator = construct(method, registry, tables);
         if (rowSink) {
             return org.weakref.nitro.OperatorAssertions.OperatorAssert.toRows(operator).size();
         }
         return consume(operator);
+    }
+
+    private static Operator construct(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)
+            throws Exception
+    {
+        return (Operator) method.invoke(null, new Allocator(), registry, tables);
+    }
+
+    private static Operator constructUnchecked(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)
+    {
+        try {
+            return construct(method, registry, tables);
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static long runUnchecked(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables, boolean rowSink)

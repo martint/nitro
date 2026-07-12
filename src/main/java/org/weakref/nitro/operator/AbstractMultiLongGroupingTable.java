@@ -13,13 +13,14 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.Arrays;
 
 /**
  * Cold-path machinery shared by every generated multi-long grouping table. Holds the interleaved
- * {@code entries} array ({@code arity} keys + group id per slot, stride {@code arity + 1}), the parallel
+ * {@code entries} array ({@code arity} keys and, for grouping tables, a group id per slot), the parallel
  * {@code nullMasks}, the open-addressing bookkeeping, and the reverse map used to reconstruct group keys
  * at materialization ({@code keysByGroup[column][groupId]} + {@code nullMasksByGroup[groupId]}).
  *
@@ -30,9 +31,11 @@ import java.util.Arrays;
  * Fields are package-private so the generated same-package subclass can access them directly.
  */
 abstract class AbstractMultiLongGroupingTable
+        implements LongGroupingTable
 {
     static final float LOAD_FACTOR = 0.75f;
     static final long EMPTY_GROUP_ID = -1L;
+    private static final boolean DEBUG_TABLE_SHAPES = Boolean.getBoolean("nitro.debug.multiLongTableShapes");
 
     // Distinct odd 64-bit multipliers, one per key column; the generated hash multiplies key i by
     // HASH_PRIMES[i], sums with nullMask, then applies a Murmur3 finalizer — matching the hand-written mixers.
@@ -51,6 +54,8 @@ abstract class AbstractMultiLongGroupingTable
 
     final int arity;
     final int stride;
+    final boolean storesGroupIds;
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     long[] entries;
     byte[] nullMasks;
     // Swiss-table control byte per slot: 0 marks an empty slot, otherwise a 7-bit hash fragment with the high bit set
@@ -69,34 +74,40 @@ abstract class AbstractMultiLongGroupingTable
         return (byte) ((hash >>> 24) | 0x80);
     }
 
-    AbstractMultiLongGroupingTable(int arity, int expectedSize)
+    AbstractMultiLongGroupingTable(int arity, int expectedSize, boolean retainGroupKeys)
     {
         this.arity = arity;
-        this.stride = arity + 1;
+        this.storesGroupIds = retainGroupKeys;
+        this.stride = arity + (storesGroupIds ? 1 : 0);
         int capacity = 16;
         while (capacity < expectedSize / LOAD_FACTOR) {
             capacity <<= 1;
         }
         entries = allocateEntries(capacity);
-        nullMasks = new byte[capacity];
-        control = new byte[capacity];
+        nullMasks = arrayPool.borrowBytes(capacity);
+        control = arrayPool.borrowBytes(capacity);
+        Arrays.fill(control, (byte) 0);
         mask = capacity - 1;
         maxFill = (int) (capacity * LOAD_FACTOR);
 
-        int reverse = Math.max(16, expectedSize);
-        keysByGroup = new long[arity][];
-        for (int column = 0; column < arity; column++) {
-            keysByGroup[column] = new long[reverse];
+        if (retainGroupKeys) {
+            int reverse = Math.max(16, expectedSize);
+            keysByGroup = new long[arity][];
+            for (int column = 0; column < arity; column++) {
+                keysByGroup[column] = arrayPool.borrowLongs(reverse);
+            }
+            nullMasksByGroup = arrayPool.borrowBytes(reverse);
         }
-        nullMasksByGroup = new byte[reverse];
     }
 
     private long[] allocateEntries(int capacity)
     {
-        long[] array = new long[capacity * stride];
-        int groupIdOffset = arity;
-        for (int slot = 0; slot < capacity; slot++) {
-            array[slot * stride + groupIdOffset] = EMPTY_GROUP_ID;
+        long[] array = arrayPool.borrowLongs(capacity * stride);
+        if (storesGroupIds) {
+            int groupIdOffset = stride - 1;
+            for (int slot = 0; slot < capacity; slot++) {
+                array[slot * stride + groupIdOffset] = EMPTY_GROUP_ID;
+            }
         }
         return array;
     }
@@ -106,7 +117,8 @@ abstract class AbstractMultiLongGroupingTable
      * supplied accessors, builds the null bitmask, probes/inserts, writes {@code result[position]}, and
      * records new group keys in the reverse map. Returns the next free group id. Generated per arity.
      */
-    abstract long assignBatch(
+    @Override
+    public abstract long assignBatch(
             VectorAccess.LongValues[] keyAccessors,
             VectorAccess.BooleanValues[] nullAccessors,
             int[] positions,
@@ -114,10 +126,47 @@ abstract class AbstractMultiLongGroupingTable
             long[] result,
             long startGroupId);
 
+    /** Distinct-set variant of {@link #assignBatch}: writes only the first position for each newly inserted key. */
+    abstract int assignDistinctBatch(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] nullAccessors,
+            int[] positions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId);
+
+    /** Null-free variant that omits all null-accessor reads after the caller has proved every stream false. */
+    abstract int assignDistinctBatchNullFree(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] nullAccessors,
+            int[] positions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId);
+
     /** Hash of the stored tuple at {@code table[base..base+arity-1]} + {@code nullMask}; used by rehash. */
     abstract int hashEntry(long[] table, int base, byte nullMask);
 
-    void ensureCapacity(long expectedSize)
+    @Override
+    public final int arity()
+    {
+        return arity;
+    }
+
+    @Override
+    public final long groupedValue(int column, int groupId)
+    {
+        return keysByGroup[column][groupId];
+    }
+
+    @Override
+    public final boolean groupedValueIsNull(int column, int groupId)
+    {
+        return (nullMasksByGroup[groupId] & (1 << column)) != 0;
+    }
+
+    @Override
+    public final void ensureCapacity(long expectedSize)
     {
         if (expectedSize < maxFill) {
             return;
@@ -142,8 +191,9 @@ abstract class AbstractMultiLongGroupingTable
         int previousCapacity = previousControl.length;
 
         entries = allocateEntries(capacity);
-        nullMasks = new byte[capacity];
-        control = new byte[capacity];
+        nullMasks = arrayPool.borrowBytes(capacity);
+        control = arrayPool.borrowBytes(capacity);
+        Arrays.fill(control, (byte) 0);
         mask = capacity - 1;
         maxFill = (int) (capacity * LOAD_FACTOR);
         size = 0;
@@ -165,6 +215,9 @@ abstract class AbstractMultiLongGroupingTable
             control[slot] = controlFragment(hash);
             size++;
         }
+        arrayPool.release(previousEntries);
+        arrayPool.release(previousNullMasks);
+        arrayPool.release(previousControl);
     }
 
     /** Grows the reverse map to hold {@code groupId}. Called from generated code on each new group. */
@@ -178,8 +231,39 @@ abstract class AbstractMultiLongGroupingTable
             newSize *= 2;
         }
         for (int column = 0; column < arity; column++) {
-            keysByGroup[column] = Arrays.copyOf(keysByGroup[column], newSize);
+            long[] previous = keysByGroup[column];
+            keysByGroup[column] = arrayPool.borrowLongs(newSize);
+            System.arraycopy(previous, 0, keysByGroup[column], 0, previous.length);
+            arrayPool.release(previous);
         }
-        nullMasksByGroup = Arrays.copyOf(nullMasksByGroup, newSize);
+        byte[] previousNullMasks = nullMasksByGroup;
+        nullMasksByGroup = arrayPool.borrowBytes(newSize);
+        System.arraycopy(previousNullMasks, 0, nullMasksByGroup, 0, previousNullMasks.length);
+        arrayPool.release(previousNullMasks);
+    }
+
+    @Override
+    public final void releaseBuffers()
+    {
+        if (DEBUG_TABLE_SHAPES && storesGroupIds) {
+            System.err.printf("[multi-long-table] arity=%d groups=%d capacity=%d stride=%d%n", arity, size, control.length, stride);
+        }
+        arrayPool.release(entries);
+        entries = null;
+        arrayPool.release(nullMasks);
+        nullMasks = null;
+        arrayPool.release(control);
+        control = null;
+        if (keysByGroup != null) {
+            for (int column = 0; column < arity; column++) {
+                arrayPool.release(keysByGroup[column]);
+                keysByGroup[column] = null;
+            }
+            keysByGroup = null;
+        }
+        if (nullMasksByGroup != null) {
+            arrayPool.release(nullMasksByGroup);
+        }
+        nullMasksByGroup = null;
     }
 }

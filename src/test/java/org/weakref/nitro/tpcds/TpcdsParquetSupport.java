@@ -42,12 +42,14 @@ import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
+import org.weakref.nitro.operator.aggregation.ConditionalSum;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.Sum;
+import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -72,6 +74,14 @@ import java.util.function.Supplier;
 final class TpcdsParquetSupport
 {
     private static final String NULLS_LAST_SENTINEL_STRING = "\uFFFF";
+    private static final boolean QUERY22_COMPACT_JOIN_LAYOUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.tpcds.query22CompactJoinLayouts", "true"));
+    private static final boolean QUERY21_COMPACT_JOIN_LAYOUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.tpcds.query21CompactJoinLayouts", "true"));
+    private static final boolean QUERY39_COMPACT_JOIN_LAYOUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.tpcds.query39CompactJoinLayouts", "true"));
+    private static final boolean QUERY78_COMPACT_JOIN_LAYOUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.tpcds.query78CompactJoinLayouts", "true"));
     // Audit hook: counts table-scan helper calls (one per table reference) while a query operator tree is built,
     // so a harness can compare per-query scan counts against the canonical Trino EXPLAIN plan.
     public static final java.util.concurrent.atomic.AtomicInteger SCAN_COUNT = new java.util.concurrent.atomic.AtomicInteger();
@@ -191,12 +201,16 @@ final class TpcdsParquetSupport
     private static Operator query04Joined(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator joined = query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2001);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2002), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2001), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2002), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2001), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2002), 0);
-        return projectInputs(allocator, primitiveRegistry, joined, 0, 1, 3, 5, 7, 9, 11);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2002), 0)
+                .withOutputs(0, 1, 3);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2001), 0)
+                .withOutputs(0, 1, 2, 4);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2002), 0)
+                .withOutputs(0, 1, 2, 3, 5);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2001), 0)
+                .withOutputs(0, 1, 2, 3, 4, 6);
+        return new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2002), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 7);
     }
 
     public static Operator query06(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -303,24 +317,24 @@ final class TpcdsParquetSupport
                 sales,
                 4,
                 scannedTable(allocator, tables, "store", "s_store_sk"),
-                0);
+                0).withOutputs(0, 1, 2, 3, 5, 6, 7, 8, 9);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
                 1,
                 scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"),
-                0);
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 10, 11);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                1,
                 scannedTable(allocator, tables, "household_demographics", "hd_demo_sk", "hd_dep_count"),
-                0);
-        sales = filter(allocator, primitiveRegistry, sales, query13DemographicsPredicate(12, 13, 6, 15));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 11);
+        sales = filter(allocator, primitiveRegistry, sales, query13DemographicsPredicate(7, 8, 3, 9));
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                3,
+                1,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -329,8 +343,8 @@ final class TpcdsParquetSupport
                         equalUtf8(1, "United States"),
                         new String[] {"ca_address_sk", "ca_country", "ca_state"},
                         0, 2),
-                0);
-        sales = filter(allocator, primitiveRegistry, sales, query13StateProfitPredicate(17, 9));
+                0).withOutputs(0, 2, 4, 5, 6, 11);
+        sales = filter(allocator, primitiveRegistry, sales, query13StateProfitPredicate(5, 4));
         sales = new HashJoinOperator(
                 allocator,
                 sales,
@@ -343,8 +357,7 @@ final class TpcdsParquetSupport
                         equal(1, 2001),
                         new String[] {"d_date_sk", "d_year"},
                         0),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 5, 7, 8);
+                0).withOutputs(1, 2, 3);
         sales = new AggregationOperator(
                 allocator,
                 List.of(new Avg(0), new Sum(1), new CountColumn(1), new Sum(2), new CountColumn(2)),
@@ -356,8 +369,8 @@ final class TpcdsParquetSupport
     {
         // Same revenue-ratio-by-class shape as Q12 over catalog_sales: item(category) ⋈ date_dim(30-day window);
         // GROUP BY item attrs sum(ext_sales_price); PARTITION SUM over i_class; revenue ratio; top 100.
-        Operator facts = factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price");
-        facts = new HashJoinOperator(
+        Operator facts = profiled("q20.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price"));
+        facts = profiled("q20.join.item", new HashJoinOperator(
                 allocator,
                 facts,
                 1,
@@ -368,8 +381,8 @@ final class TpcdsParquetSupport
                         "item",
                         query12CategoryPredicate(),
                         new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
-                0);
-        facts = new HashJoinOperator(
+                0));
+        facts = profiled("q20.join.date", new HashJoinOperator(
                 allocator,
                 facts,
                 0,
@@ -381,13 +394,13 @@ final class TpcdsParquetSupport
                         query12DatePredicate(),
                         new String[] {"d_date_sk", "d_date"},
                         0),
-                0);
-        facts = projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2);
-        facts = new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts);
-        facts = new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
-                List.of(new PartitionSumI64WindowFunction(5)));
-        facts = projectQuery12RevenueRatio(allocator, primitiveRegistry, facts);
-        return new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts);
+                0));
+        facts = profiled("q20.project.join", projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2));
+        facts = profiled("q20.group", new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts));
+        facts = profiled("q20.window", new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(5))));
+        facts = profiled("q20.project.ratio", projectQuery12RevenueRatio(allocator, primitiveRegistry, facts));
+        return profiled("q20.top", new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts));
     }
 
     public static Operator query39(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -395,9 +408,12 @@ final class TpcdsParquetSupport
         Operator inventoryFirst = query39InventoryVariation(allocator, primitiveRegistry, tables, 1, 1.5);
         Operator inventorySecond = query39InventoryVariation(allocator, primitiveRegistry, tables, 2, 1.0);
 
-        Operator joined = new HashJoinOperator(allocator, inventoryFirst, new int[] {0, 1}, inventorySecond, new int[] {0, 1});
+        Operator joined = profiled("q39.join.months", new HashJoinOperator(allocator, inventoryFirst, new int[] {0, 1}, inventorySecond, new int[] {0, 1}));
+        if (QUERY39_COMPACT_JOIN_LAYOUTS) {
+            return profiled("q39.sort", new SortOperator(allocator, new int[] {0, 1, 2, 3, 4, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false}, joined));
+        }
         joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
-        return new SortOperator(allocator, new int[] {0, 1, 2, 3, 4, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false}, joined);
+        return profiled("q39.sort", new SortOperator(allocator, new int[] {0, 1, 2, 3, 4, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false}, joined));
     }
 
     public static Operator query17(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -621,14 +637,14 @@ final class TpcdsParquetSupport
     public static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator inventory = query22Rollup(allocator, primitiveRegistry, tables);
-        inventory = projectQuery22Output(allocator, primitiveRegistry, inventory, 5, 6);
-        return new TopNOperator(allocator, 100, new int[] {4, 0, 1, 2, 3}, new boolean[] {false, false, false, false, false}, inventory);
+        inventory = profiled("q22.project.output", projectQuery22Output(allocator, primitiveRegistry, inventory, 5, 6));
+        return profiled("q22.topn", new TopNOperator(allocator, 100, new int[] {4, 0, 1, 2, 3}, new boolean[] {false, false, false, false, false}, inventory));
     }
 
     private static Operator query22Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator inventory = query22InventoryRollupSource(allocator, primitiveRegistry, tables);
-        inventory = new GroupIdOperator(
+        inventory = profiled("q22.group_id", new GroupIdOperator(
                 allocator,
                 inventory,
                 new int[][] {
@@ -636,18 +652,18 @@ final class TpcdsParquetSupport
                         {0, -1, -1, -1, 4, 5},
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
-                        {0, 1, 2, 3, 4, 5}});
-        return new GroupedAggregationOperator(
+                        {0, 1, 2, 3, 4, 5}}));
+        return profiled("q22.group.rollup", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 6),
                 List.of(new Sum(4), new Sum(5)),
-                inventory);
+                inventory));
     }
 
     private static Operator query22InventoryRollupSource(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator inventory = scannedTable(allocator, tables, "inventory", "inv_date_sk", "inv_item_sk", "inv_quantity_on_hand");
-        inventory = new HashJoinOperator(
+        Operator inventory = profiled("q22.scan.inventory", scannedTable(allocator, tables, "inventory", "inv_date_sk", "inv_item_sk", "inv_quantity_on_hand"));
+        HashJoinOperator dateJoin = new HashJoinOperator(
                 allocator,
                 inventory,
                 0,
@@ -660,19 +676,24 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_month_seq"},
                         0),
                 0);
-        inventory = new GroupedAggregationOperator(
+        inventory = profiled("q22.join.date_dim", QUERY22_COMPACT_JOIN_LAYOUTS ? dateJoin.withOutputs(1, 2) : dateJoin);
+        inventory = profiled("q22.group.by_item", new GroupedAggregationOperator(
                 allocator,
-                List.of(1),
-                List.of(1),
-                List.of(new Sum(2), new CountColumn(2)),
-                inventory);
-        inventory = new HashJoinOperator(
+                List.of(QUERY22_COMPACT_JOIN_LAYOUTS ? 0 : 1),
+                List.of(QUERY22_COMPACT_JOIN_LAYOUTS ? 0 : 1),
+                List.of(new Sum(QUERY22_COMPACT_JOIN_LAYOUTS ? 1 : 2), new CountColumn(QUERY22_COMPACT_JOIN_LAYOUTS ? 1 : 2)),
+                inventory));
+        HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 inventory,
                 0,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_product_name", "i_brand", "i_class", "i_category"),
                 0);
-        return projectInputs(allocator, primitiveRegistry, inventory, 4, 5, 6, 7, 1, 2);
+        inventory = profiled("q22.join.item", QUERY22_COMPACT_JOIN_LAYOUTS ? itemJoin.withOutputs(4, 5, 6, 7, 1, 2) : itemJoin);
+        if (QUERY22_COMPACT_JOIN_LAYOUTS) {
+            return inventory;
+        }
+        return profiled("q22.project.rollup_source", projectInputs(allocator, primitiveRegistry, inventory, 4, 5, 6, 7, 1, 2));
     }
 
     private static Operator projectQuery22Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int sumIndex, int countIndex)
@@ -779,10 +800,13 @@ final class TpcdsParquetSupport
     {
         Operator before = query21InventoryByWarehouseItem(allocator, primitiveRegistry, tables, true);
         Operator after = query21InventoryByWarehouseItem(allocator, primitiveRegistry, tables, false);
-        Operator joined = new HashJoinOperator(allocator, before, new int[] {0, 1}, after, new int[] {0, 1});
-        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 5);
-        joined = filter(allocator, primitiveRegistry, joined, query21InventoryRatioPredicate(2, 3));
-        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
+        HashJoinOperator ratioJoin = new HashJoinOperator(allocator, before, new int[] {0, 1}, after, new int[] {0, 1});
+        Operator joined = profiled("q21.join.before_after", QUERY21_COMPACT_JOIN_LAYOUTS ? ratioJoin.withOutputs(0, 1, 2, 5) : ratioJoin);
+        if (!QUERY21_COMPACT_JOIN_LAYOUTS) {
+            joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 5);
+        }
+        joined = profiled("q21.filter.ratio", filter(allocator, primitiveRegistry, joined, query21InventoryRatioPredicate(2, 3)));
+        return profiled("q21.topn", new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined));
     }
 
     public static Operator query27(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -875,9 +899,10 @@ final class TpcdsParquetSupport
     {
         Operator currentYear = projectQuery02AdjustedWeek(allocator, primitiveRegistry, query02WeeklySales(allocator, primitiveRegistry, tables, 2001));
         Operator nextYear = query02WeeklySales(allocator, primitiveRegistry, tables, 2002);
-        Operator joined = new HashJoinOperator(allocator, currentYear, 0, nextYear, 0);
-        joined = projectQuery02Output(allocator, primitiveRegistry, joined);
-        return new TopNOperator(allocator, 10_000, 0, false, joined);
+        Operator joined = profiled("q02.join.years", new HashJoinOperator(allocator, currentYear, 0, nextYear, 0)
+                .withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16));
+        joined = profiled("q02.project.output", projectQuery02Output(allocator, primitiveRegistry, joined));
+        return profiled("q02.topn", new TopNOperator(allocator, 10_000, 0, false, joined));
     }
 
     public static Operator query42(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -912,7 +937,7 @@ final class TpcdsParquetSupport
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -974,7 +999,7 @@ final class TpcdsParquetSupport
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1036,11 +1061,11 @@ final class TpcdsParquetSupport
                         query34DatePredicate(),
                         new String[] {"d_date_sk", "d_dom", "d_year"},
                         0),
-                0);
+                0).withOutputs(1, 2, 3, 4);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1049,11 +1074,11 @@ final class TpcdsParquetSupport
                         utf8AnyOf(1, Set.of("Williamson County")),
                         new String[] {"s_store_sk", "s_county"},
                         0),
-                0);
+                0).withOutputs(1, 2, 3);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1062,8 +1087,7 @@ final class TpcdsParquetSupport
                         query34HouseholdPredicate(),
                         new String[] {"hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"},
                         0),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 3, 4);
+                0).withOutputs(1, 2);
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -1075,8 +1099,7 @@ final class TpcdsParquetSupport
                 sales,
                 1,
                 scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_salutation", "c_preferred_cust_flag"),
-                0);
-        sales = projectCustomerIdentity(allocator, primitiveRegistry, sales, 4, 5, 6, 7, 0, 2);
+                0).withOutputs(4, 5, 6, 7, 0, 2);
         return new SortOperator(allocator, new int[] {0, 1, 2, 3, 4}, new boolean[] {false, false, false, true, false}, sales);
     }
 
@@ -1099,17 +1122,28 @@ final class TpcdsParquetSupport
                 "sr_ticket_number",
                 "sr_item_sk",
                 "sr_customer_sk");
-        Operator joined = new HashJoinOperator(allocator, sales, new int[] {1, 2, 3}, returns, new int[] {1, 2, 3});
-        joined = new HashJoinOperator(
+        boolean compactJoinLayouts = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query50CompactJoinLayouts", "true"));
+        HashJoinOperator firstJoin = new HashJoinOperator(allocator, sales, new int[] {1, 2, 3}, returns, new int[] {1, 2, 3});
+        if (compactJoinLayouts) {
+            // Match Velox: [ss_sold_date_sk, ss_store_sk, sr_returned_date_sk]. Join keys remain private.
+            firstJoin.withOutputs(0, 4, 5);
+        }
+        Operator joined = firstJoin;
+        HashJoinOperator soldDateJoin = new HashJoinOperator(
                 allocator,
                 joined,
                 0,
                 scannedTable(allocator, tables, "date_dim", "d_date_sk"),
                 0);
-        joined = new HashJoinOperator(
+        if (compactJoinLayouts) {
+            // [ss_store_sk, sr_returned_date_sk, ss_sold_date_sk]
+            soldDateJoin.withOutputs(1, 2, 0);
+        }
+        joined = soldDateJoin;
+        HashJoinOperator returnedDateJoin = new HashJoinOperator(
                 allocator,
                 joined,
-                5,
+                compactJoinLayouts ? 1 : 5,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1119,10 +1153,14 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_year", "d_moy"},
                         0),
                 0);
-        joined = new HashJoinOperator(
+        if (compactJoinLayouts) {
+            returnedDateJoin.withOutputs(0, 1, 2);
+        }
+        joined = returnedDateJoin;
+        HashJoinOperator storeJoin = new HashJoinOperator(
                 allocator,
                 joined,
-                4,
+                compactJoinLayouts ? 0 : 4,
                 scannedTable(
                         allocator,
                         tables,
@@ -1139,7 +1177,14 @@ final class TpcdsParquetSupport
                         "s_state",
                         "s_zip"),
                 0);
-        joined = projectQuery50Buckets(allocator, primitiveRegistry, joined, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 5, 0);
+        if (compactJoinLayouts) {
+            // [sr_returned_date_sk, ss_sold_date_sk, ten store address columns]
+            storeJoin.withOutputs(1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13);
+        }
+        joined = storeJoin;
+        joined = compactJoinLayouts
+                ? projectQuery50Buckets(allocator, primitiveRegistry, joined, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1)
+                : projectQuery50Buckets(allocator, primitiveRegistry, joined, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 5, 0);
         joined = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
@@ -1271,12 +1316,12 @@ final class TpcdsParquetSupport
 
     public static Operator query79(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 5}, new boolean[] {false, false, false, false}, query79FinalProjectedRows(allocator, primitiveRegistry, tables));
+        return profiled("q79.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2, 5}, new boolean[] {false, false, false, false}, query79FinalProjectedRows(allocator, primitiveRegistry, tables)));
     }
 
     static Operator query79ProjectedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = factScan(
+        Operator sales = profiled("q79.scan.store_sales", factScan(
                 allocator,
                 tables,
                 "store_sales",
@@ -1287,8 +1332,8 @@ final class TpcdsParquetSupport
                 "ss_customer_sk",
                 "ss_addr_sk",
                 "ss_coupon_amt",
-                "ss_net_profit");
-        sales = new HashJoinOperator(
+                "ss_net_profit"));
+        sales = profiled("q79.join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
@@ -1300,11 +1345,11 @@ final class TpcdsParquetSupport
                         query79DatePredicate(),
                         new String[] {"d_date_sk", "d_dow", "d_year"},
                         0),
-                0);
-        sales = new HashJoinOperator(
+                0).withOutputs(1, 2, 3, 4, 5, 6, 7));
+        sales = profiled("q79.join.store", new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1313,11 +1358,11 @@ final class TpcdsParquetSupport
                         betweenInclusive(2, 200, 295),
                         new String[] {"s_store_sk", "s_city", "s_number_employees"},
                         0, 1),
-                0);
-        sales = new HashJoinOperator(
+                0).withOutputs(1, 2, 3, 4, 5, 6, 8));
+        sales = profiled("q79.join.household_demographics", new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1326,49 +1371,28 @@ final class TpcdsParquetSupport
                         query79HouseholdPredicate(),
                         new String[] {"hd_demo_sk", "hd_dep_count", "hd_vehicle_count"},
                         0),
-                0);
-        Variable zero = new Variable(0);
-        Variable coupon = new Variable(1);
-        Variable profit = new Variable(2);
-        return new ProjectOperator(
-                allocator,
-                new EvaluationPlan(
-                        List.of(
-                                new Assignment(zero, new Literal(0L), AllMask.ALL),
-                                new Assignment(coupon, new Call("coalesce_i64", List.of(
-                                        new Reference(new Input(6), Stream.VALUES),
-                                        new Reference(zero, Stream.VALUES))), AllMask.ALL),
-                                new Assignment(profit, new Call("coalesce_i64", List.of(
-                                        new Reference(new Input(7), Stream.VALUES),
-                                        new Reference(zero, Stream.VALUES))), AllMask.ALL)),
-                        List.of(
-                                new Reference(new Input(3), Stream.VALUES),
-                                new Reference(new Input(4), Stream.VALUES),
-                                new Reference(new Input(5), Stream.VALUES),
-                                new Reference(new Input(10), Stream.VALUES),
-                                new Reference(coupon, Stream.VALUES),
-                                new Reference(profit, Stream.VALUES))),
-                primitiveRegistry,
-                sales);
+                0).withOutputs(1, 2, 3, 4, 5, 6));
+        // Preserve the nullable measure streams: SQL SUM returns null, not zero, for an all-null group.
+        return profiled("q79.project.sales", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 2, 5, 3, 4));
     }
 
     static Operator query79GroupedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return new GroupedAggregationOperator(
+        return profiled("q79.group.sales", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3),
                 List.of(new Sum(4), new Sum(5)),
-                query79ProjectedSales(allocator, primitiveRegistry, tables));
+                query79ProjectedSales(allocator, primitiveRegistry, tables)));
     }
 
     static Operator query79JoinedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return new HashJoinOperator(
+        return profiled("q79.join.customer", new HashJoinOperator(
                 allocator,
                 query79GroupedSales(allocator, primitiveRegistry, tables),
                 1,
                 scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name"),
-                0);
+                0).withOutputs(0, 3, 4, 5, 7, 8));
     }
 
     static Operator query79FinalProjectedRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -1377,25 +1401,25 @@ final class TpcdsParquetSupport
         Variable start = new Variable(0);
         Variable length = new Variable(1);
         Variable cityPrefix = new Variable(2);
-        return new ProjectOperator(
+        return profiled("q79.project.final", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(
                                 new Assignment(start, new Literal(1L), AllMask.ALL),
                                 new Assignment(length, new Literal(30L), AllMask.ALL),
                                 new Assignment(cityPrefix, new Call("substring_utf8", List.of(
-                                        new Reference(new Input(3), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES),
                                         new Reference(start, Stream.VALUES),
                                         new Reference(length, Stream.VALUES))), AllMask.ALL)),
                         List.of(
-                                new Reference(new Input(7), Stream.VALUES),
-                                new Reference(new Input(8), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES),
                                 new Reference(cityPrefix, Stream.VALUES),
                                 new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(4), Stream.VALUES),
-                                new Reference(new Input(5), Stream.VALUES))),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES))),
                 primitiveRegistry,
-                sales);
+                sales));
     }
 
     public static Operator query91(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -1836,7 +1860,7 @@ final class TpcdsParquetSupport
 
     public static Operator query26(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = factScan(
+        Operator sales = profiled("q26.scan.catalog_sales", factScan(
                 allocator,
                 tables,
                 "catalog_sales",
@@ -1847,27 +1871,8 @@ final class TpcdsParquetSupport
                 "cs_quantity",
                 "cs_list_price",
                 "cs_coupon_amt",
-                "cs_sales_price");
-        sales = new HashJoinOperator(
-                allocator,
-                sales,
-                0,
-                filteredProjectedTable(
-                        allocator,
-                        primitiveRegistry,
-                        tables,
-                        "date_dim",
-                        equal(1, 2000),
-                        new String[] {"d_date_sk", "d_year"},
-                        0),
-                0);
-        sales = new HashJoinOperator(
-                allocator,
-                sales,
-                1,
-                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
-                0);
-        sales = new HashJoinOperator(
+                "cs_sales_price"));
+        sales = profiled("q26.join.customer_demographics", new HashJoinOperator(
                 allocator,
                 sales,
                 2,
@@ -1879,11 +1884,30 @@ final class TpcdsParquetSupport
                         and(equalUtf8(1, "M"), equalUtf8(2, "S"), equalUtf8(3, "College")),
                         new String[] {"cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status"},
                         0),
-                0);
-        sales = new HashJoinOperator(
+                0).withOutputs(0, 1, 3, 4, 5, 6, 7));
+        sales = profiled("q26.join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
-                3,
+                0,
+                filteredProjectedTable(
+                        allocator,
+                        primitiveRegistry,
+                        tables,
+                        "date_dim",
+                        equal(1, 2000),
+                        new String[] {"d_date_sk", "d_year"},
+                        0),
+                0).withOutputs(1, 2, 3, 4, 5, 6));
+        sales = profiled("q26.join.item", new HashJoinOperator(
+                allocator,
+                sales,
+                0,
+                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
+                0).withOutputs(1, 2, 3, 4, 5, 7));
+        sales = profiled("q26.join.promotion", new HashJoinOperator(
+                allocator,
+                sales,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -1892,14 +1916,22 @@ final class TpcdsParquetSupport
                         or(equalUtf8(1, "N"), equalUtf8(2, "N")),
                         new String[] {"p_promo_sk", "p_channel_email", "p_channel_event"},
                         0),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 10, 4, 5, 6, 7);
-        sales = new GroupedAggregationOperator(
+                0).withOutputs(1, 2, 3, 4, 5));
+        sales = profiled("q26.project.sales", projectInputs(allocator, primitiveRegistry, sales, 4, 0, 1, 2, 3));
+        sales = profiled("q26.group.item", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new Avg(1), new Avg(2), new Avg(3), new Avg(4)),
-                sales);
-        return new TopNOperator(allocator, 100, 0, false, sales);
+                List.of(
+                        new Avg(1),
+                        new Sum(2),
+                        new CountColumn(2),
+                        new Sum(3),
+                        new CountColumn(3),
+                        new Sum(4),
+                        new CountColumn(4)),
+                sales));
+        sales = profiled("q26.project.averages", projectQuery26Averages(allocator, primitiveRegistry, sales));
+        return profiled("q26.topn", new TopNOperator(allocator, 100, 0, false, sales));
     }
 
     public static Operator query55(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -1953,81 +1985,90 @@ final class TpcdsParquetSupport
 
     public static Operator query72(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = factScan(allocator, tables, "catalog_sales", "cs_item_sk", "cs_quantity", "cs_bill_cdemo_sk", "cs_bill_hdemo_sk", "cs_sold_date_sk", "cs_ship_date_sk", "cs_promo_sk", "cs_order_number");
-        sales = new HashJoinOperator(
+        Operator sales = profiled("q72.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_item_sk", "cs_quantity", "cs_bill_cdemo_sk", "cs_bill_hdemo_sk", "cs_sold_date_sk", "cs_ship_date_sk", "cs_promo_sk", "cs_order_number"));
+        HashJoinOperator soldDateJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 4,
-                filteredProjectedTable(
+                profiled("q72.scan.date_dim.sold", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         equal(2, 1999),
                         new String[] {"d_date_sk", "d_week_seq", "d_year", "d_date"},
-                        0, 1, 3),
+                        0, 1, 3)),
                 0);
-        sales = new HashJoinOperator(allocator, sales, new int[] {0, 9}, query72InventoryByWeek(allocator, primitiveRegistry, tables), new int[] {0, 3});
-        sales = new HashJoinOperator(
+        sales = profiled("q72.join.date_dim.sold", soldDateJoin.withOutputs(0, 1, 2, 3, 5, 6, 10, 9));
+        HashJoinOperator inventoryJoin = new HashJoinOperator(allocator, sales, new int[] {0, 7}, query72InventoryByWeek(allocator, primitiveRegistry, tables), new int[] {0, 3});
+        sales = profiled("q72.join.inventory", inventoryJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 9, 10));
+        HashJoinOperator warehouseJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                12,
-                scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"),
+                8,
+                profiled("q72.scan.warehouse", scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name")),
                 0);
-        sales = new HashJoinOperator(
+        sales = profiled("q72.join.warehouse", warehouseJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 9, 11, 7));
+        HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 0,
-                scannedTable(allocator, tables, "item", "i_item_sk", "i_item_desc"),
+                profiled("q72.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_item_desc")),
                 0);
-        sales = new HashJoinOperator(
+        sales = profiled("q72.join.item", itemJoin.withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 9, 11));
+        HashJoinOperator customerDemographicsJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
-                filteredProjectedTable(
+                1,
+                profiled("q72.scan.customer_demographics", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "customer_demographics",
                         equalUtf8(1, "D"),
                         new String[] {"cd_demo_sk", "cd_marital_status"},
-                        0),
+                        0)),
                 0);
-        sales = new HashJoinOperator(
+        // The selective customer join reduces the high-fanout inventory stream from 4.7M to 930K rows. Collapse
+        // its accumulated dictionary mappings here instead of repeatedly copying the full fanout at earlier joins.
+        sales = profiled("q72.join.customer_demographics", projectInputs(allocator, primitiveRegistry, customerDemographicsJoin, 0, 2, 3, 4, 5, 6, 7, 8, 9));
+        HashJoinOperator householdDemographicsJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                3,
-                filteredProjectedTable(
+                1,
+                profiled("q72.scan.household_demographics", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "household_demographics",
                         equalUtf8(1, ">10000"),
                         new String[] {"hd_demo_sk", "hd_buy_potential"},
-                        0),
+                        0)),
                 0);
-        sales = new HashJoinOperator(
+        sales = profiled("q72.join.household_demographics", householdDemographicsJoin.withOutputs(0, 2, 3, 4, 5, 6, 7, 8));
+        HashJoinOperator shipDateJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                5,
-                scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_date"),
+                1,
+                profiled("q72.scan.date_dim.ship", scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_date")),
                 0);
-        sales = new SemiJoinOperator(
+        sales = profiled("q72.join.date_dim.ship", projectInputs(allocator, primitiveRegistry, shipDateJoin, 0, 2, 3, 9, 4, 5, 6, 7));
+        sales = profiled("q72.semi.promotion", new SemiJoinOperator(
                 allocator,
                 sales,
-                6,
-                scannedTable(allocator, tables, "promotion", "p_promo_sk"),
+                1,
+                profiled("q72.scan.promotion", scannedTable(allocator, tables, "promotion", "p_promo_sk")),
                 0,
                 true,
-                true);
-        sales = filter(allocator, primitiveRegistry, sales, query72Predicate(13, 1, 22, 10));
-        sales = projectQuery72GroupedRows(allocator, primitiveRegistry, sales, 18, 16, 9, 23);
-        sales = new GroupedAggregationOperator(
+                true));
+        sales = profiled("q72.filter", filter(allocator, primitiveRegistry, sales, query72Predicate(4, 0, 3, 2)));
+        sales = profiled("q72.project", projectQuery72GroupedRows(allocator, primitiveRegistry, sales, 7, 5, 6, 8));
+        sales = profiled("q72.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(3), new Sum(4), new CountAll()),
-                sales);
-        return new TopNOperator(allocator, 100, new int[] {5, 0, 1, 2}, new boolean[] {true, false, false, false}, sales);
+                sales));
+        return profiled("q72.topn", new TopNOperator(allocator, 100, new int[] {5, 0, 1, 2}, new boolean[] {true, false, false, false}, sales));
     }
 
     public static Operator query33(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2066,22 +2107,22 @@ final class TpcdsParquetSupport
         Operator storeItemSales = query65StoreItemSales(allocator, primitiveRegistry, tables);
         Operator storeThresholds = query65StoreThresholds(allocator, primitiveRegistry, tables);
 
-        Operator joined = new HashJoinOperator(allocator, storeItemSales, 0, storeThresholds, 0);
-        joined = filter(allocator, primitiveRegistry, joined, query65ThresholdPredicate(2, 4));
-        joined = new HashJoinOperator(
+        Operator joined = profiled("q65.join.threshold", new HashJoinOperator(allocator, storeItemSales, 0, storeThresholds, 0));
+        joined = profiled("q65.filter.threshold", filter(allocator, primitiveRegistry, joined, query65ThresholdPredicate(2, 4)));
+        joined = profiled("q65.join.store", new HashJoinOperator(
                 allocator,
                 joined,
                 0,
                 scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name"),
-                0);
-        joined = new HashJoinOperator(
+                0));
+        joined = profiled("q65.join.item", new HashJoinOperator(
                 allocator,
                 joined,
                 1,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_item_desc", "i_current_price", "i_wholesale_cost", "i_brand"),
-                0);
-        joined = projectInputs(allocator, primitiveRegistry, joined, 6, 8, 2, 9, 10, 11);
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 5, 2}, new boolean[] {false, false, false, false}, joined);
+                0));
+        joined = profiled("q65.project", projectInputs(allocator, primitiveRegistry, joined, 6, 8, 2, 9, 10, 11));
+        return profiled("q65.top", new TopNOperator(allocator, 100, new int[] {0, 1, 5, 2}, new boolean[] {false, false, false, false}, joined));
     }
 
     public static Operator query66(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2110,8 +2151,8 @@ final class TpcdsParquetSupport
                 "cs_quantity",
                 "cs_sales_price",
                 "cs_net_paid_inc_tax");
-        Operator combined = new UnionAllOperator(32, List.of(webChannel, catalogChannel));
-        combined = new GroupedAggregationOperator(
+        Operator combined = profiled("q66.union", new UnionAllOperator(32, List.of(webChannel, catalogChannel)));
+        combined = profiled("q66.group.combined", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7),
                 List.of(
@@ -2119,9 +2160,9 @@ final class TpcdsParquetSupport
                         new Sum(14), new Sum(15), new Sum(16), new Sum(17), new Sum(18), new Sum(19),
                         new Sum(20), new Sum(21), new Sum(22), new Sum(23), new Sum(24), new Sum(25),
                         new Sum(26), new Sum(27), new Sum(28), new Sum(29), new Sum(30), new Sum(31)),
-                combined);
-        combined = projectQuery66Output(allocator, primitiveRegistry, combined);
-        return new TopNOperator(allocator, 100, new int[] {0}, new boolean[] {false}, combined);
+                combined));
+        combined = profiled("q66.project.output", projectQuery66Output(allocator, primitiveRegistry, combined));
+        return profiled("q66.topn", new TopNOperator(allocator, 100, new int[] {0}, new boolean[] {false}, combined));
     }
 
     public static Operator query98(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2265,13 +2306,13 @@ final class TpcdsParquetSupport
         Operator previous = projectQuery47AdjacentRows(allocator, primitiveRegistry, query47MonthlySales(allocator, primitiveRegistry, tables), true);
         Operator next = projectQuery47AdjacentRows(allocator, primitiveRegistry, query47MonthlySales(allocator, primitiveRegistry, tables), false);
 
-        Operator joined = new HashJoinOperator(allocator, current, new int[] {0, 1, 2, 3, 8}, previous, new int[] {0, 1, 2, 3, 5});
-        joined = new HashJoinOperator(allocator, joined, new int[] {0, 1, 2, 3, 8}, next, new int[] {0, 1, 2, 3, 5});
+        Operator joined = profiled("q47.join.previous", new HashJoinOperator(allocator, current, new int[] {0, 1, 2, 3, 8}, previous, new int[] {0, 1, 2, 3, 5}));
+        joined = profiled("q47.join.next", new HashJoinOperator(allocator, joined, new int[] {0, 1, 2, 3, 8}, next, new int[] {0, 1, 2, 3, 5}));
         joined = projectQuery47Output(allocator, primitiveRegistry, joined);
         joined = new BatchSliceOperator(allocator, 4_096, joined);
-        joined = filter(allocator, primitiveRegistry, joined, query53QuarterlyDeviationPredicate(7, 6));
+        joined = profiled("q47.filter.deviation", filter(allocator, primitiveRegistry, joined, query53QuarterlyDeviationPredicate(7, 6)));
         joined = projectQuery47SortKey(allocator, primitiveRegistry, joined);
-        joined = new TopNOperator(allocator, 100, new int[] {10, 2}, new boolean[] {false, false}, joined);
+        joined = profiled("q47.topn", new TopNOperator(allocator, 100, new int[] {10, 2}, new boolean[] {false, false}, joined));
         return projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9);
     }
 
@@ -2296,12 +2337,15 @@ final class TpcdsParquetSupport
     public static Operator query11(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator joined = query11ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_discount_amt", 2001);
-        joined = new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_discount_amt", 2002), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2001), 0);
-        joined = new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2002), 0);
-        joined = filter(allocator, primitiveRegistry, joined, query11GrowthPredicate(6, 13, 20, 27));
-        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5);
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3}, new boolean[] {false, false, false, false}, joined);
+        joined = profiled("q11.join.store2002", new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_discount_amt", 2002), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 13));
+        joined = profiled("q11.join.web2001", new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2001), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 14));
+        joined = profiled("q11.join.web2002", new HashJoinOperator(allocator, joined, 0, query11ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_discount_amt", 2002), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 15));
+        joined = profiled("q11.filter.growth", filter(allocator, primitiveRegistry, joined, query11GrowthPredicate(6, 7, 8, 9)));
+        joined = profiled("q11.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3, 4, 5));
+        return profiled("q11.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3}, new boolean[] {false, false, false, false}, joined));
     }
 
     public static Operator query14(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2399,7 +2443,19 @@ final class TpcdsParquetSupport
 
     public static Operator query45(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator filtered = profiled("q45.scan.web_sales", factScan(allocator, tables, "web_sales", "ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price"));
+        Operator projected = query45Rows(allocator, primitiveRegistry, tables);
+        Operator aggregated = profiled("q45.group.zip_city", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new Sum(2)),
+                projected));
+        return profiled("q45.topn", new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated));
+    }
+
+    /** Diagnostic pre-aggregation pipeline; query45 consumes this exact operator tree. */
+    public static Operator query45Rows(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        Operator filtered = query45WebSales(allocator, primitiveRegistry, tables);
         filtered = profiled("q45.join.customer", new HashJoinOperator(
                 allocator,
                 filtered,
@@ -2447,26 +2503,26 @@ final class TpcdsParquetSupport
                 true,
                 true));
         filtered = profiled("q45.filter.project.sales", filter(allocator, primitiveRegistry, filtered, query45ZipOrItemPredicate(8, 12)));
-        Operator projected = profiled("q45.project.group_inputs", projectInputs(allocator, primitiveRegistry, filtered, 8, 7, 3));
-        Operator aggregated = profiled("q45.group.zip_city", new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1),
-                List.of(new Sum(2)),
-                projected));
-        return profiled("q45.topn", new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, aggregated));
+        return profiled("q45.project.group_inputs", projectInputs(allocator, primitiveRegistry, filtered, 8, 7, 3));
+    }
+
+    /** Diagnostic scan leaf; query45 consumes this exact operator. */
+    public static Operator query45WebSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    {
+        return profiled("q45.scan.web_sales", factScan(allocator, tables, "web_sales", "ws_item_sk", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_sales_price"));
     }
 
     public static Operator query51(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator joined = new UnionAllOperator(4, List.of(
+        Operator joined = profiled("q51.union.channels", new UnionAllOperator(4, List.of(
                 query51MergedChannel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price", true),
-                query51MergedChannel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price", false)));
-        joined = new GroupedAggregationOperator(
+                query51MergedChannel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price", false))));
+        joined = profiled("q51.group.merged", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new Max(2), new Max(3)),
-                joined);
-        joined = new WindowOperator(
+                joined));
+        joined = profiled("q51.window.merged", new WindowOperator(
                 allocator,
                 joined,
                 new int[] {0},
@@ -2474,9 +2530,9 @@ final class TpcdsParquetSupport
                 new boolean[] {false},
                 List.of(
                         new RunningMaxI64WindowFunction(2),
-                        new RunningMaxI64WindowFunction(3)));
-        joined = filter(allocator, primitiveRegistry, joined, query51CumulativePredicate(4, 5));
-        return new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
+                        new RunningMaxI64WindowFunction(3))));
+        joined = profiled("q51.filter.cumulative", filter(allocator, primitiveRegistry, joined, query51CumulativePredicate(4, 5)));
+        return profiled("q51.top100", new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined));
     }
 
     public static Operator query53(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2500,22 +2556,22 @@ final class TpcdsParquetSupport
         Operator upperMonthSequence = query54ScalarMonthBoundary(allocator, primitiveRegistry, tables, 3);
 
         Operator revenue = query54RevenueByCustomer(allocator, primitiveRegistry, tables);
-        revenue = new NestedLoopJoinOperator(allocator, revenue, lowerMonthSequence);
-        revenue = new NestedLoopJoinOperator(allocator, revenue, upperMonthSequence);
-        revenue = filter(allocator, primitiveRegistry, revenue, query54MonthBetweenPredicate(2, 3, 4));
+        revenue = profiled("q54.join.lower_month_seq", new NestedLoopJoinOperator(allocator, revenue, lowerMonthSequence));
+        revenue = profiled("q54.join.upper_month_seq", new NestedLoopJoinOperator(allocator, revenue, upperMonthSequence));
+        revenue = profiled("q54.filter.month_between", filter(allocator, primitiveRegistry, revenue, query54MonthBetweenPredicate(2, 3, 4)));
         revenue = projectInputs(allocator, primitiveRegistry, revenue, 0, 1);
-        revenue = new GroupedAggregationOperator(
+        revenue = profiled("q54.group.customer", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new Sum(1)),
-                revenue);
+                revenue));
         revenue = projectQuery54Segment(allocator, primitiveRegistry, revenue);
 
-        Operator grouped = new GroupedAggregationOperator(
+        Operator grouped = profiled("q54.group.segment", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new CountAll()),
-                revenue);
+                revenue));
         grouped = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, grouped);
         return projectQuery54Output(allocator, primitiveRegistry, grouped);
     }
@@ -2531,7 +2587,7 @@ final class TpcdsParquetSupport
         joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 3, 5);
         joined = filter(allocator, primitiveRegistry, joined, query58SimilarityPredicate(1, 2, 3));
         joined = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
-        return projectQuery58Output(allocator, primitiveRegistry, joined);
+        return projectThreeChannelOutput(allocator, primitiveRegistry, joined, 10_000L);
     }
 
     public static Operator query59(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -2611,29 +2667,29 @@ final class TpcdsParquetSupport
 
     public static Operator query99(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator allowedShipDates = filteredProjectedTable(
+        Operator allowedShipDates = profiled("q99.scan.allowed_ship_dates", filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
                 tables,
                 "date_dim",
                 and(greaterThan(1, 1199), lessThan(1, 1212)),
                 new String[] {"d_date_sk", "d_month_seq"},
-                0);
-        Operator warehouseNames = scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name");
-        Operator shipModeNames = scannedTable(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type");
-        Operator callCenterNames = scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name");
-        Operator joined = factScan(allocator, tables, "catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk");
-        joined = new HashJoinOperator(allocator, joined, 0, allowedShipDates, 0);
-        joined = new HashJoinOperator(allocator, joined, 2, warehouseNames, 0);
-        joined = new HashJoinOperator(allocator, joined, 3, shipModeNames, 0);
-        joined = new HashJoinOperator(allocator, joined, 4, callCenterNames, 0);
-        Operator projected = projectShippingBuckets(allocator, primitiveRegistry, joined, 7, 9, 11, 0, 1);
-        Operator aggregated = new GroupedAggregationOperator(
+                0));
+        Operator warehouseNames = profiled("q99.scan.warehouse", scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"));
+        Operator shipModeNames = profiled("q99.scan.ship_mode", scannedTable(allocator, tables, "ship_mode", "sm_ship_mode_sk", "sm_type"));
+        Operator callCenterNames = profiled("q99.scan.call_center", scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"));
+        Operator joined = profiled("q99.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_ship_date_sk", "cs_sold_date_sk", "cs_warehouse_sk", "cs_ship_mode_sk", "cs_call_center_sk"));
+        joined = profiled("q99.join.date_dim", new HashJoinOperator(allocator, joined, 0, allowedShipDates, 0));
+        joined = profiled("q99.join.warehouse", new HashJoinOperator(allocator, joined, 2, warehouseNames, 0));
+        joined = profiled("q99.join.ship_mode", new HashJoinOperator(allocator, joined, 3, shipModeNames, 0));
+        joined = profiled("q99.join.call_center", new HashJoinOperator(allocator, joined, 4, callCenterNames, 0));
+        Operator projected = profiled("q99.project.shipping_buckets", projectShippingBuckets(allocator, primitiveRegistry, joined, 7, 9, 11, 0, 1));
+        Operator aggregated = profiled("q99.aggregate.shipping_buckets", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7)),
-                projected);
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated);
+                projected));
+        return profiled("q99.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, aggregated));
     }
 
     public static Operator query10(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3258,7 +3314,7 @@ final class TpcdsParquetSupport
 
     public static Operator query23(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator catalog = query23Channel(
+        Operator catalog = profiled("q23.catalog.channel", query23Channel(
                 allocator,
                 primitiveRegistry,
                 tables,
@@ -3267,8 +3323,8 @@ final class TpcdsParquetSupport
                 "cs_bill_customer_sk",
                 "cs_item_sk",
                 "cs_quantity",
-                "cs_list_price");
-        Operator web = query23Channel(
+                "cs_list_price"));
+        Operator web = profiled("q23.web.channel", query23Channel(
                 allocator,
                 primitiveRegistry,
                 tables,
@@ -3277,32 +3333,32 @@ final class TpcdsParquetSupport
                 "ws_bill_customer_sk",
                 "ws_item_sk",
                 "ws_quantity",
-                "ws_list_price");
-        return new AggregationOperator(
+                "ws_list_price"));
+        return profiled("q23.final.sum", new AggregationOperator(
                 allocator,
                 List.of(new Sum(0)),
-                new UnionAllOperator(1, List.of(catalog, web)));
+                profiled("q23.union", new UnionAllOperator(1, List.of(catalog, web)))));
     }
 
     public static Operator query24(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator groupedSales = query24Sales(allocator, primitiveRegistry, tables, "pale");
-        groupedSales = new GroupedAggregationOperator(
+        Operator groupedSales = profiled("q24.pale.sales", query24Sales(allocator, primitiveRegistry, tables, "pale"));
+        groupedSales = profiled("q24.pale.outer_group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(10)),
-                groupedSales);
+                groupedSales));
 
-        Operator averageSales = query24AverageSales(allocator, primitiveRegistry, tables);
-        averageSales = new AggregationOperator(
+        Operator averageSales = profiled("q24.average.sales", query24AverageSales(allocator, primitiveRegistry, tables));
+        averageSales = profiled("q24.average.final", new AggregationOperator(
                 allocator,
                 List.of(new Sum(5), new CountColumn(5)),
-                averageSales);
+                averageSales));
 
-        Operator joined = new NestedLoopJoinOperator(allocator, groupedSales, averageSales);
-        joined = filter(allocator, primitiveRegistry, joined, query24ThresholdPredicate(3, 4, 5));
-        joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3);
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined);
+        Operator joined = profiled("q24.join.threshold", new NestedLoopJoinOperator(allocator, groupedSales, averageSales));
+        joined = profiled("q24.filter.threshold", filter(allocator, primitiveRegistry, joined, query24ThresholdPredicate(3, 4, 5)));
+        joined = profiled("q24.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3));
+        return profiled("q24.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
     public static Operator query25(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3320,17 +3376,17 @@ final class TpcdsParquetSupport
                         and(equal(1, 4), equal(2, 2001)),
                         new String[] {"d_date_sk", "d_moy", "d_year"},
                         0),
-                0);
+                0).withOutputs(1, 2, 3, 4, 5);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
                 new int[] {1, 2, 4},
                 scannedTable(allocator, tables, "store_returns", "sr_item_sk", "sr_customer_sk", "sr_ticket_number", "sr_returned_date_sk", "sr_net_loss"),
-                new int[] {0, 1, 2});
+                new int[] {0, 1, 2}).withOutputs(0, 1, 2, 4, 8, 9);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
-                10,
+                4,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -3339,17 +3395,17 @@ final class TpcdsParquetSupport
                         and(betweenInclusive(1, 4, 10), equal(2, 2001)),
                         new String[] {"d_date_sk", "d_moy", "d_year"},
                         0),
-                0);
+                0).withOutputs(0, 1, 2, 3, 5);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
-                new int[] {2, 1},
+                new int[] {1, 0},
                 factScan(allocator, tables, "catalog_sales", "cs_bill_customer_sk", "cs_item_sk", "cs_sold_date_sk", "cs_net_profit"),
-                new int[] {0, 1});
+                new int[] {0, 1}).withOutputs(0, 2, 3, 4, 7, 8);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
-                15,
+                4,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -3358,20 +3414,19 @@ final class TpcdsParquetSupport
                         and(betweenInclusive(1, 4, 10), equal(2, 2001)),
                         new String[] {"d_date_sk", "d_moy", "d_year"},
                         0),
-                0);
-        joined = new HashJoinOperator(
-                allocator,
-                joined,
-                3,
-                scannedTable(allocator, tables, "store", "s_store_sk", "s_store_id", "s_store_name"),
-                0);
+                0).withOutputs(0, 1, 2, 3, 5);
         joined = new HashJoinOperator(
                 allocator,
                 joined,
                 1,
+                scannedTable(allocator, tables, "store", "s_store_sk", "s_store_id", "s_store_name"),
+                0).withOutputs(0, 2, 3, 4, 6, 7);
+        joined = new HashJoinOperator(
+                allocator,
+                joined,
+                0,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id", "i_item_desc"),
-                0);
-        joined = projectInputs(allocator, primitiveRegistry, joined, 22, 23, 19, 20, 5, 11, 16);
+                0).withOutputs(7, 8, 4, 5, 1, 2, 3);
         joined = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3),
@@ -3412,17 +3467,17 @@ final class TpcdsParquetSupport
                 sales,
                 3,
                 scannedTable(allocator, tables, "store", "s_store_sk"),
-                0);
+                0).withOutputs(0, 1, 2, 4, 5, 6);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
                 1,
                 scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"),
-                0);
+                0).withOutputs(0, 2, 3, 4, 5, 7, 8);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                1,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -3431,7 +3486,7 @@ final class TpcdsParquetSupport
                         equalUtf8(1, "United States"),
                         new String[] {"ca_address_sk", "ca_country", "ca_state"},
                         0, 2),
-                0);
+                0).withOutputs(0, 2, 3, 4, 5, 6, 8);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
@@ -3444,10 +3499,10 @@ final class TpcdsParquetSupport
                         equal(1, 2000),
                         new String[] {"d_date_sk", "d_year"},
                         0),
-                0);
-        sales = filter(allocator, primitiveRegistry, sales, query48DemographicsPredicate(9, 10, 5));
-        sales = filter(allocator, primitiveRegistry, sales, query48StateProfitPredicate(12, 6));
-        sales = projectInputs(allocator, primitiveRegistry, sales, 4);
+                0).withOutputs(1, 2, 3, 4, 5, 6);
+        sales = filter(allocator, primitiveRegistry, sales, query48DemographicsPredicate(3, 4, 1));
+        sales = filter(allocator, primitiveRegistry, sales, query48StateProfitPredicate(5, 2));
+        sales = projectInputs(allocator, primitiveRegistry, sales, 0);
         return new AggregationOperator(allocator, List.of(new Sum(0)), sales);
     }
 
@@ -3533,7 +3588,9 @@ final class TpcdsParquetSupport
         joined = new HashJoinOperator(allocator, joined, 0, web, 0);
         joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1, 3, 5);
         joined = new TopNOperator(allocator, 100, new int[] {0, 1}, new boolean[] {false, false}, joined);
-        return projectQuery58Output(allocator, primitiveRegistry, joined);
+        // Trino's BIGINT / DECIMAL '3.00' average has six fractional digits, whereas q58's decimal-revenue
+        // average has four.  Keep the same generic three-channel projection and supply the SQL result scale.
+        return projectThreeChannelOutput(allocator, primitiveRegistry, joined, 1_000_000L);
     }
 
     public static Operator query97(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3555,13 +3612,13 @@ final class TpcdsParquetSupport
 
     public static Operator query73(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator allowedDates = filteredProjectedTable(allocator, primitiveRegistry, tables, "date_dim", dayOfMonthAndYearsPredicate(1, 2, 1, 2, 1999, 2000, 2001), new String[] {"d_date_sk", "d_dom", "d_year"});
-        Operator allowedStores = filteredProjectedTable(allocator, primitiveRegistry, tables, "store", utf8AnyOf(1, Set.of("Williamson County", "Franklin Parish", "Bronx County", "Orange County")), new String[] {"s_store_sk", "s_county"});
-        Operator allowedHouseholds = filteredProjectedTable(allocator, primitiveRegistry, tables, "household_demographics", query73HouseholdPredicate(), new String[] {"hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"});
+        Operator allowedDates = filteredProjectedTable(allocator, primitiveRegistry, tables, "date_dim", dayOfMonthAndYearsPredicate(1, 2, 1, 2, 1999, 2000, 2001), new String[] {"d_date_sk", "d_dom", "d_year"}, 0);
+        Operator allowedStores = filteredProjectedTable(allocator, primitiveRegistry, tables, "store", utf8AnyOf(1, Set.of("Williamson County", "Franklin Parish", "Bronx County", "Orange County")), new String[] {"s_store_sk", "s_county"}, 0);
+        Operator allowedHouseholds = filteredProjectedTable(allocator, primitiveRegistry, tables, "household_demographics", query73HouseholdPredicate(), new String[] {"hd_demo_sk", "hd_buy_potential", "hd_vehicle_count", "hd_dep_count"}, 0);
         Operator projected = factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_customer_sk", "ss_sold_date_sk", "ss_store_sk", "ss_hdemo_sk");
-        projected = new HashJoinOperator(allocator, projected, 2, allowedDates, 0);
-        projected = new HashJoinOperator(allocator, projected, 3, allowedStores, 0);
-        projected = new HashJoinOperator(allocator, projected, 4, allowedHouseholds, 0);
+        projected = new HashJoinOperator(allocator, projected, 2, allowedDates, 0).withOutputs(0, 1, 3, 4);
+        projected = new HashJoinOperator(allocator, projected, 2, allowedStores, 0).withOutputs(0, 1, 3);
+        projected = new HashJoinOperator(allocator, projected, 2, allowedHouseholds, 0).withOutputs(0, 1);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -3578,31 +3635,34 @@ final class TpcdsParquetSupport
                         "c_first_name",
                         "c_salutation",
                         "c_preferred_cust_flag"),
-                0);
-        Operator enriched = projectCustomerIdentity(allocator, primitiveRegistry, joined, 4, 5, 6, 7, 0, 2);
+                0).withOutputs(4, 5, 6, 7, 0, 2);
+        Operator enriched = joined;
         return new TopNOperator(allocator, 100, new int[] {5, 0, 4}, new boolean[] {true, false, false}, enriched);
     }
 
     public static Operator query84(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator eligibleIncomeBands = filteredProjectedTable(allocator, primitiveRegistry, tables, "income_band", and(greaterThan(1, 38127), lessThan(2, 88129)), new String[] {"ib_income_band_sk", "ib_lower_bound", "ib_upper_bound"});
-        Operator eligibleHouseholds = new HashJoinOperator(
+        Operator eligibleIncomeBands = profiled("q84.scan.income_band", filteredProjectedTable(allocator, primitiveRegistry, tables, "income_band", and(greaterThan(1, 38127), lessThan(2, 88129)), new String[] {"ib_income_band_sk", "ib_lower_bound", "ib_upper_bound"}));
+        Operator eligibleHouseholds = profiled("q84.join.income_band", new HashJoinOperator(
                 allocator,
-                factScan(allocator, tables, "household_demographics", "hd_demo_sk", "hd_income_band_sk"),
+                profiled("q84.scan.household_demographics", factScan(allocator, tables, "household_demographics", "hd_demo_sk", "hd_income_band_sk")),
                 1,
                 eligibleIncomeBands,
-                0);
-        Operator eligibleAddresses = filteredProjectedTable(allocator, primitiveRegistry, tables, "customer_address", equalUtf8(1, "Edgewood"), new String[] {"ca_address_sk", "ca_city"});
-        Operator customers = customerScan(allocator, tables,
+                0).withOutputs(0));
+        Operator eligibleAddresses = profiled("q84.scan.customer_address", filteredProjectedTable(allocator, primitiveRegistry, tables, "customer_address", equalUtf8(1, "Edgewood"), new String[] {"ca_address_sk", "ca_city"}));
+        Operator customers = profiled("q84.scan.customer", customerScan(allocator, tables,
                 "c_customer_id",
                 "c_last_name",
                 "c_first_name",
                 "c_current_addr_sk",
                 "c_current_cdemo_sk",
-                "c_current_hdemo_sk");
-        customers = new HashJoinOperator(allocator, customers, 3, eligibleAddresses, 0);
-        customers = new HashJoinOperator(allocator, customers, 5, eligibleHouseholds, 0);
-        customers = new HashJoinOperator(allocator, customers, 4, scannedTable(allocator, tables, "store_returns", "sr_cdemo_sk"), 0);
+                "c_current_hdemo_sk"));
+        customers = profiled("q84.join.customer_address", new HashJoinOperator(allocator, customers, 3, eligibleAddresses, 0)
+                .withOutputs(0, 1, 2, 4, 5));
+        customers = profiled("q84.join.household_demographics", new HashJoinOperator(allocator, customers, 4, eligibleHouseholds, 0)
+                .withOutputs(0, 1, 2, 3));
+        customers = profiled("q84.join.store_returns", new HashJoinOperator(allocator, customers, 3, profiled("q84.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_cdemo_sk")), 0)
+                .withOutputs(0, 1, 2));
         Operator projected = projectCustomerName(allocator, primitiveRegistry, customers, 0, 1, 2);
         return new TopNOperator(allocator, 100, 0, false, projected);
     }
@@ -3620,12 +3680,12 @@ final class TpcdsParquetSupport
 
     public static Operator query75(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator currentYear = filter(allocator, primitiveRegistry, query75AllSales(allocator, primitiveRegistry, tables), equal(0, 2002));
-        Operator previousYear = filter(allocator, primitiveRegistry, query75AllSales(allocator, primitiveRegistry, tables), equal(0, 2001));
-        Operator joined = new HashJoinOperator(allocator, currentYear, new int[] {1, 2, 3, 4}, previousYear, new int[] {1, 2, 3, 4});
-        joined = filter(allocator, primitiveRegistry, joined, query75CountRatioPredicate(5, 12));
-        joined = projectQuery75Output(allocator, primitiveRegistry, joined);
-        return new TopNOperator(allocator, 100, new int[] {8, 9}, new boolean[] {false, false}, joined);
+        Operator currentYear = profiled("q75.filter.current", filter(allocator, primitiveRegistry, query75AllSales(allocator, primitiveRegistry, tables, "q75.current"), equal(0, 2002)));
+        Operator previousYear = profiled("q75.filter.previous", filter(allocator, primitiveRegistry, query75AllSales(allocator, primitiveRegistry, tables, "q75.previous"), equal(0, 2001)));
+        Operator joined = profiled("q75.join.previous", new HashJoinOperator(allocator, currentYear, new int[] {1, 2, 3, 4}, previousYear, new int[] {1, 2, 3, 4}));
+        joined = profiled("q75.filter.ratio", filter(allocator, primitiveRegistry, joined, query75CountRatioPredicate(5, 12)));
+        joined = profiled("q75.project.output", projectQuery75Output(allocator, primitiveRegistry, joined));
+        return profiled("q75.topn", new TopNOperator(allocator, 100, new int[] {8, 9}, new boolean[] {false, false}, joined));
     }
 
     public static Operator query78(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3644,7 +3704,8 @@ final class TpcdsParquetSupport
                 "ss_sales_price",
                 "store_returns",
                 "sr_item_sk",
-                "sr_ticket_number");
+                "sr_ticket_number",
+                "q78.store");
         Operator web = query78Channel(
                 allocator,
                 primitiveRegistry,
@@ -3659,7 +3720,8 @@ final class TpcdsParquetSupport
                 "ws_sales_price",
                 "web_returns",
                 "wr_item_sk",
-                "wr_order_number");
+                "wr_order_number",
+                "q78.web");
         Operator catalog = query78Channel(
                 allocator,
                 primitiveRegistry,
@@ -3674,13 +3736,27 @@ final class TpcdsParquetSupport
                 "cs_sales_price",
                 "catalog_returns",
                 "cr_item_sk",
-                "cr_order_number");
-        Operator joined = new HashJoinOperator(allocator, store, new int[] {0, 1, 2}, web, new int[] {0, 1, 2}, true);
-        joined = new HashJoinOperator(allocator, joined, new int[] {0, 2}, catalog, new int[] {0, 2}, true);
-        joined = filter(allocator, primitiveRegistry, joined, and(greaterThan(9, 0), greaterThan(15, 0)));
-        joined = projectQuery78Output(allocator, primitiveRegistry, joined);
-        joined = new TopNOperator(allocator, 100, new int[] {8, 9, 0, 2, 3, 4, 5, 6, 7, 1}, new boolean[] {false, false, false, true, true, true, false, false, false, false}, joined);
-        return projectInputs(allocator, primitiveRegistry, joined, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7);
+                "cr_order_number",
+                "q78.catalog");
+        HashJoinOperator storeWebJoin = new HashJoinOperator(allocator, store, new int[] {0, 1, 2}, web, new int[] {0, 1, 2}, true);
+        if (QUERY78_COMPACT_JOIN_LAYOUTS) {
+            storeWebJoin = storeWebJoin.withOutputs(0, 1, 2, 3, 4, 5, 9, 10, 11);
+        }
+        Operator joined = profiled("q78.join.store_web", storeWebJoin);
+        HashJoinOperator catalogJoin = new HashJoinOperator(allocator, joined, new int[] {0, 2}, catalog, new int[] {0, 2}, true);
+        if (QUERY78_COMPACT_JOIN_LAYOUTS) {
+            catalogJoin = catalogJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 14);
+            joined = profiled("q78.join.catalog", catalogJoin);
+            joined = profiled("q78.filter.positive_quantities", filter(allocator, primitiveRegistry, joined, and(greaterThan(6, 0), greaterThan(9, 0))));
+            joined = profiled("q78.project.output", projectQuery78CompactOutput(allocator, primitiveRegistry, joined));
+        }
+        else {
+            joined = profiled("q78.join.catalog", catalogJoin);
+            joined = profiled("q78.filter.positive_quantities", filter(allocator, primitiveRegistry, joined, and(greaterThan(9, 0), greaterThan(15, 0))));
+            joined = profiled("q78.project.output", projectQuery78Output(allocator, primitiveRegistry, joined));
+        }
+        joined = profiled("q78.top100", new TopNOperator(allocator, 100, new int[] {8, 9, 0, 2, 3, 4, 5, 6, 7, 1}, new boolean[] {false, false, false, true, true, true, false, false, false, false}, joined));
+        return profiled("q78.project.final", projectInputs(allocator, primitiveRegistry, joined, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7));
     }
 
     public static Operator query90(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -3717,12 +3793,20 @@ final class TpcdsParquetSupport
     public static Operator query85(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator sales = factScan(allocator, tables, "web_sales", "ws_web_page_sk", "ws_item_sk", "ws_order_number", "ws_sold_date_sk", "ws_quantity", "ws_sales_price", "ws_net_profit");
-        sales = new HashJoinOperator(allocator, sales, 0, scannedTable(allocator, tables, "web_page", "wp_web_page_sk"), 0);
-        sales = new HashJoinOperator(allocator, sales, new int[] {1, 2}, scannedTable(allocator, tables, "web_returns", "wr_item_sk", "wr_order_number", "wr_refunded_cdemo_sk", "wr_returning_cdemo_sk", "wr_refunded_addr_sk", "wr_reason_sk", "wr_refunded_cash", "wr_fee"), new int[] {0, 1});
-        sales = new HashJoinOperator(
+        sales = profiled("q85.join.web_page", new HashJoinOperator(allocator, sales, 0, scannedTable(allocator, tables, "web_page", "wp_web_page_sk"), 0)
+                .withOutputs(1, 2, 3, 4, 5, 6)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.web_returns", new HashJoinOperator(allocator, sales, new int[] {0, 1}, scannedTable(allocator, tables, "web_returns", "wr_item_sk", "wr_order_number", "wr_refunded_cdemo_sk", "wr_returning_cdemo_sk", "wr_refunded_addr_sk", "wr_reason_sk", "wr_refunded_cash", "wr_fee"), new int[] {0, 1})
+                .withOutputs(2, 3, 4, 5, 8, 9, 10, 11, 12, 13)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
-                3,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -3731,15 +3815,34 @@ final class TpcdsParquetSupport
                         equal(1, 2000),
                         new String[] {"d_date_sk", "d_year"},
                         0),
-                0);
-        sales = new HashJoinOperator(allocator, sales, 10, scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"), 0);
-        sales = new HashJoinOperator(allocator, sales, 11, scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"), 0);
-        sales = new HashJoinOperator(allocator, sales, 12, scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_country", "ca_state"), 0);
-        sales = new HashJoinOperator(allocator, sales, 13, scannedTable(allocator, tables, "reason", "r_reason_sk", "r_reason_desc"), 0);
-        sales = filter(allocator, primitiveRegistry, sales, and(
-                query85DemographicsAndPricePredicate(18, 19, 21, 22, 5),
-                query85AddressProfitPredicate(24, 25, 6)));
-        sales = projectInputs(allocator, primitiveRegistry, sales, 27, 4, 14, 15);
+                0).withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 9)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.refunded_demo", new HashJoinOperator(allocator, sales, 3, scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"), 0)
+                .withOutputs(0, 1, 2, 4, 5, 6, 7, 8, 10, 11)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.returning_demo", new HashJoinOperator(allocator, sales, 3, scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status", "cd_education_status"), 0)
+                .withOutputs(0, 1, 2, 4, 5, 6, 7, 8, 9, 11, 12)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.customer_address", new HashJoinOperator(allocator, sales, 3, scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_country", "ca_state"), 0)
+                .withOutputs(0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 13)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.join.reason", new HashJoinOperator(allocator, sales, 3, scannedTable(allocator, tables, "reason", "r_reason_sk", "r_reason_desc"), 0)
+                .withOutputs(0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 13)
+                .withComposeEncodedOuterDictionaryDepth(0)
+                .withLazyDuplicateSlotState()
+                .withDirectExactBuildCoalescing());
+        sales = profiled("q85.filter", filter(allocator, primitiveRegistry, sales, and(
+                query85DemographicsAndPricePredicate(5, 6, 7, 8, 1),
+                query85AddressProfitPredicate(9, 10, 2))));
+        sales = projectInputs(allocator, primitiveRegistry, sales, 11, 0, 3, 4);
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -3785,13 +3888,13 @@ final class TpcdsParquetSupport
 
     public static Operator query93(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {false, false}, query93GroupedSales(allocator, primitiveRegistry, tables));
+        return profiled("q93.topn", new TopNOperator(allocator, 100, new int[] {1, 0}, new boolean[] {false, false}, query93GroupedSales(allocator, primitiveRegistry, tables)));
     }
 
     static Operator query93ProjectedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator returns = scannedTable(allocator, tables, "store_returns", "sr_item_sk", "sr_reason_sk", "sr_ticket_number", "sr_return_quantity");
-        returns = new HashJoinOperator(
+        Operator returns = profiled("q93.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_item_sk", "sr_reason_sk", "sr_ticket_number", "sr_return_quantity"));
+        returns = profiled("q93.join.reason", new HashJoinOperator(
                 allocator,
                 returns,
                 1,
@@ -3803,12 +3906,12 @@ final class TpcdsParquetSupport
                         equalUtf8(1, "reason 28"),
                         new String[] {"r_reason_sk", "r_reason_desc"},
                         0),
-                0);
-        returns = projectInputs(allocator, primitiveRegistry, returns, 0, 2, 3);
+                0));
+        returns = profiled("q93.project.returns", projectInputs(allocator, primitiveRegistry, returns, 0, 2, 3));
 
-        Operator sales = factScan(allocator, tables, "store_sales", "ss_item_sk", "ss_customer_sk", "ss_ticket_number", "ss_quantity", "ss_sales_price");
-        sales = new HashJoinOperator(allocator, sales, new int[] {0, 2}, returns, new int[] {0, 1});
-        sales = projectQuery93SalesValue(allocator, primitiveRegistry, sales);
+        Operator sales = profiled("q93.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_item_sk", "ss_customer_sk", "ss_ticket_number", "ss_quantity", "ss_sales_price"));
+        sales = profiled("q93.join.returns", new HashJoinOperator(allocator, sales, new int[] {0, 2}, returns, new int[] {0, 1}));
+        sales = profiled("q93.project.sales_value", projectQuery93SalesValue(allocator, primitiveRegistry, sales));
         return sales;
     }
 
@@ -3837,11 +3940,11 @@ final class TpcdsParquetSupport
 
     private static Operator query93GroupedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        return new GroupedAggregationOperator(
+        return profiled("q93.group.customer", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new Sum(1)),
-                query93ProjectedSales(allocator, primitiveRegistry, tables));
+                query93ProjectedSales(allocator, primitiveRegistry, tables)));
     }
 
     public static Operator query88(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -4819,8 +4922,13 @@ final class TpcdsParquetSupport
     {
         Operator left = factScan(allocator, tables, "web_sales", "ws_warehouse_sk", "ws_order_number");
         Operator right = factScan(allocator, tables, "web_sales", "ws_warehouse_sk", "ws_order_number");
-        Operator joined = new HashJoinOperator(allocator, left, 1, right, 1);
-        joined = filter(allocator, primitiveRegistry, joined, notEqualColumns(0, 2));
+        Operator joined = new HashJoinOperator(
+                allocator,
+                left,
+                1,
+                right,
+                1,
+                HashJoinOperator.JoinFilter.longNotEqual(0, 0));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
         return new MarkDistinctOperator(allocator, 0, joined);
     }
@@ -5148,8 +5256,9 @@ final class TpcdsParquetSupport
 
     private static Operator query24Sales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String colorFilter)
     {
-        Operator sales = query24CustomerStoreItemSales(allocator, primitiveRegistry, tables);
-        sales = new HashJoinOperator(
+        boolean compactJoinLayouts = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query24CompactJoinLayouts", "true"));
+        Operator sales = profiled("q24.pale.base", query24CustomerStoreItemSales(allocator, primitiveRegistry, tables));
+        HashJoinOperator storeJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 3,
@@ -5164,11 +5273,15 @@ final class TpcdsParquetSupport
                                 and(equal(1, 8), notEmptyUtf8(4)),
                                 new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
                                 0, 2, 3, 4)),
-                0);
-        sales = new HashJoinOperator(
+                        0);
+        if (compactJoinLayouts) {
+            storeJoin.withOutputs(0, 1, 2, 4, 5, 7, 8, 9);
+        }
+        sales = profiled("q24.pale.join.store", storeJoin);
+        HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                4,
+                compactJoinLayouts ? 3 : 4,
                 colorFilter == null
                         ? scannedTable(allocator, tables, "item", "i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id")
                         : filteredProjectedTable(
@@ -5179,24 +5292,33 @@ final class TpcdsParquetSupport
                                 equalUtf8(3, colorFilter),
                                 new String[] {"i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id"}),
                 0);
-        sales = new HashJoinOperator(
+        if (compactJoinLayouts) {
+            itemJoin.withOutputs(0, 1, 2, 4, 5, 6, 7, 11, 9, 12, 13, 10);
+        }
+        sales = profiled("q24.pale.join.item", itemJoin);
+        HashJoinOperator addressJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                9,
+                compactJoinLayouts ? 6 : 9,
                 query24AddressLookup(allocator, primitiveRegistry, tables),
-                0);
-        sales = filter(allocator, primitiveRegistry, sales, equalUtf8Columns(2, 17));
-        return new GroupedAggregationOperator(
+                0,
+                HashJoinOperator.JoinFilter.binaryEquals(2, 1));
+        if (compactJoinLayouts) {
+            addressJoin.withOutputs(0, 1, 4, 14, 5, 7, 8, 10, 9, 11, 3);
+        }
+        sales = profiled("q24.pale.join.address", addressJoin);
+        return profiled("q24.pale.group", new GroupedAggregationOperator(
                 allocator,
-                List.of(0, 1, 7, 18, 8, 13, 11, 15, 14, 12),
-                List.of(new Sum(5)),
-                sales);
+                compactJoinLayouts ? List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9) : List.of(0, 1, 7, 18, 8, 13, 11, 15, 14, 12),
+                List.of(new Sum(compactJoinLayouts ? 10 : 5)),
+                sales));
     }
 
     private static Operator query24AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = query24CustomerStoreItemSales(allocator, primitiveRegistry, tables);
-        sales = new HashJoinOperator(
+        boolean compactJoinLayouts = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query24CompactJoinLayouts", "true"));
+        Operator sales = profiled("q24.average.base", query24CustomerStoreItemSales(allocator, primitiveRegistry, tables));
+        HashJoinOperator storeJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 3,
@@ -5211,37 +5333,56 @@ final class TpcdsParquetSupport
                                 and(equal(1, 8), notEmptyUtf8(4)),
                                 new String[] {"s_store_sk", "s_market_id", "s_store_name", "s_state", "s_zip"},
                                 0, 4)),
-                0);
-        sales = new HashJoinOperator(
+                        0);
+        if (compactJoinLayouts) {
+            storeJoin.withOutputs(0, 1, 2, 3, 4, 5, 7);
+        }
+        sales = profiled("q24.average.join.store", storeJoin);
+        HashJoinOperator addressJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                7,
+                compactJoinLayouts ? 6 : 7,
                 query24AddressLookup(allocator, primitiveRegistry, tables),
-                0);
-        sales = filter(allocator, primitiveRegistry, sales, equalUtf8Columns(2, 9));
-        return new GroupedAggregationOperator(
+                0,
+                HashJoinOperator.JoinFilter.binaryEquals(2, 1));
+        if (compactJoinLayouts) {
+            addressJoin.withOutputs(0, 1, 9, 3, 4, 5);
+        }
+        sales = profiled("q24.average.join.address", addressJoin);
+        return profiled("q24.average.group", new GroupedAggregationOperator(
                 allocator,
-                List.of(0, 1, 10, 3, 4),
+                compactJoinLayouts ? List.of(0, 1, 2, 3, 4) : List.of(0, 1, 10, 3, 4),
                 List.of(new Sum(5)),
-                sales);
+                sales));
     }
 
     private static Operator query24CustomerStoreItemSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
+        boolean compactJoinLayouts = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query24CompactJoinLayouts", "true"));
         Operator sales = profiled("q24.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"));
-        sales = profiled("q24.join.store_returns", new HashJoinOperator(
+        HashJoinOperator returnsJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {0, 1},
                 profiled("q24.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk")),
-                new int[] {0, 1}));
-        sales = profiled("q24.join.customer", new HashJoinOperator(
+                new int[] {0, 1});
+        if (compactJoinLayouts) {
+            returnsJoin.withOutputs(1, 2, 3, 4);
+        }
+        sales = profiled("q24.join.store_returns", returnsJoin);
+        HashJoinOperator customerJoin = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                compactJoinLayouts ? 1 : 2,
                 profiled("q24.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country")),
-                0));
-        sales = profiled("q24.project", projectInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 3, 1, 4));
+                0);
+        if (compactJoinLayouts) {
+            customerJoin.withOutputs(5, 6, 7, 2, 0, 3);
+        }
+        sales = profiled("q24.join.customer", customerJoin);
+        if (!compactJoinLayouts) {
+            sales = profiled("q24.project", projectInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 3, 1, 4));
+        }
         return profiled("q24.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
@@ -5423,81 +5564,88 @@ final class TpcdsParquetSupport
 
     private static Operator query23FrequentItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator frequentItems = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk");
-        frequentItems = new HashJoinOperator(
+        Operator frequentItems = profiled("q23.frequent.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk"));
+        frequentItems = profiled("q23.frequent.join.date", new HashJoinOperator(
                 allocator,
                 frequentItems,
                 0,
-                filteredProjectedTable(
+                profiled("q23.frequent.scan.date", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         query23YearRangePredicate(),
                         new String[] {"d_date_sk", "d_year", "d_date"},
-                        0, 2),
-                0);
-        frequentItems = new HashJoinOperator(
+                        0, 2)),
+                0));
+        frequentItems = profiled("q23.frequent.join.item", new HashJoinOperator(
                 allocator,
                 frequentItems,
                 1,
-                scannedTable(allocator, tables, "item", "i_item_sk"),
-                0);
-        frequentItems = projectInputs(allocator, primitiveRegistry, frequentItems, 1, 3);
-        frequentItems = new GroupedAggregationOperator(
+                profiled("q23.frequent.scan.item", scannedTable(allocator, tables, "item", "i_item_sk")),
+                0));
+        frequentItems = profiled("q23.frequent.project", projectInputs(allocator, primitiveRegistry, frequentItems, 1, 3));
+        frequentItems = profiled("q23.frequent.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new CountAll()),
-                frequentItems);
-        frequentItems = filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4));
-        frequentItems = projectInputs(allocator, primitiveRegistry, frequentItems, 0);
-        return new MarkDistinctOperator(allocator, 0, frequentItems);
+                frequentItems));
+        frequentItems = profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4)));
+        frequentItems = profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
+        return profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems));
     }
 
     private static Operator query23CustomerSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean filterYears)
     {
+        String profile = filterYears ? "q23.customer_window" : "q23.customer_all";
         Operator sales = filterYears
-                ? factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_quantity", "ss_sales_price")
-                : factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_quantity", "ss_sales_price");
+                ? profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_quantity", "ss_sales_price"))
+                : profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_quantity", "ss_sales_price"));
         if (filterYears) {
-            sales = new HashJoinOperator(
+            sales = profiled(profile + ".join.date", new HashJoinOperator(
                     allocator,
                     sales,
                     1,
-                    filteredProjectedTable(
+                    profiled(profile + ".scan.date", filteredProjectedTable(
                             allocator,
                             primitiveRegistry,
                             tables,
                             "date_dim",
                             query23YearRangePredicate(),
                             new String[] {"d_date_sk", "d_year"},
-                            0),
-                    0);
+                            0)),
+                    0));
         }
-        sales = new HashJoinOperator(
+        HashJoinOperator customerJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 0,
-                scannedTable(allocator, tables, "customer", "c_customer_sk"),
+                profiled(profile + ".scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk")),
                 0);
-        sales = projectQuery23SalesValue(allocator, primitiveRegistry, sales, 0, filterYears ? 2 : 1, filterYears ? 3 : 2);
-        return new GroupedAggregationOperator(
+        // The customer join is an eligibility join; its key is equal to ss_customer_sk and no inner payload is
+        // consumed. Retain the SQL-derived store_sales columns in their original order and discard only the inner
+        // duplicate key. The former ordinals came from the pre-compaction wide scan and are now out of bounds.
+        sales = profiled(profile + ".join.customer", filterYears
+                ? customerJoin.withOutputs(0, 1, 2, 3)
+                : customerJoin.withOutputs(0, 1, 2));
+        sales = profiled(profile + ".project_value", projectQuery23SalesValue(allocator, primitiveRegistry, sales, 0, filterYears ? 2 : 1, filterYears ? 3 : 2));
+        return profiled(profile + ".group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new Sum(1)),
-                sales);
+                sales));
     }
 
     private static Operator query23BestCustomers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator customerSales = query23CustomerSales(allocator, primitiveRegistry, tables, false);
-        Operator maxStoreSales = new AggregationOperator(
+        Operator customerSales = profiled("q23.best.customer_sales", query23CustomerSales(allocator, primitiveRegistry, tables, false));
+        Operator maxStoreSales = profiled("q23.best.max", new AggregationOperator(
                 allocator,
                 List.of(new Max(0)),
-                projectInputs(allocator, primitiveRegistry, query23CustomerSales(allocator, primitiveRegistry, tables, true), 1));
-        customerSales = new NestedLoopJoinOperator(allocator, customerSales, maxStoreSales);
-        customerSales = filter(allocator, primitiveRegistry, customerSales, query23HalfMaxPredicate(1, 2));
-        return projectInputs(allocator, primitiveRegistry, customerSales, 0);
+                profiled("q23.best.project_window", projectInputs(allocator, primitiveRegistry, query23CustomerSales(allocator, primitiveRegistry, tables, true), 1))));
+        customerSales = profiled("q23.best.join_max", new NestedLoopJoinOperator(allocator, customerSales, maxStoreSales));
+        customerSales = profiled("q23.best.filter", filter(allocator, primitiveRegistry, customerSales, query23HalfMaxPredicate(1, 2)));
+        return profiled("q23.best.project_customer", projectInputs(allocator, primitiveRegistry, customerSales, 0));
     }
 
     private static Operator query23Channel(
@@ -5511,23 +5659,24 @@ final class TpcdsParquetSupport
             String quantityColumn,
             String listPriceColumn)
     {
-        Operator channel = factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, itemColumn, quantityColumn, listPriceColumn);
-        channel = new HashJoinOperator(
+        String profile = salesTable.equals("catalog_sales") ? "q23.catalog" : "q23.web";
+        Operator channel = profiled(profile + ".scan", factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, itemColumn, quantityColumn, listPriceColumn));
+        channel = profiled(profile + ".join.date", new HashJoinOperator(
                 allocator,
                 channel,
                 0,
-                filteredProjectedTable(
+                profiled(profile + ".scan.date", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         and(equal(1, 2000), equal(2, 2)),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
-                        0),
-                0);
-        channel = new SemiJoinOperator(allocator, channel, 2, query23FrequentItems(allocator, primitiveRegistry, tables), 0);
-        channel = new SemiJoinOperator(allocator, channel, 1, query23BestCustomers(allocator, primitiveRegistry, tables), 0);
-        return projectQuery23SalesOnly(allocator, primitiveRegistry, channel, 3, 4);
+                        0)),
+                0));
+        channel = profiled(profile + ".semi.frequent", new SemiJoinOperator(allocator, channel, 2, query23FrequentItems(allocator, primitiveRegistry, tables), 0));
+        channel = profiled(profile + ".semi.best", new SemiJoinOperator(allocator, channel, 1, query23BestCustomers(allocator, primitiveRegistry, tables), 0));
+        return profiled(profile + ".project_sales", projectQuery23SalesOnly(allocator, primitiveRegistry, channel, 3, 4));
     }
 
     private static Operator query92ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -6458,7 +6607,7 @@ final class TpcdsParquetSupport
                 primitiveRegistry,
                 query01CustomerStoreReturnsWithValueCounts(allocator, primitiveRegistry, tables),
                 0,
-                1,
+                0,
                 2);
     }
 
@@ -6543,8 +6692,9 @@ final class TpcdsParquetSupport
 
     private static Operator query51Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn)
     {
-        Operator facts = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesPriceColumn);
-        facts = filter(allocator, primitiveRegistry, facts, isNotNullI64(1));
+        String profilePrefix = "q51." + salesTable;
+        Operator facts = profiled(profilePrefix + ".scan", factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, salesPriceColumn));
+        facts = profiled(profilePrefix + ".filter.item", filter(allocator, primitiveRegistry, facts, isNotNullI64(1)));
         Operator allowedDates = filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
@@ -6554,19 +6704,19 @@ final class TpcdsParquetSupport
                 new String[] {"d_date_sk", "d_date", "d_month_seq"},
                 0,
                 1);
-        facts = new HashJoinOperator(allocator, facts, 0, allowedDates, 0);
-        Operator grouped = new GroupedAggregationOperator(
+        facts = profiled(profilePrefix + ".join.date", new HashJoinOperator(allocator, facts, 0, allowedDates, 0));
+        Operator grouped = profiled(profilePrefix + ".group.item_date", new GroupedAggregationOperator(
                 allocator,
                 List.of(1, 4),
                 List.of(new Sum(2)),
-                facts);
-        Operator running = new WindowOperator(
+                facts));
+        Operator running = profiled(profilePrefix + ".window.running_sum", new WindowOperator(
                 allocator,
                 grouped,
                 new int[] {0},
                 new int[] {1},
                 new boolean[] {false},
-                List.of(new RunningSumI64WindowFunction(2)));
+                List.of(new RunningSumI64WindowFunction(2))));
         return projectInputs(allocator, primitiveRegistry, running, 0, 1, 3);
     }
 
@@ -6723,68 +6873,68 @@ final class TpcdsParquetSupport
 
     private static Operator query54RevenueByCustomer(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator revenue = factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price");
-        revenue = new HashJoinOperator(allocator, revenue, 0, query54MyCustomers(allocator, primitiveRegistry, tables), 0);
-        revenue = new HashJoinOperator(
+        Operator revenue = profiled("q54.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_sales_price"));
+        revenue = profiled("q54.join.my_customers", new HashJoinOperator(allocator, revenue, 0, query54MyCustomers(allocator, primitiveRegistry, tables), 0));
+        revenue = profiled("q54.join.customer_address", new HashJoinOperator(
                 allocator,
                 revenue,
                 4,
                 scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_county", "ca_state"),
-                0);
-        revenue = new HashJoinOperator(
+                0));
+        revenue = profiled("q54.join.store", new HashJoinOperator(
                 allocator,
                 revenue,
                 new int[] {6, 7},
                 scannedTable(allocator, tables, "store", "s_county", "s_state"),
-                new int[] {0, 1});
-        revenue = new HashJoinOperator(
+                new int[] {0, 1}));
+        revenue = profiled("q54.join.date_dim", new HashJoinOperator(
                 allocator,
                 revenue,
                 1,
                 scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_month_seq"),
-                0);
+                0));
         return projectInputs(allocator, primitiveRegistry, revenue, 3, 2, 11);
     }
 
     private static Operator query54MyCustomers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator customerSales = new UnionAllOperator(3, List.of(
-                factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk"),
-                factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk")));
-        customerSales = new HashJoinOperator(
+                profiled("q54.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_bill_customer_sk", "cs_item_sk")),
+                profiled("q54.scan.web_sales", factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_bill_customer_sk", "ws_item_sk"))));
+        customerSales = profiled("q54.join.item", new HashJoinOperator(
                 allocator,
                 customerSales,
                 2,
-                filteredProjectedTable(
+                profiled("q54.scan.item", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "item",
                         and(equalUtf8(1, "Women"), equalUtf8(2, "maternity")),
                         new String[] {"i_item_sk", "i_category", "i_class"},
-                        0),
-                0);
-        customerSales = new HashJoinOperator(
+                        0)),
+                0));
+        customerSales = profiled("q54.join.sales_date", new HashJoinOperator(
                 allocator,
                 customerSales,
                 0,
-                filteredProjectedTable(
+                profiled("q54.scan.sales_date", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         and(equal(1, 12), equal(2, 1998)),
                         new String[] {"d_date_sk", "d_moy", "d_year"},
-                        0),
-                0);
-        customerSales = new HashJoinOperator(
+                        0)),
+                0));
+        customerSales = profiled("q54.join.customer", new HashJoinOperator(
                 allocator,
                 customerSales,
                 1,
-                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk"),
-                0);
+                profiled("q54.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk")),
+                0));
         customerSales = projectInputs(allocator, primitiveRegistry, customerSales, 1, 6);
-        return new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales);
+        return profiled("q54.distinct.customer_address", new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales));
     }
 
     private static Operator query54ScalarMonthBoundary(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int offset)
@@ -6977,8 +7127,9 @@ final class TpcdsParquetSupport
     private static Operator query21InventoryByWarehouseItem(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean beforeCutoff)
     {
         LocalDate cutoffDate = LocalDate.of(2000, 3, 11);
-        Operator inventory = scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand");
-        inventory = new HashJoinOperator(
+        String profilePrefix = beforeCutoff ? "q21.before" : "q21.after";
+        Operator inventory = profiled(profilePrefix + ".scan.inventory", scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand"));
+        HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 inventory,
                 0,
@@ -6991,16 +7142,18 @@ final class TpcdsParquetSupport
                         new String[] {"i_item_sk", "i_current_price", "i_item_id"},
                         0, 2),
                 0);
-        inventory = new HashJoinOperator(
+        inventory = profiled(profilePrefix + ".join.item", QUERY21_COMPACT_JOIN_LAYOUTS ? itemJoin.withOutputs(1, 2, 3, 5) : itemJoin);
+        HashJoinOperator warehouseJoin = new HashJoinOperator(
                 allocator,
                 inventory,
-                1,
+                QUERY21_COMPACT_JOIN_LAYOUTS ? 0 : 1,
                 scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"),
                 0);
-        inventory = new HashJoinOperator(
+        inventory = profiled(profilePrefix + ".join.warehouse", QUERY21_COMPACT_JOIN_LAYOUTS ? warehouseJoin.withOutputs(1, 2, 3, 5) : warehouseJoin);
+        HashJoinOperator dateJoin = new HashJoinOperator(
                 allocator,
                 inventory,
-                2,
+                QUERY21_COMPACT_JOIN_LAYOUTS ? 0 : 2,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -7012,12 +7165,19 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_date"},
                         0),
                 0);
-        inventory = projectInputs(allocator, primitiveRegistry, inventory, 7, 5, 3);
-        return new GroupedAggregationOperator(
+        inventory = profiled(profilePrefix + ".join.date_dim", QUERY21_COMPACT_JOIN_LAYOUTS ? dateJoin.withOutputs(1, 2, 3) : dateJoin);
+        inventory = profiled(profilePrefix + ".project.inventory", projectInputs(
+                allocator,
+                primitiveRegistry,
+                inventory,
+                QUERY21_COMPACT_JOIN_LAYOUTS ? 2 : 7,
+                QUERY21_COMPACT_JOIN_LAYOUTS ? 1 : 5,
+                QUERY21_COMPACT_JOIN_LAYOUTS ? 0 : 3));
+        return profiled(profilePrefix + ".group.inventory", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new Sum(2)),
-                inventory);
+                inventory));
     }
 
     private static Operator query04ChannelYearTotal(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String customerColumn, String soldDateColumn, String listPriceColumn, String wholesaleCostColumn, String discountColumn, String salesPriceColumn, int year)
@@ -7255,10 +7415,11 @@ final class TpcdsParquetSupport
         return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
     }
 
-    private static Operator projectQuery58Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    private static Operator projectThreeChannelOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, long averageScale)
     {
         Variable three = new Variable(0);
-        Variable tenThousand = new Variable(1);
+        Variable deviationScale = new Variable(1);
+        Variable resultAverageScale = new Variable(13);
         Variable firstPairTotal = new Variable(2);
         Variable totalRevenue = new Variable(3);
         Variable denominator = new Variable(4);
@@ -7274,7 +7435,8 @@ final class TpcdsParquetSupport
                 allocator,
                 new EvaluationPlan(List.of(
                         new Assignment(three, new Literal(3L), AllMask.ALL),
-                        new Assignment(tenThousand, new Literal(10_000L), AllMask.ALL),
+                        new Assignment(deviationScale, new Literal(10_000L), AllMask.ALL),
+                        new Assignment(resultAverageScale, new Literal(averageScale), AllMask.ALL),
                         new Assignment(firstPairTotal, new Call("add", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
@@ -7286,16 +7448,16 @@ final class TpcdsParquetSupport
                                 new Reference(three, Stream.VALUES))), AllMask.ALL),
                         new Assignment(scaledStoreRevenue, new Call("multiply", List.of(
                                 new Reference(new Input(1), Stream.VALUES),
-                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                                new Reference(deviationScale, Stream.VALUES))), AllMask.ALL),
                         new Assignment(scaledCatalogRevenue, new Call("multiply", List.of(
                                 new Reference(new Input(2), Stream.VALUES),
-                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                                new Reference(deviationScale, Stream.VALUES))), AllMask.ALL),
                         new Assignment(scaledWebRevenue, new Call("multiply", List.of(
                                 new Reference(new Input(3), Stream.VALUES),
-                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                                new Reference(deviationScale, Stream.VALUES))), AllMask.ALL),
                         new Assignment(scaledTotalRevenue, new Call("multiply", List.of(
                                 new Reference(totalRevenue, Stream.VALUES),
-                                new Reference(tenThousand, Stream.VALUES))), AllMask.ALL),
+                                new Reference(resultAverageScale, Stream.VALUES))), AllMask.ALL),
                         new Assignment(storeDeviation, new Call("divide_round_i64", List.of(
                                 new Reference(scaledStoreRevenue, Stream.VALUES),
                                 new Reference(denominator, Stream.VALUES))), AllMask.ALL),
@@ -7375,6 +7537,33 @@ final class TpcdsParquetSupport
                         new Reference(averageSalesPrice, Stream.VALUES),
                         new Reference(averageWholesaleCost, Stream.VALUES),
                         new Reference(new Input(3), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery26Averages(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable averageListPrice = new Variable(0);
+        Variable averageCouponAmount = new Variable(1);
+        Variable averageSalesPrice = new Variable(2);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(List.of(
+                        new Assignment(averageListPrice, new Call("divide_round_i64", List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(averageCouponAmount, new Call("divide_round_i64", List.of(
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(averageSalesPrice, new Call("divide_round_i64", List.of(
+                                new Reference(new Input(6), Stream.VALUES),
+                                new Reference(new Input(7), Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(averageListPrice, Stream.VALUES),
+                        new Reference(averageCouponAmount, Stream.VALUES),
+                        new Reference(averageSalesPrice, Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
@@ -7736,17 +7925,23 @@ final class TpcdsParquetSupport
                         new Reference(wednesdaySales, Stream.VALUES),
                         new Reference(thursdaySales, Stream.VALUES),
                         new Reference(fridaySales, Stream.VALUES),
-                        new Reference(saturdaySales, Stream.VALUES))),
+                        new Reference(saturdaySales, Stream.VALUES),
+                        // Hidden physical channels for conditional-aggregation fusion. The SQL projection outputs
+                        // above remain present and lazy; a fused accumulator can consume the original discriminator
+                        // and value without materializing seven sparse vectors.
+                        new Reference(new Input(dayNameIndex), Stream.VALUES),
+                        new Reference(new Input(salesIndex), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
 
     private static Operator query02WeeklySales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, long year)
     {
+        String prefix = "q02." + year;
         Operator union = new UnionAllOperator(2, List.of(
-                factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_ext_sales_price"),
-                factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_ext_sales_price")));
-        union = new HashJoinOperator(
+                profiled(prefix + ".scan.web_sales", factScan(allocator, tables, "web_sales", "ws_sold_date_sk", "ws_ext_sales_price")),
+                profiled(prefix + ".scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_ext_sales_price"))));
+        union = profiled(prefix + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 union,
                 0,
@@ -7758,14 +7953,24 @@ final class TpcdsParquetSupport
                         null,
                         new String[] {"d_date_sk", "d_week_seq", "d_day_name"},
                         0, 1, 2),
-                0);
-        union = projectQuery02Buckets(allocator, primitiveRegistry, union, 3, 4, 1);
-        Operator weekly = new GroupedAggregationOperator(
+                0).withOutputs(1, 3, 4));
+        union = profiled(prefix + ".project.buckets", projectQuery02Buckets(allocator, primitiveRegistry, union, 1, 2, 0));
+        List<org.weakref.nitro.operator.aggregation.Accumulator> sums = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query02ConditionalAggregation", "true"))
+                ? List.of(
+                        ConditionalSum.equalUtf8(8, "Sunday", 9),
+                        ConditionalSum.equalUtf8(8, "Monday", 9),
+                        ConditionalSum.equalUtf8(8, "Tuesday", 9),
+                        ConditionalSum.equalUtf8(8, "Wednesday", 9),
+                        ConditionalSum.equalUtf8(8, "Thursday", 9),
+                        ConditionalSum.equalUtf8(8, "Friday", 9),
+                        ConditionalSum.equalUtf8(8, "Saturday", 9))
+                : List.of(new Sum(1), new Sum(2), new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7));
+        Operator weekly = profiled(prefix + ".group.week", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new Sum(1), new Sum(2), new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7)),
-                union);
-        weekly = new HashJoinOperator(
+                sums,
+                union));
+        weekly = profiled(prefix + ".join.year", new HashJoinOperator(
                 allocator,
                 weekly,
                 0,
@@ -7777,8 +7982,8 @@ final class TpcdsParquetSupport
                         equal(1, year),
                         new String[] {"d_week_seq", "d_year"},
                         0),
-                0);
-        return projectInputs(allocator, primitiveRegistry, weekly, 0, 1, 2, 3, 4, 5, 6, 7);
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7));
+        return weekly;
     }
 
     private static Operator projectQuery02AdjustedWeek(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -7823,35 +8028,35 @@ final class TpcdsParquetSupport
                         List.of(
                                 new Assignment(hundred, new Literal(100L), AllMask.ALL),
                                 new Assignment(sundayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(2), Stream.VALUES),
-                                        new Reference(new Input(10), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES),
+                                        new Reference(new Input(8), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(mondayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(3), Stream.VALUES),
-                                        new Reference(new Input(11), Stream.VALUES),
+                                        new Reference(new Input(2), Stream.VALUES),
+                                        new Reference(new Input(9), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(tuesdayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(4), Stream.VALUES),
-                                        new Reference(new Input(12), Stream.VALUES),
+                                        new Reference(new Input(3), Stream.VALUES),
+                                        new Reference(new Input(10), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(wednesdayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(5), Stream.VALUES),
-                                        new Reference(new Input(13), Stream.VALUES),
+                                        new Reference(new Input(4), Stream.VALUES),
+                                        new Reference(new Input(11), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(thursdayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(6), Stream.VALUES),
-                                        new Reference(new Input(14), Stream.VALUES),
+                                        new Reference(new Input(5), Stream.VALUES),
+                                        new Reference(new Input(12), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(fridayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(7), Stream.VALUES),
-                                        new Reference(new Input(15), Stream.VALUES),
+                                        new Reference(new Input(6), Stream.VALUES),
+                                        new Reference(new Input(13), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL),
                                 new Assignment(saturdayRatio, new Call("divide_scale_round_i64", List.of(
-                                        new Reference(new Input(8), Stream.VALUES),
-                                        new Reference(new Input(16), Stream.VALUES),
+                                        new Reference(new Input(7), Stream.VALUES),
+                                        new Reference(new Input(14), Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
                         List.of(
-                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
                                 new Reference(sundayRatio, Stream.VALUES),
                                 new Reference(mondayRatio, Stream.VALUES),
                                 new Reference(tuesdayRatio, Stream.VALUES),
@@ -8217,28 +8422,10 @@ final class TpcdsParquetSupport
 
     private static Operator projectQuery23SalesValue(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int customerIndex, int quantityIndex, int priceIndex)
     {
-        Variable zero = new Variable(0);
-        Variable priceIsNull = new Variable(1);
-        Variable quantityIsNull = new Variable(2);
-        Variable anyNull = new Variable(3);
-        Variable multiplied = new Variable(4);
-        Variable sales = new Variable(5);
-        List<Assignment> assignments = List.of(
-                new Assignment(zero, new Literal(0L), AllMask.ALL),
-                new Assignment(priceIsNull, new Call("is_null_i64", List.of(
-                        new Reference(new Input(priceIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(quantityIsNull, new Call("is_null_i32", List.of(
-                        new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(anyNull, new Call("or", List.of(
-                        new Reference(priceIsNull, Stream.VALUES),
-                        new Reference(quantityIsNull, Stream.VALUES))), AllMask.ALL),
-                new Assignment(multiplied, new Call("multiply", List.of(
-                        new Reference(new Input(priceIndex), Stream.VALUES),
-                        new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(sales, new Call("if_i64", List.of(
-                        new Reference(anyNull, Stream.VALUES),
-                        new Reference(zero, Stream.VALUES),
-                        new Reference(multiplied, Stream.VALUES))), AllMask.ALL));
+        Variable sales = new Variable(0);
+        List<Assignment> assignments = List.of(new Assignment(sales, new Call("multiply_null_as_zero_i64", List.of(
+                new Reference(new Input(priceIndex), Stream.VALUES),
+                new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL));
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(assignments, List.of(
@@ -8250,28 +8437,10 @@ final class TpcdsParquetSupport
 
     private static Operator projectQuery23SalesOnly(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int quantityIndex, int priceIndex)
     {
-        Variable zero = new Variable(0);
-        Variable priceIsNull = new Variable(1);
-        Variable quantityIsNull = new Variable(2);
-        Variable anyNull = new Variable(3);
-        Variable multiplied = new Variable(4);
-        Variable sales = new Variable(5);
-        List<Assignment> assignments = List.of(
-                new Assignment(zero, new Literal(0L), AllMask.ALL),
-                new Assignment(priceIsNull, new Call("is_null_i64", List.of(
-                        new Reference(new Input(priceIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(quantityIsNull, new Call("is_null_i32", List.of(
-                        new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(anyNull, new Call("or", List.of(
-                        new Reference(priceIsNull, Stream.VALUES),
-                        new Reference(quantityIsNull, Stream.VALUES))), AllMask.ALL),
-                new Assignment(multiplied, new Call("multiply", List.of(
-                        new Reference(new Input(priceIndex), Stream.VALUES),
-                        new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL),
-                new Assignment(sales, new Call("if_i64", List.of(
-                        new Reference(anyNull, Stream.VALUES),
-                        new Reference(zero, Stream.VALUES),
-                        new Reference(multiplied, Stream.VALUES))), AllMask.ALL));
+        Variable sales = new Variable(0);
+        List<Assignment> assignments = List.of(new Assignment(sales, new Call("multiply_null_as_zero_i64", List.of(
+                new Reference(new Input(priceIndex), Stream.VALUES),
+                new Reference(new Input(quantityIndex), Stream.VALUES))), AllMask.ALL));
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(assignments, List.of(new Reference(sales, Stream.VALUES))),
@@ -8794,14 +8963,15 @@ final class TpcdsParquetSupport
             String discountColumn,
             int year)
     {
-        Operator sales = factScan(allocator, tables, salesTable, customerColumn, soldDateColumn, listPriceColumn, discountColumn);
-        sales = new HashJoinOperator(
+        String profile = "q11." + salesTable + "." + year;
+        Operator sales = profiled(profile + ".scan", factScan(allocator, tables, salesTable, customerColumn, soldDateColumn, listPriceColumn, discountColumn));
+        sales = profiled(profile + ".join.customer", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
                 scannedTable(allocator, tables, "customer", "c_customer_sk", "c_customer_id", "c_first_name", "c_last_name", "c_preferred_cust_flag", "c_birth_country", "c_login"),
-                0);
-        sales = new HashJoinOperator(
+                0));
+        sales = profiled(profile + ".join.date", new HashJoinOperator(
                 allocator,
                 sales,
                 1,
@@ -8813,13 +8983,13 @@ final class TpcdsParquetSupport
                         equal(1, year),
                         new String[] {"d_date_sk", "d_year"},
                         0),
-                0);
-        sales = projectQuery11SalesValue(allocator, primitiveRegistry, sales, 5, 6, 7, 8, 9, 10, 2, 3);
-        return new GroupedAggregationOperator(
+                0).withOutputs(2, 3, 5, 6, 7, 8, 9, 10));
+        sales = profiled(profile + ".project", projectQuery11SalesValue(allocator, primitiveRegistry, sales, 2, 3, 4, 5, 6, 7, 0, 1));
+        return profiled(profile + ".group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5),
                 List.of(new Sum(6)),
-                sales);
+                sales));
     }
 
     private static Operator query76ChannelCategorySales(
@@ -8834,32 +9004,33 @@ final class TpcdsParquetSupport
             String itemColumn,
             String salesColumn)
     {
-        Operator sales = filteredProjectedScan(
+        String profile = "q76." + channelName;
+        Operator sales = profiled(profile + ".scan_filter_project", filteredProjectedScan(
                 allocator,
                 primitiveRegistry,
                 tables,
                 salesTable,
                 isNull(0),
                 new String[] {nullableColumn, soldDateColumn, itemColumn, salesColumn},
-                1, 2, 3);
-        sales = new HashJoinOperator(
+                1, 2, 3));
+        sales = profiled(profile + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
                 scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_year", "d_qoy"),
-                0);
-        sales = new HashJoinOperator(
+                0).withOutputs(1, 2, 4, 5));
+        sales = profiled(profile + ".join.item", new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_category"),
-                0);
-        sales = projectQuery76ChannelOutput(allocator, primitiveRegistry, sales, channelName, columnName);
-        return new GroupedAggregationOperator(
+                0).withOutputs(1, 2, 3, 5));
+        sales = profiled(profile + ".project.channel_output", projectQuery76ChannelOutput(allocator, primitiveRegistry, sales, channelName, columnName));
+        return profiled(profile + ".group.channel_category", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
                 List.of(new CountAll(), new Sum(5)),
-                sales);
+                sales));
     }
 
     private static Operator query74ChannelYearTotal(
@@ -8915,11 +9086,11 @@ final class TpcdsParquetSupport
                 sales,
                 0,
                 customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name"),
-                0);
+                0).withOutputs(1, 3, 4);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -8928,7 +9099,7 @@ final class TpcdsParquetSupport
                         and(greaterThan(1, 1199), lessThan(1, 1212)),
                         new String[] {"d_date_sk", "d_month_seq", "d_date"},
                         0, 2),
-                0);
+                0).withOutputs(1, 2, 4);
         // Emit per-row channel-presence flags only. The global aggregation in query87 groups by
         // (last_name, first_name, date) and the downstream filter only checks whether each channel's
         // summed flag is positive or zero, so a per-channel pre-aggregation would be redundant work
@@ -8975,45 +9146,45 @@ final class TpcdsParquetSupport
 
     private static Operator query47MonthlySales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price");
-        facts = new HashJoinOperator(
+        Operator facts = profiled("q47.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        facts = profiled("q47.join.item", new HashJoinOperator(
                 allocator,
                 facts,
                 1,
-                scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"),
-                0);
-        facts = new HashJoinOperator(
+                profiled("q47.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category")),
+                0));
+        facts = profiled("q47.join.date_dim", new HashJoinOperator(
                 allocator,
                 facts,
                 0,
-                filteredProjectedTable(
+                profiled("q47.scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         query57DatePredicate(),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
-                        0, 1, 2),
-                0);
-        facts = new HashJoinOperator(
+                        0, 1, 2)),
+                0));
+        facts = profiled("q47.join.store", new HashJoinOperator(
                 allocator,
                 facts,
                 2,
-                scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name", "s_company_name"),
-                0);
-        facts = projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 12, 8, 9, 3);
-        facts = new GroupedAggregationOperator(
+                profiled("q47.scan.store", scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name", "s_company_name")),
+                0));
+        facts = profiled("q47.project.group_inputs", projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 12, 8, 9, 3));
+        facts = profiled("q47.group.monthly_sales", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5),
                 List.of(new Sum(6)),
-                facts);
-        return new WindowOperator(
+                facts));
+        return profiled("q47.rank.monthly_sales", new TopNRankingOperator(
                 allocator,
-                facts,
+                32,
                 new int[] {0, 1, 2, 3},
                 new int[] {4, 5},
                 new boolean[] {false, false},
-                List.of(new RankWindowFunction(new int[] {4, 5}, new boolean[] {false, false})));
+                facts));
     }
 
     private static Operator projectQuery31Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int countyIndex, int storeQuarterOneIndex, int storeQuarterTwoIndex, int storeQuarterThreeIndex, int webQuarterOneIndex, int webQuarterTwoIndex, int webQuarterThreeIndex)
@@ -9092,10 +9263,10 @@ final class TpcdsParquetSupport
                         List.of(
                                 new Reference(channel, Stream.VALUES),
                                 new Reference(column, Stream.VALUES),
-                                new Reference(new Input(4), Stream.VALUES),
-                                new Reference(new Input(5), Stream.VALUES),
-                                new Reference(new Input(7), Stream.VALUES),
-                                new Reference(new Input(2), Stream.VALUES))),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
@@ -9159,40 +9330,51 @@ final class TpcdsParquetSupport
 
     private static Operator query39InventoryVariation(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int month, double covarianceThreshold)
     {
-        Operator inventory = scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand");
-        inventory = new HashJoinOperator(
+        String profilePrefix = "q39.month" + month;
+        Operator inventory = profiled(profilePrefix + ".scan.inventory", scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand"));
+        HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 inventory,
                 0,
-                scannedTable(allocator, tables, "item", "i_item_sk"),
+                profiled(profilePrefix + ".scan.item", scannedTable(allocator, tables, "item", "i_item_sk")),
                 0);
-        inventory = new HashJoinOperator(
+        // Compact layouts below are semantic, not merely width reductions. Keep the comments synchronized with
+        // Trino q39.sql so fields used only by GROUP BY are not accidentally discarded.
+        inventory = profiled(profilePrefix + ".join.item", QUERY39_COMPACT_JOIN_LAYOUTS ? itemJoin.withOutputs(1, 2, 3, 0) : itemJoin);
+        // Compact: [inv_warehouse_sk, inv_date_sk, inv_quantity_on_hand, inv_item_sk].
+        HashJoinOperator warehouseJoin = new HashJoinOperator(
                 allocator,
                 inventory,
-                1,
-                scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name"),
+                QUERY39_COMPACT_JOIN_LAYOUTS ? 0 : 1,
+                profiled(profilePrefix + ".scan.warehouse", scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name")),
                 0);
-        inventory = new HashJoinOperator(
+        inventory = profiled(profilePrefix + ".join.warehouse", QUERY39_COMPACT_JOIN_LAYOUTS ? warehouseJoin.withOutputs(1, 2, 3, 4, 5) : warehouseJoin);
+        // Compact: [inv_date_sk, inv_quantity_on_hand, inv_item_sk, w_warehouse_sk, w_warehouse_name].
+        HashJoinOperator dateJoin = new HashJoinOperator(
                 allocator,
                 inventory,
-                2,
-                filteredProjectedTable(
+                QUERY39_COMPACT_JOIN_LAYOUTS ? 0 : 2,
+                profiled(profilePrefix + ".scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         and(equal(1, 2001), equal(2, month)),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
-                        0, 2),
+                        0, 2)),
                 0);
-        inventory = projectInputs(allocator, primitiveRegistry, inventory, 5, 0, 8, 3);
-        inventory = new GroupedAggregationOperator(
+        inventory = profiled(profilePrefix + ".join.date_dim", QUERY39_COMPACT_JOIN_LAYOUTS ? dateJoin.withOutputs(4, 3, 2, 6, 1) : dateJoin);
+        // Group input: [w_warehouse_name, w_warehouse_sk, i_item_sk, d_moy, inv_quantity_on_hand].
+        if (!QUERY39_COMPACT_JOIN_LAYOUTS) {
+            inventory = projectInputs(allocator, primitiveRegistry, inventory, 6, 5, 0, 8, 3);
+        }
+        inventory = profiled(profilePrefix + ".group", new GroupedAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(new CountColumn(3), new StddevSamp(3), new Avg(3)),
-                inventory);
-        inventory = filter(allocator, primitiveRegistry, inventory, query39CovarianceThresholdPredicate(3, 5, 4, covarianceThreshold));
-        return projectQuery39InventoryOutput(allocator, primitiveRegistry, inventory);
+                List.of(0, 1, 2, 3),
+                List.of(new CountColumn(4), new StddevSamp(4), new Avg(4)),
+                inventory));
+        inventory = profiled(profilePrefix + ".filter.cov", filter(allocator, primitiveRegistry, inventory, query39CovarianceThresholdPredicate(4, 6, 5, covarianceThreshold)));
+        return profiled(profilePrefix + ".project.output", projectQuery39InventoryOutput(allocator, primitiveRegistry, inventory));
     }
 
     private static Operator projectQuery39InventoryOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -9203,13 +9385,13 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(
                         List.of(
                                 new Assignment(coefficient, new Call("divide_f64", List.of(
-                                        new Reference(new Input(4), Stream.VALUES),
-                                        new Reference(new Input(5), Stream.VALUES))), AllMask.ALL)),
+                                        new Reference(new Input(5), Stream.VALUES),
+                                        new Reference(new Input(6), Stream.VALUES))), AllMask.ALL)),
                         List.of(
-                                new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(new Input(2), Stream.VALUES),
-                                new Reference(new Input(5), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(6), Stream.VALUES),
                                 new Reference(coefficient, Stream.VALUES))),
                 primitiveRegistry,
                 source);
@@ -9318,60 +9500,61 @@ final class TpcdsParquetSupport
                 sales,
                 new int[] {6, 7},
                 scannedTable(allocator, tables, "store_returns", "sr_item_sk", "sr_ticket_number"),
-                new int[] {0, 1}));
-        sales = profiled(profilePrefix + ".join.eligible_items", new HashJoinOperator(allocator, sales, 6, query64EligibleCatalogItems(allocator, primitiveRegistry, tables, profilePrefix + ".eligible_catalog"), 0));
+                new int[] {0, 1}).withOutputs(0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11));
+        sales = profiled(profilePrefix + ".join.eligible_items", new HashJoinOperator(allocator, sales, 6, query64EligibleCatalogItems(allocator, primitiveRegistry, tables, profilePrefix + ".eligible_catalog"), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
         sales = profiled(profilePrefix + ".join.store", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
                 scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name", "s_zip"),
-                0));
+                0).withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13));
         sales = profiled(profilePrefix + ".join.customer", new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                1,
                 scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_cdemo_sk", "c_current_hdemo_sk", "c_current_addr_sk", "c_first_sales_date_sk", "c_first_shipto_date_sk"),
-                0));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17));
         sales = profiled(profilePrefix + ".join.customer_demographics.bought", new HashJoinOperator(
                 allocator,
                 sales,
-                3,
+                1,
                 scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status"),
-                0));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17));
         sales = profiled(profilePrefix + ".join.customer_demographics.current", new HashJoinOperator(
                 allocator,
                 sales,
-                19,
+                10,
                 scannedTable(allocator, tables, "customer_demographics", "cd_demo_sk", "cd_marital_status"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 17));
         sales = profiled(profilePrefix + ".join.household_demographics.bought", new HashJoinOperator(
                 allocator,
                 sales,
-                4,
+                1,
                 scannedTable(allocator, tables, "household_demographics", "hd_demo_sk", "hd_income_band_sk"),
-                0));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17));
         sales = profiled(profilePrefix + ".join.household_demographics.current", new HashJoinOperator(
                 allocator,
                 sales,
-                20,
+                9,
                 scannedTable(allocator, tables, "household_demographics", "hd_demo_sk", "hd_income_band_sk"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 17));
         sales = profiled(profilePrefix + ".join.customer_address.bought", new HashJoinOperator(
                 allocator,
                 sales,
-                5,
+                1,
                 scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_street_number", "ca_street_name", "ca_city", "ca_zip"),
-                0));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20));
         sales = profiled(profilePrefix + ".join.customer_address.current", new HashJoinOperator(
                 allocator,
                 sales,
-                21,
+                8,
                 scannedTable(allocator, tables, "customer_address", "ca_address_sk", "ca_street_number", "ca_street_name", "ca_city", "ca_zip"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23));
         sales = profiled(profilePrefix + ".join.date_dim.sold", new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9381,41 +9564,41 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_year"},
                         0,
                         1),
-                0));
+                0).withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23));
         sales = profiled(profilePrefix + ".join.date_dim.first_sales", new HashJoinOperator(
                 allocator,
                 sales,
-                22,
+                7,
                 scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_year"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23));
         sales = profiled(profilePrefix + ".join.date_dim.first_ship", new HashJoinOperator(
                 allocator,
                 sales,
-                23,
+                7,
                 scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_year"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23));
         sales = profiled(profilePrefix + ".join.promotion", new HashJoinOperator(
                 allocator,
                 sales,
-                8,
+                1,
                 scannedTable(allocator, tables, "promotion", "p_promo_sk"),
-                0));
+                0).withOutputs(0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21));
         sales = profiled(profilePrefix + ".join.income_band.bought", new HashJoinOperator(
                 allocator,
                 sales,
-                29,
+                8,
                 scannedTable(allocator, tables, "income_band", "ib_income_band_sk"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20));
         sales = profiled(profilePrefix + ".join.income_band.current", new HashJoinOperator(
                 allocator,
                 sales,
-                31,
+                8,
                 scannedTable(allocator, tables, "income_band", "ib_income_band_sk"),
-                0));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19));
         sales = profiled(profilePrefix + ".join.item", new HashJoinOperator(
                 allocator,
                 sales,
-                6,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9425,8 +9608,8 @@ final class TpcdsParquetSupport
                                 betweenInclusive(2, 65_00L, 74_00L),
                                 utf8AnyOf(3, Set.of("purple", "burlywood", "indian", "spring", "floral", "medium"))),
                         new String[] {"i_item_sk", "i_product_name", "i_current_price", "i_color"}),
-                0));
-        sales = profiled(profilePrefix + ".filter.same_address", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(25, 27)));
+                0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20));
+        sales = profiled(profilePrefix + ".filter.same_address", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(6, 7)));
         sales = profiled(profilePrefix + ".project.group_rows", projectQuery64CrossSalesRows(allocator, primitiveRegistry, sales));
         return profiled(profilePrefix + ".group.cross_sales", new GroupedAggregationOperator(
                 allocator,
@@ -9442,24 +9625,24 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(
                         List.of(),
                         List.of(
-                                new Reference(new Input(52), Stream.VALUES),
-                                new Reference(new Input(6), Stream.VALUES),
-                                new Reference(new Input(16), Stream.VALUES),
-                                new Reference(new Input(17), Stream.VALUES),
-                                new Reference(new Input(33), Stream.VALUES),
-                                new Reference(new Input(34), Stream.VALUES),
-                                new Reference(new Input(35), Stream.VALUES),
-                                new Reference(new Input(36), Stream.VALUES),
-                                new Reference(new Input(38), Stream.VALUES),
-                                new Reference(new Input(39), Stream.VALUES),
-                                new Reference(new Input(40), Stream.VALUES),
-                                new Reference(new Input(41), Stream.VALUES),
-                                new Reference(new Input(43), Stream.VALUES),
-                                new Reference(new Input(45), Stream.VALUES),
-                                new Reference(new Input(47), Stream.VALUES),
+                                new Reference(new Input(19), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES),
+                                new Reference(new Input(8), Stream.VALUES),
                                 new Reference(new Input(9), Stream.VALUES),
                                 new Reference(new Input(10), Stream.VALUES),
-                                new Reference(new Input(11), Stream.VALUES))),
+                                new Reference(new Input(11), Stream.VALUES),
+                                new Reference(new Input(12), Stream.VALUES),
+                                new Reference(new Input(13), Stream.VALUES),
+                                new Reference(new Input(14), Stream.VALUES),
+                                new Reference(new Input(15), Stream.VALUES),
+                                new Reference(new Input(16), Stream.VALUES),
+                                new Reference(new Input(17), Stream.VALUES),
+                                new Reference(new Input(18), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
@@ -9532,27 +9715,27 @@ final class TpcdsParquetSupport
 
     private static Operator query72InventoryByWeek(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator inventory = scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand");
-        inventory = new HashJoinOperator(
+        Operator inventory = profiled("q72.scan.inventory", scannedTable(allocator, tables, "inventory", "inv_item_sk", "inv_warehouse_sk", "inv_date_sk", "inv_quantity_on_hand"));
+        inventory = profiled("q72.join.date_dim.inventory", new HashJoinOperator(
                 allocator,
                 inventory,
                 2,
-                filteredProjectedTable(
+                profiled("q72.scan.date_dim.inventory", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         equal(2, 1999),
                         new String[] {"d_date_sk", "d_week_seq", "d_year"},
-                        0, 1),
-                0);
-        return projectInputs(allocator, primitiveRegistry, inventory, 0, 1, 3, 5);
+                        0, 1)),
+                0));
+        return profiled("q72.project.inventory_by_week", projectInputs(allocator, primitiveRegistry, inventory, 0, 1, 3, 5));
     }
 
     private static Operator query65StoreItemSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price");
-        sales = new HashJoinOperator(
+        Operator sales = profiled("q65.sales.scan", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        sales = profiled("q65.sales.join.date", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
@@ -9564,23 +9747,23 @@ final class TpcdsParquetSupport
                         and(greaterThan(1, 1175), lessThan(1, 1188)),
                         new String[] {"d_date_sk", "d_month_seq"},
                         0),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 2, 1, 3);
-        return new GroupedAggregationOperator(
+                0));
+        sales = profiled("q65.sales.project", projectInputs(allocator, primitiveRegistry, sales, 2, 1, 3));
+        return profiled("q65.sales.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new Sum(2)),
-                sales);
+                sales));
     }
 
     private static Operator query65StoreThresholds(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator grouped = new GroupedAggregationOperator(
+        Operator grouped = profiled("q65.threshold.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new CountAll(), new Sum(2)),
-                query65StoreItemSales(allocator, primitiveRegistry, tables));
-        return projectQuery65StoreAverage(allocator, primitiveRegistry, grouped);
+                query65StoreItemSales(allocator, primitiveRegistry, tables)));
+        return profiled("q65.threshold.project", projectQuery65StoreAverage(allocator, primitiveRegistry, grouped));
     }
 
     private static Operator projectQuery65StoreAverage(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -9609,14 +9792,15 @@ final class TpcdsParquetSupport
             String salesPriceColumn,
             String netPaidColumn)
     {
-        Operator sales = factScan(allocator, tables, salesTable, soldDateColumn, soldTimeColumn, shipModeColumn, warehouseColumn, quantityColumn, salesPriceColumn, netPaidColumn);
-        sales = new HashJoinOperator(
+        String profile = "q66." + salesTable;
+        Operator sales = profiled(profile + ".scan", factScan(allocator, tables, salesTable, soldDateColumn, soldTimeColumn, shipModeColumn, warehouseColumn, quantityColumn, salesPriceColumn, netPaidColumn));
+        sales = profiled(profile + ".join.warehouse", new HashJoinOperator(
                 allocator,
                 sales,
                 3,
                 scannedTable(allocator, tables, "warehouse", "w_warehouse_sk", "w_warehouse_name", "w_warehouse_sq_ft", "w_city", "w_county", "w_state", "w_country"),
-                0);
-        sales = new HashJoinOperator(
+                0));
+        sales = profiled(profile + ".join.date", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
@@ -9628,8 +9812,8 @@ final class TpcdsParquetSupport
                         equal(1, 2001),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
                         0, 1, 2),
-                0);
-        sales = new HashJoinOperator(
+                0));
+        sales = profiled(profile + ".join.time", new HashJoinOperator(
                 allocator,
                 sales,
                 1,
@@ -9641,8 +9825,8 @@ final class TpcdsParquetSupport
                         and(greaterThan(1, 30_837), lessThan(1, 59_639)),
                         new String[] {"t_time_sk", "t_time"},
                         0),
-                0);
-        sales = new HashJoinOperator(
+                0));
+        sales = profiled(profile + ".join.ship_mode", new HashJoinOperator(
                 allocator,
                 sales,
                 2,
@@ -9654,9 +9838,24 @@ final class TpcdsParquetSupport
                         utf8AnyOf(1, Set.of("DHL", "BARIAN")),
                         new String[] {"sm_ship_mode_sk", "sm_carrier"},
                         0),
-                0);
-        sales = projectQuery66MonthlyBuckets(allocator, primitiveRegistry, sales, 8, 9, 10, 11, 12, 13, 15, 16, 4, 5, 6);
-        return new GroupedAggregationOperator(
+                0));
+        if (Boolean.parseBoolean(System.getProperty("nitro.tpcds.query66ConditionalAggregation", "true"))) {
+            sales = profiled(profile + ".project.pivot_inputs", projectQuery66PivotInputs(allocator, primitiveRegistry, sales, 8, 9, 10, 11, 12, 13, 15, 16, 4, 5, 6));
+            List<org.weakref.nitro.operator.aggregation.Accumulator> sums = new ArrayList<>();
+            for (int month = 1; month <= 12; month++) {
+                sums.add(new SumProductIfEqual(8, month, 10, 9));
+            }
+            for (int month = 1; month <= 12; month++) {
+                sums.add(new SumProductIfEqual(8, month, 11, 9));
+            }
+            return profiled(profile + ".group", new GroupedAggregationOperator(
+                    allocator,
+                    List.of(0, 1, 2, 3, 4, 5, 6, 7),
+                    sums,
+                    sales));
+        }
+        sales = profiled(profile + ".project.months", projectQuery66MonthlyBuckets(allocator, primitiveRegistry, sales, 8, 9, 10, 11, 12, 13, 15, 16, 4, 5, 6));
+        return profiled(profile + ".group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7),
                 List.of(
@@ -9664,7 +9863,45 @@ final class TpcdsParquetSupport
                         new Sum(14), new Sum(15), new Sum(16), new Sum(17), new Sum(18), new Sum(19),
                         new Sum(20), new Sum(21), new Sum(22), new Sum(23), new Sum(24), new Sum(25),
                         new Sum(26), new Sum(27), new Sum(28), new Sum(29), new Sum(30), new Sum(31)),
-                sales);
+                sales));
+    }
+
+    private static Operator projectQuery66PivotInputs(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            Operator source,
+            int warehouseNameIndex,
+            int warehouseSquareFeetIndex,
+            int warehouseCityIndex,
+            int warehouseCountyIndex,
+            int warehouseStateIndex,
+            int warehouseCountryIndex,
+            int yearIndex,
+            int monthIndex,
+            int quantityIndex,
+            int salesPriceIndex,
+            int netPaidIndex)
+    {
+        Variable shipCarriers = new Variable(0);
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(new Assignment(shipCarriers, new Literal("DHL,BARIAN"), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(warehouseNameIndex), Stream.VALUES),
+                                new Reference(new Input(warehouseSquareFeetIndex), Stream.VALUES),
+                                new Reference(new Input(warehouseCityIndex), Stream.VALUES),
+                                new Reference(new Input(warehouseCountyIndex), Stream.VALUES),
+                                new Reference(new Input(warehouseStateIndex), Stream.VALUES),
+                                new Reference(new Input(warehouseCountryIndex), Stream.VALUES),
+                                new Reference(shipCarriers, Stream.VALUES),
+                                new Reference(new Input(yearIndex), Stream.VALUES),
+                                new Reference(new Input(monthIndex), Stream.VALUES),
+                                new Reference(new Input(quantityIndex), Stream.VALUES),
+                                new Reference(new Input(salesPriceIndex), Stream.VALUES),
+                                new Reference(new Input(netPaidIndex), Stream.VALUES))),
+                primitiveRegistry,
+                source);
     }
 
     private static Operator projectQuery66MonthlyBuckets(
@@ -9788,11 +10025,11 @@ final class TpcdsParquetSupport
                     sales,
                     1,
                     filteredProjectedTable(allocator, primitiveRegistry, tables, "item", null, itemColumns, 0, itemKeyInputIndex),
-                    0);
+                    0).withOutputs(0, 2, 3, 5);
             sales = new SemiJoinOperator(
                     allocator,
                     sales,
-                    5,
+                    3,
                     filteredProjectedTable(allocator, primitiveRegistry, tables, "item", itemFilter, itemColumns, itemKeyInputIndex),
                     0);
         }
@@ -9802,7 +10039,7 @@ final class TpcdsParquetSupport
                     sales,
                     1,
                     filteredProjectedTable(allocator, primitiveRegistry, tables, "item", itemFilter, itemColumns, 0, itemKeyInputIndex),
-                    0);
+                    0).withOutputs(0, 2, 3, 5);
         }
         sales = new HashJoinOperator(
                 allocator,
@@ -9816,11 +10053,11 @@ final class TpcdsParquetSupport
                         and(equal(1, year), equal(2, month)),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
                         0),
-                0);
+                0).withOutputs(1, 2, 3);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
-                2,
+                0,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9829,12 +10066,11 @@ final class TpcdsParquetSupport
                         equal(1, -500L),
                         new String[] {"ca_address_sk", "ca_gmt_offset"},
                         0),
-                0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 5, 3);
+                0).withOutputs(1, 2);
         return new GroupedAggregationOperator(
                 allocator,
-                List.of(0),
-                List.of(new Sum(1)),
+                List.of(1),
+                List.of(new Sum(0)),
                 sales);
     }
 
@@ -9854,7 +10090,8 @@ final class TpcdsParquetSupport
                 returnsTable,
                 greaterThan(3, 1_000_000L),
                 new String[] {returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn});
-        sales = new HashJoinOperator(allocator, sales, new int[] {2, 1}, returns, new int[] {1, 0});
+        sales = new HashJoinOperator(allocator, sales, new int[] {2, 1}, returns, new int[] {1, 0})
+                .withOutputs(0, 1, 3, 4, 8, 9);
         sales = new HashJoinOperator(
                 allocator,
                 sales,
@@ -9867,7 +10104,7 @@ final class TpcdsParquetSupport
                         and(equal(1, 2001), equal(2, 12)),
                         new String[] {"d_date_sk", "d_year", "d_moy"},
                         0),
-                0);
+                0).withOutputs(1, 2, 3, 4, 5);
         sales = projectQuery49Measures(allocator, primitiveRegistry, sales);
         sales = new GroupedAggregationOperator(
                 allocator,
@@ -9878,87 +10115,97 @@ final class TpcdsParquetSupport
         return query49Ranks(allocator, primitiveRegistry, sales, channel);
     }
 
-    private static Operator query75Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String orderColumn, String quantityColumn, String salesAmountColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String returnQuantityColumn, String returnAmountColumn)
+    private static Operator query75Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String orderColumn, String quantityColumn, String salesAmountColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String returnQuantityColumn, String returnAmountColumn, String profilePrefix)
     {
-        Operator sales = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, orderColumn, quantityColumn, salesAmountColumn);
-        sales = new HashJoinOperator(
+        Operator sales = profiled(profilePrefix + ".scan.sales", factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, orderColumn, quantityColumn, salesAmountColumn));
+        sales = profiled(profilePrefix + ".join.item", new HashJoinOperator(
                 allocator,
                 sales,
                 1,
-                filteredProjectedTable(
+                profiled(profilePrefix + ".scan.item", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "item",
                         equalUtf8(1, "Books"),
                         new String[] {"i_item_sk", "i_category", "i_brand_id", "i_class_id", "i_category_id", "i_manufact_id"},
-                        0, 2, 3, 4, 5),
-                0);
-        sales = new HashJoinOperator(
+                        0, 2, 3, 4, 5)),
+                0));
+        sales = profiled(profilePrefix + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
-                filteredProjectedTable(
+                profiled(profilePrefix + ".scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         or(equal(1, 2001), equal(1, 2002)),
                         new String[] {"d_date_sk", "d_year"},
-                        0, 1),
-                0);
-        sales = new HashJoinOperator(
+                        0, 1)),
+                0));
+        sales = profiled(profilePrefix + ".join.returns", new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {2, 1},
-                scannedTable(allocator, tables, returnsTable, returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn),
+                profiled(profilePrefix + ".scan.returns", scannedTable(allocator, tables, returnsTable, returnItemColumn, returnOrderColumn, returnQuantityColumn, returnAmountColumn)),
                 new int[] {1, 0},
-                true);
-        return projectQuery75Sales(allocator, primitiveRegistry, sales);
+                true));
+        return profiled(profilePrefix + ".project.net", projectQuery75Sales(allocator, primitiveRegistry, sales));
     }
 
-    private static Operator query75AllSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query75AllSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix)
     {
-        return new GroupedAggregationOperator(
+        return profiled(profilePrefix + ".group.all_sales", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
                 List.of(new Sum(5), new Sum(6)),
-                new MarkDistinctOperator(allocator, new int[] {0, 1, 2, 3, 4, 5, 6}, new UnionAllOperator(7, List.of(
-                        query75Channel(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_ext_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount"),
-                        query75Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_ext_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt"),
-                        query75Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt"))), true));
+                profiled(profilePrefix + ".distinct.all_sales", new MarkDistinctOperator(allocator, new int[] {0, 1, 2, 3, 4, 5, 6}, new UnionAllOperator(7, List.of(
+                        query75Channel(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_ext_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount", profilePrefix + ".catalog"),
+                        query75Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_ext_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt", profilePrefix + ".store"),
+                        query75Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt", profilePrefix + ".web"))), true))));
     }
 
-    private static Operator query78Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn)
+    private static Operator query78Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String profilePrefix)
     {
-        Operator sales = factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, customerColumn, orderColumn, quantityColumn, wholesaleCostColumn, salesPriceColumn);
-        sales = new HashJoinOperator(
+        Operator sales = profiled(profilePrefix + ".scan.sales", factScan(allocator, tables, salesTable, soldDateColumn, itemColumn, customerColumn, orderColumn, quantityColumn, wholesaleCostColumn, salesPriceColumn));
+        HashJoinOperator returnsJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {3, 1},
-                scannedTable(allocator, tables, returnsTable, returnItemColumn, returnOrderColumn),
+                profiled(profilePrefix + ".scan.returns", scannedTable(allocator, tables, returnsTable, returnItemColumn, returnOrderColumn)),
                 new int[] {1, 0},
                 true);
-        sales = filter(allocator, primitiveRegistry, sales, isNull(8));
-        sales = new HashJoinOperator(
+        if (QUERY78_COMPACT_JOIN_LAYOUTS) {
+            returnsJoin = returnsJoin.withOutputs(0, 1, 2, 4, 5, 6, 8);
+        }
+        sales = profiled(profilePrefix + ".join.returns", returnsJoin);
+        sales = profiled(profilePrefix + ".filter.not_returned", filter(allocator, primitiveRegistry, sales, isNull(QUERY78_COMPACT_JOIN_LAYOUTS ? 6 : 8)));
+        HashJoinOperator dateJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 0,
-                filteredProjectedTable(
+                profiled(profilePrefix + ".scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
                         "date_dim",
                         equal(1, 2000),
                         new String[] {"d_date_sk", "d_year"},
-                        0, 1),
+                        0, 1)),
                 0);
-        sales = projectInputs(allocator, primitiveRegistry, sales, 10, 1, 2, 4, 5, 6);
-        return new GroupedAggregationOperator(
+        if (QUERY78_COMPACT_JOIN_LAYOUTS) {
+            dateJoin = dateJoin.withOutputs(8, 1, 2, 3, 4, 5);
+        }
+        sales = profiled(profilePrefix + ".join.date_dim", dateJoin);
+        if (!QUERY78_COMPACT_JOIN_LAYOUTS) {
+            sales = profiled(profilePrefix + ".project.group_inputs", projectInputs(allocator, primitiveRegistry, sales, 10, 1, 2, 4, 5, 6));
+        }
+        return profiled(profilePrefix + ".group.channel", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
                 List.of(new Sum(3), new Sum(4), new Sum(5)),
-                sales);
+                sales));
     }
 
     private static Operator projectQuery47CurrentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -10060,23 +10307,23 @@ final class TpcdsParquetSupport
                 new EvaluationPlan(List.of(
                         new Assignment(zero, new Literal(0L), AllMask.ALL),
                         new Assignment(returnQuantityIsNull, new Call("is_null_i64", List.of(
-                                new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
                         new Assignment(returnQuantity, new Call("if_i64", List.of(
                                 new Reference(returnQuantityIsNull, Stream.VALUES),
                                 new Reference(zero, Stream.VALUES),
-                                new Reference(new Input(8), Stream.VALUES))), AllMask.ALL),
+                                new Reference(new Input(3), Stream.VALUES))), AllMask.ALL),
                         new Assignment(returnAmountIsNull, new Call("is_null_i64", List.of(
-                                new Reference(new Input(9), Stream.VALUES))), AllMask.ALL),
+                                new Reference(new Input(4), Stream.VALUES))), AllMask.ALL),
                         new Assignment(returnAmount, new Call("if_i64", List.of(
                                 new Reference(returnAmountIsNull, Stream.VALUES),
                                 new Reference(zero, Stream.VALUES),
-                                new Reference(new Input(9), Stream.VALUES))), AllMask.ALL)),
+                                new Reference(new Input(4), Stream.VALUES))), AllMask.ALL)),
                         List.of(
-                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
                                 new Reference(returnQuantity, Stream.VALUES),
-                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
                                 new Reference(returnAmount, Stream.VALUES),
-                                new Reference(new Input(4), Stream.VALUES))),
+                                new Reference(new Input(2), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
@@ -10545,9 +10792,9 @@ final class TpcdsParquetSupport
                                 new Assignment(catalogFlag, new Literal(catalogFlagValue), AllMask.ALL),
                                 new Assignment(webFlag, new Literal(webFlagValue), AllMask.ALL)),
                         List.of(
-                                new Reference(new Input(3), Stream.VALUES),
-                                new Reference(new Input(4), Stream.VALUES),
-                                new Reference(new Input(6), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
                                 new Reference(storeFlag, Stream.VALUES),
                                 new Reference(catalogFlag, Stream.VALUES),
                                 new Reference(webFlag, Stream.VALUES))),
@@ -10677,6 +10924,52 @@ final class TpcdsParquetSupport
                                         new Reference(new Input(3), Stream.VALUES),
                                         new Reference(otherQuantity, Stream.VALUES),
                                         new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
+                        List.of(
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(ratio, Stream.VALUES),
+                                new Reference(new Input(3), Stream.VALUES),
+                                new Reference(new Input(4), Stream.VALUES),
+                                new Reference(new Input(5), Stream.VALUES),
+                                new Reference(otherQuantity, Stream.VALUES),
+                                new Reference(otherWholesaleCost, Stream.VALUES),
+                                new Reference(otherSalesPrice, Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                primitiveRegistry,
+                source);
+    }
+
+    private static Operator projectQuery78CompactOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    {
+        Variable zero = new Variable(0);
+        Variable hundred = new Variable(1);
+        Variable webQuantity = new Variable(2);
+        Variable catalogQuantity = new Variable(3);
+        Variable otherQuantity = new Variable(4);
+        Variable webWholesaleCost = new Variable(5);
+        Variable catalogWholesaleCost = new Variable(6);
+        Variable otherWholesaleCost = new Variable(7);
+        Variable webSalesPrice = new Variable(8);
+        Variable catalogSalesPrice = new Variable(9);
+        Variable otherSalesPrice = new Variable(10);
+        Variable ratio = new Variable(11);
+
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(zero, new Literal(0L), AllMask.ALL),
+                                new Assignment(hundred, new Literal(100L), AllMask.ALL),
+                                new Assignment(webQuantity, new Call("coalesce_i64", List.of(new Reference(new Input(6), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(catalogQuantity, new Call("coalesce_i64", List.of(new Reference(new Input(9), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(otherQuantity, new Call("add", List.of(new Reference(webQuantity, Stream.VALUES), new Reference(catalogQuantity, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(webWholesaleCost, new Call("coalesce_i64", List.of(new Reference(new Input(7), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(catalogWholesaleCost, new Call("coalesce_i64", List.of(new Reference(new Input(10), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(otherWholesaleCost, new Call("add", List.of(new Reference(webWholesaleCost, Stream.VALUES), new Reference(catalogWholesaleCost, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(webSalesPrice, new Call("coalesce_i64", List.of(new Reference(new Input(8), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(catalogSalesPrice, new Call("coalesce_i64", List.of(new Reference(new Input(11), Stream.VALUES), new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(otherSalesPrice, new Call("add", List.of(new Reference(webSalesPrice, Stream.VALUES), new Reference(catalogSalesPrice, Stream.VALUES))), AllMask.ALL),
+                                new Assignment(ratio, new Call("divide_scale_round_i64", List.of(new Reference(new Input(3), Stream.VALUES), new Reference(otherQuantity, Stream.VALUES), new Reference(hundred, Stream.VALUES))), AllMask.ALL)),
                         List.of(
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(ratio, Stream.VALUES),
@@ -10976,9 +11269,12 @@ final class TpcdsParquetSupport
     private static Operator query88Bucket(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int bucket)
     {
         Operator filtered = factScan(allocator, tables, "store_sales", "ss_sold_time_sk", "ss_hdemo_sk", "ss_store_sk");
-        filtered = new HashJoinOperator(allocator, filtered, 0, filteredProjectedTable(allocator, primitiveRegistry, tables, "time_dim", query88TimeBucketPredicate(bucket), new String[] {"t_time_sk", "t_hour", "t_minute"}), 0);
-        filtered = new HashJoinOperator(allocator, filtered, 1, filteredProjectedTable(allocator, primitiveRegistry, tables, "household_demographics", query88HouseholdPredicate(), new String[] {"hd_demo_sk", "hd_dep_count", "hd_vehicle_count"}), 0);
-        return new HashJoinOperator(allocator, filtered, 2, filteredProjectedTable(allocator, primitiveRegistry, tables, "store", equalUtf8(1, "ese"), new String[] {"s_store_sk", "s_store_name"}), 0);
+        filtered = new HashJoinOperator(allocator, filtered, 0, filteredProjectedTable(allocator, primitiveRegistry, tables, "time_dim", query88TimeBucketPredicate(bucket), new String[] {"t_time_sk", "t_hour", "t_minute"}), 0)
+                .withOutputs(1, 2);
+        filtered = new HashJoinOperator(allocator, filtered, 0, filteredProjectedTable(allocator, primitiveRegistry, tables, "household_demographics", query88HouseholdPredicate(), new String[] {"hd_demo_sk", "hd_dep_count", "hd_vehicle_count"}), 0)
+                .withOutputs(1);
+        return new HashJoinOperator(allocator, filtered, 0, filteredProjectedTable(allocator, primitiveRegistry, tables, "store", equalUtf8(1, "ese"), new String[] {"s_store_sk", "s_store_name"}), 0)
+                .withOutputs(0);
     }
 
     private static Operator query88BucketCount(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int bucket)

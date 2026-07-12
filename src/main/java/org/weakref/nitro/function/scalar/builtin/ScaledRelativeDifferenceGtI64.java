@@ -155,7 +155,7 @@ public final class ScaledRelativeDifferenceGtI64
         return new MaskOutcome(
                 context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, truePositions, trueIndex, mask.size()),
                 context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, nullPositions, nullIndex, mask.size()),
-                context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, new int[0], 0, mask.size()));
+                context.allocator().allocateEmptyMask(ALLOCATION_CONTEXT, mask.size()));
     }
 
     @Override

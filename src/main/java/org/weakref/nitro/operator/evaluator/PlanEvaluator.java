@@ -51,9 +51,11 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -64,7 +66,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class PlanEvaluator
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("PlanEvaluator");
+    private final Allocator.Context allocationContext;
     private static final Set<Stream> VALUES_ONLY = java.util.EnumSet.of(Stream.VALUES);
     private static final Set<Stream> NULLS_ONLY = java.util.EnumSet.of(Stream.NULLS);
     private static final Set<Stream> ERRORS_ONLY = java.util.EnumSet.of(Stream.ERRORS);
@@ -81,8 +83,16 @@ public final class PlanEvaluator
             Integer.getInteger("nitro.expression.orFinalTermMinRemainingPercent", 75);
     private static final boolean FAST_BOOLEAN_MASK_CLASSIFIER =
             Boolean.parseBoolean(System.getProperty("nitro.expression.fastBooleanMaskClassifier", "true"));
+    private static final boolean IN_PLACE_FLAT_BOOLEAN_CLASSIFIER =
+            Boolean.parseBoolean(System.getProperty("nitro.expression.inPlaceFlatBooleanClassifier", "true"));
+    private static final boolean FUSE_LONG_CONSTANT_RANGES =
+            Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true"));
     private static final boolean INPUT_MASK_RESOLVER =
             Boolean.parseBoolean(System.getProperty("nitro.expression.inputMaskResolver", "true"));
+    private static final boolean DIRECT_PRIMITIVE_INPUT_MASK =
+            Boolean.parseBoolean(System.getProperty("nitro.expression.directPrimitiveInputMask", "true"));
+    private static final boolean RECYCLE_CONTROL_FRAMES =
+            Boolean.parseBoolean(System.getProperty("nitro.expression.recycleControlFrames", "true"));
     private static final boolean ASCII_SUBSTRING_IN_SET_MASK =
             Boolean.parseBoolean(System.getProperty("nitro.expression.asciiSubstringInSetMask", "true"));
     private static final boolean PACKED_ASCII_PREFIX_SUBSTRING_IN_SET_MASK =
@@ -101,12 +111,24 @@ public final class PlanEvaluator
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Producer, Set<Stream>> explicitProjectedStreamsByProducer;
     private final Map<Producer, Set<Stream>> projectedStreamsByProducer;
+    private final boolean requireProjectedCompanionStreams;
     private final Map<Producer, Set<Stream>> memoizedStreamsByProducer;
     private final Map<Reference, Set<Stream>> requestedStreamsByReference = new HashMap<>();
     private final Map<Reference, Set<Stream>> hardRequestedStreamsByReference = new HashMap<>();
     private final Map<Reference, Streams> memoizedStreams = new HashMap<>();
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
     private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
+    private final Map<Call, ArrayList<Streams>> callInputFrames = new IdentityHashMap<>();
+    // Dictionary peeling walks the same row-id mapping for every node in a projected expression DAG. Cache its
+    // logical base cardinality for this evaluation cycle; the ids buffer can be recycled with different contents in
+    // the next batch, so reset()/resetForReuse() must clear the cache.
+    private final Map<int[], DictionaryIdsMetadata> dictionaryIdsMetadata = new IdentityHashMap<>();
+    // Results peeled through an input dictionary can borrow that immutable row mapping while the input batch is live.
+    // ProjectOperator calls prepareResultForTransfer before a result escapes the batch, which copies only then.
+    private final Set<Vector> borrowedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
+    private TermOrderFrames termOrderFrames;
+    private final ArrayList<Streams> maskInvocationInputs = new ArrayList<>();
+    private final PrimitiveMaskInvocation maskInvocation = new PrimitiveMaskInvocation(maskInvocationInputs);
 
     @FunctionalInterface
     public interface InputResolver
@@ -121,6 +143,27 @@ public final class PlanEvaluator
 
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator)
     {
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"));
+    }
+
+    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup)
+    {
+        this(plan, primitiveRegistry, input, allocator, poolGroup, false);
+    }
+
+    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup, boolean requireProjectedCompanionStreams)
+    {
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams);
+    }
+
+    private PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Allocator.Context allocationContext)
+    {
+        this(plan, primitiveRegistry, input, allocator, allocationContext, false);
+    }
+
+    private PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Allocator.Context allocationContext, boolean requireProjectedCompanionStreams)
+    {
+        this.allocationContext = allocationContext;
         this.plan = plan;
         this.primitiveRegistry = primitiveRegistry;
         this.input = input;
@@ -131,6 +174,7 @@ public final class PlanEvaluator
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
         this.explicitProjectedStreamsByProducer = streamsByProducer(plan.outputs());
         this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
+        this.requireProjectedCompanionStreams = requireProjectedCompanionStreams;
         this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
     }
 
@@ -181,6 +225,8 @@ public final class PlanEvaluator
     {
         memoizedMasks.clear();
         memoizedStreams.clear();
+        dictionaryIdsMetadata.clear();
+        borrowedDictionaryResults.clear();
         // Drop, rather than pool, every buffer produced during this evaluation cycle. These contexts
         // hold the result vectors handed back to callers (e.g. projected scalar outputs, literal RLEs,
         // mask scratch). A produced result can still be referenced by a consumer once the evaluation
@@ -195,6 +241,47 @@ public final class PlanEvaluator
             allocator.discardAllIfPresent(context);
         }
         allocator.discardAllIfPresent(allocationContext);
+    }
+
+    /**
+     * Ends an evaluation cycle after every result exposed to the caller has already been released or taken.
+     * Unlike {@link #reset()}, this returns the remaining evaluator-owned scratch and intermediate vectors to their
+     * pools. Calling this while a returned result is still borrowed would permit a later evaluation to overwrite it.
+     */
+    public void resetForReuse()
+    {
+        memoizedMasks.clear();
+        memoizedStreams.clear();
+        dictionaryIdsMetadata.clear();
+        borrowedDictionaryResults.clear();
+        for (Allocator.Context context : primitiveAllocationContexts) {
+            allocator.releaseIfPresent(context);
+        }
+        for (Allocator.Context context : executionContext.allocationContexts()) {
+            allocator.releaseIfPresent(context);
+        }
+        allocator.releaseIfPresent(allocationContext);
+    }
+
+    /** Releases a borrowed result only from contexts owned by this evaluator, leaving borrowed input vectors alone. */
+    public void release(Vector vector)
+    {
+        for (Allocator.Context context : primitiveAllocationContexts) {
+            allocator.release(context, vector);
+        }
+        for (Allocator.Context context : executionContext.allocationContexts()) {
+            allocator.release(context, vector);
+        }
+        allocator.release(allocationContext, vector);
+    }
+
+    /** Makes a borrowed dictionary mapping self-contained before an evaluator result escapes its input batch. */
+    public Vector prepareResultForTransfer(Vector vector)
+    {
+        if (!(vector instanceof DictionaryVector dictionary) || !borrowedDictionaryResults.remove(vector)) {
+            return vector;
+        }
+        return allocator.allocateDictionary(allocationContext, dictionary.ids(), dictionary.length(), dictionary.values());
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)
@@ -253,7 +340,15 @@ public final class PlanEvaluator
         PrimitiveFunction function = primitiveRegistry.get(call.name());
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Set<Stream> hardRequestedStreams = hardRequestedStreamsFor(reference);
-        List<Streams> inputs = new ArrayList<>(call.arguments().size());
+        List<Streams> inputs;
+        if (RECYCLE_CONTROL_FRAMES) {
+            ArrayList<Streams> frame = callInputFrames.computeIfAbsent(call, _ -> new ArrayList<>(call.arguments().size()));
+            frame.clear();
+            inputs = frame;
+        }
+        else {
+            inputs = new ArrayList<>(call.arguments().size());
+        }
         for (int index = 0; index < call.arguments().size(); index++) {
             Reference argument = call.arguments().get(index);
             inputs.add(evaluateArgument(
@@ -300,7 +395,7 @@ public final class PlanEvaluator
 
         try {
             Streams baseResult = function.apply(inputsForPeeling(peeling), peeling.baseMask(), requestedStreams, null, executionContext);
-            return wrapDictionaryPeeledStreams(peeling.ids(), baseResult);
+            return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), baseResult);
         }
         finally {
             allocator.release(allocationContext, peeling.baseMask());
@@ -346,10 +441,7 @@ public final class PlanEvaluator
             return null;
         }
 
-        int baseLength = 0;
-        for (int index = 0; index < rowCount; index++) {
-            baseLength = Math.max(baseLength, sharedIds[index] + 1);
-        }
+        int baseLength = dictionaryBaseLength(sharedIds, rowCount);
         if (dictionaryPeelTooSparse(rowCount, baseLength)) {
             return null;
         }
@@ -391,7 +483,7 @@ public final class PlanEvaluator
         }
 
         Streams.Builder result = Streams.builder();
-        result.put(Stream.VALUES, executionContext.allocator().allocateDictionary(allocationContext, sharedIds, baseValues));
+        result.put(Stream.VALUES, wrapBorrowedDictionary(sharedIds, rowCount, baseValues));
         if (passthroughNulls != null && requestedStreams.contains(Stream.NULLS)) {
             result.put(Stream.NULLS, passthroughNulls);
         }
@@ -418,10 +510,7 @@ public final class PlanEvaluator
             return null;
         }
 
-        int baseLength = 0;
-        for (int index = 0; index < rowCount; index++) {
-            baseLength = Math.max(baseLength, sharedIds[index] + 1);
-        }
+        int baseLength = dictionaryBaseLength(sharedIds, rowCount);
         if (dictionaryPeelTooSparse(rowCount, baseLength)) {
             return null;
         }
@@ -436,7 +525,7 @@ public final class PlanEvaluator
             }
             peeledInputs.add(peeled);
         }
-        return new DictionaryPeeling(sharedIds, baseMask, List.copyOf(peeledInputs));
+        return new DictionaryPeeling(sharedIds, rowCount, baseMask, List.copyOf(peeledInputs));
     }
 
     private static boolean dictionaryPeelTooSparse(int rowCount, int baseLength)
@@ -461,14 +550,31 @@ public final class PlanEvaluator
     {
         return switch (vector) {
             case DictionaryVector dictionary when dictionary.length() == rowCount && dictionary.values().length() >= baseLength && sameDictionaryIds(sharedIds, dictionary.ids(), rowCount) -> dictionary.values();
-            case RleVector rle when rle.counts().length == 1 -> executionContext.allocator().allocateRle(allocationContext, new int[] {baseLength}, rle.values());
+            case RleVector rle when rle.counts().length == 1 -> executionContext.allocator().allocateSingleRunRle(allocationContext, baseLength, rle.values());
             case BooleanVector booleans when booleans.length() == rowCount && isConstantBooleanVector(booleans) -> fillBoolean(booleans.values()[0], baseLength);
             default -> null;
         };
     }
 
+    private int dictionaryBaseLength(int[] ids, int length)
+    {
+        DictionaryIdsMetadata metadata = dictionaryIdsMetadata.get(ids);
+        if (metadata != null && metadata.length() == length) {
+            return metadata.baseLength();
+        }
+        int baseLength = 0;
+        for (int index = 0; index < length; index++) {
+            baseLength = Math.max(baseLength, ids[index] + 1);
+        }
+        dictionaryIdsMetadata.put(ids, new DictionaryIdsMetadata(length, baseLength));
+        return baseLength;
+    }
+
     private static boolean sameDictionaryIds(int[] left, int[] right, int length)
     {
+        if (left == right) {
+            return true;
+        }
         for (int index = 0; index < length; index++) {
             if (left[index] != right[index]) {
                 return false;
@@ -476,6 +582,8 @@ public final class PlanEvaluator
         }
         return true;
     }
+
+    private record DictionaryIdsMetadata(int length, int baseLength) {}
 
     private static boolean isConstantBooleanVector(BooleanVector vector)
     {
@@ -491,13 +599,20 @@ public final class PlanEvaluator
         return true;
     }
 
-    private Streams wrapDictionaryPeeledStreams(int[] sharedIds, Streams streams)
+    private Streams wrapDictionaryPeeledStreams(int[] sharedIds, int rowCount, Streams streams)
     {
         Streams.Builder wrapped = Streams.builder();
         for (Stream stream : streams.streams()) {
-            wrapped.put(stream, executionContext.allocator().allocateDictionary(allocationContext, sharedIds, streams.get(stream)));
+            wrapped.put(stream, wrapBorrowedDictionary(sharedIds, rowCount, streams.get(stream)));
         }
         return wrapped.build();
+    }
+
+    private DictionaryVector wrapBorrowedDictionary(int[] ids, int length, Vector values)
+    {
+        DictionaryVector dictionary = allocator.adopt(allocationContext, DictionaryVector.wrap(ids, length, values));
+        borrowedDictionaryResults.add(dictionary);
+        return dictionary;
     }
 
     private Streams evaluateArgument(Reference argument, Mask mask)
@@ -509,6 +624,28 @@ public final class PlanEvaluator
     {
         if (requiredStreams.isEmpty()) {
             return Streams.empty();
+        }
+
+        // Mask-specialized primitives commonly consume VALUES plus any physically present NULLS/ERRORS streams
+        // directly from an input column. Resolve that tuple in one pass instead of routing each stream through
+        // evaluate(), constructing an intermediate Streams object, and then repacking it into another Streams.
+        if (allowAvailableCompanionStreams && argument.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+            Vector values = null;
+            Vector nulls = null;
+            Vector errors = null;
+            for (Stream stream : requiredStreams) {
+                Reference requestedReference = remapReference(argument, stream);
+                if (requestedReference == null) {
+                    continue;
+                }
+                Vector vector = input.resolve(requestedReference, mask);
+                switch (stream) {
+                    case VALUES -> values = vector;
+                    case NULLS -> nulls = vector;
+                    case ERRORS -> errors = vector;
+                }
+            }
+            return Streams.of(values, nulls, errors);
         }
 
         Streams.Builder result = Streams.builder();
@@ -681,20 +818,6 @@ public final class PlanEvaluator
         return merged;
     }
 
-    /**
-     * Allocates a terminal all-false {@link BooleanVector} for a synthesized null-free NULLS/ERRORS
-     * stream. The allocator hands back an already-zeroed buffer (fresh arrays are zero-initialized;
-     * pooled buffers are cleared via {@code clearForReuse}), so no fill is needed. The result is
-     * read-only for its consumers, so its all-false state is recorded up front and never invalidated —
-     * making downstream {@link VectorAccess#isAllFalseNulls} checks O(1).
-     */
-    private Vector allocateAllFalse(int length)
-    {
-        BooleanVector target = allocator.allocate(allocationContext, BooleanVector.class, length, BooleanVector::new);
-        target.markAllFalse();
-        return target;
-    }
-
     private BooleanVector fillFalseBoolean(Vector existing, Mask mask, int length)
     {
         BooleanVector target = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, length);
@@ -809,21 +932,21 @@ public final class PlanEvaluator
     {
         I64Vector values = allocator.allocate(allocationContext, I64Vector.class, 1, I64Vector::new);
         values.values()[0] = value;
-        return allocator.allocateRle(allocationContext, new int[] {length}, values);
+        return allocator.allocateSingleRunRle(allocationContext, length, values);
     }
 
     private Vector fillDoubleRle(double value, int length)
     {
         F64Vector values = allocator.allocate(allocationContext, F64Vector.class, 1, F64Vector::new);
         values.values()[0] = value;
-        return allocator.allocateRle(allocationContext, new int[] {length}, values);
+        return allocator.allocateSingleRunRle(allocationContext, length, values);
     }
 
     private Vector fillBoolean(boolean value, int length)
     {
         BooleanVector values = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
         values.values()[0] = value;
-        return allocator.allocateRle(allocationContext, new int[] {length}, values);
+        return allocator.allocateSingleRunRle(allocationContext, length, values);
     }
 
     private Vector fillUtf8(String value, int length)
@@ -835,7 +958,7 @@ public final class PlanEvaluator
             values.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
         values.setBytes(0, bytes);
-        return allocator.allocateRle(allocationContext, new int[] {length}, values);
+        return allocator.allocateSingleRunRle(allocationContext, length, values);
     }
 
     private static Map<Variable, Assignment> indexAssignments(List<Assignment> assignments)
@@ -882,7 +1005,14 @@ public final class PlanEvaluator
     private Set<Stream> computeHardRequestedStreams(Reference reference)
     {
         java.util.EnumSet<Stream> streams = java.util.EnumSet.of(reference.stream());
-        Set<Stream> projectedStreams = explicitProjectedStreamsByProducer.get(reference.producer());
+        // ProjectOperator exposes a VALUES projection's companion NULLS/ERRORS streams even when the IR output list
+        // names VALUES alone.  In that mode those companions are semantic outputs, not optional physical metadata:
+        // a downstream arithmetic node must recursively compute an intermediate NULLS stream in order to preserve
+        // SQL null propagation.  Treating the auto-added companions as "available only" caused a multi-stage
+        // expression such as (nullable_a + b) + c to synthesize an all-false NULLS stream for the first add. Direct
+        // evaluator clients retain the explicit-stream contract and do not pay to resolve unrequested companions.
+        Set<Stream> projectedStreams = (requireProjectedCompanionStreams ? projectedStreamsByProducer : explicitProjectedStreamsByProducer)
+                .get(reference.producer());
         if (projectedStreams != null) {
             streams.addAll(projectedStreams);
         }
@@ -1020,9 +1150,12 @@ public final class PlanEvaluator
     private MaskOutcome classifyBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
         ClassificationCounts counts = countBooleanMaskOutcomes(values, nulls, errors, mask);
-        int[] truePositions = new int[counts.trueCount()];
-        int[] nullPositions = new int[counts.nullCount()];
-        int[] errorPositions = new int[counts.errorCount()];
+        Mask trueMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.trueCount(), mask.size());
+        Mask nullMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.nullCount(), mask.size());
+        Mask errorMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.errorCount(), mask.size());
+        int[] truePositions = trueMask.positionsArrayForOverwrite(counts.trueCount());
+        int[] nullPositions = nullMask.positionsArrayForOverwrite(counts.nullCount());
+        int[] errorPositions = errorMask.positionsArrayForOverwrite(counts.errorCount());
         int trueCount = 0;
         int nullCount = 0;
         int errorCount = 0;
@@ -1039,10 +1172,7 @@ public final class PlanEvaluator
             }
         }
 
-        return new MaskOutcome(
-                allocator.allocateSparseMask(allocationContext, truePositions, trueCount, mask.size()),
-                allocator.allocateSparseMask(allocationContext, nullPositions, nullCount, mask.size()),
-                allocator.allocateSparseMask(allocationContext, errorPositions, errorCount, mask.size()));
+        return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
     private Mask classifyTrueBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
@@ -1052,7 +1182,8 @@ public final class PlanEvaluator
         }
 
         int trueCount = countTrueRows(values, nulls, errors, mask);
-        int[] truePositions = new int[trueCount];
+        Mask result = allocator.allocateUninitializedSparseMask(allocationContext, trueCount, mask.size());
+        int[] truePositions = result.positionsArrayForOverwrite(trueCount);
         int outputIndex = 0;
         for (int position : mask) {
             if (isError(errors, position)) {
@@ -1066,7 +1197,7 @@ public final class PlanEvaluator
             }
         }
 
-        return allocator.allocateSparseMask(allocationContext, truePositions, outputIndex, mask.size());
+        return result;
     }
 
     private Mask classifyFalseBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
@@ -1076,7 +1207,8 @@ public final class PlanEvaluator
         }
 
         int falseCount = countFalseRows(values, nulls, errors, mask);
-        int[] falsePositions = new int[falseCount];
+        Mask result = allocator.allocateUninitializedSparseMask(allocationContext, falseCount, mask.size());
+        int[] falsePositions = result.positionsArrayForOverwrite(falseCount);
         int outputIndex = 0;
         for (int position : mask) {
             if (isError(errors, position)) {
@@ -1090,7 +1222,7 @@ public final class PlanEvaluator
             }
         }
 
-        return allocator.allocateSparseMask(allocationContext, falsePositions, outputIndex, mask.size());
+        return result;
     }
 
     private ClassificationCounts countBooleanMaskOutcomes(Vector values, Vector nulls, Vector errors, Mask mask)
@@ -1193,6 +1325,13 @@ public final class PlanEvaluator
 
     private boolean tryEvaluatePrimitiveMaskInPlace(Reference reference, Mask mask, boolean selectTrue)
     {
+        Mask directInputMask = tryResolvePrimitiveDirectInputMask(reference, mask, selectTrue);
+        if (directInputMask != null) {
+            if (directInputMask != mask) {
+                mask.copyFrom(directInputMask);
+            }
+            return true;
+        }
         if (tryEvaluateSubstringInSetMaskInPlace(reference, mask, selectTrue)) {
             return true;
         }
@@ -1204,6 +1343,35 @@ public final class PlanEvaluator
         return selectTrue
                 ? invocation.function().tryEvaluateTrueMaskInPlace(invocation.inputs(), mask, executionContext)
                 : invocation.function().tryEvaluateFalseMaskInPlace(invocation.inputs(), mask, executionContext);
+    }
+
+    private Mask tryResolvePrimitiveDirectInputMask(Reference reference, Mask mask, boolean selectTrue)
+    {
+        if (!DIRECT_PRIMITIVE_INPUT_MASK || reference.stream() != Stream.VALUES ||
+                !(reference.producer() instanceof Variable variable)) {
+            return null;
+        }
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null || !(assignment.operation() instanceof Call call)) {
+            return null;
+        }
+        PrimitiveFunction function;
+        try {
+            function = primitiveRegistry.get(call.name());
+        }
+        catch (IllegalArgumentException _) {
+            return null;
+        }
+        if (!(function instanceof MaskEvaluablePrimitiveFunction maskFunction)) {
+            return null;
+        }
+        Reference directInput = maskFunction.directMaskInput(call.arguments());
+        // The Filter input resolver can delegate only physical input streams to its source Output. A variable alias
+        // remains inside this evaluator and follows the ordinary primitive path.
+        if (directInput == null || !(directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input)) {
+            return null;
+        }
+        return tryResolveInputMask(directInput, mask, selectTrue);
     }
 
     private Mask tryEvaluateSubstringInSetMask(Reference reference, Mask mask, boolean selectMatches)
@@ -1575,7 +1743,7 @@ public final class PlanEvaluator
         if (allSelected) {
             return allocator.copyMask(allocationContext, mask);
         }
-        return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
     private Mask evaluateSparseDoubleNestedSubstringInSetMask(
@@ -1593,11 +1761,13 @@ public final class PlanEvaluator
         boolean allSelected = true;
         int[] positions = null;
         int selectedCount = 0;
+        int inputCount = mask.selectedCount();
         if (nulls == null) {
-            for (int position : mask) {
+            for (int inputIndex = 0; inputIndex < inputCount; inputIndex++) {
+                int position = mask.position(inputIndex);
                 if (substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
                     if (!allSelected) {
-                        positions = ensurePositionCapacity(positions, selectedCount, mask.count());
+                        positions = ensurePositionCapacity(positions, selectedCount, inputCount);
                         positions[selectedCount] = position;
                     }
                     selectedCount++;
@@ -1611,10 +1781,11 @@ public final class PlanEvaluator
             }
         }
         else {
-            for (int position : mask) {
+            for (int inputIndex = 0; inputIndex < inputCount; inputIndex++) {
+                int position = mask.position(inputIndex);
                 if (!nulls.value(position) && substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
                     if (!allSelected) {
-                        positions = ensurePositionCapacity(positions, selectedCount, mask.count());
+                        positions = ensurePositionCapacity(positions, selectedCount, inputCount);
                         positions[selectedCount] = position;
                     }
                     selectedCount++;
@@ -1630,7 +1801,7 @@ public final class PlanEvaluator
         if (allSelected) {
             return allocator.copyMask(allocationContext, mask);
         }
-        return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
     private Mask evaluateSparseSubstringInSetMask(
@@ -1683,7 +1854,7 @@ public final class PlanEvaluator
         if (allSelected) {
             return allocator.copyMask(allocationContext, mask);
         }
-        return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
     private Mask evaluateSparseSubstringInSetMask(
@@ -1736,7 +1907,7 @@ public final class PlanEvaluator
         if (allSelected) {
             return allocator.copyMask(allocationContext, mask);
         }
-        return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
     private static int[] selectedPrefix(Mask mask, int selectedCount)
@@ -1964,17 +2135,18 @@ public final class PlanEvaluator
             return null;
         }
 
-        List<Streams> inputs = new ArrayList<>(call.arguments().size());
+        maskInvocationInputs.clear();
         for (int index = 0; index < call.arguments().size(); index++) {
             Reference argument = call.arguments().get(index);
             Set<Stream> requiredInputStreams = maskFunction.requiredMaskInputStreams(index);
             if (maskFunction.requiresCompletedInputCompanionStreamsForMask()) {
-                inputs.add(evaluateArgument(argument, mask, requiredInputStreams, false));
+                maskInvocationInputs.add(evaluateArgument(argument, mask, requiredInputStreams, false));
                 continue;
             }
-            inputs.add(evaluateArgument(argument, mask, requiredInputStreams, true));
+            maskInvocationInputs.add(evaluateArgument(argument, mask, requiredInputStreams, true));
         }
-        return new PrimitiveMaskInvocation(maskFunction, List.copyOf(inputs));
+        maskInvocation.function(maskFunction);
+        return maskInvocation;
     }
 
     private record SubstringInSetInputs(DictionaryVector dictionary, Vector nulls, byte[][] literals, long start, long length, PackedAsciiSubstringSet packedAscii) {}
@@ -2122,10 +2294,10 @@ public final class PlanEvaluator
             // already zeroed, and this stream is terminal (consumers only read it), so marking it
             // all-false lets downstream null-free checks (isAllFalseNulls) short-circuit in O(1) rather
             // than rescanning every batch. Mirrors Velox's absent null buffer (mayHaveNulls).
-            completed = completed.with(Stream.NULLS, allocateAllFalse(length));
+            completed = completed.with(Stream.NULLS, allocator.borrowAllFalseBoolean(allocationContext, length));
         }
         if (wantsErrors && !completed.has(Stream.ERRORS)) {
-            completed = completed.with(Stream.ERRORS, allocateAllFalse(length));
+            completed = completed.with(Stream.ERRORS, allocator.borrowAllFalseBoolean(allocationContext, length));
         }
         return completed;
     }
@@ -2170,113 +2342,129 @@ public final class PlanEvaluator
     private MaskOutcome evaluateAdaptiveAnd(List<MaskExpression> terms, Mask mask)
     {
         terms = orderTerms(terms, BooleanOperator.AND);
+        try {
+            Mask activeMask = mask;
+            Mask nullMask = emptyMask(mask.size());
+            Mask errorMask = emptyMask(mask.size());
+            for (MaskExpression term : terms) {
+                MaskOutcome termOutcome = evaluateMeasuredOutcome(term, activeMask, BooleanOperator.AND);
+                Mask survivors = termOutcome.survivorsMask(allocator, allocationContext);
+                if (survivors.none()) {
+                    return new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
+                }
 
-        Mask activeMask = mask;
-        Mask nullMask = emptyMask(mask.size());
-        Mask errorMask = emptyMask(mask.size());
-        for (MaskExpression term : terms) {
-            MaskOutcome termOutcome = evaluateMeasuredOutcome(term, activeMask, BooleanOperator.AND);
-            Mask survivors = termOutcome.survivorsMask(allocator, allocationContext);
-            if (survivors.none()) {
-                return new MaskOutcome(emptyMask(mask.size()), emptyMask(mask.size()), emptyMask(mask.size()));
+                Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, nullMask, survivors);
+                Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, errorMask, survivors);
+                Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
+                Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
+                nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(allocationContext, nextNullMask, nextErrorMask);
+
+                activeMask = survivors;
+                nullMask = nextNullMask;
+                errorMask = nextErrorMask;
             }
-
-            Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, nullMask, survivors);
-            Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, errorMask, survivors);
-            Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
-            Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
-            nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(allocationContext, nextNullMask, nextErrorMask);
-
-            activeMask = survivors;
-            nullMask = nextNullMask;
-            errorMask = nextErrorMask;
+            Mask trueMask = subtractMasks(activeMask, nullMask, errorMask);
+            return new MaskOutcome(trueMask, nullMask, errorMask);
         }
-        Mask trueMask = subtractMasks(activeMask, nullMask, errorMask);
-        return new MaskOutcome(trueMask, nullMask, errorMask);
+        finally {
+            releaseOrderedTerms();
+        }
     }
 
     private Mask evaluateAdaptiveAndTrueMask(List<MaskExpression> terms, Mask mask)
     {
         terms = orderTerms(terms, BooleanOperator.AND);
-
-        Mask activeMask = mask;
-        for (MaskExpression term : terms) {
-            activeMask = evaluateMeasuredTrueMask(term, activeMask, BooleanOperator.AND);
-            if (activeMask.none()) {
-                return emptyMask(mask.size());
+        try {
+            Mask activeMask = mask;
+            for (MaskExpression term : terms) {
+                activeMask = evaluateMeasuredTrueMask(term, activeMask, BooleanOperator.AND);
+                if (activeMask.none()) {
+                    return emptyMask(mask.size());
+                }
             }
+            return activeMask;
         }
-        return activeMask;
+        finally {
+            releaseOrderedTerms();
+        }
     }
 
     private MaskOutcome evaluateAdaptiveOr(List<MaskExpression> terms, Mask mask)
     {
         terms = orderTerms(terms, BooleanOperator.OR);
+        try {
+            Mask acceptedMask = emptyMask(mask.size());
+            Mask nullMask = emptyMask(mask.size());
+            Mask errorMask = emptyMask(mask.size());
+            Mask remainingMask = mask;
+            for (MaskExpression term : terms) {
+                if (remainingMask.none()) {
+                    break;
+                }
 
-        Mask acceptedMask = emptyMask(mask.size());
-        Mask nullMask = emptyMask(mask.size());
-        Mask errorMask = emptyMask(mask.size());
-        Mask remainingMask = mask;
-        for (MaskExpression term : terms) {
-            if (remainingMask.none()) {
-                break;
+                MaskOutcome termOutcome = evaluateMeasuredOutcome(term, remainingMask, BooleanOperator.OR);
+                acceptedMask = unionMasks(acceptedMask, termOutcome.trueMask(), mask.size());
+                remainingMask = termOutcome.trueMask().none() ? remainingMask : allocator.differenceMask(allocationContext, remainingMask, termOutcome.trueMask());
+                if (remainingMask.none()) {
+                    return new MaskOutcome(acceptedMask, emptyMask(mask.size()), emptyMask(mask.size()));
+                }
+
+                Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, nullMask, remainingMask);
+                Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, errorMask, remainingMask);
+                Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
+                Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
+                nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(allocationContext, nextNullMask, nextErrorMask);
+                nullMask = nextNullMask;
+                errorMask = nextErrorMask;
             }
 
-            MaskOutcome termOutcome = evaluateMeasuredOutcome(term, remainingMask, BooleanOperator.OR);
-            acceptedMask = unionMasks(acceptedMask, termOutcome.trueMask(), mask.size());
-            remainingMask = termOutcome.trueMask().none() ? remainingMask : allocator.differenceMask(allocationContext, remainingMask, termOutcome.trueMask());
-            if (remainingMask.none()) {
-                return new MaskOutcome(acceptedMask, emptyMask(mask.size()), emptyMask(mask.size()));
-            }
-
-            Mask survivingNulls = nullMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, nullMask, remainingMask);
-            Mask survivingErrors = errorMask.none() ? emptyMask(mask.size()) : allocator.intersectMask(allocationContext, errorMask, remainingMask);
-            Mask nextErrorMask = unionMasks(survivingErrors, termOutcome.errorMask(), mask.size());
-            Mask nextNullMask = unionMasks(survivingNulls, termOutcome.nullMask(), mask.size());
-            nextNullMask = nextErrorMask.none() ? nextNullMask : allocator.differenceMask(allocationContext, nextNullMask, nextErrorMask);
-            nullMask = nextNullMask;
-            errorMask = nextErrorMask;
+            return new MaskOutcome(acceptedMask, nullMask, errorMask);
         }
-
-        return new MaskOutcome(acceptedMask, nullMask, errorMask);
+        finally {
+            releaseOrderedTerms();
+        }
     }
 
     private Mask evaluateAdaptiveOrTrueMask(List<MaskExpression> terms, Mask mask)
     {
         terms = orderTerms(terms, BooleanOperator.OR);
+        try {
+            Mask acceptedMask = emptyMask(mask.size());
+            if (!OR_SHORT_CIRCUIT_REMAINING) {
+                for (MaskExpression term : terms) {
+                    Mask termTrueMask = evaluateMeasuredTrueMask(term, mask, BooleanOperator.OR);
+                    acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
+                    if (acceptedMask.all()) {
+                        break;
+                    }
+                }
+                return acceptedMask;
+            }
 
-        Mask acceptedMask = emptyMask(mask.size());
-        if (!OR_SHORT_CIRCUIT_REMAINING) {
-            for (MaskExpression term : terms) {
-                Mask termTrueMask = evaluateMeasuredTrueMask(term, mask, BooleanOperator.OR);
-                acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
-                if (acceptedMask.all()) {
+            Mask remainingMask = mask;
+            for (int index = 0; index < terms.size(); index++) {
+                if (remainingMask.none()) {
                     break;
                 }
+
+                MaskExpression term = terms.get(index);
+                Mask termTrueMask = evaluateMeasuredTrueMask(term, remainingMask, BooleanOperator.OR);
+                acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
+                if (index + 1 == terms.size() || termTrueMask.selectedCount() == remainingMask.selectedCount()) {
+                    break;
+                }
+                if (shouldEvaluateFinalOrTermOnFullMask(terms, index, mask, remainingMask, termTrueMask)) {
+                    Mask finalTermTrueMask = evaluateMeasuredTrueMask(terms.get(index + 1), mask, BooleanOperator.OR);
+                    acceptedMask = unionMasks(acceptedMask, finalTermTrueMask, mask.size());
+                    break;
+                }
+                remainingMask = termTrueMask.none() ? remainingMask : allocator.differenceMask(allocationContext, remainingMask, termTrueMask);
             }
             return acceptedMask;
         }
-
-        Mask remainingMask = mask;
-        for (int index = 0; index < terms.size(); index++) {
-            if (remainingMask.none()) {
-                break;
-            }
-
-            MaskExpression term = terms.get(index);
-            Mask termTrueMask = evaluateMeasuredTrueMask(term, remainingMask, BooleanOperator.OR);
-            acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
-            if (index + 1 == terms.size() || termTrueMask.selectedCount() == remainingMask.selectedCount()) {
-                break;
-            }
-            if (shouldEvaluateFinalOrTermOnFullMask(terms, index, mask, remainingMask, termTrueMask)) {
-                Mask finalTermTrueMask = evaluateMeasuredTrueMask(terms.get(index + 1), mask, BooleanOperator.OR);
-                acceptedMask = unionMasks(acceptedMask, finalTermTrueMask, mask.size());
-                break;
-            }
-            remainingMask = termTrueMask.none() ? remainingMask : allocator.differenceMask(allocationContext, remainingMask, termTrueMask);
+        finally {
+            releaseOrderedTerms();
         }
-        return acceptedMask;
     }
 
     private static boolean shouldEvaluateFinalOrTermOnFullMask(List<MaskExpression> terms, int index, Mask mask, Mask remainingMask, Mask termTrueMask)
@@ -2354,10 +2542,7 @@ public final class PlanEvaluator
                     if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
                         yield evaluateTrueMaskInPlace(resolved, mask);
                     }
-                    Mask result = evaluateTrueReferenceMask(reference, mask);
-                    if (result != mask) {
-                        mask.copyFrom(result);
-                    }
+                    evaluateTrueReferenceMaskFallbackInPlace(reference, mask);
                 }
                 yield mask;
             }
@@ -2381,6 +2566,44 @@ public final class PlanEvaluator
         };
     }
 
+    /**
+     * Completes an in-place reference-mask evaluation after expression resolution and the primitive in-place
+     * contract have declined it. A flat, null-free Boolean result can compact the caller-owned mask directly;
+     * materializing a second mask only to copy it back defeats the output mask's pooled high-water storage.
+     */
+    private void evaluateTrueReferenceMaskFallbackInPlace(Reference reference, Mask mask)
+    {
+        Mask primitiveMask = tryEvaluatePrimitiveTrueMask(reference, mask);
+        if (primitiveMask != null) {
+            if (primitiveMask != mask) {
+                mask.copyFrom(primitiveMask);
+            }
+            return;
+        }
+
+        Mask inputMask = tryResolveInputMask(reference, mask, true);
+        if (inputMask != null) {
+            if (inputMask != mask) {
+                mask.copyFrom(inputMask);
+            }
+            return;
+        }
+
+        Vector values = evaluate(reference, mask).get(reference.stream());
+        Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
+        Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
+        if (IN_PLACE_FLAT_BOOLEAN_CLASSIFIER && values instanceof BooleanVector booleanValues &&
+                VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
+            mask.retainBooleans(booleanValues.values(), true);
+            return;
+        }
+
+        Mask result = classifyTrueBooleanMask(values, nulls, errors, mask);
+        if (result != mask) {
+            mask.copyFrom(result);
+        }
+    }
+
     private boolean evaluateFalseMaskInPlace(MaskExpression expression, Mask mask)
     {
         return switch (expression) {
@@ -2399,14 +2622,86 @@ public final class PlanEvaluator
 
     private Mask evaluateAdaptiveAndTrueMaskInPlace(List<MaskExpression> terms, Mask mask)
     {
-        terms = orderTerms(terms, BooleanOperator.AND);
-        for (MaskExpression term : terms) {
-            if (mask.none()) {
-                break;
-            }
-            evaluateMeasuredTrueMaskInPlace(term, mask, BooleanOperator.AND);
+        RangeFusion rangeFusion = FUSE_LONG_CONSTANT_RANGES ? findLongConstantRange(terms, mask) : null;
+        if (rangeFusion != null) {
+            rangeFusion.apply(mask);
+            terms = rangeFusion.remainingTerms();
         }
-        return mask;
+        terms = orderTerms(terms, BooleanOperator.AND);
+        try {
+            for (MaskExpression term : terms) {
+                if (mask.none()) {
+                    break;
+                }
+                evaluateMeasuredTrueMaskInPlace(term, mask, BooleanOperator.AND);
+            }
+            return mask;
+        }
+        finally {
+            releaseOrderedTerms();
+        }
+    }
+
+    private RangeFusion findLongConstantRange(List<MaskExpression> terms, Mask mask)
+    {
+        for (int lowerIndex = 0; lowerIndex < terms.size(); lowerIndex++) {
+            ConstantBound lower = constantBound(terms.get(lowerIndex));
+            if (lower == null || !lower.lower()) {
+                continue;
+            }
+            for (int upperIndex = 0; upperIndex < terms.size(); upperIndex++) {
+                ConstantBound upper = constantBound(terms.get(upperIndex));
+                if (upper == null || upper.lower() || !upper.column().equals(lower.column())) {
+                    continue;
+                }
+                Streams column = evaluateArgument(lower.column(), mask, PrimitiveFunction.ALL_INPUT_STREAMS, true);
+                if (!VectorAccess.isAllFalseNulls(column.getOrNull(Stream.ERRORS))) {
+                    return null;
+                }
+                boolean[] nulls = null;
+                Vector nullVector = column.getOrNull(Stream.NULLS);
+                if (!VectorAccess.isAllFalseNulls(nullVector)) {
+                    nulls = VectorAccess.flatBooleans(nullVector);
+                    if (nulls == null) {
+                        return null;
+                    }
+                }
+                Vector values = column.values();
+                if (!(values instanceof I64Vector) && !(values instanceof I32Vector)) {
+                    return null;
+                }
+                ArrayList<MaskExpression> remaining = new ArrayList<>(terms.size() - 2);
+                for (int index = 0; index < terms.size(); index++) {
+                    if (index != lowerIndex && index != upperIndex) {
+                        remaining.add(terms.get(index));
+                    }
+                }
+                return new RangeFusion(values, nulls, lower.literal(), upper.literal(), List.copyOf(remaining));
+            }
+        }
+        return null;
+    }
+
+    private ConstantBound constantBound(MaskExpression expression)
+    {
+        if (!(expression instanceof ReferenceMask(Reference reference)) || reference.stream() != Stream.VALUES ||
+                !(reference.producer() instanceof Variable variable)) {
+            return null;
+        }
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null || !(assignment.operation() instanceof Call(String name, List<Reference> arguments)) ||
+                !name.equals("lt") || arguments.size() != 2) {
+            return null;
+        }
+        OptionalLong leftLiteral = literalLong(arguments.get(0));
+        OptionalLong rightLiteral = literalLong(arguments.get(1));
+        if (leftLiteral.isPresent() && rightLiteral.isEmpty()) {
+            return new ConstantBound(arguments.get(1), leftLiteral.getAsLong(), true);
+        }
+        if (rightLiteral.isPresent() && leftLiteral.isEmpty()) {
+            return new ConstantBound(arguments.get(0), rightLiteral.getAsLong(), false);
+        }
+        return null;
     }
 
     private Mask evaluateMeasuredTrueMaskInPlace(MaskExpression term, Mask mask, BooleanOperator operator)
@@ -2429,6 +2724,17 @@ public final class PlanEvaluator
             return terms;
         }
 
+        if (RECYCLE_CONTROL_FRAMES) {
+            if (termOrderFrames == null) {
+                termOrderFrames = new TermOrderFrames();
+            }
+            ArrayList<MaskExpression> ordered = termOrderFrames.acquire(terms.size());
+            ordered.addAll(terms);
+            // List.sort is stable, so equal scores retain the plan's original term order.
+            ordered.sort(Comparator.comparingDouble(term -> score(term, operator)));
+            return ordered;
+        }
+
         ArrayList<IndexedTerm> indexedTerms = new ArrayList<>(terms.size());
         for (int index = 0; index < terms.size(); index++) {
             indexedTerms.add(new IndexedTerm(index, terms.get(index)));
@@ -2441,6 +2747,13 @@ public final class PlanEvaluator
             ordered.add(indexedTerm.term());
         }
         return List.copyOf(ordered);
+    }
+
+    private void releaseOrderedTerms()
+    {
+        if (ADAPTIVE_MASK_REORDERING && RECYCLE_CONTROL_FRAMES) {
+            termOrderFrames.release();
+        }
     }
 
     private double score(MaskExpression expression, BooleanOperator operator)
@@ -2480,7 +2793,7 @@ public final class PlanEvaluator
 
     private Mask emptyMask(int size)
     {
-        return allocator.allocateSparseMask(allocationContext, new int[0], size);
+        return allocator.allocateEmptyMask(allocationContext, size);
     }
 
     private enum BooleanOperator
@@ -2491,11 +2804,75 @@ public final class PlanEvaluator
 
     private record IndexedTerm(int index, MaskExpression term) {}
 
+    private record ConstantBound(Reference column, long literal, boolean lower) {}
+
+    private record RangeFusion(Vector values, boolean[] nulls, long lowerExclusive, long upperExclusive, List<MaskExpression> remainingTerms)
+    {
+        private void apply(Mask mask)
+        {
+            if (values instanceof I64Vector longs) {
+                mask.retainConstantRange(longs.values(), lowerExclusive, upperExclusive, nulls);
+            }
+            else {
+                mask.retainConstantRange(((I32Vector) values).values(), lowerExclusive, upperExclusive, nulls);
+            }
+        }
+    }
+
+    private static final class TermOrderFrames
+    {
+        private final ArrayList<ArrayList<MaskExpression>> frames = new ArrayList<>();
+        private int depth;
+
+        private ArrayList<MaskExpression> acquire(int capacity)
+        {
+            if (depth == frames.size()) {
+                frames.add(new ArrayList<>(capacity));
+            }
+            ArrayList<MaskExpression> frame = frames.get(depth++);
+            frame.clear();
+            frame.ensureCapacity(capacity);
+            return frame;
+        }
+
+        private void release()
+        {
+            if (depth <= 0) {
+                throw new IllegalStateException("No active term-order frame");
+            }
+            depth--;
+        }
+    }
+
     private record ClassificationCounts(int trueCount, int nullCount, int errorCount) {}
 
-    private record DictionaryPeeling(int[] ids, Mask baseMask, List<Streams> inputs) {}
+    private record DictionaryPeeling(int[] ids, int rowCount, Mask baseMask, List<Streams> inputs) {}
 
-    private record PrimitiveMaskInvocation(MaskEvaluablePrimitiveFunction function, List<Streams> inputs) {}
+    private static final class PrimitiveMaskInvocation
+    {
+        private MaskEvaluablePrimitiveFunction function;
+        private final List<Streams> inputs;
+
+        private PrimitiveMaskInvocation(List<Streams> inputs)
+        {
+            this.inputs = inputs;
+        }
+
+        private MaskEvaluablePrimitiveFunction function()
+        {
+            return function;
+        }
+
+        private void function(MaskEvaluablePrimitiveFunction function)
+        {
+            this.function = function;
+        }
+
+        private List<Streams> inputs()
+        {
+            return inputs;
+        }
+    }
 
     private record KeyAccess(BinaryVector values, boolean dictionary, int[] ids)
     {

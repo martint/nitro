@@ -45,9 +45,6 @@ public class DumpResults
         Files.createDirectories(out);
         String only = System.getProperty("nitro.dump.only");
         for (int q = 1; q <= 99; q++) {
-            if (q == 14) {
-                continue;
-            }
             if (only != null && q != Integer.parseInt(only)) {
                 continue;
             }

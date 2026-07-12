@@ -1,0 +1,55 @@
+Execution time: 1.81s
+OperatorWall: Aggregation=0.0 CallbackSink=0.1 FilterProject=71.1 HashBuild=163.1 HashProbe=293.4 LocalExchange=0.0 LocalPartition=0.0 OrderBy=0.0 PartialAggregation=16.8 TableScan=1171.5
+ScanWall: 1171.5ms  ComputeWall: 544.5ms  (sum 1716.1ms)
+Splits total: 13, finished: 13
+-- Project[18][expressions: (n_name:VARCHAR, ROW["n_name"]), (revenue:DOUBLE, ROW["revenue"])] -> n_name:VARCHAR, revenue:DOUBLE
+   Output: 5 rows (192B, 1 batches), Cpu time: 6.41us, Wall time: 10.09us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (2.90us/271ns/2.12us/1.12us)
+  -- OrderBy[17][revenue DESC NULLS LAST] -> n_name:VARCHAR, revenue:DOUBLE
+     Output: 5 rows (192B, 1 batches), Cpu time: 20.02us, Wall time: 23.21us, Blocked wall time: 0ns, Peak memory: 128.44KB, Memory allocations: 5, Threads: 1, CPU breakdown: B/I/O/F (9.17us/4.43us/3.13us/3.29us)
+    -- Aggregation[16][FINAL [n_name] revenue := sum("revenue")] -> n_name:VARCHAR, revenue:DOUBLE
+       Output: 5 rows (287.81KB, 1 batches), Cpu time: 36.05us, Wall time: 38.53us, Blocked wall time: 0ns, Peak memory: 356.38KB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (1.82us/21.60us/11.80us/823ns)
+      -- LocalPartition[15][GATHER] -> n_name:VARCHAR, revenue:DOUBLE
+         Output: 10 rows (575.62KB, 2 batches), Cpu time: 1.88ms, Wall time: 3.18ms, Blocked wall time: 1.81s, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (1.84ms/27.48us/5.27us/2.21us)
+         LocalPartition: Input: 5 rows (287.81KB, 1 batches), Output: 5 rows (287.81KB, 1 batches), Cpu time: 1.88ms, Wall time: 3.18ms, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (1.84ms/27.48us/2.05us/2.06us)
+         LocalExchange: Input: 5 rows (287.81KB, 1 batches), Output: 5 rows (287.81KB, 1 batches), Cpu time: 4.34us, Wall time: 5.30us, Blocked wall time: 1.81s, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (972ns/0ns/3.22us/150ns)
+        -- Aggregation[14][PARTIAL [n_name] revenue := sum(ROW["part_revenue"])] -> n_name:VARCHAR, revenue:DOUBLE
+           Output: 5 rows (287.81KB, 1 batches), Cpu time: 19.94ms, Wall time: 29.26ms, Blocked wall time: 0ns, Peak memory: 644.75KB, Memory allocations: 15, Threads: 1, CPU breakdown: B/I/O/F (7.23ms/9.02ms/1.89ms/1.80ms)
+          -- HashJoin[13][INNER s_nationkey=c_nationkey AND o_custkey=c_custkey] -> n_name:VARCHAR, part_revenue:DOUBLE
+             Output: 72985 rows (2.47MB, 12042 batches), Cpu time: 101.16ms, Wall time: 113.67ms, Blocked wall time: 467.99ms, Peak memory: 80.29MB, Memory allocations: 16, CPU breakdown: B/I/O/F (9.14ms/59.90ms/10.77ms/21.34ms)
+             HashBuild: Input: 1500000 rows (0B, 151 batches), Output: 0 rows (0B, 0 batches), Cpu time: 56.38ms, Wall time: 56.43ms, Blocked wall time: 0ns, Peak memory: 80.27MB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (47.51us/36.80ms/22.82us/19.51ms)
+             HashProbe: Input: 1825042 rows (106.86MB, 12561 batches), Output: 72985 rows (2.47MB, 12042 batches), Cpu time: 44.77ms, Wall time: 57.24ms, Blocked wall time: 467.99ms, Peak memory: 25.31KB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (9.09ms/23.10ms/10.75ms/1.83ms)
+            -- HashJoin[12][INNER l_orderkey=o_orderkey] -> n_name:VARCHAR, part_revenue:DOUBLE, s_nationkey:BIGINT, o_custkey:BIGINT
+               Output: 1825042 rows (106.86MB, 12561 batches), Cpu time: 267.89ms, Wall time: 280.57ms, Blocked wall time: 0ns, Peak memory: 114.35MB, Memory allocations: 19, CPU breakdown: B/I/O/F (8.92ms/194.19ms/33.97ms/30.81ms)
+               HashBuild: Input: 2275919 rows (10.65MB, 1502 batches), Output: 0 rows (0B, 0 batches), Cpu time: 106.22ms, Wall time: 106.82ms, Blocked wall time: 0ns, Peak memory: 114.27MB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (679.94us/76.35ms/219.21us/28.96ms)
+               HashProbe: Input: 12021065 rows (653.80MB, 12769 batches), Output: 1825042 rows (106.86MB, 12561 batches), Cpu time: 161.67ms, Wall time: 173.75ms, Blocked wall time: 0ns, Peak memory: 81.50KB, Memory allocations: 11, Threads: 1, CPU breakdown: B/I/O/F (8.24ms/117.83ms/33.75ms/1.85ms)
+              -- HashJoin[11][INNER l_suppkey=s_suppkey] -> n_name:VARCHAR, part_revenue:DOUBLE, s_nationkey:BIGINT, l_orderkey:BIGINT
+                 Output: 12021065 rows (653.80MB, 12769 batches), Cpu time: 96.18ms, Wall time: 102.96ms, Blocked wall time: 2.76ms, Peak memory: 3.19MB, Memory allocations: 16, CPU breakdown: B/I/O/F (5.41ms/15.82ms/73.86ms/1.08ms)
+                 HashBuild: Input: 20037 rows (1.62MB, 22 batches), Output: 0 rows (0B, 0 batches), Cpu time: 1.04ms, Wall time: 1.05ms, Blocked wall time: 0ns, Peak memory: 3.03MB, Memory allocations: 7, Threads: 1, CPU breakdown: B/I/O/F (9.46us/817.67us/3.88us/204.40us)
+                 HashProbe: Input: 12021065 rows (664.86MB, 6010 batches), Output: 12021065 rows (653.80MB, 12769 batches), Cpu time: 95.14ms, Wall time: 101.91ms, Blocked wall time: 2.76ms, Peak memory: 158.00KB, Memory allocations: 9, Threads: 1, CPU breakdown: B/I/O/F (5.40ms/15.01ms/73.86ms/874.21us)
+                -- Project[10][expressions: (part_revenue:DOUBLE, multiply(ROW["l_extendedprice"],minus(1,ROW["l_discount"]))), (l_orderkey:BIGINT, ROW["l_orderkey"]), (l_suppkey:BIGINT, ROW["l_suppkey"])] -> part_revenue:DOUBLE, l_orderkey:BIGINT, l_suppkey:BIGINT
+                   Output: 12021065 rows (664.86MB, 6010 batches), Cpu time: 20.81ms, Wall time: 24.54ms, Blocked wall time: 0ns, Peak memory: 24.00KB, Memory allocations: 6010, Threads: 1, CPU breakdown: B/I/O/F (3.50ms/990.47us/15.45ms/876.25us)
+                  -- TableScan[9][table: lineitem] -> l_suppkey:BIGINT, l_orderkey:BIGINT, l_discount:DOUBLE, l_extendedprice:DOUBLE
+                     Input: 12021065 rows (874.98MB, 6010 batches), Raw Input: 59986052 rows (586.67MB), Output: 12021065 rows (874.98MB, 6010 batches), Cpu time: 918.78ms, Wall time: 923.12ms, Blocked wall time: 0ns, Peak memory: 5.88MB, Memory allocations: 50228, Threads: 1, Splits: 4, DynamicFilter producer plan nodes: 11, CPU breakdown: B/I/O/F (968.25us/0ns/917.81ms/220ns)
+                -- HashJoin[8][INNER s_nationkey=n_nationkey] -> s_suppkey:BIGINT, n_name:VARCHAR, s_nationkey:BIGINT
+                   Output: 20037 rows (1.62MB, 22 batches), Cpu time: 173.63us, Wall time: 187.02us, Blocked wall time: 468.21ms, Peak memory: 230.00KB, Memory allocations: 11, CPU breakdown: B/I/O/F (13.64us/30.21us/109.28us/20.50us)
+                   HashBuild: Input: 5 rows (0B, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 26.28us, Wall time: 28.34us, Blocked wall time: 0ns, Peak memory: 84.00KB, Memory allocations: 3, Threads: 1, CPU breakdown: B/I/O/F (1.75us/5.66us/872ns/18.00us)
+                   HashProbe: Input: 20037 rows (959.06KB, 10 batches), Output: 20037 rows (1.62MB, 22 batches), Cpu time: 147.35us, Wall time: 158.68us, Blocked wall time: 468.21ms, Peak memory: 146.00KB, Memory allocations: 8, Threads: 1, CPU breakdown: B/I/O/F (11.90us/24.55us/108.41us/2.49us)
+                  -- TableScan[7][table: supplier] -> s_nationkey:BIGINT, s_suppkey:BIGINT
+                     Input: 20037 rows (1.11MB, 10 batches), Raw Input: 100000 rows (8.00MB), Output: 20037 rows (1.11MB, 10 batches), Cpu time: 1.01ms, Wall time: 1.54ms, Blocked wall time: 0ns, Peak memory: 1.13MB, Memory allocations: 57, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 8, CPU breakdown: B/I/O/F (1.85us/0ns/1.00ms/140ns)
+                  -- HashJoin[6][INNER n_regionkey=r_regionkey] -> n_nationkey:BIGINT, n_name:VARCHAR
+                     Output: 5 rows (0B, 1 batches), Cpu time: 52.24us, Wall time: 56.72us, Blocked wall time: 369.00us, Peak memory: 84.00KB, Memory allocations: 3, CPU breakdown: B/I/O/F (12.04us/8.04us/4.00us/28.16us)
+                     HashBuild: Input: 1 rows (32B, 1 batches), Output: 0 rows (0B, 0 batches), Cpu time: 36.79us, Wall time: 39.17us, Blocked wall time: 0ns, Peak memory: 84.00KB, Memory allocations: 3, Threads: 1, CPU breakdown: B/I/O/F (1.75us/7.61us/832ns/26.59us)
+                     HashProbe: Input: 5 rows (288B, 1 batches), Output: 5 rows (0B, 1 batches), Cpu time: 15.46us, Wall time: 17.54us, Blocked wall time: 369.00us, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (10.29us/431ns/3.17us/1.57us)
+                    -- TableScan[5][table: nation] -> n_nationkey:BIGINT, n_name:VARCHAR, n_regionkey:BIGINT
+                       Input: 5 rows (544B, 1 batches), Raw Input: 25 rows (2.77KB), Output: 5 rows (544B, 1 batches), Cpu time: 118.77us, Wall time: 134.46us, Blocked wall time: 0ns, Peak memory: 3.88KB, Memory allocations: 20, Threads: 1, Splits: 1, DynamicFilter producer plan nodes: 6, CPU breakdown: B/I/O/F (492ns/0ns/118.13us/150ns)
+                    -- Filter[1][expression: in("r_name",array_constructor(ASIA))] -> r_regionkey:BIGINT, r_name:VARCHAR
+                       Output: 1 rows (32B, 1 batches), Cpu time: 13.99us, Wall time: 16.38us, Blocked wall time: 0ns, Peak memory: 768B, Memory allocations: 7, Threads: 1, CPU breakdown: B/I/O/F (1.75us/331ns/11.06us/841ns)
+                      -- TableScan[0][table: region] -> r_regionkey:BIGINT, r_name:VARCHAR
+                         Input: 5 rows (640B, 1 batches), Output: 5 rows (640B, 1 batches), Cpu time: 56.97us, Wall time: 162.06us, Blocked wall time: 58.00us, Peak memory: 2.62KB, Memory allocations: 18, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (782ns/0ns/56.03us/151ns)
+              -- Filter[3][expression: and(gte("o_orderdate",1994-01-01),lte("o_orderdate",1994-12-31))] -> o_orderdate:DATE, o_custkey:BIGINT, o_orderkey:BIGINT
+                 Output: 2275919 rows (10.65MB, 1502 batches), Cpu time: 53.03ms, Wall time: 54.18ms, Blocked wall time: 0ns, Peak memory: 52.50KB, Memory allocations: 1507, Threads: 1, CPU breakdown: B/I/O/F (866.61us/240.14us/51.70ms/222.85us)
+                -- TableScan[2][table: orders] -> o_orderdate:DATE, o_custkey:BIGINT, o_orderkey:BIGINT
+                   Input: 15000000 rows (334.06MB, 1502 batches), Output: 15000000 rows (334.06MB, 1502 batches), Cpu time: 235.04ms, Wall time: 236.16ms, Blocked wall time: 68.00us, Peak memory: 2.18MB, Memory allocations: 18447, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (222.74us/0ns/234.82ms/221ns)
+            -- TableScan[4][table: customer] -> c_custkey:BIGINT, c_nationkey:BIGINT
+               Input: 1500000 rows (28.10MB, 151 batches), Output: 1500000 rows (28.10MB, 151 batches), Cpu time: 11.87ms, Wall time: 12.48ms, Blocked wall time: 70.00us, Peak memory: 1.27MB, Memory allocations: 675, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (22.73us/0ns/11.84ms/280ns)
+

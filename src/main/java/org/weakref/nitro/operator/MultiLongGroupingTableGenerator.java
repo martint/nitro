@@ -61,12 +61,22 @@ final class MultiLongGroupingTableGenerator
 
     static AbstractMultiLongGroupingTable create(int arity, int expectedSize)
     {
+        return create(arity, expectedSize, true);
+    }
+
+    static AbstractMultiLongGroupingTable createDistinct(int arity, int expectedSize)
+    {
+        return create(arity, expectedSize, false);
+    }
+
+    private static AbstractMultiLongGroupingTable create(int arity, int expectedSize, boolean retainGroupKeys)
+    {
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(arity, MultiLongGroupingTableGenerator::generate);
         try {
-            return (AbstractMultiLongGroupingTable) constructor.invoke(expectedSize);
+            return (AbstractMultiLongGroupingTable) constructor.invoke(expectedSize, retainGroupKeys);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated grouping table for arity " + arity, e);
@@ -82,24 +92,28 @@ final class MultiLongGroupingTableGenerator
             builder.withSuperclass(CD_BASE);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
 
-            // <init>(int expectedSize) { super(arity, expectedSize); }
-            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_int), ClassFile.ACC_PUBLIC, code -> {
+            // <init>(int expectedSize, boolean retainGroupKeys) { super(arity, expectedSize, retainGroupKeys); }
+            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_int, CD_boolean), ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
                 code.loadConstant(arity);
                 code.iload(1);
-                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int));
+                code.iload(2);
+                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int, CD_boolean));
                 code.return_();
             });
 
-            builder.withMethodBody("assignGroup", assignGroupType, ClassFile.ACC_PUBLIC, code -> emitAssignGroup(code, arity, thisClass));
-            builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType));
+            builder.withMethodBody("assignGroup", assignGroupType, ClassFile.ACC_PUBLIC, code -> emitAssignGroup(code, arity, thisClass, true));
+            builder.withMethodBody("assignDistinctGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false));
+            builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false));
+            builder.withMethodBody("assignDistinctBatch", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, false));
+            builder.withMethodBody("assignDistinctBatchNullFree", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, true));
             builder.withMethodBody("hashEntry", MethodTypeDesc.of(CD_int, CD_LONG_ARRAY, CD_int, CD_byte), ClassFile.ACC_PUBLIC, code -> emitHashEntry(code, arity));
         });
 
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
                     .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
-            return lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class, int.class));
+            return lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class, int.class, boolean.class));
         }
         catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to generate grouping table for arity " + arity, e);
@@ -122,9 +136,14 @@ final class MultiLongGroupingTableGenerator
         return MethodTypeDesc.of(CD_long, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_LONG_ARRAY, CD_long);
     }
 
+    private static MethodTypeDesc assignDistinctBatchType()
+    {
+        return MethodTypeDesc.of(CD_int, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_INT_ARRAY, CD_long);
+    }
+
     // long assignGroup(long k0..kN-1, byte nullMask, long newGroupId)
     // locals: this=0, k_i=1+2i, nullMask=1+2N, newGroupId=2+2N
-    private static void emitAssignGroup(CodeBuilder code, int arity, ClassDesc thisClass)
+    private static void emitAssignGroup(CodeBuilder code, int arity, ClassDesc thisClass, boolean retainGroupKeys)
     {
         int nullMaskSlot = 1 + 2 * arity;
         int newGroupIdSlot = 2 + 2 * arity;
@@ -132,7 +151,7 @@ final class MultiLongGroupingTableGenerator
         int baseVar = 5 + 2 * arity;
         int fragVar = 6 + 2 * arity;
         int controlVar = 7 + 2 * arity;
-        int groupIdOffset = arity;
+        int recordStride = arity + (retainGroupKeys ? 1 : 0);
 
         // hash = hash(keys, nullMask)
         emitHash(code, arity, key -> code.lload(1 + 2 * key), () -> code.iload(nullMaskSlot));
@@ -170,7 +189,7 @@ final class MultiLongGroupingTableGenerator
         // ---- fragment match: compare keys then nullMask ----
         // base = slot * stride
         code.iload(slotVar);
-        code.loadConstant(arity + 1);
+        code.loadConstant(recordStride);
         code.imul();
         code.istore(baseVar);
         for (int key = 0; key < arity; key++) {
@@ -195,20 +214,25 @@ final class MultiLongGroupingTableGenerator
         code.baload();
         code.iload(nullMaskSlot);
         code.if_icmpne(advance);
-        // match: return entries[base + arity]
-        code.aload(0);
-        code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
-        code.iload(baseVar);
-        code.loadConstant(groupIdOffset);
-        code.iadd();
-        code.laload();
+        // Grouping returns the stored id. DISTINCT only needs a value unequal to newGroupId.
+        if (retainGroupKeys) {
+            code.aload(0);
+            code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
+            code.iload(baseVar);
+            code.loadConstant(arity);
+            code.iadd();
+            code.laload();
+        }
+        else {
+            code.loadConstant(AbstractMultiLongGroupingTable.EMPTY_GROUP_ID);
+        }
         code.lreturn();
 
         // ---- empty slot: insert new group ----
         code.labelBinding(empty);
         // base = slot * stride
         code.iload(slotVar);
-        code.loadConstant(arity + 1);
+        code.loadConstant(recordStride);
         code.imul();
         code.istore(baseVar);
         for (int key = 0; key < arity; key++) {
@@ -220,13 +244,15 @@ final class MultiLongGroupingTableGenerator
             code.lload(1 + 2 * key);
             code.lastore();
         }
-        code.aload(0);
-        code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
-        code.iload(baseVar);
-        code.loadConstant(groupIdOffset);
-        code.iadd();
-        code.lload(newGroupIdSlot);
-        code.lastore();
+        if (retainGroupKeys) {
+            code.aload(0);
+            code.getfield(CD_BASE, "entries", CD_LONG_ARRAY);
+            code.iload(baseVar);
+            code.loadConstant(arity);
+            code.iadd();
+            code.lload(newGroupIdSlot);
+            code.lastore();
+        }
         code.aload(0);
         code.getfield(CD_BASE, "nullMasks", CD_BYTE_ARRAY);
         code.iload(slotVar);
@@ -238,28 +264,30 @@ final class MultiLongGroupingTableGenerator
         code.iload(slotVar);
         code.iload(fragVar);
         code.bastore();
-        // ensureReverseCapacity((int) newGroupId)
-        code.aload(0);
-        code.lload(newGroupIdSlot);
-        code.l2i();
-        code.invokevirtual(CD_BASE, "ensureReverseCapacity", MethodTypeDesc.of(CD_void, CD_int));
-        // keysByGroup[key][(int) newGroupId] = k_key
-        for (int key = 0; key < arity; key++) {
+        if (retainGroupKeys) {
+            // ensureReverseCapacity((int) newGroupId)
             code.aload(0);
-            code.getfield(CD_BASE, "keysByGroup", CD_LONG_ARRAY_2D);
-            code.loadConstant(key);
-            code.aaload();
             code.lload(newGroupIdSlot);
             code.l2i();
-            code.lload(1 + 2 * key);
-            code.lastore();
+            code.invokevirtual(CD_BASE, "ensureReverseCapacity", MethodTypeDesc.of(CD_void, CD_int));
+            // keysByGroup[key][(int) newGroupId] = k_key
+            for (int key = 0; key < arity; key++) {
+                code.aload(0);
+                code.getfield(CD_BASE, "keysByGroup", CD_LONG_ARRAY_2D);
+                code.loadConstant(key);
+                code.aaload();
+                code.lload(newGroupIdSlot);
+                code.l2i();
+                code.lload(1 + 2 * key);
+                code.lastore();
+            }
+            code.aload(0);
+            code.getfield(CD_BASE, "nullMasksByGroup", CD_BYTE_ARRAY);
+            code.lload(newGroupIdSlot);
+            code.l2i();
+            code.iload(nullMaskSlot);
+            code.bastore();
         }
-        code.aload(0);
-        code.getfield(CD_BASE, "nullMasksByGroup", CD_BYTE_ARRAY);
-        code.lload(newGroupIdSlot);
-        code.l2i();
-        code.iload(nullMaskSlot);
-        code.bastore();
         // size++
         code.aload(0);
         code.dup();
@@ -294,7 +322,7 @@ final class MultiLongGroupingTableGenerator
 
     // long assignBatch(LongValues[] keyAcc, BooleanValues[] nullAcc, int[] positions, int count, long[] result, long startGroupId)
     // locals: this=0, keyAcc=1, nullAcc=2, positions=3, count=4, result=5, startGroupId/groupId=6
-    private static void emitAssignBatch(CodeBuilder code, int arity, ClassDesc thisClass, MethodTypeDesc assignGroupType)
+    private static void emitAssignBatch(CodeBuilder code, int arity, ClassDesc thisClass, MethodTypeDesc assignGroupType, String assignGroupMethod, boolean distinct, boolean nullFree)
     {
         int accBase = 8;                       // hoisted key accessors a0..a(N-1)
         int nullAccBase = 8 + arity;           // hoisted null accessors n0..n(N-1)
@@ -303,17 +331,25 @@ final class MultiLongGroupingTableGenerator
         int keyBase = 10 + 2 * arity;          // k_i at keyBase + 2*i
         int nullMaskVar = 10 + 4 * arity;
         int gidVar = 11 + 4 * arity;
+        int distinctCountVar = 13 + 4 * arity;
         int groupIdVar = 6;
+
+        if (distinct) {
+            code.loadConstant(0);
+            code.istore(distinctCountVar);
+        }
 
         for (int key = 0; key < arity; key++) {
             code.aload(1);
             code.loadConstant(key);
             code.aaload();
             code.astore(accBase + key);
-            code.aload(2);
-            code.loadConstant(key);
-            code.aaload();
-            code.astore(nullAccBase + key);
+            if (!nullFree) {
+                code.aload(2);
+                code.loadConstant(key);
+                code.aaload();
+                code.astore(nullAccBase + key);
+            }
         }
 
         code.loadConstant(0);
@@ -335,26 +371,34 @@ final class MultiLongGroupingTableGenerator
         code.istore(nullMaskVar);
 
         for (int key = 0; key < arity; key++) {
-            code.aload(nullAccBase + key);
-            code.iload(pos);
-            code.invokeinterface(CD_BOOLEAN_VALUES, "value", MethodTypeDesc.of(CD_boolean, CD_int));
-            Label notNull = code.newLabel();
-            Label done = code.newLabel();
-            code.ifeq(notNull);
-            // null: nullMask |= (1 << key); k_key = 0
-            code.iload(nullMaskVar);
-            code.loadConstant(1 << key);
-            code.ior();
-            code.istore(nullMaskVar);
-            code.loadConstant(0L);
-            code.lstore(keyBase + 2 * key);
-            code.goto_(done);
-            code.labelBinding(notNull);
-            code.aload(accBase + key);
-            code.iload(pos);
-            code.invokeinterface(CD_LONG_VALUES, "value", MethodTypeDesc.of(CD_long, CD_int));
-            code.lstore(keyBase + 2 * key);
-            code.labelBinding(done);
+            if (nullFree) {
+                code.aload(accBase + key);
+                code.iload(pos);
+                code.invokeinterface(CD_LONG_VALUES, "value", MethodTypeDesc.of(CD_long, CD_int));
+                code.lstore(keyBase + 2 * key);
+            }
+            else {
+                code.aload(nullAccBase + key);
+                code.iload(pos);
+                code.invokeinterface(CD_BOOLEAN_VALUES, "value", MethodTypeDesc.of(CD_boolean, CD_int));
+                Label notNull = code.newLabel();
+                Label done = code.newLabel();
+                code.ifeq(notNull);
+                // null: nullMask |= (1 << key); k_key = 0
+                code.iload(nullMaskVar);
+                code.loadConstant(1 << key);
+                code.ior();
+                code.istore(nullMaskVar);
+                code.loadConstant(0L);
+                code.lstore(keyBase + 2 * key);
+                code.goto_(done);
+                code.labelBinding(notNull);
+                code.aload(accBase + key);
+                code.iload(pos);
+                code.invokeinterface(CD_LONG_VALUES, "value", MethodTypeDesc.of(CD_long, CD_int));
+                code.lstore(keyBase + 2 * key);
+                code.labelBinding(done);
+            }
         }
         // nullMask = (byte) nullMask
         code.iload(nullMaskVar);
@@ -368,19 +412,28 @@ final class MultiLongGroupingTableGenerator
         }
         code.iload(nullMaskVar);
         code.lload(groupIdVar);
-        code.invokevirtual(thisClass, "assignGroup", assignGroupType);
+        code.invokevirtual(thisClass, assignGroupMethod, assignGroupType);
         code.lstore(gidVar);
-        // result[pos] = gid
-        code.aload(5);
-        code.iload(pos);
-        code.lload(gidVar);
-        code.lastore();
+        if (!distinct) {
+            // result[pos] = gid
+            code.aload(5);
+            code.iload(pos);
+            code.lload(gidVar);
+            code.lastore();
+        }
         // if (gid == groupId) groupId++
         code.lload(gidVar);
         code.lload(groupIdVar);
         code.lcmp();
         Label notNew = code.newLabel();
         code.ifne(notNew);
+        if (distinct) {
+            code.aload(5);
+            code.iload(distinctCountVar);
+            code.iload(pos);
+            code.iastore();
+            code.iinc(distinctCountVar, 1);
+        }
         code.lload(groupIdVar);
         code.loadConstant(1L);
         code.ladd();
@@ -390,8 +443,14 @@ final class MultiLongGroupingTableGenerator
         code.iinc(p, 1);
         code.goto_(loopTop);
         code.labelBinding(loopEnd);
-        code.lload(groupIdVar);
-        code.lreturn();
+        if (distinct) {
+            code.iload(distinctCountVar);
+            code.ireturn();
+        }
+        else {
+            code.lload(groupIdVar);
+            code.lreturn();
+        }
     }
 
     // int hashEntry(long[] table, int base, byte nullMask): locals this=0, table=1, base=2, nullMask=3

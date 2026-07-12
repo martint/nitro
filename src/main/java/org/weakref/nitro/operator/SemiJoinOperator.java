@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
@@ -48,11 +49,11 @@ public class SemiJoinOperator
     private final Allocator allocator;
     private final boolean includeMatches;
     private final boolean outputMatches;
-    private final GroupingState membership = new GroupingState();
+    private final MembershipSet membership;
+    private final PositionScratch selectionScratch = new PositionScratch();
 
     private boolean loaded;
     private BatchState currentBatchState;
-    private I64Vector membershipScratch;
     private it.unimi.dsi.fastutil.longs.LongOpenHashSet dynamicFilterValues;
     private boolean dynamicFilterAbandoned;
     private SmallBinarySet smallBinaryMembership;
@@ -77,6 +78,7 @@ public class SemiJoinOperator
         this.allocator = allocator;
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
+        this.membership = new MembershipSet(allocator, ALLOCATION_CONTEXT);
     }
 
     @Override
@@ -213,6 +215,12 @@ public class SemiJoinOperator
         if (!loaded) {
             inner.close();
         }
+        membership.releaseBuffers();
+        selectionScratch.release();
+        if (smallBinaryMembership != null) {
+            smallBinaryMembership.releaseBuffers();
+            smallBinaryMembership = null;
+        }
         allocator.release(ALLOCATION_CONTEXT);
     }
 
@@ -234,13 +242,7 @@ public class SemiJoinOperator
                 Vector nulls = output.borrowOrNull(Stream.NULLS);
                 collectDynamicFilterValues(values, nulls, mask);
                 collectSmallBinaryMembership(values, nulls, mask);
-                membershipScratch = allocator.allocateOrGrow(
-                        ALLOCATION_CONTEXT,
-                        membershipScratch,
-                        I64Vector.class,
-                        values.length(),
-                        I64Vector::new);
-                membership.assignGroups(values, nulls, mask, membershipScratch);
+                membership.addBatch(values, nulls, mask);
             }
             finally {
                 batch.close();
@@ -294,6 +296,9 @@ public class SemiJoinOperator
         }
         if (!SmallBinarySet.supports(values)) {
             smallBinaryMembershipAbandoned = true;
+            if (smallBinaryMembership != null) {
+                smallBinaryMembership.releaseBuffers();
+            }
             smallBinaryMembership = null;
             return;
         }
@@ -302,6 +307,7 @@ public class SemiJoinOperator
         }
         if (!smallBinaryMembership.addValues(values, nulls, mask)) {
             smallBinaryMembershipAbandoned = true;
+            smallBinaryMembership.releaseBuffers();
             smallBinaryMembership = null;
         }
     }
@@ -330,7 +336,7 @@ public class SemiJoinOperator
     private Mask selectRows(Batch sourceBatch, Mask sourceMask, boolean includeMatches, Allocator resultAllocator, Allocator.Context resultAllocationContext)
     {
         if (sourceMask.none()) {
-            return resultAllocator.allocateSparseMask(resultAllocationContext, new int[0], sourceMask.size());
+            return resultAllocator.allocateEmptyMask(resultAllocationContext, sourceMask.size());
         }
 
         Output output = sourceBatch.output(outerJoinColumn);
@@ -339,38 +345,16 @@ public class SemiJoinOperator
 
         SmallBinarySet binaryMembership = smallBinaryMembership;
         if (binaryMembership != null && binaryMembership.supportsProbe(values)) {
-            return binaryMembership.selectRows(resultAllocator, resultAllocationContext, values, nulls, sourceMask, includeMatches);
+            return binaryMembership.selectRows(resultAllocator, resultAllocationContext, values, nulls, sourceMask, includeMatches, selectionScratch);
         }
 
-        int[] positions = null;
-        boolean allSelected = true;
-        int selectedCount = 0;
-        membership.beginContainsBatch(values, nulls);
-        try {
-            for (int position : sourceMask) {
-                if (membership.contains(values, nulls, position) == includeMatches) {
-                    if (!allSelected) {
-                        positions = ensurePositionCapacity(positions, selectedCount, sourceMask.count());
-                        positions[selectedCount] = position;
-                    }
-                    selectedCount++;
-                }
-                else if (allSelected) {
-                    allSelected = false;
-                    if (selectedCount > 0) {
-                        positions = selectedPrefix(sourceMask, selectedCount);
-                    }
-                }
-            }
-        }
-        finally {
-            membership.endContainsBatch();
-        }
+        int[] positions = selectionScratch.ensure(sourceMask.count());
+        int selectedCount = membership.selectPositions(values, nulls, sourceMask, includeMatches, positions);
 
-        if (allSelected || selectedCount == sourceMask.count()) {
+        if (selectedCount == sourceMask.count()) {
             return resultAllocator.copyMask(resultAllocationContext, sourceMask);
         }
-        return resultAllocator.allocateSparseMask(resultAllocationContext, positions == null ? new int[0] : positions, selectedCount, sourceMask.size());
+        return resultAllocator.allocateSparseMask(resultAllocationContext, positions, selectedCount, sourceMask.size());
     }
 
     private BooleanVector computeMatchValues(BatchState batchState, BooleanVector matchValues, Mask requestedMask)
@@ -388,46 +372,53 @@ public class SemiJoinOperator
             return matchValues;
         }
 
-        membership.beginContainsBatch(values, nulls);
-        try {
-            for (int position : requestedMask) {
-                matchValues.values()[position] = membership.contains(values, nulls, position);
-            }
-        }
-        finally {
-            membership.endContainsBatch();
-        }
+        membership.writeMatches(values, nulls, requestedMask, matchValues.values());
         return matchValues;
     }
 
-    private static int[] selectedPrefix(Mask mask, int selectedCount)
+    private static final class PositionScratch
     {
-        int[] positions = new int[Math.min(mask.count(), Math.max(16, selectedCount + 1))];
-        if (mask.all()) {
-            for (int index = 0; index < selectedCount; index++) {
-                positions[index] = index;
-            }
-            return positions;
-        }
-        int index = 0;
-        for (int position : mask) {
-            if (index == selectedCount) {
-                break;
-            }
-            positions[index++] = position;
-        }
-        return positions;
-    }
+        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private int[] positions = new int[0];
 
-    private static int[] ensurePositionCapacity(int[] positions, int selectedCount, int maxCount)
-    {
-        if (positions == null) {
-            return new int[Math.min(maxCount, Math.max(16, selectedCount + 1))];
-        }
-        if (selectedCount < positions.length) {
+        private int[] ensure(int count)
+        {
+            if (positions.length < count) {
+                int[] previous = positions;
+                positions = arrayPool.isRetainable((long) count * Integer.BYTES) ? arrayPool.borrowInts(count) : new int[count];
+                if (arrayPool.isRetainable((long) previous.length * Integer.BYTES)) {
+                    arrayPool.release(previous);
+                }
+            }
             return positions;
         }
-        return Arrays.copyOf(positions, Math.min(maxCount, positions.length * 2));
+
+        private int[] selectedPrefix(Mask mask, int selectedCount)
+        {
+            int[] result = ensure(mask.count());
+            if (mask.all()) {
+                for (int index = 0; index < selectedCount; index++) {
+                    result[index] = index;
+                }
+                return result;
+            }
+            int index = 0;
+            for (int position : mask) {
+                if (index == selectedCount) {
+                    break;
+                }
+                result[index++] = position;
+            }
+            return result;
+        }
+
+        private void release()
+        {
+            if (arrayPool.isRetainable((long) positions.length * Integer.BYTES)) {
+                arrayPool.release(positions);
+            }
+            positions = new int[0];
+        }
     }
 
     private static final class SmallBinarySet
@@ -435,6 +426,7 @@ public class SemiJoinOperator
         private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
         private final int maxValues;
+        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
         private byte[][] values = new byte[8][];
         private int[] lengths = new int[8];
         private int[] hashes = new int[8];
@@ -599,10 +591,10 @@ public class SemiJoinOperator
             }
         }
 
-        private Mask selectRows(Allocator allocator, Allocator.Context allocationContext, Vector values, Vector nulls, Mask mask, boolean includeMatches)
+        private Mask selectRows(Allocator allocator, Allocator.Context allocationContext, Vector values, Vector nulls, Mask mask, boolean includeMatches, PositionScratch selectionScratch)
         {
             if (VectorAccess.isAllFalseNulls(nulls)) {
-                return selectRowsNoNulls(allocator, allocationContext, values, mask, includeMatches);
+                return selectRowsNoNulls(allocator, allocationContext, values, mask, includeMatches, selectionScratch);
             }
             VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
             int[] positions = null;
@@ -620,7 +612,7 @@ public class SemiJoinOperator
                         boolean match = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
                         if (match == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -628,7 +620,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -640,7 +632,7 @@ public class SemiJoinOperator
                         boolean match = !nullValues.value(position) && dictionaryMatch(dictionaryValues, ids[position], generation);
                         if (match == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -648,7 +640,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -660,7 +652,7 @@ public class SemiJoinOperator
                         boolean match = !nullValues.value(position) && containsValue(values, position);
                         if (match == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -668,7 +660,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -680,7 +672,7 @@ public class SemiJoinOperator
                         boolean match = !nullValues.value(position) && containsValue(values, position);
                         if (match == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -688,7 +680,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -697,10 +689,10 @@ public class SemiJoinOperator
             if (allSelected || selectedCount == maskCount) {
                 return allocator.copyMask(allocationContext, mask);
             }
-            return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+            return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
         }
 
-        private Mask selectRowsNoNulls(Allocator allocator, Allocator.Context allocationContext, Vector values, Mask mask, boolean includeMatches)
+        private Mask selectRowsNoNulls(Allocator allocator, Allocator.Context allocationContext, Vector values, Mask mask, boolean includeMatches, PositionScratch selectionScratch)
         {
             int[] positions = null;
             boolean allSelected = true;
@@ -716,7 +708,7 @@ public class SemiJoinOperator
                     for (int position = 0; position < maskCount; position++) {
                         if (dictionaryMatch(dictionaryValues, ids[position], generation) == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -724,7 +716,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -735,7 +727,7 @@ public class SemiJoinOperator
                         int position = maskPositions[index];
                         if (dictionaryMatch(dictionaryValues, ids[position], generation) == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -743,7 +735,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -754,7 +746,7 @@ public class SemiJoinOperator
                     for (int position = 0; position < maskCount; position++) {
                         if (containsValue(values, position) == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -762,7 +754,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -773,7 +765,7 @@ public class SemiJoinOperator
                         int position = maskPositions[index];
                         if (containsValue(values, position) == includeMatches) {
                             if (!allSelected) {
-                                positions = ensurePositionCapacity(positions, selectedCount, maskCount);
+                                positions = selectionScratch.ensure(maskCount);
                                 positions[selectedCount] = position;
                             }
                             selectedCount++;
@@ -781,7 +773,7 @@ public class SemiJoinOperator
                         else if (allSelected) {
                             allSelected = false;
                             if (selectedCount > 0) {
-                                positions = selectedPrefix(mask, selectedCount);
+                                positions = selectionScratch.selectedPrefix(mask, selectedCount);
                             }
                         }
                     }
@@ -790,7 +782,7 @@ public class SemiJoinOperator
             if (allSelected || selectedCount == maskCount) {
                 return allocator.copyMask(allocationContext, mask);
             }
-            return allocator.allocateSparseMask(allocationContext, positions == null ? new int[0] : positions, selectedCount, mask.size());
+            return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
         }
 
         private boolean dictionaryMatch(Vector dictionaryValues, int dictionaryId, int generation)
@@ -809,7 +801,10 @@ public class SemiJoinOperator
         {
             if (cachedDictionaryValues != dictionaryValues) {
                 cachedDictionaryValues = dictionaryValues;
-                cachedDictionaryMatchStates = new byte[dictionaryValues.length()];
+                byte[] previous = cachedDictionaryMatchStates;
+                cachedDictionaryMatchStates = borrowBytes(dictionaryValues.length());
+                Arrays.fill(cachedDictionaryMatchStates, (byte) 0);
+                release(previous);
             }
             byte state = cachedDictionaryMatchStates[dictionaryId];
             if (state != 0) {
@@ -834,8 +829,61 @@ public class SemiJoinOperator
             if (dictionaryMatches.length >= size) {
                 return;
             }
-            dictionaryMatches = Arrays.copyOf(dictionaryMatches, size);
-            dictionaryGenerations = Arrays.copyOf(dictionaryGenerations, size);
+            boolean[] previousMatches = dictionaryMatches;
+            int[] previousGenerations = dictionaryGenerations;
+            dictionaryMatches = borrowBooleans(size);
+            dictionaryGenerations = borrowInts(size);
+            Arrays.fill(dictionaryGenerations, 0);
+            dictionaryGeneration = 0;
+            release(previousMatches);
+            release(previousGenerations);
+        }
+
+        private byte[] borrowBytes(int size)
+        {
+            return arrayPool.isRetainable(size) ? arrayPool.borrowBytes(size) : new byte[size];
+        }
+
+        private boolean[] borrowBooleans(int size)
+        {
+            return arrayPool.isRetainable(size) ? arrayPool.borrowBooleans(size) : new boolean[size];
+        }
+
+        private int[] borrowInts(int size)
+        {
+            return arrayPool.isRetainable((long) size * Integer.BYTES) ? arrayPool.borrowInts(size) : new int[size];
+        }
+
+        private void release(byte[] buffer)
+        {
+            if (arrayPool.isRetainable(buffer.length)) {
+                arrayPool.release(buffer);
+            }
+        }
+
+        private void release(boolean[] buffer)
+        {
+            if (arrayPool.isRetainable(buffer.length)) {
+                arrayPool.release(buffer);
+            }
+        }
+
+        private void release(int[] buffer)
+        {
+            if (arrayPool.isRetainable((long) buffer.length * Integer.BYTES)) {
+                arrayPool.release(buffer);
+            }
+        }
+
+        private void releaseBuffers()
+        {
+            release(dictionaryMatches);
+            dictionaryMatches = new boolean[0];
+            release(dictionaryGenerations);
+            dictionaryGenerations = new int[0];
+            release(cachedDictionaryMatchStates);
+            cachedDictionaryMatchStates = new byte[0];
+            cachedDictionaryValues = null;
         }
 
         private boolean containsValue(Vector values, int position)

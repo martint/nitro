@@ -13,20 +13,28 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.ints.IntArrays;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-
-import java.util.ArrayList;
-import java.util.List;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 public class SortOperator
         implements Operator
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SortOperator");
+    private static final boolean COLUMNAR_BUFFER =
+            Boolean.parseBoolean(System.getProperty("nitro.sort.columnarBuffer", "true"));
+    private static final int COLUMNAR_BUFFER_MAX_COLUMNS =
+            Integer.getInteger("nitro.sort.columnarBufferMaxColumns", 8);
 
     private final Allocator allocator;
     private final Operator source;
     private final TopNState state;
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private int[] orderedSlots = new int[0];
+    private int[] sortScratch = new int[0];
+    private long[] sortKeys = new long[0];
+    private int[] radixCounts = new int[0];
 
     private boolean done;
 
@@ -78,37 +86,135 @@ public class SortOperator
 
     private Mask computeSorted()
     {
-        List<Integer> orderedSlots = new ArrayList<>();
+        int slotCount = 0;
 
         while (source.hasNext()) {
             Batch batch = source.next();
+            // A full sort retains every input row, so eagerly copy every output while this batch is open. Each stream
+            // is copied before the next output is borrowed and the source is not advanced until the batch is closed;
+            // computed projections may therefore recycle a previously borrowed evaluator vector without invalidating
+            // the sort buffer. This requires ordinary batch-lifetime borrowing, not cross-borrow/cross-batch retention.
+            if (COLUMNAR_BUFFER && outputCount() <= COLUMNAR_BUFFER_MAX_COLUMNS) {
+                Mask mask = batch.borrowMask();
+                // An empty physical batch contributes no rows and therefore must not replace an already buffered
+                // column with whatever partial schema streams that batch happens to expose.  This matters for lazy
+                // projections, where an empty batch can expose only NULLS/ERRORS until VALUES is demanded.  Retain
+                // the first empty batch only when the complete sort is still empty, so it can supply output schema.
+                if (mask.none()) {
+                    if (slotCount == 0) {
+                        state.captureSchema(batch, true);
+                        if (!state.shouldKeepBatchForEmptySchema(batch, true)) {
+                            batch.close();
+                        }
+                    }
+                    else {
+                        batch.close();
+                    }
+                    continue;
+                }
+                int batchStart = slotCount;
+                int required = slotCount + mask.count();
+                ensureSortCapacity(required);
+                state.appendDenseBatch(batch, mask, batchStart, orderedSlots.length);
+                for (int position = 0; position < mask.count(); position++) {
+                    orderedSlots[slotCount] = slotCount;
+                    slotCount++;
+                }
+                batch.close();
+                continue;
+            }
             state.captureSchema(batch, false);
             Mask mask = batch.borrowMask();
-            state.ensureCapacity(orderedSlots.size() + mask.size());
+            int batchStart = slotCount;
+            int required = slotCount + mask.count();
+            state.ensureCapacity(required);
+            ensureSortCapacity(required);
 
-            List<Integer> batchSlots = new ArrayList<>(mask.size());
             for (int position : mask) {
-                int slot = orderedSlots.size();
+                int slot = slotCount++;
                 state.copyRow(batch, position, slot);
-                orderedSlots.add(slot);
-                batchSlots.add(slot);
+                orderedSlots[slot] = slot;
             }
 
             if (!source.supportsRetainedBatches()) {
-                state.flushPendingBatch(batch, batchSlots);
-                if (!orderedSlots.isEmpty()) {
+                state.flushPendingBatch(batch, orderedSlots, batchStart, slotCount);
+                if (slotCount > 0) {
                     state.releaseFallbackBatch();
                 }
-                if (!state.shouldKeepBatchForEmptySchema(batch, orderedSlots.isEmpty())) {
+                if (!state.shouldKeepBatchForEmptySchema(batch, slotCount == 0)) {
                     batch.close();
                 }
             }
         }
 
-        orderedSlots.sort((left, right) -> state.compareSlots(right, left));
-        state.setOrderedSlots(orderedSlots);
+        stableSort(orderedSlots, sortScratch, slotCount);
+        state.setOrderedSlots(orderedSlots, slotCount);
         done = true;
-        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, orderedSlots.size());
+        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, slotCount);
+    }
+
+    private void ensureSortCapacity(int required)
+    {
+        if (orderedSlots.length >= required) {
+            return;
+        }
+        int capacity = Math.max(required, Math.max(256, orderedSlots.length * 2));
+        int[] oldOrdered = orderedSlots;
+        int[] oldScratch = sortScratch;
+        orderedSlots = arrayPool.borrowInts(capacity);
+        sortScratch = arrayPool.borrowInts(capacity);
+        long[] oldKeys = sortKeys;
+        sortKeys = arrayPool.borrowLongs(capacity);
+        System.arraycopy(oldOrdered, 0, orderedSlots, 0, Math.min(oldOrdered.length, required));
+        arrayPool.release(oldOrdered);
+        arrayPool.release(oldScratch);
+        arrayPool.release(oldKeys);
+    }
+
+    private void stableSort(int[] values, int[] scratch, int count)
+    {
+        if (state.hasSingleFixedWidthNonNullOrdering(count)) {
+            radixSort(values, scratch, count);
+            return;
+        }
+        System.arraycopy(values, 0, scratch, 0, count);
+        IntArrays.mergeSort(values, 0, count, (left, right) -> state.compareSlots(right, left), scratch);
+    }
+
+    private void radixSort(int[] values, int[] scratch, int count)
+    {
+        if (radixCounts.length == 0) {
+            radixCounts = arrayPool.borrowInts(256);
+        }
+        for (int index = 0; index < count; index++) {
+            int slot = values[index];
+            sortKeys[slot] = state.singleFixedWidthSortKey(slot);
+        }
+        int[] source = values;
+        int[] target = scratch;
+        boolean descending = state.singleOrderingDescending();
+        for (int shift = 0; shift < Long.SIZE; shift += Byte.SIZE) {
+            java.util.Arrays.fill(radixCounts, 0, 256, 0);
+            for (int index = 0; index < count; index++) {
+                int digit = (int) (sortKeys[source[index]] >>> shift) & 0xFF;
+                radixCounts[descending ? 0xFF - digit : digit]++;
+            }
+            int offset = 0;
+            for (int digit = 0; digit < 256; digit++) {
+                int size = radixCounts[digit];
+                radixCounts[digit] = offset;
+                offset += size;
+            }
+            for (int index = 0; index < count; index++) {
+                int slot = source[index];
+                int digit = (int) (sortKeys[slot] >>> shift) & 0xFF;
+                int orderedDigit = descending ? 0xFF - digit : digit;
+                target[radixCounts[orderedDigit]++] = slot;
+            }
+            int[] swap = source;
+            source = target;
+            target = swap;
+        }
     }
 
     @Override
@@ -136,5 +242,13 @@ public class SortOperator
     {
         source.close();
         allocator.release(ALLOCATION_CONTEXT);
+        arrayPool.release(orderedSlots);
+        arrayPool.release(sortScratch);
+        arrayPool.release(sortKeys);
+        arrayPool.release(radixCounts);
+        orderedSlots = new int[0];
+        sortScratch = new int[0];
+        sortKeys = new long[0];
+        radixCounts = new int[0];
     }
 }

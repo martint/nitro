@@ -23,6 +23,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.StructVector;
@@ -31,7 +32,10 @@ import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 
@@ -49,6 +53,8 @@ final class JoinBufferSupport
             Boolean.parseBoolean(System.getProperty("nitro.join.copyAndCompactRangeSelection", "true"));
     private static final boolean PRESERVE_DICTIONARY_BINARY_POSITION_COPIES =
             Boolean.parseBoolean(System.getProperty("nitro.join.preserveDictionaryBinaryPositionCopies", "true"));
+    private static final boolean COMPACT_ALL_FALSE_POSITION_COPIES =
+            Boolean.parseBoolean(System.getProperty("nitro.join.compactAllFalsePositionCopies", "true"));
 
     JoinBufferSupport(Allocator allocator, Allocator.Context allocationContext)
     {
@@ -71,6 +77,49 @@ final class JoinBufferSupport
         return streams.build();
     }
 
+    Set<Vector> identities(Streams[] columns)
+    {
+        Set<Vector> identities = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Streams streams : columns) {
+            if (streams == null) {
+                continue;
+            }
+            for (Stream stream : Stream.values()) {
+                Vector vector = streams.getOrNull(stream);
+                if (vector != null) {
+                    collectIdentities(vector, identities);
+                }
+            }
+        }
+        return identities;
+    }
+
+    void releaseUnreferenced(Streams[] columns, Set<Vector> retained)
+    {
+        if (columns == null) {
+            return;
+        }
+        for (Streams streams : columns) {
+            if (streams == null) {
+                continue;
+            }
+            for (Stream stream : Stream.values()) {
+                Vector vector = streams.getOrNull(stream);
+                if (vector != null) {
+                    allocator.releaseUnreferenced(allocationContext, vector, retained);
+                }
+            }
+        }
+    }
+
+    private static void collectIdentities(Vector vector, Set<Vector> identities)
+    {
+        if (!identities.add(vector)) {
+            return;
+        }
+        vector.forEachChildVector(child -> collectIdentities(child, identities));
+    }
+
     public Streams replicate(Streams existing, Streams input, int size, int start, int length, int position)
     {
         if (length == 1) {
@@ -81,11 +130,30 @@ final class JoinBufferSupport
 
     public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size)
     {
+        return copyAndCompact(input, mask, maskStart, existing, outputStart, copied, size, null, null);
+    }
+
+    public Streams copyAndCompact(Output input, Mask mask, int maskStart, Streams existing, int outputStart, int copied, int size, PositionBuffer positionBuffer)
+    {
+        return copyAndCompact(input, mask, maskStart, existing, outputStart, copied, size, positionBuffer, null);
+    }
+
+    public Streams copyAndCompact(
+            Output input,
+            Mask mask,
+            int maskStart,
+            Streams existing,
+            int outputStart,
+            int copied,
+            int size,
+            PositionBuffer positionBuffer,
+            PositionMappingCache sharedPositionCache)
+    {
         SelectedPositions rangePositions = COPY_AND_COMPACT_RANGE_SELECTION && mask.all()
                 ? SelectedPositions.range(maskStart, copied)
                 : null;
         int[] positions = null;
-        PositionMappingCache positionCache = positionCache(input);
+        PositionMappingCache positionCache = positionCache(input, sharedPositionCache);
         Streams.Builder result = Streams.builder();
         if (input.hasValues()) {
             Vector existingVector = existing != null ? existing.getOrNull(Stream.VALUES) : null;
@@ -94,8 +162,8 @@ final class JoinBufferSupport
                 result.put(Stream.VALUES, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
             }
             else {
-                positions = positions != null ? positions : positions(mask, maskStart, copied);
-                result.put(Stream.VALUES, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+                positions = positions != null ? positions : positions(positionBuffer, mask, maskStart, copied);
+                result.put(Stream.VALUES, copyVectorPositions(existingVector, source, positions, 0, copied, outputStart, size, false, positionCache));
             }
         }
         if (hasConcreteStream(input, Stream.NULLS)) {
@@ -105,8 +173,8 @@ final class JoinBufferSupport
                 result.put(Stream.NULLS, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
             }
             else {
-                positions = positions != null ? positions : positions(mask, maskStart, copied);
-                result.put(Stream.NULLS, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+                positions = positions != null ? positions : positions(positionBuffer, mask, maskStart, copied);
+                result.put(Stream.NULLS, copyVectorPositions(existingVector, source, positions, 0, copied, outputStart, size, false, positionCache));
             }
         }
         if (hasConcreteStream(input, Stream.ERRORS)) {
@@ -116,8 +184,8 @@ final class JoinBufferSupport
                 result.put(Stream.ERRORS, copyVectorPositions(existingVector, source, rangePositions, outputStart, size, false));
             }
             else {
-                positions = positions != null ? positions : positions(mask, maskStart, copied);
-                result.put(Stream.ERRORS, copyVectorPositions(existingVector, source, positions, 0, positions.length, outputStart, size, false, positionCache));
+                positions = positions != null ? positions : positions(positionBuffer, mask, maskStart, copied);
+                result.put(Stream.ERRORS, copyVectorPositions(existingVector, source, positions, 0, copied, outputStart, size, false, positionCache));
             }
         }
         return result.build();
@@ -557,6 +625,11 @@ final class JoinBufferSupport
         return POSITION_MAPPING_CACHE ? new PositionMappingCache() : null;
     }
 
+    PositionMappingCache newRecyclingPositionMappingCache()
+    {
+        return POSITION_MAPPING_CACHE ? new PositionMappingCache(true) : null;
+    }
+
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
     {
         return copyPositions(existing, source, sourcePositions, sourcePositions.length, outputStart, size);
@@ -584,6 +657,10 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache positionCache)
     {
+        Vector compactFalse = compactAllFalseCopy(existing, source, outputStart, sourceCount, size);
+        if (compactFalse != null) {
+            return compactFalse;
+        }
         if (source instanceof DictionaryVector dictionaryValues) {
             Vector fused = copyDictionaryPositions(existing, dictionaryValues, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
             if (fused != null) {
@@ -634,6 +711,10 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, SelectedPositions sourcePositions, int outputStart, int size, boolean assumeClearOutputRange)
     {
+        Vector compactFalse = compactAllFalseCopy(existing, source, outputStart, sourcePositions.count(), size);
+        if (compactFalse != null) {
+            return compactFalse;
+        }
         if (source instanceof DictionaryVector dictionaryValues) {
             int[] positions = sourcePositions.backingArrayOrNull();
             if (positions != null) {
@@ -681,6 +762,39 @@ final class JoinBufferSupport
             default -> {}
         }
         return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
+    }
+
+    private Vector compactAllFalseCopy(Vector existing, Vector source, int outputStart, int count, int size)
+    {
+        if (!COMPACT_ALL_FALSE_POSITION_COPIES || !isAllFalseBoolean(source)) {
+            return null;
+        }
+        if (existing == null || (!(existing instanceof BooleanVector) && isAllFalseBoolean(existing) && existing.length() < size)) {
+            BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+            sentinel.markAllFalse();
+            return allocator.allocateSingleRunRle(allocationContext, size, sentinel);
+        }
+        // Do not call BooleanVector.isAllFalse() on the mutable output under construction: a later chunk can write
+        // true bits directly into the same backing array, while that method's cache is valid only after publication.
+        if (!(existing instanceof BooleanVector) && isAllFalseBoolean(existing)) {
+            return existing;
+        }
+        if (existing instanceof BooleanVector booleans) {
+            BooleanVector output = ensureBooleanCapacity(booleans, size);
+            Arrays.fill(output.values(), outputStart, outputStart + count, false);
+            return output;
+        }
+        return null;
+    }
+
+    private static boolean isAllFalseBoolean(Vector vector)
+    {
+        return switch (vector) {
+            case BooleanVector booleans -> booleans.isAllFalse();
+            case DictionaryVector dictionary -> isAllFalseBoolean(dictionary.values());
+            case RleVector rle -> isAllFalseBoolean(rle.values());
+            default -> false;
+        };
     }
 
     boolean canCopyRangeWithoutMaterializing(Streams input)
@@ -1620,6 +1734,11 @@ final class JoinBufferSupport
         return positions;
     }
 
+    private static int[] positions(PositionBuffer positionBuffer, Mask mask, int maskStart, int copied)
+    {
+        return positionBuffer == null ? positions(mask, maskStart, copied) : positionBuffer.positions(mask, maskStart, copied);
+    }
+
     private static int[] repeatedPositions(int position, int length)
     {
         int[] positions = new int[length];
@@ -1829,11 +1948,6 @@ final class JoinBufferSupport
         return Streams.builder().putAll(existing);
     }
 
-    private static PositionMappingCache positionCache(Output input)
-    {
-        return positionCache(input, null);
-    }
-
     private static PositionMappingCache positionCache(Output input, PositionMappingCache sharedPositionCache)
     {
         if (!POSITION_MAPPING_CACHE) {
@@ -1850,11 +1964,6 @@ final class JoinBufferSupport
             streamCount++;
         }
         return streamCount > 1 ? new PositionMappingCache() : null;
-    }
-
-    private static PositionMappingCache positionCache(Streams input)
-    {
-        return positionCache(input, null);
     }
 
     private static PositionMappingCache positionCache(Streams input, PositionMappingCache sharedPositionCache)
@@ -1877,12 +1986,43 @@ final class JoinBufferSupport
 
     static final class PositionMappingCache
     {
+        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final boolean recycling;
         private final Object[] mappings = new Object[POSITION_MAPPING_CACHE_SIZE];
         private final int[][] sourcePositions = new int[POSITION_MAPPING_CACHE_SIZE][];
         private final int[] sourceStarts = new int[POSITION_MAPPING_CACHE_SIZE];
         private final int[] sourceCounts = new int[POSITION_MAPPING_CACHE_SIZE];
         private final int[][] mappedPositions = new int[POSITION_MAPPING_CACHE_SIZE][];
-        private int next;
+        private int count;
+
+        private PositionMappingCache()
+        {
+            this(false);
+        }
+
+        private PositionMappingCache(boolean recycling)
+        {
+            this.recycling = recycling;
+        }
+
+        void reset()
+        {
+            Arrays.fill(mappings, 0, count, null);
+            Arrays.fill(sourcePositions, 0, count, null);
+            count = 0;
+        }
+
+        void release()
+        {
+            reset();
+            if (!recycling) {
+                return;
+            }
+            for (int index = 0; index < mappedPositions.length; index++) {
+                arrayPool.release(mappedPositions[index]);
+                mappedPositions[index] = null;
+            }
+        }
 
         private int[] dictionaryPositions(int[] ids, int[] positions, int sourceStart, int sourceCount)
         {
@@ -1891,7 +2031,10 @@ final class JoinBufferSupport
                 return mapped;
             }
 
-            mapped = JoinBufferSupport.dictionaryPositions(ids, positions, sourceStart, sourceCount);
+            mapped = acquire(sourceCount);
+            for (int index = 0; index < sourceCount; index++) {
+                mapped[index] = ids[positions[sourceStart + index]];
+            }
             put(ids, positions, sourceStart, sourceCount, mapped);
             return mapped;
         }
@@ -1903,14 +2046,17 @@ final class JoinBufferSupport
                 return mapped;
             }
 
-            mapped = JoinBufferSupport.rlePositions(values, positions, sourceStart, sourceCount);
+            mapped = acquire(sourceCount);
+            for (int index = 0; index < sourceCount; index++) {
+                mapped[index] = rlePosition(values, positions[sourceStart + index]);
+            }
             put(values, positions, sourceStart, sourceCount, mapped);
             return mapped;
         }
 
         private int[] get(Object mapping, int[] positions, int sourceStart, int sourceCount)
         {
-            for (int index = 0; index < POSITION_MAPPING_CACHE_SIZE; index++) {
+            for (int index = 0; index < count; index++) {
                 if (mappings[index] == mapping &&
                         sourcePositions[index] == positions &&
                         sourceStarts[index] == sourceStart &&
@@ -1923,13 +2069,29 @@ final class JoinBufferSupport
 
         private void put(Object mapping, int[] positions, int sourceStart, int sourceCount, int[] mapped)
         {
-            int index = next;
+            if (count == POSITION_MAPPING_CACHE_SIZE) {
+                return;
+            }
+            int index = count++;
             mappings[index] = mapping;
             sourcePositions[index] = positions;
             sourceStarts[index] = sourceStart;
             sourceCounts[index] = sourceCount;
             mappedPositions[index] = mapped;
-            next = (index + 1) & (POSITION_MAPPING_CACHE_SIZE - 1);
+        }
+
+        private int[] acquire(int requiredCapacity)
+        {
+            if (!recycling || count == POSITION_MAPPING_CACHE_SIZE) {
+                return new int[requiredCapacity];
+            }
+            int[] mapped = mappedPositions[count];
+            if (mapped == null || mapped.length < requiredCapacity) {
+                arrayPool.release(mapped);
+                mapped = arrayPool.borrowInts(requiredCapacity);
+                mappedPositions[count] = mapped;
+            }
+            return mapped;
         }
     }
 }

@@ -30,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -43,6 +44,9 @@ public final class LikeUtf8
         implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LikeUtf8");
+    private static final ConcurrentHashMap<String, Pattern> PATTERNS = new ConcurrentHashMap<>();
+    private static final boolean BOYER_MOORE_HORSPOOL =
+            Boolean.parseBoolean(System.getProperty("nitro.like.boyerMooreHorspool", "true"));
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -143,19 +147,24 @@ public final class LikeUtf8
     private static Pattern parsePattern(byte[] pattern)
     {
         String text = new String(pattern, StandardCharsets.UTF_8);
+        return PATTERNS.computeIfAbsent(text, LikeUtf8::parsePattern);
+    }
+
+    private static Pattern parsePattern(String text)
+    {
         checkArgument(text.indexOf('_') < 0, "like_utf8 does not support the _ wildcard: %s", text);
         boolean anchoredStart = !text.startsWith("%");
         boolean anchoredEnd = !text.endsWith("%");
-        List<byte[]> segments = new ArrayList<>();
+        List<Segment> segments = new ArrayList<>();
         for (String segment : text.split("%", -1)) {
             if (!segment.isEmpty()) {
-                segments.add(segment.getBytes(StandardCharsets.UTF_8));
+                segments.add(new Segment(segment.getBytes(StandardCharsets.UTF_8)));
             }
         }
         return new Pattern(anchoredStart, anchoredEnd, segments);
     }
 
-    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<byte[]> segments)
+    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments)
     {
         boolean matches(byte[] data, int offset, int length)
         {
@@ -165,24 +174,24 @@ public final class LikeUtf8
             int cursor = offset;
             int end = offset + length;
             for (int index = 0; index < segments.size(); index++) {
-                byte[] segment = segments.get(index);
+                Segment segment = segments.get(index);
                 boolean last = index == segments.size() - 1;
                 if (index == 0 && anchoredStart) {
-                    if (length < segment.length || !regionEquals(data, offset, segment)) {
+                    if (length < segment.bytes.length || !regionEquals(data, offset, segment.bytes)) {
                         return false;
                     }
-                    cursor = offset + segment.length;
+                    cursor = offset + segment.bytes.length;
                 }
                 else if (last && anchoredEnd) {
-                    int start = end - segment.length;
-                    return start >= cursor && regionEquals(data, start, segment);
+                    int start = end - segment.bytes.length;
+                    return start >= cursor && regionEquals(data, start, segment.bytes);
                 }
                 else {
                     int found = indexOf(data, cursor, end, segment);
                     if (found < 0) {
                         return false;
                     }
-                    cursor = found + segment.length;
+                    cursor = found + segment.bytes.length;
                 }
                 if (last && anchoredEnd && index == 0 && anchoredStart) {
                     return cursor == end;
@@ -202,15 +211,49 @@ public final class LikeUtf8
             return true;
         }
 
-        private static int indexOf(byte[] data, int from, int end, byte[] segment)
+        private static int indexOf(byte[] data, int from, int end, Segment segment)
         {
-            int limit = end - segment.length;
+            byte[] bytes = segment.bytes;
+            int limit = end - bytes.length;
+            if (BOYER_MOORE_HORSPOOL && bytes.length >= 4) {
+                int last = bytes.length - 1;
+                int start = from;
+                while (start <= limit) {
+                    int index = last;
+                    while (index >= 0 && data[start + index] == bytes[index]) {
+                        index--;
+                    }
+                    if (index < 0) {
+                        return start;
+                    }
+                    start += segment.shifts[data[start + last] & 0xFF];
+                }
+                return -1;
+            }
             for (int start = from; start <= limit; start++) {
-                if (regionEquals(data, start, segment)) {
+                if (regionEquals(data, start, bytes)) {
                     return start;
                 }
             }
             return -1;
+        }
+    }
+
+    private record Segment(byte[] bytes, int[] shifts)
+    {
+        private Segment(byte[] bytes)
+        {
+            this(bytes, shifts(bytes));
+        }
+
+        private static int[] shifts(byte[] bytes)
+        {
+            int[] shifts = new int[256];
+            java.util.Arrays.fill(shifts, bytes.length);
+            for (int index = 0; index < bytes.length - 1; index++) {
+                shifts[bytes[index] & 0xFF] = bytes.length - 1 - index;
+            }
+            return shifts;
         }
     }
 }

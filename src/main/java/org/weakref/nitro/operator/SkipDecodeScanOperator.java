@@ -532,7 +532,7 @@ public final class SkipDecodeScanOperator
         }
         if (block instanceof RunLengthEncodedBlock runLengthBlock) {
             Vector value = convertFlatValues(columnIndex, runLengthBlock.getValue(), 1);
-            return output(allocator.allocateRle(ALLOCATION_CONTEXT, new int[] {count}, value), nullVector);
+            return output(allocator.allocateSingleRunRle(ALLOCATION_CONTEXT, count, value), nullVector);
         }
         return output(convertFlatValues(columnIndex, block, count), nullVector);
     }

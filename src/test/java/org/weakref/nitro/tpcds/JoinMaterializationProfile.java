@@ -29,7 +29,7 @@ import java.util.Map;
 
 import static java.lang.String.format;
 
-final class JoinMaterializationProfile
+public final class JoinMaterializationProfile
         implements HashJoinOperator.MaterializationProfile
 {
     private final Map<String, Metric> metrics = new LinkedHashMap<>();

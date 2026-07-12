@@ -36,6 +36,9 @@ import io.airlift.slice.SliceUtf8;
  */
 public final class JoniRegexpSupport
 {
+    private static final boolean ZERO_COPY_MATCHER =
+            Boolean.parseBoolean(System.getProperty("nitro.regexp.zeroCopyMatcher", "true"));
+
     private JoniRegexpSupport() {}
 
     /** Compile a UTF-8 pattern with the same encoding/syntax/options Trino uses for its Joni regexp type. */
@@ -52,17 +55,27 @@ public final class JoniRegexpSupport
     /** Replace every match of {@code pattern} in {@code source} with {@code replacement}. */
     public static Slice replace(Slice source, Regex pattern, Slice replacement)
     {
-        Matcher matcher = pattern.matcher(source.getBytes());
+        byte[] sourceBytes = ZERO_COPY_MATCHER ? source.byteArray() : null;
+        int sourceStart;
+        if (sourceBytes == null) {
+            sourceBytes = source.getBytes();
+            sourceStart = 0;
+        }
+        else {
+            sourceStart = source.byteArrayOffset();
+        }
+        int sourceEnd = sourceStart + source.length();
+        Matcher matcher = pattern.matcher(sourceBytes, sourceStart, sourceEnd);
         SliceOutput output = new DynamicSliceOutput(source.length() + replacement.length() * 5);
 
         int lastEnd = 0;
-        int nextStart = 0;
+        int nextStart = sourceStart;
         while (true) {
-            int offset = matcher.search(nextStart, source.length(), Option.NONE);
+            int offset = matcher.search(nextStart, sourceEnd, Option.NONE);
             if (offset == -1) {
                 break;
             }
-            nextStart = nextStart(source, matcher);
+            nextStart = sourceStart + nextStart(source, matcher);
             Slice unmatched = source.slice(lastEnd, matcher.getBegin() - lastEnd);
             lastEnd = matcher.getEnd();
             output.appendBytes(unmatched);

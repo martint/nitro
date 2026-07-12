@@ -1,0 +1,48 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.operator;
+
+import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.PrimitiveArrayPool;
+
+import java.util.HashSet;
+import java.util.Set;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class TestPooledLongHashSet
+{
+    @Test
+    void testInsertResizeAndReuse()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(16L << 20, 0);
+        Set<Long> expected = new HashSet<>();
+        PooledLongHashSet first = new PooledLongHashSet(1, pool);
+        for (long value = -10_000; value <= 10_000; value++) {
+            assertThat(first.add(value)).isEqualTo(expected.add(value));
+            assertThat(first.add(value)).isFalse();
+        }
+        assertThat(first.size()).isEqualTo(expected.size());
+        expected.forEach(value -> assertThat(first.contains(value)).isTrue());
+        assertThat(first.contains(Long.MIN_VALUE)).isFalse();
+        first.releaseBuffers();
+
+        long reusedBefore = pool.reusedBytes();
+        PooledLongHashSet second = new PooledLongHashSet(20_001, pool);
+        assertThat(pool.reusedBytes()).isGreaterThan(reusedBefore);
+        assertThat(second.add(0)).isTrue();
+        assertThat(second.add(0)).isFalse();
+        second.releaseBuffers();
+    }
+}

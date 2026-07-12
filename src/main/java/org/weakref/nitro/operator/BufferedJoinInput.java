@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -25,32 +26,77 @@ import static java.lang.Math.toIntExact;
 
 final class BufferedJoinInput
 {
+    @FunctionalInterface
+    interface BatchMaskPruner
+    {
+        void prune(Batch batch, Mask mask);
+    }
+
     // Coalesce a multi-batch build into one addressable batch up to this many rows. A single build batch lets the
     // inner join output reference build columns as a zero-copy DictionaryVector (one run, ids = matched build
     // positions) instead of copying the (variable-width) bytes once per matched output row -- the dominant cost in
     // high-fan-out joins over dimension tables. Bounded so a fact-table-sized build is never copied wholesale; the
     // one-time coalesce copy pays for itself whenever the join output references the build more than once.
-    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 2_000_000);
+    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 4_000_000);
+    // Post-load coalescing is a separate decision from an explicitly requested direct build. Keeping the controls
+    // separate lets large ordinary builds remain paged without disabling a caller's exact/bounded one-copy layout.
+    // Above one million rows, the eager second payload copy is a large fixed cost and paged row references remain
+    // cheaper for selective probes; callers that know the final cardinality can still request the one-copy layout.
+    private static final int MAX_POST_LOAD_COALESCED_ROWS =
+            Integer.getInteger("nitro.hash.join.maxPostLoadCoalescedInnerRows", 1 << 20);
     private static final boolean COALESCE_RANGE_SELECTION =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.coalesceRangeSelection", "true"));
     private static final boolean BUFFERED_DENSE_POSITIONS_CACHE =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.bufferedDensePositionsCache", "true"));
+    private static final boolean CLOSE_COPIED_BATCHES =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.closeCopiedBuildBatches", "true"));
+    private static final boolean SHARED_COMPACTION_POSITIONS =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.sharedCompactionPositions", "true"));
+    private static final boolean RECYCLED_COMPACTION_MAPPINGS =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.recycledCompactionMappings", "true"));
+    private static final boolean RELEASE_COPIED_COALESCE_SOURCES =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.releaseCopiedCoalesceSources", "true"));
+    private static final boolean DEFAULT_DIRECT_EXACT_COALESCE =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.directExactCoalesce", "false"));
+    // An operator-reported exact cardinality is a stronger signal than the post-load row count: it lets the build
+    // write directly into its final one-batch layout instead of first filling 64K pages and then copying them again.
+    // Keep automatic admission at the ordinary one-million-row coalescing bound. Larger exact builds require the
+    // explicit physical-plan hint below, which preserves the existing 4M escape hatch without making a large eager
+    // allocation the default for every scan-backed dimension.
+    private static final boolean AUTOMATIC_DIRECT_EXACT_COALESCE =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.automaticDirectExactCoalesce", "true"));
+    // Small or fixed-width-dominated builds already make the ordinary paged-then-coalesced copy cheap, while
+    // pre-sizing a large final batch can add locality work without recovering enough payload traffic. Automatic
+    // admission therefore requires both this cardinality floor and a variable-width majority in the first physical
+    // batch. Explicit physical-plan hints retain the existing lower-cardinality escape hatch.
+    private static final int MIN_AUTOMATIC_DIRECT_EXACT_ROWS =
+            Integer.getInteger("nitro.hash.join.minAutomaticDirectExactRows", 1 << 18);
+    private static final boolean DEFAULT_DIRECT_BOUNDED_COALESCE =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.directBoundedCoalesce", "true"));
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
 
     private final JoinBufferSupport buffers;
+    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     private final int columnCount;
     private final Streams[] schema;
     private final java.util.Set<Stream>[] outputStreams;
     private final int[] outputKnownAllFalseFlags;
     private final boolean[] outputKnownAllFalseInitialized;
     private final List<InnerBatch> batches = new ArrayList<>();
+    // Coalesced vectors may preserve dictionary/value storage from their source batches. Keep those owners alive
+    // until the join closes, while removing them from the active probe list.
+    private final List<InnerBatch> coalescedSources = new ArrayList<>();
     private Batch firstRetainedBatch;
     private int[] densePositionsCache = new int[0];
+    private final PositionBuffer compactionPositions = new PositionBuffer();
+    private final JoinBufferSupport.PositionMappingCache compactionMappings;
 
     private boolean loaded;
     private long rowCount;
+    private boolean directExactCoalesce = DEFAULT_DIRECT_EXACT_COALESCE;
+    private boolean directBoundedCoalesce;
 
     @SuppressWarnings("unchecked")
     BufferedJoinInput(JoinBufferSupport buffers, int columnCount)
@@ -61,11 +107,29 @@ final class BufferedJoinInput
         this.outputStreams = (java.util.Set<Stream>[]) new java.util.Set<?>[columnCount];
         this.outputKnownAllFalseFlags = new int[columnCount];
         this.outputKnownAllFalseInitialized = new boolean[columnCount];
+        this.compactionMappings = buffers.newRecyclingPositionMappingCache();
     }
 
     public void loadAll(Operator source, int batchSize)
     {
         loadAll(source, batchSize, new int[0], false, false);
+    }
+
+    void enableDirectExactCoalesce()
+    {
+        if (loaded) {
+            throw new IllegalStateException("Build input is already loaded");
+        }
+        directExactCoalesce = true;
+    }
+
+    boolean enableDirectBoundedCoalesce()
+    {
+        if (loaded) {
+            throw new IllegalStateException("Build input is already loaded");
+        }
+        directBoundedCoalesce = DEFAULT_DIRECT_BOUNDED_COALESCE;
+        return directBoundedCoalesce;
     }
 
     public void loadAll(Operator source, int batchSize, int[] eagerColumns, boolean retainBatches)
@@ -84,19 +148,44 @@ final class BufferedJoinInput
      */
     public void loadAll(Operator source, int batchSize, int[] eagerColumns, boolean retainBatches, boolean deferSingleBatch)
     {
+        loadAll(source, batchSize, eagerColumns, retainBatches, deferSingleBatch, null);
+    }
+
+    public void loadAll(
+            Operator source,
+            int batchSize,
+            int[] eagerColumns,
+            boolean retainBatches,
+            boolean deferSingleBatch,
+            BatchMaskPruner maskPruner)
+    {
         if (loaded) {
             return;
         }
         loaded = true;
 
         if (retainBatches) {
-            loadRetained(source);
+            loadRetained(source, maskPruner);
             coalesceSmallBatches();
             return;
         }
 
         Streams[] columns = new Streams[columnCount];
         int outputPosition = 0;
+        long exactRows = source.exactOutputRows();
+        int outputBatchSize;
+        boolean automaticExactCandidate = AUTOMATIC_DIRECT_EXACT_COALESCE &&
+                exactRows >= MIN_AUTOMATIC_DIRECT_EXACT_ROWS &&
+                exactRows <= MAX_POST_LOAD_COALESCED_ROWS;
+        if (directExactCoalesce && exactRows > 0 && exactRows <= MAX_COALESCED_ROWS) {
+            outputBatchSize = toIntExact(exactRows);
+        }
+        else if (directBoundedCoalesce) {
+            outputBatchSize = MAX_COALESCED_ROWS;
+        }
+        else {
+            outputBatchSize = batchSize;
+        }
 
         boolean first = true;
         while (source.hasNext()) {
@@ -104,6 +193,9 @@ final class BufferedJoinInput
             captureStreams(batch, outputStreams);
             captureKnownAllFalse(batch, outputKnownAllFalseFlags, outputKnownAllFalseInitialized);
             Mask mask = batch.borrowMask();
+            if (maskPruner != null) {
+                maskPruner.prune(batch, mask);
+            }
 
             // Single-batch defer fast path: when the source yields exactly one batch and supports a
             // constrained re-borrow, retain it as a deferred batch. Build borrows only the join-key
@@ -127,23 +219,45 @@ final class BufferedJoinInput
                 coalesceSmallBatches();
                 return;
             }
+            if (first && automaticExactCandidate && hasVariableWidthMajority(batch)) {
+                outputBatchSize = toIntExact(exactRows);
+            }
             first = false;
             captureSchema(batch, schema);
             int maskOffset = 0;
             while (maskOffset < mask.count()) {
-                int copied = Math.min(mask.count() - maskOffset, batchSize - outputPosition);
+                int copied = Math.min(mask.count() - maskOffset, outputBatchSize - outputPosition);
+                compactionPositions.reset();
                 for (int columnIndex = 0; columnIndex < columns.length; columnIndex++) {
-                    columns[columnIndex] = buffers.copyAndCompact(batch.output(columnIndex), mask, maskOffset, columns[columnIndex], outputPosition, copied, batchSize);
+                    if (compactionMappings != null) {
+                        compactionMappings.reset();
+                    }
+                    columns[columnIndex] = buffers.copyAndCompact(
+                            batch.output(columnIndex),
+                            mask,
+                            maskOffset,
+                            columns[columnIndex],
+                            outputPosition,
+                            copied,
+                            outputBatchSize,
+                            SHARED_COMPACTION_POSITIONS ? compactionPositions : null,
+                            RECYCLED_COMPACTION_MAPPINGS ? compactionMappings : null);
                 }
                 outputPosition += copied;
                 maskOffset += copied;
                 rowCount += copied;
 
-                if (outputPosition == batchSize) {
-                    batches.add(new InnerBatch(columns, batchSize));
+                if (outputPosition == outputBatchSize) {
+                    batches.add(new InnerBatch(columns, outputBatchSize));
                     columns = new Streams[columnCount];
                     outputPosition = 0;
                 }
+            }
+            // Every selected stream and position has been copied into this buffer. Close the non-retained wrapper
+            // now so operators above the scan can recycle their masks and borrowed streams before the next batch.
+            // Retained and deferred paths deliberately keep their batches open and do not reach this point.
+            if (CLOSE_COPIED_BATCHES) {
+                batch.close();
             }
         }
 
@@ -154,7 +268,24 @@ final class BufferedJoinInput
         coalesceSmallBatches();
     }
 
-    private void loadRetained(Operator source)
+    private boolean hasVariableWidthMajority(Batch batch)
+    {
+        int valueColumns = 0;
+        int variableWidthColumns = 0;
+        for (int outputIndex = 0; outputIndex < columnCount; outputIndex++) {
+            Output output = batch.output(outputIndex);
+            if (!output.hasValues()) {
+                continue;
+            }
+            valueColumns++;
+            if (output.borrow(Stream.VALUES).isVariableWidth()) {
+                variableWidthColumns++;
+            }
+        }
+        return variableWidthColumns * 2 > valueColumns;
+    }
+
+    private void loadRetained(Operator source, BatchMaskPruner maskPruner)
     {
         while (source.hasNext()) {
             Batch batch = source.next();
@@ -165,13 +296,29 @@ final class BufferedJoinInput
             captureStreams(batch, outputStreams);
             captureKnownAllFalse(batch, outputKnownAllFalseFlags, outputKnownAllFalseInitialized);
             Mask mask = batch.borrowMask();
+            if (maskPruner != null) {
+                maskPruner.prune(batch, mask);
+            }
             if (mask.none()) {
                 continue;
             }
             if (!mask.all()) {
                 Streams[] columns = new Streams[columnCount];
+                compactionPositions.reset();
                 for (int columnIndex = 0; columnIndex < columns.length; columnIndex++) {
-                    columns[columnIndex] = buffers.copyAndCompact(batch.output(columnIndex), mask, 0, null, 0, mask.count(), mask.count());
+                    if (compactionMappings != null) {
+                        compactionMappings.reset();
+                    }
+                    columns[columnIndex] = buffers.copyAndCompact(
+                            batch.output(columnIndex),
+                            mask,
+                            0,
+                            null,
+                            0,
+                            mask.count(),
+                            mask.count(),
+                            SHARED_COMPACTION_POSITIONS ? compactionPositions : null,
+                            RECYCLED_COMPACTION_MAPPINGS ? compactionMappings : null);
                 }
                 rowCount += mask.count();
                 batches.add(new InnerBatch(columns, mask.count()));
@@ -185,7 +332,7 @@ final class BufferedJoinInput
 
     private void coalesceSmallBatches()
     {
-        if (batches.size() <= 1 || rowCount == 0 || rowCount > MAX_COALESCED_ROWS) {
+        if (batches.size() <= 1 || rowCount == 0 || rowCount > MAX_POST_LOAD_COALESCED_ROWS) {
             return;
         }
 
@@ -208,6 +355,16 @@ final class BufferedJoinInput
                 }
             }
             outputStart += batch.length();
+        }
+        java.util.Set<org.weakref.nitro.data.Vector> retained = RELEASE_COPIED_COALESCE_SOURCES ? buffers.identities(columns) : null;
+        for (InnerBatch batch : batches) {
+            if (retained != null && !batch.retained()) {
+                buffers.releaseUnreferenced(batch.columns(), retained);
+                batch.releasePositions(arrayPool);
+            }
+            else {
+                coalescedSources.add(batch);
+            }
         }
         batches.clear();
         batches.add(new InnerBatch(columns, size));
@@ -320,9 +477,9 @@ final class BufferedJoinInput
         }
     }
 
-    private static int[] positions(Mask mask)
+    private int[] positions(Mask mask)
     {
-        int[] positions = new int[mask.count()];
+        int[] positions = arrayPool.borrowInts(mask.count());
         if (mask.all()) {
             for (int index = 0; index < positions.length; index++) {
                 positions[index] = index;
@@ -345,12 +502,35 @@ final class BufferedJoinInput
             return positions;
         }
         if (densePositionsCache.length < length) {
-            densePositionsCache = new int[length];
+            int[] previous = densePositionsCache;
+            densePositionsCache = arrayPool.borrowInts(length);
             for (int index = 0; index < length; index++) {
                 densePositionsCache[index] = index;
             }
+            arrayPool.release(previous);
         }
         return densePositionsCache;
+    }
+
+    public void releaseBuffers()
+    {
+        for (InnerBatch batch : batches) {
+            batch.releasePositions(arrayPool);
+        }
+        batches.clear();
+        for (InnerBatch batch : coalescedSources) {
+            batch.releasePositions(arrayPool);
+        }
+        coalescedSources.clear();
+        // Retained source vectors can escape through dictionary-preserving join outputs. Their downstream owner,
+        // rather than the join's scratch teardown, controls when those batches can be closed.
+        firstRetainedBatch = null;
+        arrayPool.release(densePositionsCache);
+        densePositionsCache = new int[0];
+        compactionPositions.release();
+        if (compactionMappings != null) {
+            compactionMappings.release();
+        }
     }
 
     private static int streamFlags(java.util.Set<Stream> streams)
@@ -448,6 +628,11 @@ final class BufferedJoinInput
         public int[] positions()
         {
             return positions;
+        }
+
+        private void releasePositions(PrimitiveArrayPool arrayPool)
+        {
+            arrayPool.release(positions);
         }
     }
 }
