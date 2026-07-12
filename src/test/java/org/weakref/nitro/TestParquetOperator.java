@@ -397,7 +397,7 @@ public class TestParquetOperator
             BooleanVector payloadNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
 
             assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
-            assertThat(payloads.traits()).isEmpty();
+            assertThat(payloads.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
             assertThat(utf8(names, 0)).isEqualTo("alice");
             assertThat(utf8(names, 1)).isEqualTo("bob");
             assertThat(utf8(names, 2)).isEqualTo("charlie");

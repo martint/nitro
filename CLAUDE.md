@@ -31,7 +31,7 @@ existing entry over adding a near-duplicate.
 
 ## Commands
 
-Java 25 with preview features enabled (`--enable-preview --add-modules
+Java 26 with preview features enabled (`--enable-preview --add-modules
 jdk.incubator.vector`). The repo uses Jujutsu (`jj`) for version control.
 
 ```bash
