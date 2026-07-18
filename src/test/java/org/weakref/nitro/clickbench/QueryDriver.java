@@ -29,7 +29,7 @@ public final class QueryDriver
     public static void main(String[] args)
     {
         String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
-        if (!query.equals("query05") && !query.equals("query06") && !query.equals("query10") && !query.equals("query12") && !query.equals("query18") && !query.equals("query22") && !query.equals("query29") && !query.equals("query30") && !query.equals("query33") && !query.equals("query34") && !query.equals("query36") && !query.equals("query43")) {
+        if (!query.equals("query05") && !query.equals("query06") && !query.equals("query10") && !query.equals("query12") && !query.equals("query18") && !query.equals("query22") && !query.equals("query29") && !query.equals("query30") && !query.equals("query33") && !query.equals("query34") && !query.equals("query36") && !query.equals("query40") && !query.equals("query43")) {
             throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
         }
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
@@ -76,6 +76,7 @@ public final class QueryDriver
             case "query33" -> ClickBenchHitsSupport.query33(allocator, hits);
             case "query34" -> ClickBenchHitsSupport.query34(allocator, hits);
             case "query36" -> ClickBenchHitsSupport.query36(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
+            case "query40" -> ClickBenchHitsSupport.query40(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
             case "query43" -> ClickBenchHitsSupport.query43(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
             default -> throw new IllegalArgumentException("Unsupported query: " + query);
         };

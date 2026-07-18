@@ -45,6 +45,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * mismatches. Reports, per query, MATCH or the genuine row-level difference (cardinality and example rows). Run:
  *   mvn test -Dtest=CompareToSql -Dnitro.tpcds.trino.root=/root/notes/trino \
  *     -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10 -Dnitro.tpcds.parquet.schema=sf10 -Dlicense.skip=true
+ * Add {@code -Dnitro.tpcds.compare.query=N} to run one query while debugging a parity failure.
  */
 public class CompareToSql
 {
@@ -52,12 +53,16 @@ public class CompareToSql
     void compareAll()
             throws Exception
     {
+        int selectedQuery = Integer.getInteger("nitro.tpcds.compare.query", 0);
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "set -Dnitro.tpcds.parquet.path");
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         StringBuilder summary = new StringBuilder();
         try (TrinoTpcdsParquetSqlSupport sql = new TrinoTpcdsParquetSqlSupport(tables)) {
             for (int q = 1; q <= 99; q++) {
+                if (selectedQuery != 0 && q != selectedQuery) {
+                    continue;
+                }
                 String name = String.format("query%02d", q);
                 Method method;
                 try {

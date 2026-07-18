@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.OutputDebug;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -104,7 +105,7 @@ public class TestQueries
     @Test
     void testQuery07TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("07", support -> support.query07(TpcdsParquetTables.requiredActual("sf10")));
+        assertTrinoOperatorMatchesSql("07", support -> support.query07(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -146,7 +147,7 @@ public class TestQueries
     @Test
     void testQuery27()
     {
-        assertOperatorMatches("27", tables -> TpcdsParquetSupport.query27(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query27(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeValue);
+        assertOperatorMatches("27", tables -> TpcdsParquetSupport.query27(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query27(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -490,37 +491,50 @@ public class TestQueries
     }
 
     @Test
+    void testQuery36NitroSql()
+    {
+        assertNitroMatchesSql("36", tables -> TpcdsParquetSupport.query36(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
     void testQuery36TrinoSql()
     {
         assertTrinoOperatorMatchesSql("36", support -> support.query36(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
     }
 
     @Test
-    void testQuery49OperatorAlignment()
-    {
-        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
-        assumeTrue(tables != null);
-        List<org.weakref.nitro.data.Row> nitroRows;
-        try (Operator query = TpcdsParquetSupport.query49(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables)) {
-            nitroRows = normalizeNitroRows(OperatorAssertions.OperatorAssert.toRows(query), TestQueries::normalizeDecimalCentsValue);
-        }
-        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
-            assertThat(nitroRows)
-                    .as("TPC-DS Q49 Nitro vs Trino operators")
-                    .containsExactlyElementsOf(normalizeTrinoRows(support.query49(tables), TestQueries::normalizeDecimalCentsValue));
-        }
-    }
-
-    @Test
     void testQuery49()
     {
-        assertApplesToApplesOperatorMatches("49", tables -> TpcdsParquetSupport.query49(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query49(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        List<org.weakref.nitro.data.Row> nitroRows;
+        try (Operator query = TpcdsParquetSupport.query49(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables)) {
+            nitroRows = normalizeQuery49Rows(OperatorAssertions.OperatorAssert.toRows(query));
+        }
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            assertThat(normalizeQuery49Rows(support.query49(tables)))
+                    .as("TPC-DS Q49 operator assembly result")
+                    .containsExactlyElementsOf(nitroRows);
+        }
+        try (TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
+            assertThat(normalizeQuery49Rows(sqlSupport.executeBenchmarkQuery("49")))
+                    .as("TPC-DS Q49 Nitro operator vs SQL")
+                    .containsExactlyElementsOf(nitroRows);
+        }
     }
 
     @Test
     void testQuery49TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("49", support -> support.query49(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+        try (TrinoTpcdsParquetSupport operatorSupport = new TrinoTpcdsParquetSupport();
+                TrinoTpcdsParquetSqlSupport sqlSupport = new TrinoTpcdsParquetSqlSupport(tables)) {
+            assertThat(normalizeQuery49Rows(operatorSupport.query49(tables)))
+                    .as("TPC-DS Q49 Trino operator vs SQL")
+                    .containsExactlyElementsOf(normalizeQuery49Rows(sqlSupport.executeBenchmarkQuery("49")));
+        }
     }
 
     @Test
@@ -562,7 +576,7 @@ public class TestQueries
     @Test
     void testQuery07()
     {
-        assertOperatorMatches("07", tables -> TpcdsParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query07(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("07", tables -> TpcdsParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query07(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -720,37 +734,37 @@ public class TestQueries
     @Test
     void testQuery10()
     {
-        assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query10(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery35()
     {
-        assertOperatorMatches("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query35(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query35(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery10Sql()
     {
-        assertNitroMatchesSql("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertNitroMatchesSql("10", tables -> TpcdsParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery10TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("10", support -> support.query10(TpcdsParquetTables.requiredActual("sf10")));
+        assertTrinoOperatorMatchesSql("10", support -> support.query10(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery35Sql()
     {
-        assertNitroMatchesSql("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertNitroMatchesSql("35", tables -> TpcdsParquetSupport.query35(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery35TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("35", support -> support.query35(TpcdsParquetTables.requiredActual("sf10")));
+        assertTrinoOperatorMatchesSql("35", support -> support.query35(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -852,13 +866,19 @@ public class TestQueries
     @Test
     void testQuery54()
     {
-        assertOperatorMatches("54", tables -> TpcdsParquetSupport.query54(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query54(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("54", tables -> TpcdsParquetSupport.query54(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query54(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
     }
 
     @Test
     void testQuery59()
     {
         assertOperatorMatches("59", tables -> TpcdsParquetSupport.query59(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query59(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
+    }
+
+    @Test
+    void testQuery59TrinoSql()
+    {
+        assertTrinoOperatorMatchesSql("59", support -> support.query59(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);
     }
 
     @Test
@@ -1067,6 +1087,29 @@ public class TestQueries
         try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
                 profile,
                 () -> TpcdsParquetSupport.query64(new Allocator(), primitiveRegistry, tables))) {
+            consumeOperator(query);
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
+    void profileQuery51OperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        int warmups = Integer.getInteger("nitro.operatorCpuProfile.warmups", 0);
+        for (int iteration = 0; iteration < warmups; iteration++) {
+            try (Operator query = TpcdsParquetSupport.query51(new Allocator(), primitiveRegistry, tables)) {
+                consumeOperator(query);
+            }
+        }
+        OperatorCpuProfile profile = new OperatorCpuProfile();
+        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
+                profile,
+                () -> TpcdsParquetSupport.query51(new Allocator(), primitiveRegistry, tables))) {
             consumeOperator(query);
         }
 
@@ -1294,19 +1337,19 @@ public class TestQueries
     @Test
     void testQuery69()
     {
-        assertOperatorMatches("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query69(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query69(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery69Sql()
     {
-        assertNitroMatchesSql("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertNitroMatchesSql("69", tables -> TpcdsParquetSupport.query69(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery69TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("69", support -> support.query69(TpcdsParquetTables.requiredActual("sf10")));
+        assertTrinoOperatorMatchesSql("69", support -> support.query69(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -1842,13 +1885,13 @@ public class TestQueries
     @Test
     void testQuery27TrinoSql()
     {
-        assertTrinoOperatorMatchesSql("27", support -> support.query27(TpcdsParquetTables.requiredActual("sf10")));
+        assertTrinoOperatorMatchesSql("27", support -> support.query27(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
     void testQuery84()
     {
-        assertOperatorMatches("84", tables -> TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query84(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("84", tables -> TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query84(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeQuery84Value);
     }
 
     @Test
@@ -1866,7 +1909,7 @@ public class TestQueries
     @Test
     void testQuery90()
     {
-        assertOperatorMatches("90", tables -> TpcdsParquetSupport.query90(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query90(TpcdsParquetTables.requiredActual("sf10")));
+        assertOperatorMatches("90", tables -> TpcdsParquetSupport.query90(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables), support -> support.query90(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeFloatingNumericValue);
     }
 
     @Test
@@ -1978,6 +2021,7 @@ public class TestQueries
 
     private static void assertOperatorMatches(String queryId, java.util.function.Function<TpcdsParquetTables, Operator> nitroQuery, java.util.function.Function<TrinoTpcdsParquetSupport, MaterializedResult> trinoQuery, java.util.function.Function<Object, Object> valueNormalizer)
     {
+        assertApplesToApplesOperatorMatches(queryId, nitroQuery, trinoQuery, valueNormalizer);
         assertNitroMatchesSql(queryId, nitroQuery, valueNormalizer);
     }
 
@@ -1987,7 +2031,17 @@ public class TestQueries
             try (Batch batch = operator.next()) {
                 int count = batch.borrowMask().count();
                 for (int column = 0; column < operator.outputCount(); column++) {
-                    consumeVector(batch.output(column).borrow(Stream.VALUES));
+                    Output output = batch.output(column);
+                    Vector values = output.borrowOrNull(Stream.VALUES);
+                    if (values != null) {
+                        consumeVector(values);
+                    }
+                    else {
+                        Vector nulls = output.borrowOrNull(Stream.NULLS);
+                        if (nulls != null) {
+                            consumeVector(nulls);
+                        }
+                    }
                 }
                 if (count == Integer.MIN_VALUE) {
                     throw new AssertionError();
@@ -2167,6 +2221,40 @@ public class TestQueries
                 .toList();
     }
 
+    private static List<org.weakref.nitro.data.Row> normalizeQuery49Rows(List<org.weakref.nitro.data.Row> rows)
+    {
+        return rows.stream()
+                .map(row -> normalizeQuery49Row(row.values()))
+                .toList();
+    }
+
+    private static List<org.weakref.nitro.data.Row> normalizeQuery49Rows(MaterializedResult result)
+    {
+        return result.getMaterializedRows().stream()
+                .map(row -> normalizeQuery49Row(row.getFields().toArray()))
+                .toList();
+    }
+
+    private static org.weakref.nitro.data.Row normalizeQuery49Row(Object[] values)
+    {
+        Object ratio = switch (values[2]) {
+            case null -> null;
+            case SqlDecimal decimal -> decimal.toBigDecimal().setScale(12, RoundingMode.HALF_UP);
+            case BigDecimal decimal -> decimal.setScale(12, RoundingMode.HALF_UP);
+            // Both operator harnesses deliberately carry the SQL ratio as a fixed-scale BIGINT. Interpret that
+            // representation semantically instead of treating it as money or forcing SQL's wider unscaled value
+            // through longValueExact().
+            case Byte _, Short _, Integer _, Long _ -> BigDecimal.valueOf(((Number) values[2]).longValue(), 12);
+            default -> throw new IllegalArgumentException("Unexpected Q49 ratio value: " + values[2]);
+        };
+        return row(
+                normalizeDecimalCentsValue(values[0]),
+                normalizeDecimalCentsValue(values[1]),
+                ratio,
+                normalizeDecimalCentsValue(values[3]),
+                normalizeDecimalCentsValue(values[4]));
+    }
+
     private static List<org.weakref.nitro.data.Row> normalizeQuery26Rows(List<org.weakref.nitro.data.Row> rows, boolean scaledCents)
     {
         return rows.stream()
@@ -2270,6 +2358,13 @@ public class TestQueries
         if (value instanceof BigDecimal decimal) {
             return decimal.unscaledValue().longValueExact();
         }
+        // Operator harnesses represent DECIMAL money as scaled BIGINT cents.  Aggregates such as
+        // avg(BIGINT), however, have a DOUBLE final type in Trino and can therefore contain a
+        // fractional cent.  Benchmark SQL returns the corresponding fixed-scale DECIMAL value;
+        // round the floating representation back to the nearest scaled cent before comparing.
+        if (value instanceof Double || value instanceof Float) {
+            return Math.round(((Number) value).doubleValue());
+        }
         if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
             return ((Number) value).longValue();
         }
@@ -2290,6 +2385,9 @@ public class TestQueries
      */
     private static Object normalizeRoundedRatioValue(Object value)
     {
+        if (value == null) {
+            return null;
+        }
         BigDecimal decimal = switch (value) {
             case SqlDecimal sqlDecimal -> sqlDecimal.toBigDecimal();
             case BigDecimal bigDecimal -> bigDecimal;

@@ -206,6 +206,21 @@ public final class RleVector
     }
 
     @Override
+    public int childVectorCount()
+    {
+        return 1;
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        if (index == 0) {
+            return values;
+        }
+        throw new IndexOutOfBoundsException(index);
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         consumer.accept(values);

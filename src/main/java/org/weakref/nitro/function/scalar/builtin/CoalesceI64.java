@@ -33,6 +33,15 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class CoalesceI64
         implements PrimitiveFunction
 {
+    // COALESCE can be null only when both operands are null. If either input proves a null-free physical stream,
+    // omit the output NULLS vector instead of walking the other (potentially nested dictionary) null mapping solely
+    // to AND it with false. The evaluator's ordinary stream-completion contract supplies shared all-false metadata
+    // when a downstream consumer explicitly requests NULLS.
+    private static final boolean OMIT_NULLS_FOR_NON_NULL_INPUT =
+            Boolean.parseBoolean(System.getProperty("nitro.coalesce.omitNullsForNonNullInput", "true"));
+    private static final boolean DEBUG_OMITTED_NULLS = Boolean.getBoolean("nitro.debug.coalesceOmittedNulls");
+    private boolean omittedNullsReported;
+
     @Override
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
@@ -50,16 +59,28 @@ public final class CoalesceI64
         }
 
         Allocator.Context allocationContext = context.allocationContext("CoalesceI64");
+        Vector primaryNullVector = inputs.get(0).getOrNull(Stream.NULLS);
+        Vector fallbackNullVector = inputs.get(1).getOrNull(Stream.NULLS);
         VectorAccess.LongValues primaryValues = VectorAccess.longValues(inputs.get(0).values());
         VectorAccess.LongValues fallbackValues = VectorAccess.longValues(inputs.get(1).values());
-        VectorAccess.BooleanValues primaryNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues fallbackNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues primaryNulls = VectorAccess.booleanValues(primaryNullVector);
+        VectorAccess.BooleanValues fallbackNulls = VectorAccess.booleanValues(fallbackNullVector);
         Vector primaryValueVector = inputs.get(0).values();
         Vector fallbackValueVector = inputs.get(1).values();
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(primaryValueVector.length(), fallbackValueVector.length()));
 
         Streams result = Streams.empty();
-        if (requestNulls) {
+        boolean resultCannotBeNull = OMIT_NULLS_FOR_NON_NULL_INPUT &&
+                (VectorAccess.isAllFalseNulls(primaryNullVector) || VectorAccess.isAllFalseNulls(fallbackNullVector));
+        if (resultCannotBeNull && DEBUG_OMITTED_NULLS && !omittedNullsReported) {
+            omittedNullsReported = true;
+            System.err.printf(
+                    "[coalesce-omitted-nulls] primary=%s fallback=%s rows=%d%n",
+                    primaryNullVector == null ? "none" : primaryNullVector.getClass().getSimpleName(),
+                    fallbackNullVector == null ? "none" : fallbackNullVector.getClass().getSimpleName(),
+                    mask.count());
+        }
+        if (requestNulls && !resultCannotBeNull) {
             BooleanVector nulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
                     allocationContext,

@@ -32,7 +32,7 @@ public final class QueryDriver
     public static void main(String[] args)
     {
         String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
-        if (!query.equals("query05") && !query.equals("query07") && !query.equals("query08") && !query.equals("query09") && !query.equals("query13") && !query.equals("query14") && !query.equals("query15") && !query.equals("query16") && !query.equals("query19") && !query.equals("query21") && !query.equals("query22")) {
+        if (!query.equals("query05") && !query.equals("query07") && !query.equals("query08") && !query.equals("query09") && !query.equals("query11") && !query.equals("query12") && !query.equals("query13") && !query.equals("query14") && !query.equals("query15") && !query.equals("query16") && !query.equals("query19") && !query.equals("query20") && !query.equals("query21") && !query.equals("query22")) {
             throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
         }
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
@@ -99,11 +99,14 @@ public final class QueryDriver
             case "query07" -> TpchParquetSupport.query07(allocator, registry, tables);
             case "query08" -> TpchParquetSupport.query08(allocator, registry, tables);
             case "query09" -> TpchParquetSupport.query09(allocator, registry, tables);
+            case "query11" -> TpchParquetSupport.query11(allocator, registry, tables);
+            case "query12" -> TpchParquetSupport.query12(allocator, registry, tables);
             case "query13" -> TpchParquetSupport.query13(allocator, registry, tables);
             case "query14" -> TpchParquetSupport.query14(allocator, registry, tables);
             case "query15" -> TpchParquetSupport.query15(allocator, registry, tables);
             case "query16" -> TpchParquetSupport.query16(allocator, registry, tables);
             case "query19" -> TpchParquetSupport.query19(allocator, registry, tables);
+            case "query20" -> TpchParquetSupport.query20(allocator, registry, tables);
             case "query21" -> TpchParquetSupport.query21(allocator, registry, tables);
             case "query22" -> TpchParquetSupport.query22(allocator, registry, tables);
             default -> throw new IllegalArgumentException("Unsupported query: " + query);

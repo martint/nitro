@@ -202,6 +202,27 @@ public final class DictionaryVector
         };
     }
 
+    /**
+     * Composes this vector's dictionary chain into {@code output[0..length)} and returns the non-dictionary base.
+     * The caller owns and may recycle {@code output}; no mapping or value buffer is allocated here. This is the bulk
+     * counterpart of {@link #basePosition(int)} for generated consumers that want one exact integer map over a
+     * concrete primitive base without materializing the primitive values themselves.
+     */
+    public Vector composeBasePositions(int[] output)
+    {
+        checkArgument(output.length >= length, "output capacity is too small");
+        System.arraycopy(ids, 0, output, 0, length);
+        Vector base = values;
+        while (base instanceof DictionaryVector dictionary) {
+            int[] nestedIds = dictionary.ids;
+            for (int position = 0; position < length; position++) {
+                output[position] = nestedIds[output[position]];
+            }
+            base = dictionary.values;
+        }
+        return base;
+    }
+
     @Override
     public int length()
     {
@@ -277,6 +298,29 @@ public final class DictionaryVector
     public Vector materializeRows(Allocator allocator, Allocator.Context allocationContext, Vector[] rows)
     {
         return values.materializeRows(allocator, allocationContext, rows);
+    }
+
+    @Override
+    public int childVectorCount()
+    {
+        return ownedIds == null ? 1 : 2;
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        if (ownedIds != null) {
+            if (index == 0) {
+                return ownedIds;
+            }
+            if (index == 1) {
+                return values;
+            }
+        }
+        else if (index == 0) {
+            return values;
+        }
+        throw new IndexOutOfBoundsException(index);
     }
 
     @Override

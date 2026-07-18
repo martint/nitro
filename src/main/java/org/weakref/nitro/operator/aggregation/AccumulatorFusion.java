@@ -33,6 +33,9 @@ import java.util.List;
  */
 public final class AccumulatorFusion
 {
+    private static final boolean FUSED_SUM_AVG_F64 =
+            Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedSumAvgF64", "true"));
+
     private AccumulatorFusion() {}
 
     /**
@@ -73,6 +76,18 @@ public final class AccumulatorFusion
             if (paired[firstIndex]) {
                 continue;
             }
+            if (FUSED_SUM_AVG_F64) {
+                for (int secondIndex = firstIndex + 1; secondIndex < accumulators.size(); secondIndex++) {
+                    if (!paired[secondIndex] && tryFuseSumAvgF64(result, firstIndex, secondIndex)) {
+                        paired[firstIndex] = true;
+                        paired[secondIndex] = true;
+                        break;
+                    }
+                }
+            }
+            if (paired[firstIndex]) {
+                continue;
+            }
             for (int secondIndex = firstIndex + 1; secondIndex < accumulators.size(); secondIndex++) {
                 if (paired[secondIndex]) {
                     continue;
@@ -85,6 +100,25 @@ public final class AccumulatorFusion
             }
         }
         return result;
+    }
+
+    private static boolean tryFuseSumAvgF64(List<Accumulator> accumulators, int firstIndex, int secondIndex)
+    {
+        Accumulator first = accumulators.get(firstIndex);
+        Accumulator second = accumulators.get(secondIndex);
+        if (first instanceof SumF64 sum && second instanceof AvgF64 avg && sum.inputColumn() == avg.inputColumn()) {
+            FusedSumAvgF64.SharedState handle = new FusedSumAvgF64.SharedState();
+            accumulators.set(firstIndex, FusedSumAvgF64.scanner(sum, sum.inputColumn(), handle, FusedSumAvgF64.Kind.SUM));
+            accumulators.set(secondIndex, FusedSumAvgF64.follower(avg, handle, FusedSumAvgF64.Kind.AVG));
+            return true;
+        }
+        if (first instanceof AvgF64 avg && second instanceof SumF64 sum && sum.inputColumn() == avg.inputColumn()) {
+            FusedSumAvgF64.SharedState handle = new FusedSumAvgF64.SharedState();
+            accumulators.set(firstIndex, FusedSumAvgF64.scanner(avg, avg.inputColumn(), handle, FusedSumAvgF64.Kind.AVG));
+            accumulators.set(secondIndex, FusedSumAvgF64.follower(sum, handle, FusedSumAvgF64.Kind.SUM));
+            return true;
+        }
+        return false;
     }
 
     private static boolean sameLiteral(ConditionalSum.Literal left, ConditionalSum.Literal right)

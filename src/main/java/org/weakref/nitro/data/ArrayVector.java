@@ -241,6 +241,18 @@ public final class ArrayVector
     }
 
     @Override
+    public int childVectorCount()
+    {
+        return elements.vectorCount();
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        return elements.vectorAt(index);
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         elements.asMap().values().forEach(consumer);

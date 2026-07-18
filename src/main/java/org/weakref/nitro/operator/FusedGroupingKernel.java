@@ -32,8 +32,10 @@ interface FusedGroupingKernel
      * @param keys the primitive group-key base values ({@code int[]} or {@code long[]}); the generated
      *        implementation is specialized to the concrete array and optional one-level dictionary shape
      * @param keyIds optional dictionary ids mapping logical positions into {@code keys}
-     * @param tableKeys open-addressed table: key per slot
-     * @param tableIds open-addressed table: group id per slot ({@code -1} when empty)
+     * @param tableKeys open-addressed table: key per slot, or empty when the physical shape resolves exact keys
+     *        through {@code keysByGroup}
+     * @param tableIds open-addressed table: either a group id per slot ({@code -1} when empty), or a packed hash
+     *        fragment plus {@code group+1} ({@code 0} when empty) for an id-indexed physical shape
      * @param tableMask {@code capacity - 1} bitmask for the table
      * @param keysByGroup reverse map: key by group id
      * @param startNextId the next group id to assign

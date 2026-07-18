@@ -1152,21 +1152,12 @@ public final class PipelineCompiler
      */
     private static String computedProjectionNull(Plan.Expr projection, IntFunction<String> decode, IntFunction<String> columnNull)
     {
-        if (projection instanceof Plan.NullLit) {
-            // A NULL literal projection is unconditionally SQL null -- its value slot is a placeholder 0.
-            return "true";
-        }
-        if (!(projection instanceof Plan.Call call) || !NULL_ON_ZERO_DENOMINATOR.contains(call.name())) {
-            return null;
-        }
-        List<String> terms = new ArrayList<>();
-        terms.add("(" + expr(call.arguments().get(1), decode) + " == 0L)");
-        for (Plan.Expr argument : call.arguments()) {
-            if (argument instanceof Plan.Col column) {
-                terms.add(columnNull.apply(column.index()));
-            }
-        }
-        return String.join(" || ", terms);
+        // The value expression is evaluated into a placeholder slot even when SQL NULL; preserve the recursively
+        // derived nullness for arithmetic, scalar calls, CASE, and COALESCE. This is especially important after an
+        // aggregation: avg(nullable_column) may be null for an otherwise present group, and a scale/round projection
+        // must not silently turn that null into numeric zero.
+        String nullCondition = nullExpr(projection, decode, columnNull);
+        return nullCondition.equals("false") ? null : nullCondition;
     }
 
     /** Inferred type of a projection expression: a column reference keeps its source type; arithmetic is DOUBLE when any operand is DOUBLE, else LONG. */

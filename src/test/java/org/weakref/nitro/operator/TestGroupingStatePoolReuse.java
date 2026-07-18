@@ -29,6 +29,106 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TestGroupingStatePoolReuse
 {
     @Test
+    public void testReleasedDirectIndexDoesNotExposeStaleGroups()
+    {
+        for (int execution = 0; execution < 2; execution++) {
+            GroupingState state = new GroupingState();
+            int size = 10_000;
+            long[] firstKeys = new long[size];
+            long[] secondKeys = new long[size];
+            for (int index = 0; index < size; index++) {
+                int shift = execution * 5_000;
+                firstKeys[index] = (index + shift) % (size * 2);
+                secondKeys[index] = (size + index + shift) % (size * 2);
+            }
+            I64Vector firstGroups = new I64Vector(size);
+            I64Vector secondGroups = new I64Vector(size);
+            state.assignGroups(new I64Vector(firstKeys), null, Mask.all(size), firstGroups);
+            state.assignGroups(new I64Vector(secondKeys), null, Mask.all(size), secondGroups);
+            assertThat(firstGroups.values()[0]).isZero();
+            assertThat(firstGroups.values()[size - 1]).isEqualTo(size - 1L);
+            assertThat(secondGroups.values()[0]).isEqualTo(size);
+            assertThat(secondGroups.values()[size - 1]).isEqualTo(size * 2L - 1);
+            state.releaseBuffers();
+        }
+    }
+
+    @Test
+    public void testSingleLongGroupingMigratesToDirectIndexAndBackWithoutChangingIds()
+    {
+        GroupingState state = new GroupingState();
+        int firstSize = 10_000;
+        long[] firstKeys = new long[firstSize];
+        for (int index = 0; index < firstSize; index++) {
+            firstKeys[index] = index;
+        }
+        I64Vector firstGroups = new I64Vector(firstSize);
+        state.assignGroups(new I64Vector(firstKeys), null, Mask.all(firstSize), firstGroups);
+        assertThat(firstGroups.values()[0]).isZero();
+        assertThat(firstGroups.values()[firstSize - 1]).isEqualTo(firstSize - 1);
+
+        long[] secondKeys = new long[firstSize];
+        secondKeys[0] = firstSize - 1;
+        for (int index = 1; index < firstSize; index++) {
+            secondKeys[index] = firstSize + index - 1;
+        }
+        I64Vector secondGroups = new I64Vector(firstSize);
+        state.assignGroups(new I64Vector(secondKeys), null, Mask.all(firstSize), secondGroups);
+        assertThat(state.usesLongDirectGrouping()).isTrue();
+        assertThat(secondGroups.values()[0]).isEqualTo(firstSize - 1);
+        assertThat(secondGroups.values()[1]).isEqualTo(firstSize);
+        assertThat(secondGroups.values()[firstSize - 1]).isEqualTo(firstSize * 2L - 2);
+
+        // A later key outside the bounded non-negative domain must promote the complete direct table back to
+        // exact open addressing without changing any previously assigned group id.
+        I64Vector fallbackGroups = new I64Vector(3);
+        state.assignGroups(new I64Vector(new long[] {0, firstSize * 2L - 2, -1}), null, Mask.all(3), fallbackGroups);
+        assertThat(state.usesLongDirectGrouping()).isFalse();
+        assertThat(fallbackGroups.values()).containsExactly(0, firstSize * 2L - 2, firstSize * 2L - 1);
+        assertThat(state.groupCount()).isEqualTo(firstSize * 2L);
+        state.releaseBuffers();
+    }
+
+    @Test
+    public void testSingleLongGroupingCompressesConstantBitsAndFallsBackExactly()
+    {
+        int firstSize = 1_100_000;
+        long[] firstKeys = new long[firstSize];
+        for (int index = 0; index < firstSize; index++) {
+            firstKeys[index] = compressibleSparseKey(index);
+        }
+
+        GroupingState state = new GroupingState();
+        I64Vector firstGroups = new I64Vector(firstSize);
+        state.assignGroups(new I64Vector(firstKeys), null, Mask.all(firstSize), firstGroups);
+        assertThat(firstGroups.values()[0]).isZero();
+        assertThat(firstGroups.values()[firstSize - 1]).isEqualTo(firstSize - 1L);
+
+        I64Vector admittedGroups = new I64Vector(3);
+        state.assignGroups(
+                new I64Vector(new long[] {compressibleSparseKey(0), compressibleSparseKey(firstSize - 1), compressibleSparseKey(firstSize)}),
+                null,
+                Mask.all(3),
+                admittedGroups);
+        assertThat(state.usesLongDirectGrouping()).isTrue();
+        assertThat(admittedGroups.values()).containsExactly(0, firstSize - 1L, firstSize);
+
+        // Bit 3 was constant zero in the admitted domain. A later value that changes it must rebuild exact hashing
+        // before assigning the row; all existing ids and the new id remain first-seen stable.
+        long lateDomainChange = compressibleSparseKey(100) | (1L << 3);
+        I64Vector fallbackGroups = new I64Vector(3);
+        state.assignGroups(
+                new I64Vector(new long[] {compressibleSparseKey(100), lateDomainChange, compressibleSparseKey(firstSize)}),
+                null,
+                Mask.all(3),
+                fallbackGroups);
+        assertThat(state.usesLongDirectGrouping()).isFalse();
+        assertThat(fallbackGroups.values()).containsExactly(100, firstSize + 1L, firstSize);
+        assertThat(state.groupCount()).isEqualTo(firstSize + 2L);
+        state.releaseBuffers();
+    }
+
+    @Test
     public void testPackedIntTripleGroupingPreservesKeysAndFirstSeenIds()
     {
         GroupingState state = new GroupingState();
@@ -289,6 +389,17 @@ public class TestGroupingStatePoolReuse
             values.setBytes(index, (prefix + index).getBytes(StandardCharsets.UTF_8));
         }
         return values;
+    }
+
+    private static long sparseKey(long value)
+    {
+        return (value >>> 3) << 5 | (value & 7);
+    }
+
+    private static long compressibleSparseKey(long value)
+    {
+        // Exercise both removed zero lanes (bits 3/4) and a removed nonzero lane.
+        return (1L << 40) | sparseKey(value);
     }
 
     private static BinaryVector binaryValue(String value)

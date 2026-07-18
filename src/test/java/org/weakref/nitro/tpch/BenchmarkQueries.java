@@ -192,8 +192,9 @@ public class BenchmarkQueries
         consume(TpchParquetSupport.query22(allocator, primitiveRegistry, tables));
     }
 
-    private static void consume(Operator operator)
+    private void consume(Operator operator)
     {
+        allocator.beginExecution();
         try (operator) {
             while (operator.hasNext()) {
                 try (var batch = operator.next()) {

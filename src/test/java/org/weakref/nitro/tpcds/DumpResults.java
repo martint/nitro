@@ -89,8 +89,8 @@ public class DumpResults
             case null -> "NULL";
             case byte[] bytes -> new String(bytes, StandardCharsets.UTF_8).stripTrailing();
             case String string -> string.stripTrailing();
-            case Double d -> Double.toString(d);
-            case Float f -> Float.toString(f);
+            case Double d -> Long.toString(Math.round(d * 100));
+            case Float f -> Long.toString(Math.round(f * 100));
             default -> value.toString();
         };
     }

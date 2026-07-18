@@ -1185,9 +1185,11 @@ public class TestCompiledTpcdsQueries
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
+        List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
+        // Materialize the compiled rows before executing the independent harness oracle. Keeping both query
+        // consumers active at once turns this result check into an accidental overlapping-lifetime stress test.
         Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
-        List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
         if (!allowEmptyOracle) {
             assertThat(expected).isNotEmpty();
         }

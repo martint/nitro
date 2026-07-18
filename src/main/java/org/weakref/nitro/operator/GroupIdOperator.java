@@ -257,10 +257,7 @@ public final class GroupIdOperator
     {
         BooleanVector vector = allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
         if (value) {
-            boolean[] values = vector.values();
-            for (int position = 0; position < size; position++) {
-                values[position] = true;
-            }
+            vector.markAllTrue();
         }
         return vector;
     }

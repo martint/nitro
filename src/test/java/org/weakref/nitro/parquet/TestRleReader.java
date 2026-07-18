@@ -77,6 +77,53 @@ class TestRleReader
         assertThat(reader.consumeIfAllOnes(8)).isFalse();
     }
 
+    @Test
+    void testFilterNullableDictionaryLongsPreservesBothCursorsAcrossWindows()
+    {
+        int[] definitionLevels = {1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1};
+        int[] dictionaryIds = {0, 1, 2, 3, 4, 5, 6, 7, 1, 4, 6, 2};
+
+        RleReader definitions = new RleReader();
+        definitions.init(MemorySegment.ofArray(bitPackedRun(1, definitionLevels)), 0, 1);
+        RleReader ids = new RleReader();
+        ids.init(MemorySegment.ofArray(bitPackedRun(3, dictionaryIds)), 0, 3);
+
+        boolean[] accepted = new boolean[8];
+        accepted[1] = true;
+        accepted[4] = true;
+        accepted[6] = true;
+        long[] dictionary = {100, 101, 102, 103, 104, 105, 106, 107};
+        int[] survivors = new int[16];
+        long[] values = new long[16];
+
+        int output = definitions.filterNullableDictionaryLongs(
+                ids, accepted, dictionary, 7, 0, survivors, values, 0);
+        output = definitions.filterNullableDictionaryLongs(
+                ids, accepted, dictionary, 9, 7, survivors, values, output);
+
+        assertThat(output).isEqualTo(6);
+        assertThat(survivors).startsWith(1, 6, 8, 11, 13, 14);
+        assertThat(values).startsWith(101, 104, 106, 101, 104, 106);
+    }
+
+    private static byte[] bitPackedRun(int bitWidth, int[] values)
+    {
+        int groups = (values.length + 7) / 8;
+        byte[] encoded = new byte[32 + groups * bitWidth];
+        int offset = writeUleb128(encoded, (groups << 1) | 1);
+        long bitCursor = (long) offset * Byte.SIZE;
+        for (int value : values) {
+            for (int bit = 0; bit < bitWidth; bit++) {
+                if (((value >>> bit) & 1) != 0) {
+                    int byteIndex = (int) (bitCursor >>> 3);
+                    encoded[byteIndex] |= (byte) (1 << ((int) bitCursor & 7));
+                }
+                bitCursor++;
+            }
+        }
+        return encoded;
+    }
+
     private static int writeUleb128(byte[] output, int value)
     {
         int offset = 0;

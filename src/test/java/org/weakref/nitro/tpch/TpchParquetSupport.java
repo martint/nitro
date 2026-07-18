@@ -359,8 +359,9 @@ final class TpchParquetSupport
     }
 
     /**
-     * Q10: orders(quarter) probes the customer build, the R-flagged lineitem probes that result, nation joins
-     * last; revenue grouped over the seven customer output columns; TopN 20 by revenue.
+     * Q10: customer probes the quarter-filtered orders build, that result probes the R-flagged lineitem build,
+     * and nation joins last; revenue is grouped over the seven customer output columns and TopN selects 20.
+     * This build/probe order mirrors Trino's optimized SQL plan.
      */
     public static Operator query10(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
@@ -373,22 +374,23 @@ final class TpchParquetSupport
                                 greaterThan(2, LocalDate.of(1993, 10, 1).toEpochDay() - 1),
                                 lessThan(2, LocalDate.of(1994, 1, 1).toEpochDay()))),
                 0, 1);
-        // [o_orderkey, o_custkey, c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey]
-        Operator ordersWithCustomer = new HashJoinOperator(allocator, orders, 1, customer, 0);
+        // [c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey, o_orderkey, o_custkey]
+        Operator customerWithOrders = new HashJoinOperator(allocator, customer, 0, orders, 1);
 
         Operator lineitem = projectInputs(allocator, primitiveRegistry,
                 filter(allocator, primitiveRegistry,
                         scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_extendedprice", "l_discount", "l_returnflag"),
                         equalUtf8(3, "R")),
                 0, 1, 2);
-        // [l_orderkey, l_extendedprice, l_discount, o_orderkey, o_custkey, c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey]
-        Operator joined = new HashJoinOperator(allocator, lineitem, 0, ordersWithCustomer, 0);
+        // [c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey, o_orderkey, o_custkey,
+        //  l_orderkey, l_extendedprice, l_discount]
+        Operator joined = new HashJoinOperator(allocator, customerWithOrders, 7, lineitem, 0);
         Operator nation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_name");
         // + [n_nationkey, n_name]
-        joined = new HashJoinOperator(allocator, joined, 11, nation, 0);
+        joined = new HashJoinOperator(allocator, joined, 6, nation, 0);
 
         // [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment, discPrice]
-        Operator projected = projectWithDiscPrice(allocator, primitiveRegistry, joined, 1, 2, 5, 6, 7, 8, 13, 9, 10);
+        Operator projected = projectWithDiscPrice(allocator, primitiveRegistry, joined, 10, 11, 0, 1, 2, 3, 13, 4, 5);
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6),
@@ -405,20 +407,20 @@ final class TpchParquetSupport
      */
     public static Operator query12(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
-        Operator lineitem = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "lineitem",
-                                "l_orderkey", "l_shipmode", "l_commitdate", "l_receiptdate", "l_shipdate"),
+        Operator lineitem = profiled("q12.project.lineitem", projectInputs(allocator, primitiveRegistry,
+                profiled("q12.filter.lineitem", filter(allocator, primitiveRegistry,
+                        profiled("q12.scan.lineitem", scannedTable(allocator, tables, "lineitem",
+                                "l_orderkey", "l_shipmode", "l_commitdate", "l_receiptdate", "l_shipdate")),
                         and(
                                 inUtf8(1, List.of("MAIL", "SHIP")),
                                 lessThanColumns(2, 3),
                                 lessThanColumns(4, 2),
                                 greaterThan(3, LocalDate.of(1994, 1, 1).toEpochDay() - 1),
-                                lessThan(3, LocalDate.of(1995, 1, 1).toEpochDay()))),
-                0, 1);
-        Operator orders = scannedTable(allocator, tables, "orders", "o_orderkey", "o_orderpriority");
+                                lessThan(3, LocalDate.of(1995, 1, 1).toEpochDay())))),
+                0, 1));
+        Operator orders = profiled("q12.scan.orders", scannedTable(allocator, tables, "orders", "o_orderkey", "o_orderpriority"));
         // [o_orderkey, o_orderpriority, l_orderkey, l_shipmode]
-        Operator joined = new HashJoinOperator(allocator, orders, 0, lineitem, 0);
+        Operator joined = profiled("q12.join.lineitem", new HashJoinOperator(allocator, orders, 0, lineitem, 0));
 
         // [shipmode, high, low]
         Variable urgent = new Variable(0);
@@ -428,7 +430,7 @@ final class TpchParquetSupport
         Variable one = new Variable(4);
         Variable highBucket = new Variable(5);
         Variable lowBucket = new Variable(6);
-        Operator projected = new ProjectOperator(
+        Operator projected = profiled("q12.project.buckets", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(
@@ -453,9 +455,9 @@ final class TpchParquetSupport
                                 new Reference(highBucket, Stream.VALUES),
                                 new Reference(lowBucket, Stream.VALUES))),
                 primitiveRegistry,
-                joined);
-        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1), new Sum(2)), projected);
-        return new SortOperator(allocator, new int[] {0}, new boolean[] {false}, aggregated);
+                joined));
+        Operator aggregated = profiled("q12.group.shipmode", new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1), new Sum(2)), projected));
+        return profiled("q12.sort", new SortOperator(allocator, new int[] {0}, new boolean[] {false}, aggregated));
     }
 
     /**
@@ -1364,14 +1366,14 @@ final class TpchParquetSupport
      */
     public static Operator query11(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
-        Operator perPart = query11GermanValue(allocator, primitiveRegistry, tables, true);
-        Operator total = new AggregationOperator(
+        Operator perPart = profiled("q11.per_part", query11GermanValue(allocator, primitiveRegistry, tables, true, "q11.per_part"));
+        Operator total = profiled("q11.total", new AggregationOperator(
                 allocator,
                 List.of(new SumF64(0)),
-                query11GermanValue(allocator, primitiveRegistry, tables, false));
+                query11GermanValue(allocator, primitiveRegistry, tables, false, "q11.total")));
         Variable fraction = new Variable(0);
         Variable threshold = new Variable(1);
-        Operator scaledTotal = new ProjectOperator(
+        Operator scaledTotal = profiled("q11.scale_total", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(
@@ -1381,36 +1383,36 @@ final class TpchParquetSupport
                                         new Reference(fraction, Stream.VALUES))), AllMask.ALL)),
                         List.of(new Reference(threshold, Stream.VALUES))),
                 primitiveRegistry,
-                total);
+                total));
         // [ps_partkey, value, threshold]
-        Operator withThreshold = new NestedLoopJoinOperator(allocator, perPart, scaledTotal);
-        Operator filtered = filter(allocator, primitiveRegistry, withThreshold, greaterThanColumnsF64(1, 2));
-        Operator projected = projectInputs(allocator, primitiveRegistry, filtered, 0, 1);
-        return new SortOperator(allocator, new int[] {1}, new boolean[] {true}, projected);
+        Operator withThreshold = profiled("q11.broadcast_threshold", new NestedLoopJoinOperator(allocator, perPart, scaledTotal));
+        Operator filtered = profiled("q11.filter_threshold", filter(allocator, primitiveRegistry, withThreshold, greaterThanColumnsF64(1, 2)));
+        Operator projected = profiled("q11.project_output", projectInputs(allocator, primitiveRegistry, filtered, 0, 1));
+        return profiled("q11.sort", new SortOperator(allocator, new int[] {1}, new boolean[] {true}, projected));
     }
 
-    private static Operator query11GermanValue(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables, boolean grouped)
+    private static Operator query11GermanValue(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables, boolean grouped, String profilePrefix)
     {
-        Operator nation = projectInputs(allocator, primitiveRegistry,
+        Operator nation = profiled(profilePrefix + ".nation", projectInputs(allocator, primitiveRegistry,
                 filter(allocator, primitiveRegistry,
                         scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"),
                         equalUtf8(1, "GERMANY")),
-                0);
+                0));
         Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
-        Operator germanSuppliers = projectInputs(allocator, primitiveRegistry,
+        Operator germanSuppliers = profiled(profilePrefix + ".supplier_join", projectInputs(allocator, primitiveRegistry,
                 new HashJoinOperator(allocator, supplier, 1, nation, 0),
-                0);
+                0));
         Operator partsupp = grouped
                 ? scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_supplycost", "ps_availqty")
                 : scannedTable(allocator, tables, "partsupp", "ps_suppkey", "ps_supplycost", "ps_availqty");
         // Grouped: [ps_partkey, ps_suppkey, ps_supplycost, ps_availqty, s_suppkey].
         // Scalar total: [ps_suppkey, ps_supplycost, ps_availqty, s_suppkey]. The latter deliberately
         // omits ps_partkey, matching the Velox/Trino branch whose consumer needs only the value.
-        Operator joined = new HashJoinOperator(allocator, partsupp, grouped ? 1 : 0, germanSuppliers, 0);
+        Operator joined = profiled(profilePrefix + ".partsupp_join", new HashJoinOperator(allocator, partsupp, grouped ? 1 : 0, germanSuppliers, 0));
 
         Variable availableQuantity = new Variable(0);
         Variable value = new Variable(1);
-        Operator projected = new ProjectOperator(
+        Operator projected = profiled(profilePrefix + ".value_project", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(
@@ -1423,11 +1425,11 @@ final class TpchParquetSupport
                                 ? List.of(new Reference(new Input(0), Stream.VALUES), new Reference(value, Stream.VALUES))
                                 : List.of(new Reference(value, Stream.VALUES))),
                 primitiveRegistry,
-                joined);
+                joined));
         if (!grouped) {
             return projected;
         }
-        return new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1)), projected);
+        return profiled(profilePrefix + ".group", new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1)), projected));
     }
 
     private static FilterSpec equalColumnsF64(int leftInputIndex, int rightInputIndex)
@@ -1523,27 +1525,27 @@ final class TpchParquetSupport
      */
     public static Operator query20(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
-        Operator forestParts = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "part", "p_partkey", "p_name"),
-                        likeUtf8(1, "forest%")),
-                0);
-        Operator partsupp = scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_availqty");
+        Operator forestParts = profiled("q20.project.forest_parts", projectInputs(allocator, primitiveRegistry,
+                profiled("q20.filter.forest_parts", filter(allocator, primitiveRegistry,
+                        profiled("q20.scan.part", scannedTable(allocator, tables, "part", "p_partkey", "p_name")),
+                        likeUtf8(1, "forest%"))),
+                0));
+        Operator partsupp = profiled("q20.scan.partsupp", scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_availqty"));
         // [ps_partkey, ps_suppkey, ps_availqty, p_partkey]
-        Operator forestPartsupp = new HashJoinOperator(allocator, partsupp, 0, forestParts, 0);
+        Operator forestPartsupp = profiled("q20.join.forest_parts", new HashJoinOperator(allocator, partsupp, 0, forestParts, 0));
 
-        Operator shipped = new GroupedAggregationOperator(
+        Operator shipped = profiled("q20.group.shipped", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new SumF64(2)),
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "lineitem", "l_partkey", "l_suppkey", "l_quantity", "l_shipdate"),
+                profiled("q20.filter.shipped", filter(allocator, primitiveRegistry,
+                        profiled("q20.scan.lineitem", scannedTable(allocator, tables, "lineitem", "l_partkey", "l_suppkey", "l_quantity", "l_shipdate")),
                         and(
                                 greaterThan(3, LocalDate.of(1994, 1, 1).toEpochDay() - 1),
-                                lessThan(3, LocalDate.of(1995, 1, 1).toEpochDay()))));
+                                lessThan(3, LocalDate.of(1995, 1, 1).toEpochDay()))))));
         Variable half = new Variable(0);
         Variable threshold = new Variable(1);
-        Operator thresholds = new ProjectOperator(
+        Operator thresholds = profiled("q20.project.threshold", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(
@@ -1556,12 +1558,12 @@ final class TpchParquetSupport
                                 new Reference(new Input(1), Stream.VALUES),
                                 new Reference(threshold, Stream.VALUES))),
                 primitiveRegistry,
-                shipped);
+                shipped));
         // + [t_partkey, t_suppkey, threshold] -> 4,5,6
-        Operator withThresholds = new HashJoinOperator(allocator, forestPartsupp, new int[] {0, 1}, thresholds, new int[] {0, 1});
+        Operator withThresholds = profiled("q20.join.threshold", new HashJoinOperator(allocator, forestPartsupp, new int[] {0, 1}, thresholds, new int[] {0, 1}));
 
         Variable available = new Variable(0);
-        Operator castAvailable = new ProjectOperator(
+        Operator castAvailable = profiled("q20.project.available", new ProjectOperator(
                 allocator,
                 new EvaluationPlan(
                         List.of(new Assignment(available, new Call("cast_i64_to_f64", List.of(
@@ -1571,22 +1573,22 @@ final class TpchParquetSupport
                                 new Reference(available, Stream.VALUES),
                                 new Reference(new Input(6), Stream.VALUES))),
                 primitiveRegistry,
-                withThresholds);
+                withThresholds));
         // [ps_suppkey] with availqty > threshold
-        Operator qualifiedSuppliers = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry, castAvailable, greaterThanColumnsF64(1, 2)),
-                0);
+        Operator qualifiedSuppliers = profiled("q20.project.qualified", projectInputs(allocator, primitiveRegistry,
+                profiled("q20.filter.qualified", filter(allocator, primitiveRegistry, castAvailable, greaterThanColumnsF64(1, 2))),
+                0));
 
-        Operator canadaNation = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"),
-                        equalUtf8(1, "CANADA")),
-                0);
-        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_address", "s_nationkey");
-        Operator canadaSuppliers = new HashJoinOperator(allocator, supplier, 3, canadaNation, 0);
-        Operator matched = new SemiJoinOperator(allocator, canadaSuppliers, 0, qualifiedSuppliers, 0);
-        Operator projected = projectInputs(allocator, primitiveRegistry, matched, 1, 2);
-        return new SortOperator(allocator, new int[] {0}, new boolean[] {false}, projected);
+        Operator canadaNation = profiled("q20.project.nation", projectInputs(allocator, primitiveRegistry,
+                profiled("q20.filter.nation", filter(allocator, primitiveRegistry,
+                        profiled("q20.scan.nation", scannedTable(allocator, tables, "nation", "n_nationkey", "n_name")),
+                        equalUtf8(1, "CANADA"))),
+                0));
+        Operator supplier = profiled("q20.scan.supplier", scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_address", "s_nationkey"));
+        Operator canadaSuppliers = profiled("q20.join.nation", new HashJoinOperator(allocator, supplier, 3, canadaNation, 0));
+        Operator matched = profiled("q20.semi.qualified", new SemiJoinOperator(allocator, canadaSuppliers, 0, qualifiedSuppliers, 0));
+        Operator projected = profiled("q20.project.output", projectInputs(allocator, primitiveRegistry, matched, 1, 2));
+        return profiled("q20.sort", new SortOperator(allocator, new int[] {0}, new boolean[] {false}, projected));
     }
 
     /**

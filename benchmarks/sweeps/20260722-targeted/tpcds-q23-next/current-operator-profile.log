@@ -1,0 +1,99 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query23: 3 iters, 5400.0 ms/iter, rows-sink=16
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q23.final.sum                      AggregationOperator       16001.309    8.43%     4266.910    1456438.760    1456438.760        3            3
+  hasNext=  0.034 next=  0.040  borrow=16001.178  take=  0.000  constrain=  0.000  close=  0.056  alloc[hasNext=   0.000 next=   0.004 borrow=4266.901 take=   0.000 constrain=   0.000 close=   0.006] MB
+q23.union                          UnionAllOperator          16001.149    8.43%     4266.899     485478.301     485478.301        9            0
+  hasNext=15772.000 next=229.063  borrow=  0.000  take=  0.000  constrain=  0.000  close=  0.086  alloc[hasNext=4176.314 next=  90.581 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.005] MB
+q23.best.project_customer          ProjectOperator           10623.920    5.60%     1193.019     203608.582     203608.582        6          366
+  hasNext=  0.021 next=10609.683  borrow=  0.011  take=  0.000  constrain=  0.000  close= 14.204  alloc[hasNext=   0.000 next=1192.936 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.083] MB
+q23.best.filter                    FilterOperator            10623.852    5.60%     1193.006     203606.301     203606.301        6          366
+  hasNext=  0.015 next=10609.645  borrow=  0.006  take=  0.000  constrain=  0.000  close= 14.184  alloc[hasNext=   0.000 next=1192.924 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.082] MB
+q23.best.join_max                  NestedLoopJoinOperator    10617.600    5.60%     1136.127     193899.052     193899.052        6      2975088
+  hasNext=  0.007 next=10603.406  borrow=  0.013  take=  0.000  constrain=  0.021  close= 14.152  alloc[hasNext=   0.000 next=1136.049 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.079] MB
+q23.catalog.channel                                           8287.778    4.37%     2159.536     368560.823     368560.823        6            0
+  hasNext=8111.191 next=174.410  borrow=  0.000  take=  0.000  constrain=  0.000  close=  2.175  alloc[hasNext=2107.154 next=  52.362 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.020] MB
+q23.catalog.project_sales          ProjectOperator            8287.762    4.37%     2159.534     368560.508     368560.508        6            0
+  hasNext=8111.186 next=174.405  borrow=  0.000  take=  0.000  constrain=  0.000  close=  2.170  alloc[hasNext=2107.154 next=  52.360 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.020] MB
+q23.catalog.semi.best              SemiJoinOperator           8287.723    4.37%     2159.522     368558.466     368558.466        6            0
+  hasNext=8111.179 next=174.393  borrow=  0.000  take=  0.000  constrain=  0.000  close=  2.150  alloc[hasNext=2107.154 next=  52.352 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.017] MB
+q23.web.channel                                               7713.320    4.07%     2107.360     719312.268     719312.268        3            0
+  hasNext=7657.933 next= 54.616  borrow=  0.000  take=  0.000  constrain=  0.000  close=  0.771  alloc[hasNext=2069.126 next=  38.216 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.018] MB
+q23.web.project_sales              ProjectOperator            7713.311    4.07%     2107.359     719311.940     719311.940        3            0
+  hasNext=7657.930 next= 54.613  borrow=  0.000  take=  0.000  constrain=  0.000  close=  0.767  alloc[hasNext=2069.126 next=  38.215 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.018] MB
+q23.web.semi.best                  SemiJoinOperator           7713.287    4.07%     2107.352     719309.417     719309.417        3            0
+  hasNext=7657.925 next= 54.605  borrow=  0.000  take=  0.000  constrain=  0.000  close=  0.756  alloc[hasNext=2069.126 next=  38.211 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.015] MB
+q23.best.max                       AggregationOperator        5319.282    2.80%      688.508     117505.301     117505.301        6            6
+  hasNext=  0.005 next=  0.045  borrow=5312.154  take=  0.000  constrain=  0.000  close=  7.076  alloc[hasNext=   0.000 next=   0.006 borrow= 688.453 take=   0.000 constrain=   0.000 close=   0.049] MB
+q23.best.project_window            ProjectOperator            5314.444    2.80%      688.491     117502.480     117502.480        6      2833500
+  hasNext=  0.011 next=5306.242  borrow=  1.112  take=  0.000  constrain=  0.000  close=  7.076  alloc[hasNext=   0.000 next= 664.125 borrow=  24.322 take=   0.000 constrain=   0.000 close=   0.044] MB
+q23.customer_window.group          GroupedAggregationOperator   5314.353    2.80%      688.479     117500.379     117500.379        6      2833500
+  hasNext=  0.006 next=5306.177  borrow=  1.108  take=  0.000  constrain=  0.000  close=  7.061  alloc[hasNext=   0.000 next= 664.115 borrow=  24.322 take=   0.000 constrain=   0.000 close=   0.043] MB
+q23.best.customer_sales                                       5294.652    2.79%      424.667      72476.510      72476.510        6      2975088
+  hasNext=  0.013 next=5276.196  borrow= 11.386  take=  0.000  constrain=  0.000  close=  7.056  alloc[hasNext=   0.000 next= 373.571 borrow=  51.073 take=   0.000 constrain=   0.000 close=   0.023] MB
+q23.customer_all.group             GroupedAggregationOperator   5294.626    2.79%      424.664      72476.047      72476.047        6      2975088
+  hasNext=  0.005 next=5276.190  borrow= 11.378  take=  0.000  constrain=  0.000  close=  7.053  alloc[hasNext=   0.000 next= 373.568 borrow=  51.073 take=   0.000 constrain=   0.000 close=   0.023] MB
+q23.frequent.distinct              MarkDistinctOperator       5138.677    2.71%     2968.259     506582.832     506582.832        6        24654
+  hasNext=  0.032 next=5134.299  borrow=  0.011  take=  0.000  constrain=  0.000  close=  4.333  alloc[hasNext=   0.000 next=2968.211 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.048] MB
+q23.frequent.project_item          ProjectOperator            4926.505    2.60%     2199.622     375402.176     375402.176        6        25326
+  hasNext=  0.022 next=4905.881  borrow= 16.200  take=  0.000  constrain=  0.128  close=  4.273  alloc[hasNext=   0.000 next=2198.797 borrow=   0.777 take=   0.000 constrain=   0.002 close=   0.046] MB
+q23.frequent.filter                FilterOperator             4926.323    2.60%     2199.608     375399.723     375399.723        6        25326
+  hasNext=  0.014 next=4905.804  borrow= 16.192  take=  0.000  constrain=  0.061  close=  4.251  alloc[hasNext=   0.000 next=2198.786 borrow=   0.777 take=   0.000 constrain=   0.001 close=   0.044] MB
+q23.frequent.group                 GroupedAggregationOperator   4826.615    2.54%     1883.393     321432.371     321432.371        6     82886622
+  hasNext=  0.006 next=4766.045  borrow= 56.265  take=  0.000  constrain=  0.067  close=  4.232  alloc[hasNext=   0.000 next=1882.572 borrow=   0.778 take=   0.000 constrain=   0.000 close=   0.043] MB
+q23.customer_window.project_value  ProjectOperator            4177.456    2.20%      535.991         53.968         53.968    10170     96989964
+  hasNext=  4.684 next=3638.690  borrow=509.405  take=  0.000  constrain=  0.000  close= 23.339  alloc[hasNext=   0.020 next= 487.731 borrow=  39.584 take=   0.000 constrain=   0.000 close=   8.656] MB
+q23.customer_window.join.customer  HashJoinOperator           3677.423    1.94%      481.404         48.472         48.472    10170     96989964
+  hasNext=  1.616 next=3629.255  borrow= 34.127  take=  0.000  constrain=  0.000  close= 11.038  alloc[hasNext=   0.000 next= 474.269 borrow=   5.469 take=   0.000 constrain=   0.000 close=   1.666] MB
+q23.customer_all.project_value     ProjectOperator            3585.014    1.89%      224.112         13.272         13.272    17292    165028428
+  hasNext=  7.715 next=2051.203  borrow=1493.384  take=  0.000  constrain=  0.000  close= 30.478  alloc[hasNext=   0.026 next= 137.037 borrow=  65.139 take=   0.000 constrain=   0.000 close=  21.910] MB
+q23.customer_all.join.customer     HashJoinOperator           3197.946    1.69%      145.154          8.596          8.596    17292    165028428
+  hasNext=  2.702 next=2017.796  borrow=1162.436  take=  0.000  constrain=  0.000  close= 12.765  alloc[hasNext=   0.000 next= 116.714 borrow=  25.652 take=   0.000 constrain=   0.000 close=   2.788] MB
+q23.catalog.semi.frequent          SemiJoinOperator           2996.240    1.58%     1537.015     262317.301     262317.301        6            0
+  hasNext=2819.751 next=174.340  borrow=  0.000  take=  0.000  constrain=  0.018  close=  2.130  alloc[hasNext=1484.661 next=  52.339 borrow=   0.000 take=   0.000 constrain=   0.001 close=   0.015] MB
+q23.customer_window.join.date      HashJoinOperator           2610.539    1.38%      371.048         37.360         37.360    10170     99328680
+  hasNext=  1.358 next=2571.520  borrow= 27.905  take=  0.000  constrain=  0.000  close=  8.426  alloc[hasNext=   0.000 next= 366.256 borrow=   3.137 take=   0.000 constrain=   0.000 close=   1.654] MB
+q23.customer_window.scan.store_sales NitroParquetScanOperator   2492.678    1.31%      338.197         34.073         34.073    10164     99328680
+  hasNext=2406.010 next= 59.889  borrow= 12.643  take=  0.000  constrain=  0.000  close= 12.742  alloc[hasNext= 326.615 next=   5.406 borrow=   0.000 take=   0.000 constrain=   0.000 close=   6.176] MB
+q23.web.semi.frequent              SemiJoinOperator           2378.393    1.25%     1522.665     519736.375     519736.375        3            0
+  hasNext=2323.065 next= 54.576  borrow=  0.000  take=  0.000  constrain=  0.010  close=  0.741  alloc[hasNext=1484.447 next=  38.204 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.013] MB
+q23.customer_all.scan.store_sales  NitroParquetScanOperator   1726.177    0.91%       56.498          3.347          3.347    17286    172805946
+  hasNext=  2.698 next=  4.579  borrow=1700.771  take=  0.000  constrain=  0.000  close= 15.876  alloc[hasNext=   0.000 next=   5.411 borrow=  45.476 take=   0.000 constrain=   0.000 close=   5.611] MB
+q23.frequent.project               ProjectOperator            1142.324    0.60%       98.289         10.117         10.117     9948     99328680
+  hasNext=  5.118 next=1093.068  borrow= 24.689  take=  0.000  constrain=  0.000  close= 18.163  alloc[hasNext=   0.000 next=  89.917 borrow=   4.550 take=   0.000 constrain=   0.000 close=   3.823] MB
+q23.frequent.join.item             HashJoinOperator           1111.483    0.59%       81.587          8.398          8.398     9948     99328680
+  hasNext=  1.913 next=1083.296  borrow= 14.595  take=  0.000  constrain=  0.000  close= 10.369  alloc[hasNext=   0.000 next=  75.567 borrow=   4.550 take=   0.000 constrain=   0.000 close=   1.471] MB
+q23.frequent.join.date             HashJoinOperator            993.101    0.52%       46.674          4.804          4.804     9948     99328680
+  hasNext=  1.313 next=965.999  borrow= 14.768  take=  0.000  constrain=  0.000  close=  9.728  alloc[hasNext=   0.000 next=  38.154 borrow=   3.341 take=   0.000 constrain=   0.000 close=   5.179] MB
+q23.frequent.scan.store_sales      NitroParquetScanOperator    878.631    0.46%       13.755          1.417          1.417     9942     99328680
+  hasNext=814.493 next= 46.489  borrow=  6.550  take=  0.000  constrain=  0.000  close=  9.754  alloc[hasNext=   8.661 next=   2.887 borrow=   0.000 take=   0.000 constrain=   0.000 close=   2.207] MB
+q23.catalog.join.date              HashJoinOperator            176.343    0.09%       52.339       8932.508       8932.508        6           45
+  hasNext=  0.004 next=174.200  borrow=  0.006  take=  0.000  constrain=  0.017  close=  2.115  alloc[hasNext=   0.000 next=  52.326 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.013] MB
+q23.catalog.scan                   NitroParquetScanOperator    172.165    0.09%       47.217      16116.859      16116.859        3           45
+  hasNext=170.121 next=  0.044  borrow=  0.005  take=  0.000  constrain=  0.000  close=  1.995  alloc[hasNext=  46.949 next=   0.262 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.006] MB
+q23.web.join.date                  HashJoinOperator             55.257    0.03%       38.210      13042.258      13042.258        3            0
+  hasNext=  0.003 next= 54.517  borrow=  0.000  take=  0.000  constrain=  0.009  close=  0.727  alloc[hasNext=   0.000 next=  38.198 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.011] MB
+q23.web.scan                       NitroParquetScanOperator     52.098    0.03%       33.101          0.000          0.000        0            0
+  hasNext= 51.474 next=  0.000  borrow=  0.000  take=  0.000  constrain=  0.000  close=  0.624  alloc[hasNext=  33.097 next=   0.000 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.004] MB
+q23.customer_window.scan.customer  NitroParquetScanOperator     25.295    0.01%       10.073         34.384         34.384      300      3000000
+  hasNext=  0.101 next=  0.091  borrow= 24.767  take=  0.000  constrain=  0.000  close=  0.279  alloc[hasNext=   0.000 next=   0.051 borrow=   9.861 take=   0.000 constrain=   0.000 close=   0.161] MB
+q23.customer_all.scan.customer     NitroParquetScanOperator     25.127    0.01%        4.057         13.848         13.848      300      3000000
+  hasNext=  0.050 next=  0.073  borrow= 24.720  take=  0.000  constrain=  0.000  close=  0.242  alloc[hasNext=   0.000 next=   0.050 borrow=   3.953 take=   0.000 constrain=   0.000 close=   0.054] MB
+q23.frequent.scan.item             NitroParquetScanOperator      5.235    0.00%        0.442          6.857          6.857       66       612000
+  hasNext=  0.010 next=  0.022  borrow=  5.047  take=  0.000  constrain=  0.000  close=  0.147  alloc[hasNext=   0.000 next=   0.014 borrow=   0.413 take=   0.000 constrain=   0.000 close=   0.015] MB
+q23.customer_window.scan.date      ProjectOperator               4.947    0.00%        6.287        134.117        134.117       48         8766
+  hasNext=  0.012 next=  1.617  borrow=  3.075  take=  0.000  constrain=  0.000  close=  0.235  alloc[hasNext=   0.000 next=   5.864 borrow=   0.385 take=   0.000 constrain=   0.000 close=   0.038] MB
+q23.frequent.scan.date             ProjectOperator               4.797    0.00%        5.830        124.384        124.384       48         8766
+  hasNext=  0.010 next=  1.166  borrow=  3.345  take=  0.000  constrain=  0.000  close=  0.269  alloc[hasNext=   0.000 next=   3.556 borrow=   2.246 take=   0.000 constrain=   0.000 close=   0.028] MB
+q23.catalog.scan.date              ProjectOperator               3.603    0.00%        3.582        152.813        152.813       24           87
+  hasNext=  0.006 next=  1.932  borrow=  1.552  take=  0.000  constrain=  0.000  close=  0.109  alloc[hasNext=   0.000 next=   3.389 borrow=   0.178 take=   0.000 constrain=   0.000 close=   0.014] MB
+q23.web.scan.date                  ProjectOperator               2.793    0.00%        3.582        152.813        152.813       24           87
+  hasNext=  0.006 next=  1.148  borrow=  1.529  take=  0.000  constrain=  0.000  close=  0.106  alloc[hasNext=   0.000 next=   3.389 borrow=   0.178 take=   0.000 constrain=   0.000 close=   0.014] MB
+Total attributed cpu_ms: 189721.551
+

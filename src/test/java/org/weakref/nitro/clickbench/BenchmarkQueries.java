@@ -318,8 +318,9 @@ public class BenchmarkQueries
         consume(ClickBenchHitsSupport.query43(allocator, primitiveRegistry, clickBenchHitsDirectory));
     }
 
-    private static void consume(Operator operator)
+    private void consume(Operator operator)
     {
+        allocator.beginExecution();
         try (operator) {
             while (operator.hasNext()) {
                 try (var batch = operator.next()) {

@@ -81,6 +81,7 @@ final class FusedGroupingAggregationKernelGenerator
     private static final int CACHED_KEY = 28;       // long, occupies 28-29
     private static final int CACHED_GROUP = 30;
     private static final int INPUT_ARRAY_BASE = 31;
+    private static final int ID_INDEXED_GROUP_MASK = 0x03FF_FFFF;
 
     private static final ConcurrentHashMap<String, FusedGroupingKernel> KERNELS = new ConcurrentHashMap<>();
 
@@ -90,17 +91,19 @@ final class FusedGroupingAggregationKernelGenerator
             boolean intKey,
             boolean keyMapped,
             boolean runCache,
+            boolean constantRuns,
             boolean directGrouping,
+            boolean idIndexedGrouping,
             boolean[] intInputs,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
             boolean[] inputUsesKeyIds,
             boolean[] inputNullUsesKeyIds)
     {
-        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":runs=" + runCache + ":direct=" + directGrouping + Arrays.toString(intInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds);
+        String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds);
         return KERNELS.computeIfAbsent(
                 cacheKey(specs) + ":groups=" + writeGroups + ":physical=" + physicalShape,
-                key -> generate(specs, writeGroups, intKey, keyMapped, runCache, directGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
+                key -> generate(specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
     }
 
     private static String cacheKey(List<FusedAccumulatorSpec> specs)
@@ -118,7 +121,9 @@ final class FusedGroupingAggregationKernelGenerator
             boolean intKey,
             boolean keyMapped,
             boolean runCache,
+            boolean constantRuns,
             boolean directGrouping,
+            boolean idIndexedGrouping,
             boolean[] intInputs,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
@@ -145,7 +150,7 @@ final class FusedGroupingAggregationKernelGenerator
             });
 
             builder.withMethodBody("accumulate", accumulateType, ClassFile.ACC_PUBLIC,
-                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, directGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
+                    code -> emitAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
         });
 
         try {
@@ -166,7 +171,9 @@ final class FusedGroupingAggregationKernelGenerator
             boolean intKey,
             boolean keyMapped,
             boolean runCache,
+            boolean constantRuns,
             boolean directGrouping,
+            boolean idIndexedGrouping,
             boolean[] intInputs,
             boolean[] mappedInputs,
             boolean[] mappedInputNulls,
@@ -200,6 +207,12 @@ final class FusedGroupingAggregationKernelGenerator
             code.loadConstant(0);
             code.istore(CACHED_GROUP);
         }
+        if (batchesConstantRuns(specs, constantRuns)) {
+            code.loadConstant(0);
+            code.istore(runGroupLocal(specs));
+            code.loadConstant(0);
+            code.istore(runCountLocal(specs));
+        }
 
         Label sparse = code.newLabel();
         Label end = code.newLabel();
@@ -208,11 +221,11 @@ final class FusedGroupingAggregationKernelGenerator
         code.aload(POSITIONS);
         code.ifnonnull(sparse);
 
-        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, runCache, directGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        emitLoop(code, specs, false, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
         code.goto_(end);
 
         code.labelBinding(sparse);
-        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, runCache, directGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        emitLoop(code, specs, true, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
 
         code.labelBinding(end);
         code.lload(NEXT_ID);
@@ -220,7 +233,7 @@ final class FusedGroupingAggregationKernelGenerator
     }
 
     // for (int index = 0; index < count; index++) { position = sparse ? positions[index] : index; <body> }
-    private static void emitLoop(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean directGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitLoop(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         code.loadConstant(0);
         code.istore(INDEX);
@@ -243,14 +256,18 @@ final class FusedGroupingAggregationKernelGenerator
             code.istore(POSITION);
         }
 
-        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, directGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
+        boolean batchConstantRuns = batchesConstantRuns(specs, constantRuns);
+        emitProbeAndAccumulate(code, specs, writeGroups, intKey, keyMapped, runCache, batchConstantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds);
 
         code.iinc(INDEX, 1);
         code.goto_(top);
         code.labelBinding(exit);
+        if (batchConstantRuns) {
+            emitConstantRunFlush(code, specs);
+        }
     }
 
-    private static void emitProbeAndAccumulate(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean directGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitProbeAndAccumulate(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         // long key = keys[position];
         code.aload(KEYS);
@@ -276,7 +293,9 @@ final class FusedGroupingAggregationKernelGenerator
         Label probeTop = code.newLabel();
         Label notEmpty = code.newLabel();
         Label advance = code.newLabel();
-        Label accumulate = code.newLabel();
+        Label accumulateNewRun = code.newLabel();
+        Label accumulateSameRun = batchConstantRuns ? code.newLabel() : accumulateNewRun;
+        Label accumulateCommon = batchConstantRuns ? code.newLabel() : accumulateNewRun;
 
         if (runCache) {
             Label probe = code.newLabel();
@@ -288,7 +307,7 @@ final class FusedGroupingAggregationKernelGenerator
             code.ifne(probe);
             code.iload(CACHED_GROUP);
             code.istore(GROUP);
-            code.goto_(accumulate);
+            code.goto_(accumulateSameRun);
             code.labelBinding(probe);
         }
 
@@ -323,7 +342,7 @@ final class FusedGroupingAggregationKernelGenerator
             code.lload(KEY);
             code.lastore();
             emitRunCacheUpdate(code, runCache);
-            code.goto_(accumulate);
+            code.goto_(accumulateNewRun);
 
             code.labelBinding(notEmpty);
             code.iload(ID);
@@ -331,12 +350,16 @@ final class FusedGroupingAggregationKernelGenerator
             code.isub();
             code.istore(GROUP);
             emitRunCacheUpdate(code, runCache);
-            code.goto_(accumulate);
+            code.goto_(accumulateNewRun);
         }
         else {
             // int slot = GroupingState.hashLong(key) & tableMask;
             code.lload(KEY);
             code.invokestatic(CD_GROUPING_STATE, "hashLong", MethodTypeDesc.of(CD_int, CD_long));
+            if (idIndexedGrouping) {
+                code.dup();
+                code.istore(idIndexedHashLocal(specs));
+            }
             code.iload(TABLE_MASK);
             code.iand();
             code.istore(SLOT);
@@ -347,10 +370,15 @@ final class FusedGroupingAggregationKernelGenerator
             code.iload(SLOT);
             code.iaload();
             code.istore(ID);
-            // if (id != -1) goto notEmpty;
+            // The ordinary table uses -1 as empty; packed id-indexed slots use zero and encode group+1.
             code.iload(ID);
-            code.loadConstant(-1);
-            code.if_icmpne(notEmpty);
+            if (idIndexedGrouping) {
+                code.ifne(notEmpty);
+            }
+            else {
+                code.loadConstant(-1);
+                code.if_icmpne(notEmpty);
+            }
 
             // empty slot: group = (int) nextId; nextId++;
             code.lload(NEXT_ID);
@@ -360,15 +388,28 @@ final class FusedGroupingAggregationKernelGenerator
             code.loadConstant(1L);
             code.ladd();
             code.lstore(NEXT_ID);
-            // tableKeys[slot] = key;
-            code.aload(TABLE_KEYS);
-            code.iload(SLOT);
-            code.lload(KEY);
-            code.lastore();
+            // The id-indexed layout stores the key only in the canonical reverse map below.
+            if (!idIndexedGrouping) {
+                code.aload(TABLE_KEYS);
+                code.iload(SLOT);
+                code.lload(KEY);
+                code.lastore();
+            }
             // tableIds[slot] = group;
             code.aload(TABLE_IDS);
             code.iload(SLOT);
-            code.iload(GROUP);
+            if (idIndexedGrouping) {
+                code.iload(idIndexedHashLocal(specs));
+                code.loadConstant(~ID_INDEXED_GROUP_MASK);
+                code.iand();
+                code.iload(GROUP);
+                code.loadConstant(1);
+                code.iadd();
+                code.ior();
+            }
+            else {
+                code.iload(GROUP);
+            }
             code.iastore();
             // keysByGroup[group] = key;
             code.aload(KEYS_BY_GROUP);
@@ -376,20 +417,41 @@ final class FusedGroupingAggregationKernelGenerator
             code.lload(KEY);
             code.lastore();
             emitRunCacheUpdate(code, runCache);
-            code.goto_(accumulate);
+            code.goto_(accumulateNewRun);
 
             // occupied slot: if (tableKeys[slot] == key) { group = id; goto accumulate; }
             code.labelBinding(notEmpty);
-            code.aload(TABLE_KEYS);
-            code.iload(SLOT);
+            if (idIndexedGrouping) {
+                code.iload(ID);
+                code.loadConstant(~ID_INDEXED_GROUP_MASK);
+                code.iand();
+                code.iload(idIndexedHashLocal(specs));
+                code.loadConstant(~ID_INDEXED_GROUP_MASK);
+                code.iand();
+                code.if_icmpne(advance);
+                code.iload(ID);
+                code.loadConstant(ID_INDEXED_GROUP_MASK);
+                code.iand();
+                code.loadConstant(1);
+                code.isub();
+                code.istore(GROUP);
+                code.aload(KEYS_BY_GROUP);
+                code.iload(GROUP);
+            }
+            else {
+                code.aload(TABLE_KEYS);
+                code.iload(SLOT);
+            }
             code.laload();
             code.lload(KEY);
             code.lcmp();
             code.ifne(advance);
-            code.iload(ID);
-            code.istore(GROUP);
+            if (!idIndexedGrouping) {
+                code.iload(ID);
+                code.istore(GROUP);
+            }
             emitRunCacheUpdate(code, runCache);
-            code.goto_(accumulate);
+            code.goto_(accumulateNewRun);
 
             // advance: slot = (slot + 1) & tableMask; goto probeTop;
             code.labelBinding(advance);
@@ -402,7 +464,24 @@ final class FusedGroupingAggregationKernelGenerator
             code.goto_(probeTop);
         }
 
-        code.labelBinding(accumulate);
+        code.labelBinding(accumulateNewRun);
+        if (batchConstantRuns) {
+            int runCount = runCountLocal(specs);
+            Label firstRun = code.newLabel();
+            code.iload(runCount);
+            code.ifeq(firstRun);
+            emitConstantRunFlush(code, specs);
+            code.labelBinding(firstRun);
+            code.iload(GROUP);
+            code.istore(runGroupLocal(specs));
+            code.loadConstant(1);
+            code.istore(runCount);
+            code.goto_(accumulateCommon);
+
+            code.labelBinding(accumulateSameRun);
+            code.iinc(runCount, 1);
+            code.labelBinding(accumulateCommon);
+        }
         if (writeGroups) {
             code.aload(OUTPUT_GROUPS);
             code.iload(POSITION);
@@ -417,7 +496,9 @@ final class FusedGroupingAggregationKernelGenerator
             }
             FusedAccumulatorSpec spec = specs.get(accumulator);
             if (!spec.readsInput()) {
-                emitIncrement(code, spec, accumulator, intInputs, mappedInputs, inputUsesKeyIds);
+                if (!batchConstantRuns) {
+                    emitIncrement(code, spec, accumulator, intInputs, mappedInputs, inputUsesKeyIds);
+                }
                 emitted[accumulator] = true;
                 continue;
             }
@@ -459,6 +540,62 @@ final class FusedGroupingAggregationKernelGenerator
                 }
             }
             code.labelBinding(nextInput);
+        }
+    }
+
+    private static boolean batchesConstantRuns(List<FusedAccumulatorSpec> specs, boolean constantRuns)
+    {
+        if (!constantRuns) {
+            return false;
+        }
+        boolean hasInputIndependent = false;
+        for (FusedAccumulatorSpec spec : specs) {
+            if (!spec.readsInput()) {
+                hasInputIndependent = true;
+            }
+            else {
+                // Keep this representation coherent: a constant-only kernel can advance all state once per
+                // physical key run. Mixed input kernels still walk every row and retain their ordinary updates.
+                return false;
+            }
+        }
+        return hasInputIndependent;
+    }
+
+    private static int runGroupLocal(List<FusedAccumulatorSpec> specs)
+    {
+        return INPUT_ARRAY_BASE + specs.size();
+    }
+
+    private static int runCountLocal(List<FusedAccumulatorSpec> specs)
+    {
+        return runGroupLocal(specs) + 1;
+    }
+
+    private static int idIndexedHashLocal(List<FusedAccumulatorSpec> specs)
+    {
+        return runCountLocal(specs) + 1;
+    }
+
+    /** Coalesces input-independent constant updates across a physically adjacent key run. */
+    private static void emitConstantRunFlush(CodeBuilder code, List<FusedAccumulatorSpec> specs)
+    {
+        int runGroup = runGroupLocal(specs);
+        int runCount = runCountLocal(specs);
+        for (int accumulator = 0; accumulator < specs.size(); accumulator++) {
+            FusedAccumulatorSpec spec = specs.get(accumulator);
+            if (spec.readsInput()) {
+                continue;
+            }
+            ClassDesc stateType = ClassDesc.of(spec.stateVectorType().getName());
+            code.aload(STATES);
+            code.loadConstant(accumulator);
+            code.aaload();
+            code.checkcast(stateType);
+            code.iload(runGroup);
+            code.iload(runCount);
+            code.i2l();
+            code.invokevirtual(stateType, "increment", INCREMENT_TYPE);
         }
     }
 

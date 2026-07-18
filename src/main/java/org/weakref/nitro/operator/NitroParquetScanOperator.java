@@ -24,6 +24,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.parquet.ColumnReader;
+import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.ParquetFile;
 
 import java.nio.file.Path;
@@ -47,9 +48,26 @@ public final class NitroParquetScanOperator
         implements Operator
 {
     private static final Object BUFFER_POOL = new Object();
+    private static final Object DECOMPRESSED_PAGE_CACHE = new Object();
+    private static final Object DIRECT_NUMERIC_BATCH_DECODE_ADMISSION = new Object();
+    private static final boolean SHARED_DECOMPRESSED_PAGES =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.sharedDecompressedPages", "true"));
     // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
     // vector alloc/release) is amortized over the same number of batches in an apples-to-apples comparison.
     private static final int MAX_BATCH_ROWS = Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000);
+    private static final int DIRECT_NUMERIC_BATCH_DECODE_MIN_INT_COLUMNS =
+            Integer.getInteger("nitro.parquet.directNumericBatchDecodeMinIntColumns", 3);
+    private static final long DIRECT_NUMERIC_BATCH_DECODE_MIN_ROWS =
+            Long.getLong("nitro.parquet.directNumericBatchDecodeMinRows", 1L << 24);
+    // A wide, all-numeric scan with no downstream constraint is usually feeding a cardinality-preserving operator.
+    // In that shape, removing the page-sized materialization buffer can increase TLB pressure in the consumer even
+    // though it saves allocation in the decoder. Wait for runtime evidence that a downstream operator is narrowing
+    // the stream before enabling direct decode. Mixed scans retain immediate admission: their binary readers already
+    // preserve page materialization, so the numeric decoder is not removing the pipeline's last page-local buffer.
+    private static final boolean DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericBatchDecodeRequireConstraintForAllNumeric", "true"));
+    private static final boolean DEBUG_DIRECT_NUMERIC_BATCH_DECODE =
+            Boolean.getBoolean("nitro.debug.directNumericBatchDecode");
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
     // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
     // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
@@ -63,11 +81,67 @@ public final class NitroParquetScanOperator
     private static final int SKIP_DECODE_MIN_AVERAGE_RUN = Integer.getInteger("nitro.parquet.skipMinAverageRun", 4);
     private static final boolean LAZY_NUMERIC_SKIP_DECODE =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.lazyNumericSkipDecode", "true"));
+    // A very sparse numeric mask can profit even when survivors are isolated: decoding the compact page IDs once
+    // and gathering only live values avoids materializing/copying every wide value. Require multiple payloads to
+    // amortize the alternate scan lifecycle, but cap their count because page-ID setup repeated over a very wide
+    // projection retires more work than it saves. Keep the ordinary run-length proof for binary and denser numeric
+    // masks. This admission depends only on physical density, encoding, and live scan width.
+    private static final boolean LAZY_FRAGMENTED_NUMERIC_SKIP_DECODE =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.lazyFragmentedNumericSkipDecode", "true"));
+    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT =
+            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxSurvivorPercent", 6);
+    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS =
+            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxScanColumns", 6);
+    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MIN_PAYLOAD_COLUMNS =
+            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMinPayloadColumns", 2);
+    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS =
+            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxPayloadColumns", 8);
     private static final int LAZY_NUMERIC_SKIP_MIN_DICTIONARY_SIZE =
             Integer.getInteger("nitro.parquet.lazyNumericSkipMinDictionarySize", 1);
     private static final boolean DEBUG_LAZY_NUMERIC_SKIP = Boolean.getBoolean("nitro.debug.lazyNumericSkip");
     private static final boolean DEFER_EMPTY_CONSTRAINED_DECODE =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.deferEmptyConstrainedDecode", "true"));
+    // A later dynamic filter can sharply narrow values already decoded at the running survivor set. Preserve the
+    // accepted dense ranks long enough to compact every aligned filter column in place, instead of discarding those
+    // ranks and recovering them later with a branch-heavy two-pointer search over the wider survivor array. The
+    // existing survivor scratch carries ranks temporarily, so this adds no buffer or steady-state allocation. Admit
+    // only after a narrow scan has demonstrated a long, sparse reuse horizon: wider scans make the large aligned
+    // column scratches themselves the locality cost, while short scans cannot amortize the extra rank pass.
+    private static final boolean PROGRESSIVE_FILTER_COMPACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.progressiveFilterCompaction", "true"));
+    private static final int PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT =
+            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMaxPercent", 12);
+    private static final int PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS =
+            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMinObservedRows", 1 << 20);
+    // A long scan need not physically process the entire reuse horizon before it can prove that horizon. Once at
+    // least one million raw positions have established the lead-filter density, project its intermediate survivors
+    // across the reader's exact physical row count. Require half of the physical scan as well as one million raw
+    // positions so clustered early pages cannot govern a long tail. A statically sparse next filter may then use rank
+    // compaction when the projected input has at least a 256K-row amortization horizon and every later filter has both
+    // full-domain metadata and an observed all-pass history; otherwise a later narrowing can make the eager copy
+    // throwaway work. The current batch's exact kept fraction still decides whether compaction occurs, so a misleading
+    // range estimate pays at most one rank pass and cannot select a different result. This is scan/representation
+    // evidence, not a query policy.
+    private static final boolean PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.prospectiveProgressiveFilterCompaction", "true"));
+    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_RAW_ROWS =
+            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinRawRows", 1 << 20);
+    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_PERCENT =
+            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinObservedPercent", 50);
+    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_PROJECTED_ROWS =
+            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinProjectedRows", 1 << 18);
+    private static final int PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS =
+            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMaxColumns", 4);
+    private static final boolean FUSED_PROGRESSIVE_FILTER_COMPACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.fusedProgressiveFilterCompaction", "true"));
+    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT =
+            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMaxPercent", 60);
+    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_ALIGNED_COLUMNS =
+            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAlignedColumns", 2);
+    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN =
+            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAverageRun", SKIP_DECODE_MIN_AVERAGE_RUN);
+    private static final boolean DEBUG_PROGRESSIVE_FILTER_COMPACTION =
+            Boolean.getBoolean("nitro.debug.progressiveFilterCompaction");
 
     // The DF-window payload path freezes one page path (skip vs bulk) for the whole scan from the FIRST window's
     // survival rate, but that single 1M-row window is positionally biased: a filter whose survivors happen to cluster
@@ -94,6 +168,10 @@ public final class NitroParquetScanOperator
     private final Allocator allocator;
     private final BatchBufferScope batchBuffers;
     private final Allocator.Context allocationContext;
+    private final Allocator.SharedResource<DecompressedPageCache> decompressedPageCacheLease;
+    private final DecompressedPageCache decompressedPages;
+    private final Allocator.SharedResource<DirectNumericBatchDecodeAdmission> directNumericBatchDecodeLease;
+    private final DirectNumericBatchDecodeAdmission directNumericBatchDecodeAdmission;
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -120,6 +198,9 @@ public final class NitroParquetScanOperator
     // Stable survivor snapshots for intermediate dynamic-filter stages. Each buffer grows to its column's high-water
     // mark and is reused across windows; readPositions may point at an earlier stage while this column owns the next.
     private final int[][] filterSurvivors;
+    private final long[] progressiveFilterObservedRows;
+    private final long[] progressiveFilterObservedKept;
+    private boolean progressiveFilterCompactionAdmitted;
     private int[] filterOrder;
     private int[] nextSurvivors = new int[0];
 
@@ -156,6 +237,8 @@ public final class NitroParquetScanOperator
             Boolean.parseBoolean(System.getProperty("nitro.parquet.exactDynamicFilterDictionaryCoverage", "true"));
     private static final boolean DIRECT_NULL_MASK_READER =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullMaskReader", "true"));
+    private static final boolean DIRECT_NULL_MASK_COMPACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullMaskCompaction", "true"));
     // Densely-packed surviving values for the current window, per column (grown to high-water mark); sliced out.
     private final long[][] windowLong;
     private final int[][] windowInt;
@@ -211,6 +294,7 @@ public final class NitroParquetScanOperator
     // batch; its skipped rows accumulate here and drain in one call the next time it is pulled, so whole data pages
     // (far larger than a batch) are byte-skipped instead of walked a batch at a time. Persists across batches.
     private long[] lazyPendingAdvance;
+    private int lazyFragmentedNumericPayloadColumns = -1;
     private final boolean[][] directNullScratch;
     private final boolean[] directNullResolved;
     private final long[] directNullPendingAdvance;
@@ -220,6 +304,13 @@ public final class NitroParquetScanOperator
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", BUFFER_POOL);
         this.allocationContext = batchBuffers.context();
+        this.decompressedPageCacheLease = SHARED_DECOMPRESSED_PAGES
+                ? allocator.acquireSharedResource(DECOMPRESSED_PAGE_CACHE, DecompressedPageCache::new)
+                : null;
+        this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
+        this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
+                DIRECT_NUMERIC_BATCH_DECODE_ADMISSION, DirectNumericBatchDecodeAdmission::new);
+        this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
         checkArgument(!paths.isEmpty(), "paths is empty");
 
@@ -237,7 +328,7 @@ public final class NitroParquetScanOperator
 
         for (int c = 0; c < columnCount; c++) {
             ParquetFile.Column first = files[0].column(columns.get(c));
-            readers[c] = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal());
+            readers[c] = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal(), decompressedPages);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];
@@ -245,16 +336,31 @@ public final class NitroParquetScanOperator
             outputResolvers[c] = new ScanOutputResolver(c);
         }
         long rows = 0;
-        for (ParquetFile file : files) {
+        for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
+            ParquetFile file = files[fileIndex];
             for (int c = 0; c < columnCount; c++) {
                 ParquetFile.Column column = file.column(columns.get(c));
+                DecompressedPageCache.Source source = decompressedPages == null
+                        ? null
+                        : new DecompressedPageCache.Source(paths.get(fileIndex), columns.get(c));
+                if (source != null) {
+                    decompressedPages.register(source);
+                }
                 for (RowGroup rowGroup : file.rowGroups()) {
-                    readers[c].addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+                    readers[c].addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows, source);
                 }
             }
             rows += file.numRows();
         }
         this.totalRows = rows;
+
+        int intColumns = 0;
+        for (ColumnReader reader : readers) {
+            if (reader.kind() == ColumnReader.Kind.INT) {
+                intColumns++;
+            }
+        }
+        directNumericBatchDecodeAdmission.register(rows, intColumns);
 
         boolean numeric = true;
         for (ColumnReader reader : readers) {
@@ -273,6 +379,8 @@ public final class NitroParquetScanOperator
         this.colNull = new boolean[columnCount][];
         this.readPositions = new int[columnCount][];
         this.filterSurvivors = new int[columnCount][];
+        this.progressiveFilterObservedRows = new long[columnCount];
+        this.progressiveFilterObservedKept = new long[columnCount];
         this.windowLong = new long[columnCount][];
         this.windowInt = new int[columnCount][];
         this.windowNull = new boolean[columnCount][];
@@ -313,6 +421,12 @@ public final class NitroParquetScanOperator
     }
 
     @Override
+    public boolean supportsDynamicFilterPushdown(int column)
+    {
+        return allNumeric && column >= 0 && column < readers.length;
+    }
+
+    @Override
     public int outputCount()
     {
         return columnNames.size();
@@ -331,6 +445,7 @@ public final class NitroParquetScanOperator
             throw new IllegalStateException("No more Parquet rows");
         }
         closeCurrentBatch();
+        enableDirectNumericBatchDecodeIfAdmitted();
 
         if (filtersActive()) {
             return emitSlice();
@@ -338,6 +453,27 @@ public final class NitroParquetScanOperator
         int count = toIntExact(Math.min(MAX_BATCH_ROWS, totalRows - nextRow));
         nextRow += count;
         return LATE_MATERIALIZATION ? lazyBatch(count) : fullBatch(count);
+    }
+
+    private boolean directNumericBatchDecodeConfigured;
+
+    private void enableDirectNumericBatchDecodeIfAdmitted()
+    {
+        if (directNumericBatchDecodeConfigured) {
+            return;
+        }
+        if (!directNumericBatchDecodeAdmission.admitted()) {
+            return;
+        }
+        if (DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC && allNumeric && !lazyConstrained) {
+            return;
+        }
+        directNumericBatchDecodeConfigured = true;
+        for (ColumnReader reader : readers) {
+            if (reader.kind() != ColumnReader.Kind.BINARY) {
+                reader.enableDirectNumericBatchDecode();
+            }
+        }
     }
 
     /**
@@ -402,6 +538,11 @@ public final class NitroParquetScanOperator
     private long debugSurvivors;
     private final long[] debugFilterInputs;
     private final long[] debugFilterOutputs;
+    private long debugProgressiveCompactionRows;
+    private long debugProgressiveCompactionKept;
+    private long debugProgressiveCompactionWindows;
+    private boolean debugFusedCompactionCandidatePrinted;
+    private boolean debugProspectiveCompactionCandidatePrinted;
 
     /** Decode windows until one yields surviving rows (or input is exhausted). Returns whether rows are available. */
     private boolean ensureWindow()
@@ -544,22 +685,46 @@ public final class NitroParquetScanOperator
             // Skip-decode only a non-binary column under a SELECTIVE constraint: when most rows survive, the per-run
             // skip overhead exceeds a bulk full decode (mirrors SkipDecode's "not selective enough to pay for"
             // guard). Decided once, on first touch, and fixed for the scan so a reader keeps one page path.
-            boolean selective = lazyConstrained && !lazyMask.all()
-                    && (long) lazyMask.selectedCount() * 100 <= (long) lazyCount * SKIP_DECODE_MAX_SURVIVOR_PERCENT
-                    && hasAmortizedSurvivorRuns(lazyMask);
+            boolean constrained = lazyConstrained && !lazyMask.all();
+            boolean sparse = constrained &&
+                    (long) lazyMask.selectedCount() * 100 <= (long) lazyCount * SKIP_DECODE_MAX_SURVIVOR_PERCENT;
+            boolean amortizedRuns = sparse && hasAmortizedSurvivorRuns(lazyMask);
+            boolean fragmentedShape = sparse && LAZY_FRAGMENTED_NUMERIC_SKIP_DECODE &&
+                    (long) lazyMask.selectedCount() * 100 <=
+                            (long) lazyCount * LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT &&
+                    readers.length <= LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS;
+            // Do not inspect page dictionaries merely to reject a candidate. Reader metadata inspection can commit
+            // page state, so the ordinary bulk path must remain bit-for-bit untouched when density fails admission.
+            int fragmentedPayloadColumns = fragmentedShape
+                    ? fragmentedNumericPayloadColumns(column)
+                    : 0;
+            boolean fragmentedNumeric = fragmentedShape &&
+                    admitsFragmentedNumericSkip(
+                            lazyMask.selectedCount(),
+                            lazyCount,
+                            readers.length,
+                            fragmentedPayloadColumns,
+                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT,
+                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS,
+                            LAZY_FRAGMENTED_NUMERIC_SKIP_MIN_PAYLOAD_COLUMNS,
+                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS);
             // Wide BINARY columns always participate. Numeric columns use the same physical selectivity and
             // survivor-run proof: clustered sparse masks can then avoid decoding almost an entire payload column,
             // while fragmented masks retain the bulk decoder. The switch is an experimental reverse control and is
             // intentionally independent of SQL type, column identity, or query shape.
-            int dictionarySize = selective && LAZY_NUMERIC_SKIP_DECODE && readers[column].kind() != ColumnReader.Kind.BINARY
+            int dictionarySize = (amortizedRuns || fragmentedNumeric) &&
+                    LAZY_NUMERIC_SKIP_DECODE &&
+                    readers[column].kind() != ColumnReader.Kind.BINARY
                     ? readers[column].peekDictionarySize()
                     : -1;
             boolean wideNumericDictionary = dictionarySize >= LAZY_NUMERIC_SKIP_MIN_DICTIONARY_SIZE;
-            lazySkipColumn[column] = selective &&
-                    (readers[column].kind() == ColumnReader.Kind.BINARY || wideNumericDictionary);
+            lazySkipColumn[column] = readers[column].kind() == ColumnReader.Kind.BINARY
+                    ? amortizedRuns
+                    : wideNumericDictionary && (amortizedRuns || fragmentedNumeric);
             if (DEBUG_LAZY_NUMERIC_SKIP && wideNumericDictionary) {
-                System.err.printf("[lazy-numeric-skip] column=%s dictionary=%s survivors=%s/%s%n",
-                        columnNames.get(column), dictionarySize, lazyMask.selectedCount(), lazyCount);
+                System.err.printf("[lazy-numeric-skip] column=%s dictionary=%s survivors=%s/%s fragmented=%s%n",
+                        columnNames.get(column), dictionarySize, lazyMask.selectedCount(), lazyCount,
+                        fragmentedNumeric && !amortizedRuns);
             }
         }
         return lazySkipColumn[column];
@@ -579,6 +744,48 @@ public final class NitroParquetScanOperator
             }
         }
         return selected >= (long) runs * SKIP_DECODE_MIN_AVERAGE_RUN;
+    }
+
+    static boolean admitsFragmentedNumericSkip(
+            int selected,
+            int total,
+            int scanColumns,
+            int payloadColumns,
+            int maxSurvivorPercent,
+            int maxScanColumns,
+            int minPayloadColumns,
+            int maxPayloadColumns)
+    {
+        return total > 0 &&
+                (long) selected * 100 <= (long) total * maxSurvivorPercent &&
+                scanColumns <= maxScanColumns &&
+                payloadColumns >= minPayloadColumns &&
+                payloadColumns <= maxPayloadColumns;
+    }
+
+    private int fragmentedNumericPayloadColumns(int currentColumn)
+    {
+        if (lazyFragmentedNumericPayloadColumns >= 0) {
+            return lazyFragmentedNumericPayloadColumns;
+        }
+        int columns = 0;
+        for (int column = 0; column < readers.length; column++) {
+            // The lead filter has already resolved before constrain(). Count the current payload and unresolved
+            // siblings only; projected-out inputs are absent from this scan entirely.
+            if (column != currentColumn && lazyResolved[column]) {
+                continue;
+            }
+            // Count the physical live numeric width without asking a reader to load or commit its current page.
+            // The selected column's own dictionary eligibility is checked only after the width/density decision.
+            if (readers[column].kind() != ColumnReader.Kind.BINARY) {
+                columns++;
+                if (columns > LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS) {
+                    break;
+                }
+            }
+        }
+        lazyFragmentedNumericPayloadColumns = columns;
+        return columns;
     }
 
     /** Resolve (decode) one column for the current late-materialization batch, honoring the active mask. */
@@ -888,16 +1095,106 @@ public final class NitroParquetScanOperator
             long[] longValues = colLong[column];
             int[] intValues = colInt[column];
             int[] next = nextSurvivors;
+            long observedRows = progressiveFilterObservedRows[column];
+            long observedKept = progressiveFilterObservedKept[column];
+            int alignedFilterColumns = alignedFilterColumnCount(order, applied, survivors);
+            boolean fusedCompaction = FUSED_PROGRESSIVE_FILTER_COMPACTION &&
+                    readers.length <= PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS &&
+                    alignedFilterColumns >= FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_ALIGNED_COLUMNS &&
+                    observedRows >= PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS &&
+                    observedKept * 100 > observedRows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
+                    observedKept * 100 <= observedRows * FUSED_PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
+                    sampledAverageRunAtLeast(survivors, rows, FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN);
+            if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && fusedCompaction && !debugFusedCompactionCandidatePrinted) {
+                debugFusedCompactionCandidatePrinted = true;
+                System.err.printf("[fused-progressive-filter-candidate] columns=%s aligned=%d observed=%d/%d sampledAverageRun=%.3f%n",
+                        columnNames,
+                        alignedFilterColumns,
+                        observedKept,
+                        observedRows,
+                        sampledAverageRun(survivors, rows));
+            }
+            boolean rankForCompaction = PROGRESSIVE_FILTER_COMPACTION &&
+                    !fusedCompaction &&
+                    readers.length <= PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS &&
+                    ((observedRows == 0
+                            ? PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS == 0
+                            : observedKept * 100 <= observedRows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT) &&
+                            observedRows + rows >= PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS ||
+                            prospectiveProgressiveFilterCompaction(order, applied, filter, observedRows + rows));
             kept = 0;
-            for (int i = 0; i < rows; i++) {
-                if (nulls != null && nulls[i]) {
-                    continue;
-                }
-                if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
-                    next[kept++] = survivors[i];
+            if (fusedCompaction) {
+                // The filter already has the accepted input rank hot. Compact every column aligned to this stage
+                // before publishing the physical survivor position, avoiding both a retained rank vector and a
+                // later branch-heavy two-pointer reconstruction. Output ranks never exceed input ranks, so each
+                // in-place copy is stable even when the source and destination arrays are identical.
+                for (int i = 0; i < rows; i++) {
+                    if (nulls != null && nulls[i]) {
+                        continue;
+                    }
+                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                        compactAlignedFilterRow(order, applied, survivors, i, kept);
+                        next[kept++] = survivors[i];
+                    }
                 }
             }
-            survivors = applied + 1 < order.length ? snapshotFilterSurvivors(column, next, kept) : next;
+            else if (rankForCompaction) {
+                // Keep the accepted dense rank until all columns aligned to this input have had a chance to compact.
+                // Physical survivor positions are restored in place below before the next reader sees the array.
+                for (int i = 0; i < rows; i++) {
+                    if (nulls != null && nulls[i]) {
+                        continue;
+                    }
+                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                        next[kept++] = i;
+                    }
+                }
+            }
+            else {
+                for (int i = 0; i < rows; i++) {
+                    if (nulls != null && nulls[i]) {
+                        continue;
+                    }
+                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                        next[kept++] = survivors[i];
+                    }
+                }
+            }
+            progressiveFilterObservedRows[column] = observedRows + rows;
+            progressiveFilterObservedKept[column] = observedKept + kept;
+            int[] inputSurvivors = survivors;
+            if (progressiveFilterCompactionAdmitted && kept == rows) {
+                // An all-pass stage must not replace an equal survivor set with a different array identity. Keeping
+                // the existing identity lets all columns decoded at this stage flow directly to the output window.
+                survivors = inputSurvivors;
+            }
+            else {
+                boolean compact = fusedCompaction || (rankForCompaction &&
+                        (long) kept * 100 <= (long) rows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT);
+                if (rankForCompaction && compact) {
+                    compactAlignedFilterColumns(order, applied, inputSurvivors, next, kept);
+                }
+                if (rankForCompaction) {
+                    for (int i = 0; i < kept; i++) {
+                        next[i] = inputSurvivors[next[i]];
+                    }
+                }
+                survivors = applied + 1 < order.length ? snapshotFilterSurvivors(column, next, kept) : next;
+                if (compact) {
+                    progressiveFilterCompactionAdmitted = true;
+                    for (int i = 0; i <= applied; i++) {
+                        int alignedColumn = order[i];
+                        if (readPositions[alignedColumn] == inputSurvivors) {
+                            readPositions[alignedColumn] = survivors;
+                        }
+                    }
+                    if (DEBUG_PROGRESSIVE_FILTER_COMPACTION) {
+                        debugProgressiveCompactionRows += rows;
+                        debugProgressiveCompactionKept += kept;
+                        debugProgressiveCompactionWindows++;
+                    }
+                }
+            }
             if (DEBUG_ROW_COUNTS) {
                 debugFilterInputs[column] += rows;
                 debugFilterOutputs[column] += kept;
@@ -994,6 +1291,130 @@ public final class NitroParquetScanOperator
             }
         }
         windowSurvivorCount = survivorCount;
+    }
+
+    /** Compact every previously decoded filter column whose dense values align with {@code inputSurvivors}. */
+    private void compactAlignedFilterColumns(int[] order, int applied, int[] inputSurvivors, int[] acceptedRanks, int kept)
+    {
+        for (int i = 0; i <= applied; i++) {
+            int column = order[i];
+            if (readPositions[column] != inputSurvivors) {
+                continue;
+            }
+            if (readers[column].kind() == ColumnReader.Kind.LONG) {
+                long[] values = colLong[column];
+                for (int output = 0; output < kept; output++) {
+                    values[output] = values[acceptedRanks[output]];
+                }
+            }
+            else {
+                int[] values = colInt[column];
+                for (int output = 0; output < kept; output++) {
+                    values[output] = values[acceptedRanks[output]];
+                }
+            }
+            boolean[] nulls = colNull[column];
+            if (nulls != null) {
+                for (int output = 0; output < kept; output++) {
+                    nulls[output] = nulls[acceptedRanks[output]];
+                }
+            }
+        }
+    }
+
+    private int alignedFilterColumnCount(int[] order, int applied, int[] inputSurvivors)
+    {
+        int count = 0;
+        for (int i = 0; i <= applied; i++) {
+            if (readPositions[order[i]] == inputSurvivors) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean prospectiveProgressiveFilterCompaction(int[] order, int applied, DynamicFilter filter, long intermediateRows)
+    {
+        if (!PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION ||
+                nextRow < PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_RAW_ROWS ||
+                (double) nextRow / totalRows * 100 < PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_PERCENT ||
+                filter.rangeDensity() * 100 > PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT ||
+                !remainingFiltersObservedNonSelective(order, applied)) {
+            return false;
+        }
+        // Compare the projected full-scan intermediate count without integer multiplication overflow.
+        double projectedRows = (double) intermediateRows / nextRow * totalRows;
+        boolean admitted = projectedRows >= PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_PROJECTED_ROWS;
+        if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && admitted && !debugProspectiveCompactionCandidatePrinted) {
+            debugProspectiveCompactionCandidatePrinted = true;
+            System.err.printf("[prospective-progressive-filter-candidate] columns=%s raw=%d/%d intermediate=%d projected=%.0f rangeDensity=%.4f%n",
+                    columnNames, nextRow, totalRows, intermediateRows, projectedRows, filter.rangeDensity());
+        }
+        return admitted;
+    }
+
+    private boolean remainingFiltersObservedNonSelective(int[] order, int applied)
+    {
+        for (int index = applied + 1; index < order.length; index++) {
+            int column = order[index];
+            long observedRows = progressiveFilterObservedRows[column];
+            // Prospective compaction is useful only when this filter is the final effective narrowing stage. Use
+            // work the scan has already performed: every later filter must have passed every observed row, and its
+            // dictionary/range estimate must also describe a full-domain filter. This avoids decompressing every
+            // later column dictionary merely to make an admission decision.
+            if (observedRows == 0 ||
+                    progressiveFilterObservedKept[column] != observedRows ||
+                    estimateSelectivity(column) < 1.0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static double sampledAverageRun(int[] positions, int count)
+    {
+        int sample = Math.min(count, 1024);
+        int runs = 1;
+        for (int index = 1; index < sample; index++) {
+            if (positions[index] != positions[index - 1] + 1) {
+                runs++;
+            }
+        }
+        return (double) sample / runs;
+    }
+
+    private static boolean sampledAverageRunAtLeast(int[] positions, int count, int minimumAverageRun)
+    {
+        if (minimumAverageRun <= 1) {
+            return true;
+        }
+        int sample = Math.min(count, 1024);
+        int runs = 1;
+        for (int index = 1; index < sample; index++) {
+            if (positions[index] != positions[index - 1] + 1) {
+                runs++;
+            }
+        }
+        return sample >= (long) runs * minimumAverageRun;
+    }
+
+    private void compactAlignedFilterRow(int[] order, int applied, int[] inputSurvivors, int input, int output)
+    {
+        for (int i = 0; i <= applied; i++) {
+            int column = order[i];
+            if (readPositions[column] != inputSurvivors) {
+                continue;
+            }
+            if (readers[column].kind() == ColumnReader.Kind.LONG) {
+                colLong[column][output] = colLong[column][input];
+            }
+            else {
+                colInt[column][output] = colInt[column][input];
+            }
+            if (colNull[column] != null) {
+                colNull[column][output] = colNull[column][input];
+            }
+        }
     }
 
     private boolean isFilterColumn(int column)
@@ -1135,12 +1556,26 @@ public final class NitroParquetScanOperator
                 reader.skipNulls(pending);
                 directNullPendingAdvance[column] = 0;
             }
+            // The direct compactor consumes the sibling null reader without materializing a reusable Boolean stream.
+            // A second mask request in the same batch therefore falls back to ordinary lazy stream resolution, which
+            // remains at the correct cursor on the primary reader and caches the full stream for subsequent callers.
+            if (DIRECT_NULL_MASK_COMPACTION && directNullResolved[column]) {
+                return null;
+            }
             if (!directNullResolved[column]) {
+                Mask result = resultAllocator.copyMask(resultContext, mask);
+                if (DIRECT_NULL_MASK_COMPACTION) {
+                    reader.retainNulls(result, selectTrue, lazyCount);
+                    directNullResolved[column] = true;
+                    return result;
+                }
                 if (directNullScratch[column].length < lazyCount) {
                     directNullScratch[column] = replaceBooleans(directNullScratch[column], lazyCount);
                 }
                 reader.readNulls(directNullScratch[column], lazyCount);
                 directNullResolved[column] = true;
+                result.retainBooleans(directNullScratch[column], selectTrue);
+                return result;
             }
             Mask result = resultAllocator.copyMask(resultContext, mask);
             result.retainBooleans(directNullScratch[column], selectTrue);
@@ -1517,6 +1952,13 @@ public final class NitroParquetScanOperator
             }
             System.err.println(stages);
         }
+        if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && debugProgressiveCompactionWindows > 0) {
+            System.err.printf("[progressive-filter-compaction] columns=%s windows=%d rows=%d kept=%d%n",
+                    columnNames,
+                    debugProgressiveCompactionWindows,
+                    debugProgressiveCompactionRows,
+                    debugProgressiveCompactionKept);
+        }
         if (DEBUG_DECOMPRESSION) {
             for (int column = 0; column < readers.length; column++) {
                 System.err.println("[decompression] " + columnNames.get(column) + " " + readers[column].decompressionSummary());
@@ -1535,7 +1977,44 @@ public final class NitroParquetScanOperator
         for (ParquetFile file : files) {
             file.close();
         }
+        if (decompressedPageCacheLease != null) {
+            decompressedPageCacheLease.close();
+        }
+        directNumericBatchDecodeLease.close();
         batchBuffers.close();
+    }
+
+    private static final class DirectNumericBatchDecodeAdmission
+            implements AutoCloseable
+    {
+        private int scans;
+        private int qualifyingScans;
+        private boolean reported;
+
+        public void register(long rows, int intColumns)
+        {
+            scans++;
+            if (rows >= DIRECT_NUMERIC_BATCH_DECODE_MIN_ROWS && intColumns >= DIRECT_NUMERIC_BATCH_DECODE_MIN_INT_COLUMNS) {
+                qualifyingScans++;
+            }
+        }
+
+        public boolean admitted()
+        {
+            boolean admitted = qualifyingScans > 0;
+            if (DEBUG_DIRECT_NUMERIC_BATCH_DECODE && !reported) {
+                reported = true;
+                System.err.printf(
+                        "[direct-numeric-batch-admission] scans=%d qualifyingScans=%d admitted=%s%n",
+                        scans,
+                        qualifyingScans,
+                        admitted);
+            }
+            return admitted;
+        }
+
+        @Override
+        public void close() {}
     }
 
     private void releaseScanScratch()

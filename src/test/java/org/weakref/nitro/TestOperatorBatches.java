@@ -23,6 +23,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -56,6 +57,7 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
+import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -544,6 +546,84 @@ public class TestOperatorBatches
                             row(1L, 10, null, null),
                             row(2L, 20, 2L, 20),
                             row(null, null, 3L, 30));
+        }
+    }
+
+    @Test
+    void testFullJoinOperatorCrossesPooledRowReferenceChunkBoundary()
+    {
+        Allocator allocator = new Allocator();
+        List<Row> outerRows = new ArrayList<>();
+        for (long key = 0; key <= 65_536; key++) {
+            outerRows.add(row(key, key + 1));
+        }
+
+        try (Operator operator = new FullJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, outerRows),
+                new int[] {0},
+                new ConstantTableOperator(allocator, 2, List.of(row(65_536L, 7L), row(70_000L, 8L))),
+                new int[] {0})) {
+            List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
+            assertThat(rows).hasSize(65_538);
+            assertThat(rows.get(65_535)).isEqualTo(row(65_535L, 65_536L, null, null));
+            assertThat(rows.get(65_536)).isEqualTo(row(65_536L, 65_537L, 65_536L, 7L));
+            assertThat(rows.get(65_537)).isEqualTo(row(null, null, 70_000L, 8L));
+        }
+    }
+
+    @Test
+    void testSortedFullJoinOperatorPreservesDuplicateMultiplicityAndNullSemantics()
+    {
+        Allocator allocator = new Allocator();
+
+        try (Operator operator = FullJoinOperator.sorted(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(1L, 11L),
+                        row(2L, 20L),
+                        row(null, 90L))),
+                new int[] {0},
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 30L),
+                        row(1L, 31L),
+                        row(3L, 40L),
+                        row(null, 91L))),
+                new int[] {0})) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 10L, 1L, 30L),
+                            row(1L, 10L, 1L, 31L),
+                            row(1L, 11L, 1L, 30L),
+                            row(1L, 11L, 1L, 31L),
+                            row(2L, 20L, null, null),
+                            row(null, null, 3L, 40L),
+                            row(null, 90L, null, null),
+                            row(null, null, null, 91L));
+        }
+    }
+
+    @Test
+    void testSortedFullJoinOperatorMergesDuplicateRunsAcrossBatchBoundaries()
+    {
+        Allocator allocator = new Allocator();
+        Operator outer = new UnionAllOperator(2, List.of(
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L))),
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 11L), row(2L, 20L)))));
+        Operator inner = new UnionAllOperator(2, List.of(
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 30L))),
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 31L), row(3L, 40L)))));
+
+        try (Operator operator = FullJoinOperator.sorted(allocator, outer, new int[] {0}, inner, new int[] {0})) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 10L, 1L, 30L),
+                            row(1L, 10L, 1L, 31L),
+                            row(1L, 11L, 1L, 30L),
+                            row(1L, 11L, 1L, 31L),
+                            row(2L, 20L, null, null),
+                            row(null, null, 3L, 40L));
         }
     }
 
@@ -2686,6 +2766,47 @@ public class TestOperatorBatches
         assertThat(utf8(leftNames, 1)).isEqualTo("beta");
         assertThat(longValues(leftPayload, rowCount)).containsExactly(10L, 20L);
         assertThat(longValues(rightPayload, rowCount)).containsExactly(100L, 200L);
+    }
+
+    @Test
+    void testHashJoinOperatorPreservesLargeSingleBatchPositionsForDuplicateLongPairs()
+    {
+        Allocator allocator = new Allocator();
+        int duplicatePosition = 70_000;
+        int rowCount = duplicatePosition + 1;
+        long[] firstKeys = new long[rowCount];
+        long[] secondKeys = new long[rowCount];
+        long[] payloads = new long[rowCount];
+        for (int position = 0; position < rowCount; position++) {
+            firstKeys[position] = position;
+            secondKeys[position] = 0;
+            payloads[position] = position;
+        }
+        // Make the final row duplicate the first pair. Its logical position no longer fits the legacy 16-bit packed
+        // row-reference lane, but it does fit the pair index's position-only single-batch representation.
+        firstKeys[duplicatePosition] = 0;
+
+        Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(0L, 0L))),
+                new int[] {0, 1},
+                new TableOperator(
+                        3,
+                        List.of(TableOperator.Page.values(
+                                rowCount,
+                                new Vector[] {
+                                        new I64Vector(firstKeys),
+                                        new I64Vector(secondKeys),
+                                        new I64Vector(payloads),
+                                },
+                                Mask.all(rowCount)))),
+                new int[] {0, 1});
+
+        Batch batch = operator.next();
+        int outputRows = batch.borrowMask().count();
+        assertThat(outputRows).isEqualTo(2);
+        assertThat(longValues(batch.output(4).borrow(Stream.VALUES), outputRows))
+                .containsExactly(0L, (long) duplicatePosition);
     }
 
     @Test

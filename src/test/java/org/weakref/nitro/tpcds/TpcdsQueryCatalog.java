@@ -64,7 +64,7 @@ public final class TpcdsQueryCatalog
 
     public static String benchmarkQuerySql(String queryId, String catalog, String schema)
     {
-        String sql = readString(benchmarkSqlDirectory().resolve("q" + normalizeQueryId(queryId) + ".sql"));
+        String sql = readString(benchmarkSqlDirectory().resolve("q" + benchmarkResourceId(queryId) + ".sql"));
         return sql
                 .replace("${database}", quoteIdentifierIfNeeded(catalog))
                 .replace("${schema}", quoteIdentifierIfNeeded(schemaNameForSql(schema)));
@@ -104,6 +104,20 @@ public final class TpcdsQueryCatalog
     private static String normalizeQueryId(String queryId)
     {
         return queryId.startsWith("q") ? queryId.substring(1) : queryId;
+    }
+
+    private static String benchmarkResourceId(String queryId)
+    {
+        return switch (normalizeQueryId(queryId)) {
+            // Trino's benchmark suite splits these query templates into two concrete variants. The
+            // operator board uses Q14a, scalar Q23a, the "pale" Q24a, and Q39b (whose first-month
+            // coefficient-of-variation threshold is 1.5) as Q14, Q23, Q24, and Q39.
+            case "14" -> "14a";
+            case "23" -> "23a";
+            case "24" -> "24a";
+            case "39" -> "39b";
+            default -> normalizeQueryId(queryId);
+        };
     }
 
     private static String schemaNameForSql(String schema)

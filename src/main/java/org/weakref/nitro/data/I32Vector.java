@@ -19,6 +19,7 @@ public class I32Vector
         implements FlatVector
 {
     private final int[] values;
+    private long contentGeneration;
 
     public I32Vector(int size)
     {
@@ -33,6 +34,12 @@ public class I32Vector
     public int[] values()
     {
         return values;
+    }
+
+    @Override
+    public long contentGeneration()
+    {
+        return contentGeneration;
     }
 
     @Override
@@ -126,6 +133,7 @@ public class I32Vector
     @Override
     public void clearForReuse()
     {
+        contentGeneration++;
         // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
     }
 

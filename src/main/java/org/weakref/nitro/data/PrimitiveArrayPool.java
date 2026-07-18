@@ -28,12 +28,17 @@ import java.util.Map;
  */
 public final class PrimitiveArrayPool
 {
-    private static final long DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
+    private static final long MIN_DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
+    private static final long MAX_DEFAULT_MAX_RETAINED_BYTES = 1L << 30;
     private static final long DEFAULT_MIN_RETAINED_BYTES = 256L << 10;
+    private static final long DEFAULT_MAX_RETAINED_NATIVE_BYTES = 256L << 20;
 
     private static final PrimitiveArrayPool SHARED = new PrimitiveArrayPool(
-            Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_BYTES),
+            Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", defaultMaxRetainedBytes()),
             Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES));
+    private static final PrimitiveArrayPool SHARED_NATIVE_BUFFERS = new PrimitiveArrayPool(
+            Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
+            Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES));
 
     private final long maxRetainedBytes;
     private final long minRetainedBytes;
@@ -44,6 +49,16 @@ public final class PrimitiveArrayPool
     private long retainedBytes;
     private long borrowedBytes;
     private long reusedBytes;
+
+    private static long defaultMaxRetainedBytes()
+    {
+        // Keep the original bounded footprint on small heaps, but let large analytic-query heaps retain enough of
+        // their actual primitive working set to avoid recreating it every invocation. The hard upper bound remains
+        // below one tenth of the 12 GiB publication heap, and the explicit property remains authoritative.
+        return Math.min(
+                MAX_DEFAULT_MAX_RETAINED_BYTES,
+                Math.max(MIN_DEFAULT_MAX_RETAINED_BYTES, Runtime.getRuntime().maxMemory() / 12));
+    }
 
     public PrimitiveArrayPool(long maxRetainedBytes, long minRetainedBytes)
     {
@@ -60,6 +75,18 @@ public final class PrimitiveArrayPool
     public static PrimitiveArrayPool shared()
     {
         return SHARED;
+    }
+
+    /**
+     * Returns the process-wide bounded retention domain for native buffers.
+     *
+     * <p>Native workspaces have an independent budget so retaining one cannot evict reusable Java primitive arrays
+     * and turn an off-heap optimization into downstream heap allocation. The same generic family/capacity API is
+     * available to any reader or operator that owns a recyclable native buffer.
+     */
+    public static PrimitiveArrayPool sharedNativeBuffers()
+    {
+        return SHARED_NATIVE_BUFFERS;
     }
 
     public synchronized int[] borrowInts(int length)

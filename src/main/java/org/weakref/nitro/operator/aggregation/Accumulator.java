@@ -36,6 +36,18 @@ public interface Accumulator
     }
 
     /**
+     * Returns the non-null Boolean input column whose true rows feed this accumulator, or {@code -1}
+     * when the incoming mask is consumed unchanged. Operators resolve this selection once per batch
+     * and pass the resulting mask to the ordinary accumulation methods. This keeps SQL aggregate
+     * filters (including the marker produced by a separate mark-distinct stage) declarative and
+     * reusable instead of baking marker handling into individual accumulator implementations.
+     */
+    default int filterInputColumn()
+    {
+        return -1;
+    }
+
+    /**
      * Allocates initial state capable of holding at least {@code size} groups.
      */
     Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size);

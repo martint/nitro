@@ -1,0 +1,416 @@
+[INFO] Processing build on daemon ce1d205c
+[INFO] Scanning for projects...
+[INFO] Njord 0.9.4 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] -------------------------< org.weakref:nitro >--------------------------
+[INFO] Building nitro 1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] 2 problems were encountered while building the effective model for org.apache.yetus:audience-annotations:jar:0.5.0 during dependency collection step for project (use -X to see details)
+[INFO] 
+[INFO] --- exec:3.6.1:exec (benchmark) @ nitro ---
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/root/.m2/repository/org/openjdk/jmh/jmh-core/1.37/jmh-core-1.37.jar)
+[WARNING] [stderr] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] [stdout] # JMH version: 1.37
+[INFO] [stdout] # VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+[INFO] [stdout] # VM invoker: /opt/java/openjdk/bin/java
+[INFO] [stdout] # VM options: --enable-preview --add-modules=jdk.incubator.vector -Dnitro.clickbench.hits.path= -Xmx12g -XX:+UseTransparentHugePages -Dnitro.tpch.parquet.path=/root/data/tpch-parquet-sf10 -Dnitro.debug.operatorCpuProfile=true
+[INFO] [stdout] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[INFO] [stdout] # Warmup: 3 iterations, 1000 ms each
+[INFO] [stdout] # Measurement: 3 iterations, 1000 ms each
+[INFO] [stdout] # Timeout: 30 min per iteration
+[INFO] [stdout] # Threads: 1 thread, will synchronize iterations
+[INFO] [stdout] # Benchmark mode: Average time, time/op
+[INFO] [stdout] # Benchmark: org.weakref.nitro.tpch.BenchmarkQueries.query21
+[INFO] [stdout] 
+[INFO] [stdout] # Run progress: 0.00% complete, ETA 00:00:06
+[INFO] [stdout] # Fork: 1 of 1
+[INFO] [stdout] # Preparing profilers: LinuxPerfAsmProfiler 
+[INFO] [stdout] # Profilers consume stdout and stderr from target VM, use -v EXTRA to copy to console
+[INFO] [stdout] # Warmup Iteration   1: 11070.544 ms/op
+[INFO] [stdout] # Warmup Iteration   2: 5447.046 ms/op
+[INFO] [stdout] # Warmup Iteration   3: 4868.629 ms/op
+[INFO] [stdout] Iteration   1: 4149.115 ms/op
+[INFO] [stdout] Iteration   2: 5033.506 ms/op
+[INFO] [stdout] Iteration   3: 3907.375 ms/op
+[INFO] [stdout] # Processing profiler results: LinuxPerfAsmProfiler 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] Result "org.weakref.nitro.tpch.BenchmarkQueries.query21":
+[INFO] [stdout]   4363.332 ±(99.9%) 10815.617 ms/op [Average]
+[INFO] [stdout]   (min, avg, max) = (3907.375, 4363.332, 5033.506), stdev = 592.840
+[INFO] [stdout]   CI (99.9%): [≈ 0, 15178.949] (assumes normal distribution)
+[INFO] [stdout] 
+[INFO] [stdout] Secondary result "org.weakref.nitro.tpch.BenchmarkQueries.query21:asm":
+[INFO] [stdout] PrintAssembly processed: 611009 total address lines.
+[INFO] [stdout] Perf output processed (skipped 22.784 seconds):
+[INFO] [stdout]  Column 1: dTLB-load-misses (10525 events)
+[INFO] [stdout] 
+[INFO] [stdout] Hottest code regions (>10.00% "dTLB-load-misses" events):
+[INFO] [stdout]  Event counts are percents of total event count.
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 1]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.parquet.ColumnReader::gatherDictionary, version 3, compile id 4259 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1154: 6049 c1e3 | 024c 895c | 2468 4d3b | 97c0 0100 | 000f 83f0 
+[INFO] [stdout]             0x0000768dd3cc1168: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@57 (line 2970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1168: 0800 004d | 8997 b001 | 0000 410f | 1882 0001 | 0000 48c7 | 0001 0000 | 0041 0f18 | 8240 0100 
+[INFO] [stdout]             0x0000768dd3cc1188: 0041 0f18 | 8280 0100 
+[INFO] [stdout]             0x0000768dd3cc1190: ;   {metadata({type array int})}
+[INFO] [stdout]             0x0000768dd3cc1190: 00c7 4008 | c863 1700 | c740 0c08 | 0000 004c | 8bd0 4983 | c210 c5fd | efc0 62d1 | fe28 7f02 
+[INFO] [stdout]    0.85%    0x0000768dd3cc11b0: 4c8b 5424 | 384c 8b5c 
+[INFO] [stdout]             0x0000768dd3cc11b8: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc11b8: 2468 c481 | 7e6f 4c1a | 10c5 fe7f | 4810 498b | 87b0 0100 | 004c 8bd0 | 4983 c230 | 4d3b 97c0 
+[INFO] [stdout]             0x0000768dd3cc11d8: 0100 000f | 83a4 0800 
+[INFO] [stdout]             0x0000768dd3cc11e0: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@57 (line 2970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc11e0: 004d 8997 | b001 0000 | 410f 1882 | 0001 0000 | 48c7 0001 | 0000 0041 | 0f18 8240 | 0100 0041 
+[INFO] [stdout]             0x0000768dd3cc1200: 0f18 8280 
+[INFO] [stdout]             0x0000768dd3cc1204: ;   {metadata({type array int})}
+[INFO] [stdout]             0x0000768dd3cc1204: 0100 00c7 | 4008 c863 | 1700 c740 | 0c08 0000 | 004c 8bd0 | 4983 c210 | c5fd efc0 | 62d1 fe28 
+[INFO] [stdout]             0x0000768dd3cc1224: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1224: 7f02 c5f9 
+[INFO] [stdout]             0x0000768dd3cc1228: ;*invokestatic fromBitsCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcastBits@19 (line 3886)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcast@5 (line 3895)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::broadcastTemplate@7 (line 631)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::broadcast@2 (line 127)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::broadcast@2 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@40 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@42 (line 3096)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1228: efc0 c5fd 
+[INFO] [stdout]             0x0000768dd3cc122c: ;*invokestatic binaryOp {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewiseTemplate@154 (line 798)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::lanewise@3 (line 278)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::lanewise@3 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@43 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@97 (line 2974)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc122c: fec1 c5fe | 7f40 10c4 | e27d 584c | 2444 62f3 | 7d28 1ff9 
+[INFO] [stdout]             0x0000768dd3cc1240: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1240: 05c5 f1ef 
+[INFO] [stdout]             0x0000768dd3cc1244: ;*invokestatic fromBitsCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcastBits@19 (line 3886)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcast@5 (line 3895)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::broadcastTemplate@7 (line 631)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::broadcast@2 (line 127)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector::broadcast@2 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@40 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@42 (line 3096)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1244: c962 f37d 
+[INFO] [stdout]             0x0000768dd3cc1248: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1248: 281f f101 
+[INFO] [stdout]             0x0000768dd3cc124c: ;*invokestatic binaryOp {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector$Int256Mask::or@29 (line 716)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int256Vector$Int256Mask::or@2 (line 574)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.VectorIntrinsics::checkIndex@46 (line 80)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@106 (line 2977)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc124c: c5cd 45ff | c5f9 98ff | 0f85 eb08 | 0000 448b | 5c24 08c5 | c446 ff4f | 8d54 dc10 | 62d2 fd4f 
+[INFO] [stdout]             0x0000768dd3cc126c: 900c c24c | 8b54 2450 | 4c8b 5c24 
+[INFO] [stdout]             0x0000768dd3cc1278: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1278: 6062 917e | 487f 8cda 
+[INFO] [stdout]             0x0000768dd3cc1280: ;*invokestatic store {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::intoArray@44 (line 3162)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@41 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1280: 1000 0000 | 448b 5c24 
+[INFO] [stdout]             0x0000768dd3cc1288: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1288: 7041 83c3 | 0844 895c | 2470 443b | 5c24 040f | 8c93 feff 
+[INFO] [stdout]             0x0000768dd3cc129c: ;*invokestatic store {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::intoArray@44 (line 3162)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@41 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc129c: ff44 8b54 
+[INFO] [stdout]             0x0000768dd3cc12a0: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc12a0: 244c 4183 
+[INFO] [stdout]             0x0000768dd3cc12a4: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@57 (line 2970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc12a4: c208 4d8b 
+[INFO] [stdout]             0x0000768dd3cc12a8: ; ImmutableOopMap {[8]=NarrowOop [12]=NarrowOop [16]=Oop [28]=NarrowOop [56]=Oop [64]=NarrowOop [80]=Oop [88]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.parquet.ColumnReader::gatherLongs@57 (line 2957)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x0000768dd3cc12a8: 5f30 4185 | 0344 8b44 | 2470 443b | 4424 480f | 8c36 feff | ff4c 8b4c | 2410 448b | 5c24 1844 
+[INFO] [stdout]             0x0000768dd3cc12c8: 8b2c 248b | 6c24 1c48 | 8b4c 2420 | 488b 7424 | 2848 8b7c | 2430 8b5c | 2440 8b54 | 2408 418b 
+[INFO] [stdout]             0x0000768dd3cc12e8: c241 3bc3 | 0f8d 8601 | 0000 458b | 54ec 0c41 | 3bc2 0f83 | c80b 0000 | 4d63 d249 | 3bf2 0f83 
+[INFO] [stdout]             0x0000768dd3cc1308: bc0b 0000 
+[INFO] [stdout]             0x0000768dd3cc130c: ; implicit exception: dispatches to 0x0000768dd3cc1ec8
+[INFO] [stdout]             0x0000768dd3cc130c: 458b 54d4 | 0c45 8b44 | dc0c 413b | c00f 83a9 | 0b00 004d | 63c0 493b | f00f 839d | 0b00 00c5 
+[INFO] [stdout]             0x0000768dd3cc132c: f96e e2c5 | f96e ebc4 | e1f9 6edf | 488b fec4 | e1f9 6ed1 | c5f9 6ec5 | c5fa 104c | 240c 418b 
+[INFO] [stdout]             0x0000768dd3cc134c: ed45 8bf3 | 4d8b c18b | d844 8be8 | ffc3 498d | 34d4 c4c1 | 797e c34b | 8d0c dcc4 
+[INFO] [stdout]             0x0000768dd3cc1368: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   17.05%  <total for region 1>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 2]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.parquet.ColumnReader::gatherDictionary, version 3, compile id 4259 
+[INFO] [stdout] 
+[INFO] [stdout]             0x0000768dd3cc1620: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1620: 004d 63da | 4c8b d049 | 83c2 504e | 8d04 9d00 | 0000 004c | 8944 2470 | 4d3b 97c0 | 0100 000f 
+[INFO] [stdout]             0x0000768dd3cc1640: 8389 0400 
+[INFO] [stdout]             0x0000768dd3cc1644: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@57 (line 2970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1644: 004d 8997 | b001 0000 | 410f 1882 | 0001 0000 | 48c7 0001 | 0000 0041 | 0f18 8240 | 0100 0041 
+[INFO] [stdout]             0x0000768dd3cc1664: 0f18 8280 
+[INFO] [stdout]             0x0000768dd3cc1668: ;   {metadata({type array int})}
+[INFO] [stdout]             0x0000768dd3cc1668: 0100 00c7 | 4008 c863 | 1700 c740 | 0c10 0000 | 004c 8bd0 | 4983 c210 | c5fd efc0 | c4c1 7e7f 
+[INFO] [stdout]             0x0000768dd3cc1688: 02c4 c17e | 7f42 204c | 8b54 2460 | 4c8b 5c24 
+[INFO] [stdout]             0x0000768dd3cc1698: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1698: 7062 917e | 486f 8c1a 
+[INFO] [stdout]             0x0000768dd3cc16a0: ;*invokestatic load {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray0Template@33 (line 3499)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::fromArray0@3 (line 962)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@24 (line 3012)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@38 (line 3095)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc16a0: 1000 0000 | 62f1 7e48 | 7f88 1000 | 0000 498b | 87b0 0100 | 004c 8bd0 | 4983 c250 | 4d3b 97c0 
+[INFO] [stdout]             0x0000768dd3cc16c0: 0100 000f | 8334 0400 
+[INFO] [stdout]             0x0000768dd3cc16c8: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@57 (line 2970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc16c8: 004d 8997 | b001 0000 | 410f 1882 | 0001 0000 | 48c7 0001 | 0000 0041 | 0f18 8240 | 0100 0041 
+[INFO] [stdout]             0x0000768dd3cc16e8: 0f18 8280 
+[INFO] [stdout]             0x0000768dd3cc16ec: ;   {metadata({type array int})}
+[INFO] [stdout]             0x0000768dd3cc16ec: 0100 00c7 | 4008 c863 | 1700 c740 | 0c10 0000 | 004c 8bd0 | 4983 c210 | c5fd efc0 | c4c1 7e7f 
+[INFO] [stdout]             0x0000768dd3cc170c: 02c4 c17e 
+[INFO] [stdout]             0x0000768dd3cc1710: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1710: 7f42 20c5 
+[INFO] [stdout]             0x0000768dd3cc1714: ;*invokestatic fromBitsCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcastBits@19 (line 3886)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcast@5 (line 3895)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::broadcastTemplate@7 (line 631)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::broadcast@2 (line 127)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::broadcast@2 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@40 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@42 (line 3096)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1714: f9ef c062 | f17d 48fe 
+[INFO] [stdout]             0x0000768dd3cc171c: ;*invokestatic binaryOp {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewiseTemplate@154 (line 798)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::lanewise@3 (line 278)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::lanewise@3 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@43 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@42 (line 3096)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc171c: c162 f17e | 487f 8010 | 0000 0062 | f27d 4858 | 4c24 2062 | f37d 481f 
+[INFO] [stdout]             0x0000768dd3cc1734: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1734: f905 c5f1 
+[INFO] [stdout]             0x0000768dd3cc1738: ;*invokestatic fromBitsCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcastBits@19 (line 3886)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector$IntSpecies::broadcast@5 (line 3895)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::broadcastTemplate@7 (line 631)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::broadcast@2 (line 127)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector::broadcast@2 (line 43)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::lanewise@40 (line 944)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::add@5 (line 1406)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@42 (line 3096)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1738: efc9 62f3 | 7d48 1ff1 
+[INFO] [stdout]             0x0000768dd3cc1740: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1740: 01c5 cc45 
+[INFO] [stdout]             0x0000768dd3cc1744: ;*invokestatic binaryOp {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector$Int512Mask::or@29 (line 732)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Int512Vector$Int512Mask::or@2 (line 590)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.VectorIntrinsics::checkIndex@46 (line 80)
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::fromArray@51 (line 3098)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@32 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1744: ffc5 f898 | ff0f 8525 | 0400 0044 | 8b44 2410 | c5c4 46ff | 4f8d 54c4 | 1062 d27d | 4f90 0c82 
+[INFO] [stdout]    3.66%    0x0000768dd3cc1764: 4c8b 5424 | 584c 8b5c 
+[INFO] [stdout]             0x0000768dd3cc176c: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc176c: 2470 6291 | 7e48 7f8c | 1a10 0000 
+[INFO] [stdout]             0x0000768dd3cc1778: ;*invokestatic store {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::intoArray@44 (line 3283)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@41 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1778: 0044 8b54 
+[INFO] [stdout]             0x0000768dd3cc177c: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc177c: 246c 4183 | c210 4489 | 5424 6c44 | 3b54 244c | 0f8c 7efe 
+[INFO] [stdout]             0x0000768dd3cc1790: ;*invokestatic store {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.IntVector::intoArray@44 (line 3283)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherInts@41 (line 2971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@52 (line 3114)
+[INFO] [stdout]             0x0000768dd3cc1790: ffff 8b5c 
+[INFO] [stdout]             0x0000768dd3cc1794: ;*invokestatic loadWithMap {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.LongVector::fromArray@154 (line 2979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherLongs@32 (line 2958)
+[INFO] [stdout]                                 ; - org.weakref.nitro.parquet.ColumnReader::gatherDictionary@179 (line 3136)
+[INFO] [stdout]             0x0000768dd3cc1794: 2468 83c3 
+[INFO] [stdout]             0x0000768dd3cc1798: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   11.94%  <total for region 2>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Regions]...............................................................................
+[INFO] [stdout]   17.05%                     c2, level 4  org.weakref.nitro.parquet.ColumnReader::gatherDictionary, version 3, compile id 4259 
+[INFO] [stdout]   11.94%                     c2, level 4  org.weakref.nitro.parquet.ColumnReader::gatherDictionary, version 3, compile id 4259 
+[INFO] [stdout]    6.98%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::findSlot, version 6, compile id 3545 
+[INFO] [stdout]    5.32%                                  <unknown> 
+[INFO] [stdout]    3.15%                                  <unknown> 
+[INFO] [stdout]    3.04%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef, version 4, compile id 3584 
+[INFO] [stdout]    2.50%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignLongGroups, version 23, compile id 2868 
+[INFO] [stdout]    2.24%                                  <unknown> 
+[INFO] [stdout]    1.69%                    runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    1.33%                     c2, level 4  org.weakref.nitro.operator.aggregation.FusedMinMaxI64$Scanner::accumulate, version 3, compile id 2169 
+[INFO] [stdout]    1.25%               [kernel.kallsyms]  default_send_IPI_mask_sequence_phys 
+[INFO] [stdout]    1.24%               [kernel.kallsyms]  mas_walk 
+[INFO] [stdout]    1.24%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef, version 4, compile id 3584 
+[INFO] [stdout]    1.19%  snappy16809003170023658533.tmp  [unknown] 
+[INFO] [stdout]    1.10%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::findSlot, version 6, compile id 3545 
+[INFO] [stdout]    1.01%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignLongGroups, version 23, compile id 2868 
+[INFO] [stdout]    0.89%               [kernel.kallsyms]  copy_mc_enhanced_fast_string 
+[INFO] [stdout]    0.86%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::addRow, version 10, compile id 4279 
+[INFO] [stdout]    0.81%                                  <unknown> 
+[INFO] [stdout]    0.74%                     c2, level 4  org.weakref.nitro.parquet.RleReader::readBitPacked, version 4, compile id 3667 
+[INFO] [stdout]   34.41%  <...other 1117 warm regions...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Methods (after inlining)]..............................................................
+[INFO] [stdout]   29.83%                     c2, level 4  org.weakref.nitro.parquet.ColumnReader::gatherDictionary, version 3, compile id 4259 
+[INFO] [stdout]   14.53%                                  <unknown> 
+[INFO] [stdout]    8.16%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::findSlot, version 6, compile id 3545 
+[INFO] [stdout]    4.96%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignLongGroups, version 23, compile id 2868 
+[INFO] [stdout]    4.81%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::singleRef, version 4, compile id 3584 
+[INFO] [stdout]    2.80%                     c2, level 4  org.weakref.nitro.operator.aggregation.FusedMinMaxI64$Scanner::accumulate, version 3, compile id 2169 
+[INFO] [stdout]    2.51%  snappy16809003170023658533.tmp  [unknown] 
+[INFO] [stdout]    2.17%                    runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    2.17%               [kernel.kallsyms]  mas_walk 
+[INFO] [stdout]    2.04%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::addRow, version 10, compile id 4279 
+[INFO] [stdout]    1.47%                     c2, level 4  org.weakref.nitro.parquet.RleReader::readBitPacked, version 4, compile id 3667 
+[INFO] [stdout]    1.35%               [kernel.kallsyms]  default_send_IPI_mask_sequence_phys 
+[INFO] [stdout]    0.95%                perf-4026524.map  [unknown] 
+[INFO] [stdout]    0.89%               [kernel.kallsyms]  copy_mc_enhanced_fast_string 
+[INFO] [stdout]    0.86%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::addRows, version 9, compile id 3502 
+[INFO] [stdout]    0.84%               [kernel.kallsyms]  lock_vma_under_rcu 
+[INFO] [stdout]    0.69%                       libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    0.57%               [kernel.kallsyms]  access_error 
+[INFO] [stdout]    0.55%               [kernel.kallsyms]  clear_page_erms 
+[INFO] [stdout]    0.52%               [kernel.kallsyms]  asm_exc_page_fault 
+[INFO] [stdout]   17.32%  <...other 666 warm methods...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Distribution by Source]........................................................................
+[INFO] [stdout]   58.74%                     c2, level 4
+[INFO] [stdout]   14.53%                                
+[INFO] [stdout]   11.78%               [kernel.kallsyms]
+[INFO] [stdout]    5.84%                       libjvm.so
+[INFO] [stdout]    3.57%                    runtime stub
+[INFO] [stdout]    2.51%  snappy16809003170023658533.tmp
+[INFO] [stdout]    0.95%                perf-4026524.map
+[INFO] [stdout]    0.81%                     c1, level 3
+[INFO] [stdout]    0.59%                     interpreter
+[INFO] [stdout]    0.48%                       libc.so.6
+[INFO] [stdout]    0.08%            ld-linux-x86-64.so.2
+[INFO] [stdout]    0.04%                          [vdso]
+[INFO] [stdout]    0.03%                     c1, level 1
+[INFO] [stdout]    0.02%                Unknown, level 0
+[INFO] [stdout]    0.01%                          [veth]
+[INFO] [stdout]    0.01%                  [nf_conntrack]
+[INFO] [stdout]    0.01%                        [rfcomm]
+[INFO] [stdout]    0.01%                     [nf_tables]
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] # Run complete. Total time: 00:00:38
+[INFO] [stdout] 
+[INFO] [stdout] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[INFO] [stdout] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[INFO] [stdout] experiments, perform baseline and negative tests that provide experimental control, make sure
+[INFO] [stdout] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[INFO] [stdout] Do not assume the numbers tell you what you want them to tell.
+[INFO] [stdout] 
+[INFO] [stdout] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[INFO] [stdout] extra caution when trusting the results, look into the generated code to check the benchmark still
+[INFO] [stdout] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[INFO] [stdout] different JVMs are already problematic, the performance difference caused by different Blackhole
+[INFO] [stdout] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[INFO] [stdout] 
+[INFO] [stdout] Benchmark                     Mode  Cnt     Score       Error  Units
+[INFO] [stdout] BenchmarkQueries.query21      avgt    3  4363.332 ± 10815.617  ms/op
+[INFO] [stdout] BenchmarkQueries.query21:asm  avgt            NaN                ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  39.681 s (Wall Clock)
+[INFO] Finished at: 2026-07-21T10:58:29Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed

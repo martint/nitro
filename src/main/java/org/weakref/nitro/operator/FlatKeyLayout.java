@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -36,10 +37,38 @@ class FlatKeyLayout
             Boolean.parseBoolean(System.getProperty("nitro.group.stableDictionaryValueHash", "true"));
     private static final boolean REUSE_DICTIONARY_ENTRY_HASHES =
             Boolean.parseBoolean(System.getProperty("nitro.group.reuseDictionaryEntryHashes", "true"));
+    private static final boolean GENERATED_DICTIONARY_HASH_BATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.group.generatedDictionaryHashBatch", "true"));
+    private static final int GENERATED_DICTIONARY_HASH_BATCH_MIN_ROWS =
+            Integer.getInteger("nitro.group.generatedDictionaryHashBatchMinRows", 128);
+    private static final int GENERATED_HYBRID_HASH_BATCH_MIN_FIELDS =
+            Integer.getInteger("nitro.group.generatedHybridHashBatchMinFields", 5);
+    private static final int GENERATED_HYBRID_HASH_BATCH_MIN_ACCESSOR_FIELDS =
+            Integer.getInteger("nitro.group.generatedHybridHashBatchMinAccessorFields", 2);
+    private static final int GENERATED_DICTIONARY_HASH_BATCH_NULL_FREE_PAIR_MIN_ROWS =
+            Integer.getInteger("nitro.group.generatedDictionaryHashBatchNullFreePairMinRows", 2048);
+    private static final boolean GENERATED_DICTIONARY_RECORD_EQUALITY =
+            Boolean.parseBoolean(System.getProperty("nitro.group.generatedDictionaryRecordEquality", "true"));
+    private static final boolean DEBUG_GENERATED_DICTIONARY_HASH_BATCH =
+            Boolean.getBoolean("nitro.debug.generatedDictionaryHashBatch");
     private static final boolean MIXED_COMPOSITE_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.group.mixedCompositeIds", "true"));
+    private static final int MIXED_COMPOSITE_MAX_FIELDS =
+            Integer.getInteger("nitro.group.mixedCompositeMaxFields", 6);
     private static final boolean FAST_MIXED_COMPOSITE_3 =
             Boolean.parseBoolean(System.getProperty("nitro.group.fastMixedComposite3", "true"));
+    private static final boolean FAST_CONSTANT_NULL_MIXED_COMPOSITE_3 =
+            Boolean.parseBoolean(System.getProperty("nitro.group.fastConstantNullMixedComposite3", "true"));
+    private static final boolean FAST_MIXED_COMPOSITE_3_BATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.group.fastMixedComposite3Batch", "true"));
+    private static final boolean SINGLE_RUN_BINARY_ACCESSOR =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.singleRunBinaryAccessor", "true"));
+    private static final boolean SINGLE_RUN_BINARY_ID_ONLY =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.singleRunBinaryIdOnly", "true"));
+    private static final boolean DEBUG_CONSTANT_NULL_MIXED_COMPOSITE_3 =
+            Boolean.getBoolean("nitro.debug.constantNullMixedComposite3");
+    private static final boolean DEBUG_MIXED_COMPOSITE =
+            Boolean.getBoolean("nitro.debug.mixedComposite");
     private static final boolean EARLY_REJECT_MIXED_COMPOSITE =
             Boolean.parseBoolean(System.getProperty("nitro.group.earlyRejectMixedComposite", "true"));
     private static final boolean FAST_NULL_FREE_LONG_BINARY =
@@ -48,6 +77,8 @@ class FlatKeyLayout
             Boolean.parseBoolean(System.getProperty("nitro.group.fastNullFreeSingleBinary", "true"));
     private static final boolean DEBUG_NULL_FREE_SINGLE_BINARY =
             Boolean.getBoolean("nitro.debug.nullFreeSingleBinary");
+    private static final boolean ALL_NULL_BATCH_METADATA =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.allNullBatchMetadata", "true"));
     private static final boolean TRACK_DICTIONARY_EMPTY_SENTINEL =
             Boolean.parseBoolean(System.getProperty("nitro.group.trackDictionaryEmptySentinel", "true"));
     private static final int DICTIONARY_SENTINEL_SAMPLE_SIZE =
@@ -62,10 +93,34 @@ class FlatKeyLayout
             Boolean.parseBoolean(System.getProperty("nitro.group.idOnlyBinaryRecords", "true"));
     private static final boolean EMBED_ID_ONLY_BINARY_IDS_CONFIG =
             Boolean.parseBoolean(System.getProperty("nitro.group.embedIdOnlyBinaryIds", "true"));
+    private static final boolean COMPACT_EMBEDDED_BINARY_RECORDS =
+            Boolean.parseBoolean(System.getProperty("nitro.group.compactEmbeddedBinaryRecords", "true"));
+    private static final int COMPACT_BINARY_MIN_FIELDS =
+            Integer.getInteger("nitro.group.compactBinaryMinFields", 5);
+    private static final int COMPACT_BINARY_MIN_ROWS =
+            Integer.getInteger("nitro.group.compactBinaryMinRows", 1024);
+    private static final int COMPACT_BINARY_MIN_REUSABLE_FIELDS =
+            Integer.getInteger("nitro.group.compactBinaryMinReusableFields", 3);
+    private static final int COMPACT_BINARY_REUSE_PERCENT =
+            Integer.getInteger("nitro.group.compactBinaryReusePercent", 75);
+    private static final long COMPACT_BINARY_MIN_DISTINCT_PRODUCT =
+            Long.getLong("nitro.group.compactBinaryMinDistinctProduct", 1024L);
+    private static final int COMPACT_BINARY_MIN_DISCRIMINATING_DISTINCT =
+            Integer.getInteger("nitro.group.compactBinaryMinDiscriminatingDistinct", 32);
+    private static final int COMPACT_BINARY_SAMPLE_SIZE = 64;
     private static final boolean OWN_GROUPED_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.group.ownedGroupedDictionaryIds", "true"));
     private static final boolean COMPOSE_NESTED_DICTIONARIES =
             Boolean.parseBoolean(System.getProperty("nitro.group.composeNestedDictionaries", "true"));
+    private static final boolean RESOLVE_DICTIONARY_NULLS =
+            Boolean.parseBoolean(System.getProperty("nitro.group.resolveDictionaryNulls", "true"));
+    private static final boolean COMPOSE_NESTED_DICTIONARY_NULLS =
+            Boolean.parseBoolean(System.getProperty("nitro.group.composeNestedDictionaryNulls", "true"));
+    // Composing a dictionary chain is an eager O(batch width) pass. Wide composite tables revisit each nullable
+    // key during hash and exact equality and amortize that pass; the five/six-field q57/q47 controls did, while
+    // the three-field q78 guard did not.
+    private static final int DICTIONARY_NULL_RESOLUTION_MIN_FIELDS =
+            Integer.getInteger("nitro.group.dictionaryNullResolutionMinFields", 5);
     private static final boolean ADAPTIVE_DISCRIMINATING_FIELD_HASH =
             Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveDiscriminatingFieldHash", "true"));
     private static final boolean NORMALIZED_INT_KEY =
@@ -85,6 +140,7 @@ class FlatKeyLayout
     private final int nullByteCount;
     private final boolean singleField;
     private final boolean embedIdOnlyBinaryIds;
+    private final boolean compactEmbeddedBinaryRecords;
     private final int singleInputChannel;
     private final FlatTypeHandler singleHandler;
     private final int singleFixedOffset;
@@ -124,6 +180,7 @@ class FlatKeyLayout
     // batch may carry nulls), but a batch of declared-nullable-yet-null-free keys -- the common case, since the
     // Parquet writer marks columns optional even when they are semantically NOT NULL -- pays no per-row null check.
     private boolean[] batchFieldNullFree;
+    private boolean[] batchFieldAllNull;
 
     // Global value-id equality for variable-width dictionary keys (Velox VectorHasher technique). Each field's
     // interner maps every distinct value to a dense id that is stable across batches AND across per-page
@@ -158,6 +215,15 @@ class FlatKeyLayout
     // reconstructing the grouped output. Avoid copying the same low-cardinality bytes into every group record.
     // A -1 record length marks this representation; fallback probes compare against the interner's owned bytes.
     private boolean[] fieldUsesIdOnlyRecords;
+    // Wide composite layouts usually carry several low-cardinality dictionary-backed BINARY fields. Once a
+    // query-stable value id exists, their ordinary 12-byte {chunk, offset, length} record wastes eight bytes per
+    // group. Eligible layouts instead store one 32-bit token: a non-negative stable value id, or ~ordinal for an
+    // exact variable-width fallback. Fallback metadata is dense and field-local, so an overflowing/high-cardinality
+    // field costs the same 12 bytes as the ordinary record while every id-backed field costs four. The fallback
+    // word packs arena chunk, offset, and length exactly; the arena's 1 MiB chunk invariant gives offset and length
+    // 21 bits each (including the exact end boundary), leaving 22 bits for the chunk index.
+    private long[][] compactBinaryFallbacks;
+    private int[] compactBinaryFallbackCounts;
 
     // Composite value-id for array-mode grouping (Velox's normalized-key technique): when every key field is an
     // interned, null-free, low-cardinality dictionary column, this batch's per-field global ids pack into a
@@ -174,7 +240,26 @@ class FlatKeyLayout
     private final int[] compositeOrder;
     private boolean batchMixedComposite;
     private int[] compactCompositeRadix;
+    private long[] compactLongBase;
+    private boolean[] compactLongBaseSet;
+    private boolean[] compactLongDomainRejected;
+    private boolean batchCompositeEncodable;
     private boolean batchCompositeEligible;
+    private boolean debugMixedCompositePrinted;
+    // Concrete three-field mixed-composite state, resolved once per batch. A GroupId-style producer commonly makes
+    // every key channel either all-null or null-free for the whole batch. Keep that invariant, field order, and
+    // compact radices out of the per-row composite-id loop; -1 means at least one channel has mixed nullness and
+    // retains the ordinary exact path.
+    private int batchMixedComposite3ConstantNullMask = -1;
+    private int batchMixedComposite3LongIndex;
+    private int batchMixedComposite3FirstBinary;
+    private int batchMixedComposite3SecondBinary;
+    private int batchMixedComposite3FirstRadix;
+    private int batchMixedComposite3SecondRadix;
+    private boolean batchMixedComposite3Prepared;
+    private boolean debugConstantNullMixedComposite3Printed;
+    private int debugConstantNullMixedComposite3BatchMask = Integer.MIN_VALUE;
+    private int debugConstantNullMixedComposite3BatchTransitions;
 
     // Per-field concrete handler kind, resolved once at construction. The per-position hot methods switch on this
     // (a tableswitch) and call the concrete handler singleton (monomorphic, inlined) instead of dispatching through
@@ -198,14 +283,21 @@ class FlatKeyLayout
     private boolean dictionarySingleBinaryFastPathDecided;
     private boolean dictionarySingleBinaryFastPathAdmitted;
     private boolean debugDictionarySingleBinaryPrinted;
+    private boolean debugGeneratedDictionaryHashBatchPrinted;
+    private boolean debugGeneratedDictionaryHashBatchRejectedPrinted;
+    private DictionaryRecordEqualityKernel generatedRecordEqualityKernel;
     private VectorAccess.LongValues[] fieldLong;
     private BinaryVector[] fieldBinaryBase;
     private int[][] fieldBinaryIds;
+    private long batchSingleRunBinaryFields;
+    private long[] fieldBinaryConstantHash;
+    private int[] fieldBinaryConstantGlobalId;
     // Reusable, per-field logical-position -> leaf-position maps for nested dictionaries. Join output commonly
     // wraps an already dictionary-encoded dimension column. Resolving that chain once per batch lets all grouping
     // operations use the concrete leaf and a single id lookup instead of recursively walking the encoding in every
     // hash/equality/write call. These buffers are high-water retained for the query and returned by releaseBuffers.
     private int[][] composedDictionaryIds;
+    private int[][] composedNullDictionaryIds;
     private VectorAccess.BooleanValues[] fieldNullAccess;
     // A composite hash table needs a deterministic discriminator, not necessarily every key field. When one field
     // is already highly selective, hashing the remaining wide fields only adds loads and TLB pressure; equality
@@ -217,7 +309,7 @@ class FlatKeyLayout
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
 
-    FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth)
+    FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth, boolean compactEmbeddedBinaryRecords)
     {
         this.fields = fields;
         this.inputChannels = inputChannels;
@@ -239,6 +331,7 @@ class FlatKeyLayout
         this.nullByteCount = nullByteCount;
         this.singleField = handlers.length == 1;
         this.embedIdOnlyBinaryIds = EMBED_ID_ONLY_BINARY_IDS_CONFIG && !singleField;
+        this.compactEmbeddedBinaryRecords = compactEmbeddedBinaryRecords;
         this.singleInputChannel = singleField ? inputChannels[0] : -1;
         this.singleHandler = singleField ? handlers[0] : null;
         this.singleFixedOffset = singleField ? fixedOffsets[0] : -1;
@@ -262,21 +355,79 @@ class FlatKeyLayout
         FlatTypeHandler[] handlers = new FlatTypeHandler[values.length];
         int[] fixedOffsets = new int[values.length];
         int nullByteCount = nullable ? Math.max(1, (values.length + Byte.SIZE - 1) / Byte.SIZE) : 0;
-        int fixedOffset = nullByteCount;
         boolean anyVariableWidth = false;
+        int binaryFields = 0;
         for (int index = 0; index < values.length; index++) {
             FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index]);
             if (handler == null) {
                 return null;
             }
-            fields[index] = new Field(index, handler, fixedOffset, OperatorVectorSupport.binaryTraits(values[index]));
             inputChannels[index] = index;
             handlers[index] = handler;
-            fixedOffsets[index] = fixedOffset;
-            fixedOffset += handler.fixedSize();
             anyVariableWidth |= handler.variableWidth();
+            binaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY ? 1 : 0;
         }
-        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth);
+        // A compact token is useful only when the first physical batch proves both reusable ids and enough possible
+        // groups to amortize its fallback sidecar. Sampled per-field distinctness is an encoding-independent reuse
+        // signal: require several fields below the reuse ceiling, one discriminating field, and a large product of
+        // distinct counts, so a tiny geographical cube does not optimize ten records. This decision depends only
+        // on batch/key shape.
+        boolean compactEmbeddedBinaryRecords = COMPACT_EMBEDDED_BINARY_RECORDS &&
+                ID_ONLY_BINARY_RECORDS &&
+                EMBED_ID_ONLY_BINARY_IDS_CONFIG &&
+                binaryFields >= COMPACT_BINARY_MIN_FIELDS &&
+                values.length > 0 &&
+                values[0].length() >= COMPACT_BINARY_MIN_ROWS &&
+                admitsCompactBinaryRecords(values, handlers);
+        int fixedOffset = nullByteCount;
+        for (int index = 0; index < values.length; index++) {
+            FlatTypeHandler handler = handlers[index];
+            fields[index] = new Field(index, handler, fixedOffset, OperatorVectorSupport.binaryTraits(values[index]));
+            fixedOffsets[index] = fixedOffset;
+            fixedOffset += compactEmbeddedBinaryRecords && handler.kind() == FlatTypeHandler.Kind.BINARY
+                    ? Integer.BYTES
+                    : handler.fixedSize();
+        }
+        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
+    }
+
+    private static boolean admitsCompactBinaryRecords(Vector[] values, FlatTypeHandler[] handlers)
+    {
+        int reusableFields = 0;
+        int maximumDistinct = 0;
+        long distinctProduct = 1;
+        long[] hashes = new long[COMPACT_BINARY_SAMPLE_SIZE];
+        for (int index = 0; index < handlers.length; index++) {
+            if (handlers[index].kind() != FlatTypeHandler.Kind.BINARY) {
+                continue;
+            }
+            int samples = Math.min(values[index].length(), COMPACT_BINARY_SAMPLE_SIZE);
+            int distinct = sampledBinaryDistinct(values[index], samples, hashes);
+            maximumDistinct = Math.max(maximumDistinct, distinct);
+            if ((long) distinct * 100 <= (long) samples * COMPACT_BINARY_REUSE_PERCENT) {
+                reusableFields++;
+            }
+            if (distinctProduct < COMPACT_BINARY_MIN_DISTINCT_PRODUCT) {
+                distinctProduct = Math.min(COMPACT_BINARY_MIN_DISTINCT_PRODUCT, Math.multiplyExact(distinctProduct, Math.max(1, distinct)));
+            }
+        }
+        return reusableFields >= COMPACT_BINARY_MIN_REUSABLE_FIELDS &&
+                maximumDistinct >= COMPACT_BINARY_MIN_DISCRIMINATING_DISTINCT &&
+                distinctProduct >= COMPACT_BINARY_MIN_DISTINCT_PRODUCT;
+    }
+
+    private static int sampledBinaryDistinct(Vector vector, int samples, long[] hashes)
+    {
+        for (int sample = 0; sample < samples; sample++) {
+            int position = samples == 1 ? 0 : (int) ((long) sample * (vector.length() - 1) / (samples - 1));
+            hashes[sample] = FlatTypeHandlers.BINARY.hashInput(vector, position);
+        }
+        Arrays.sort(hashes, 0, samples);
+        int distinct = samples == 0 ? 0 : 1;
+        for (int sample = 1; sample < samples; sample++) {
+            distinct += hashes[sample] != hashes[sample - 1] ? 1 : 0;
+        }
+        return distinct;
     }
 
     public static FlatKeyLayout tryCreate(Vector[] values)
@@ -294,9 +445,54 @@ class FlatKeyLayout
         return fixedRecordSize;
     }
 
+    boolean usesCompactEmbeddedBinaryRecords()
+    {
+        return compactEmbeddedBinaryRecords;
+    }
+
     boolean batchSupportsNormalizedIntKey()
     {
         return batchNormalizedIntKeyEligible;
+    }
+
+    boolean usesGeneratedDictionaryRecordEquality()
+    {
+        return generatedRecordEqualityKernel != null;
+    }
+
+    /**
+     * Exposes the concrete dictionary identity for a null-free, single-field binary batch. A grouping table can
+     * use this to memoize the exact group assigned to a dictionary entry, but only for the lifetime of this
+     * identity and content generation. The ordinary hash table remains authoritative for the first occurrence.
+     */
+    boolean batchSupportsSingleDictionaryGroupCache()
+    {
+        return singleField &&
+                fieldKinds[0] == FlatTypeHandler.Kind.BINARY &&
+                batchFieldNullFree[0] &&
+                fieldBinaryBase[0] != null &&
+                fieldBinaryIds[0] != null &&
+                fieldBinaryBase[0].contentGeneration() >= 0;
+    }
+
+    Vector batchSingleDictionaryGroupIdentity()
+    {
+        return fieldBinaryBase[0];
+    }
+
+    long batchSingleDictionaryGroupGeneration()
+    {
+        return fieldBinaryBase[0].contentGeneration();
+    }
+
+    int batchSingleDictionaryGroupCardinality()
+    {
+        return fieldBinaryBase[0].length();
+    }
+
+    int[] batchSingleDictionaryGroupIds()
+    {
+        return fieldBinaryIds[0];
     }
 
     /**
@@ -335,7 +531,7 @@ class FlatKeyLayout
                     if (binary == null) {
                         return false;
                     }
-                    int physicalPosition = fieldBinaryIds[index] == null ? position : fieldBinaryIds[index][position];
+                    int physicalPosition = binaryEntry(index, position);
                     ValueIdInterner interner = fieldInterners[index];
                     if (interner == null) {
                         interner = new ValueIdInterner(VALUE_ID_CEILING);
@@ -409,6 +605,7 @@ class FlatKeyLayout
      */
     public void beginBatch(Vector[] values, Vector[] nulls)
     {
+        generatedRecordEqualityKernel = null;
         if (dictionaryHashedIds == null) {
             dictionaryHashedIds = new int[handlers.length][];
             dictionaryEntryHashes = new long[handlers.length][];
@@ -419,6 +616,7 @@ class FlatKeyLayout
             batchDictionaryIds = new int[handlers.length][];
             fieldIdComparable = new boolean[handlers.length];
             batchFieldNullFree = new boolean[handlers.length];
+            batchFieldAllNull = new boolean[handlers.length];
             fieldInterners = new ValueIdInterner[handlers.length];
             batchEntryGlobalId = new int[handlers.length][];
             batchEntryGlobalIdDict = new Vector[handlers.length];
@@ -427,29 +625,47 @@ class FlatKeyLayout
             fieldLong = new VectorAccess.LongValues[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
             fieldBinaryIds = new int[handlers.length][];
+            fieldBinaryConstantHash = new long[handlers.length];
+            fieldBinaryConstantGlobalId = new int[handlers.length];
             composedDictionaryIds = new int[handlers.length][];
+            composedNullDictionaryIds = new int[handlers.length][];
             fieldNullAccess = new VectorAccess.BooleanValues[handlers.length];
             compactCompositeRadix = new int[handlers.length];
+            compactLongBase = new long[handlers.length];
+            compactLongBaseSet = new boolean[handlers.length];
+            compactLongDomainRejected = new boolean[handlers.length];
         }
         // A narrow mixed key can use compact radices whether its dictionaries are tiny or large. Tiny bases are
         // already eagerly interned by the normal policy; only a large base needs the extra eager scan so its final
         // radix is known. Keep those two decisions separate: otherwise a tiny county/state key falls back to the
         // 1025x1025 conservative radices and creates a huge sparse direct cache, while a wide rollup pays setup even
         // though its composite can never fit.
-        boolean mixedCompositeShape = MIXED_COMPOSITE_IDS && handlers.length <= 3 && hasLongField();
+        boolean mixedCompositeShape = MIXED_COMPOSITE_IDS &&
+                handlers.length <= MIXED_COMPOSITE_MAX_FIELDS &&
+                hasLongField() &&
+                (handlers.length <= 3 || hasCompactDirectBinaryDictionary(values));
         boolean eagerMixedComposite = mixedCompositeShape && hasLargeBinaryDictionary(values);
         batchMixedComposite = mixedCompositeShape;
+        if (DEBUG_MIXED_COMPOSITE && mixedCompositeShape && handlers.length > 3 && !debugMixedCompositePrinted) {
+            System.err.printf("[mixed-composite-shape] fields=%d max=%d has-long=%s mixed=%s eager=%s%n",
+                    handlers.length, MIXED_COMPOSITE_MAX_FIELDS, hasLongField(), mixedCompositeShape, eagerMixedComposite);
+        }
         anyFieldIdComparable = false;
+        batchSingleRunBinaryFields = 0;
         for (int index = 0; index < handlers.length; index++) {
             fieldIdComparable[index] = false;
             batchDictionaryIds[index] = null;
             int channel = inputChannels[index];
-            batchFieldNullFree[index] = VectorAccess.isAllFalseNulls((nulls != null && channel < nulls.length) ? nulls[channel] : null);
+            Vector fieldNulls = (nulls != null && channel < nulls.length) ? nulls[channel] : null;
+            batchFieldNullFree[index] = VectorAccess.isAllFalseNulls(fieldNulls);
+            batchFieldAllNull[index] = ALL_NULL_BATCH_METADATA && VectorAccess.isAllTrueNulls(fieldNulls);
             // Resolve this field's typed value/null accessors once for the batch (layer-2 monomorphization).
             Vector fieldValue = channel < values.length ? values[channel] : null;
             fieldLong[index] = fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldValue != null ? VectorAccess.longValues(fieldValue) : null;
             fieldBinaryBase[index] = null;
             fieldBinaryIds[index] = null;
+            fieldBinaryConstantHash[index] = 0;
+            fieldBinaryConstantGlobalId[index] = -1;
             if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY) {
                 if (fieldValue instanceof BinaryVector base) {
                     fieldBinaryBase[index] = base;
@@ -458,8 +674,29 @@ class FlatKeyLayout
                     fieldBinaryBase[index] = base;
                     fieldBinaryIds[index] = dict.ids();
                 }
+                else if (SINGLE_RUN_BINARY_ACCESSOR &&
+                        index < Long.SIZE &&
+                        fieldValue instanceof org.weakref.nitro.data.RleVector rle &&
+                        rle.counts().length == 1 &&
+                        rle.values() instanceof BinaryVector base) {
+                    fieldBinaryBase[index] = base;
+                    batchSingleRunBinaryFields |= 1L << index;
+                    fieldBinaryConstantHash[index] = OperatorVectorSupport.binaryHash(
+                            base.data(), base.startOffset(0), base.length(0));
+                    if (SINGLE_RUN_BINARY_ID_ONLY && ID_ONLY_BINARY_RECORDS) {
+                        ValueIdInterner interner = fieldInterners[index];
+                        if (interner == null) {
+                            interner = new ValueIdInterner(VALUE_ID_CEILING);
+                            fieldInterners[index] = interner;
+                        }
+                        fieldBinaryConstantGlobalId[index] = interner.intern(
+                                base.data(), base.startOffset(0), base.length(0));
+                    }
+                }
             }
-            fieldNullAccess[index] = (nulls != null && channel < nulls.length && nulls[channel] != null) ? VectorAccess.booleanValues(nulls[channel]) : null;
+            fieldNullAccess[index] = fieldNulls != null && !batchFieldNullFree[index] && !batchFieldAllNull[index]
+                    ? resolveNullAccessor(index, fieldNulls)
+                    : null;
             if (channel >= values.length || !(values[channel] instanceof DictionaryVector dictionary)) {
                 dictionaryHashedIds[index] = null;
                 release(dictionaryEntryHashes[index]);
@@ -511,7 +748,10 @@ class FlatKeyLayout
                 }
             }
             int distinctCount = dictionaryValues.length();
-            long contentGeneration = dictionaryValues.contentGeneration();
+            // Cross-batch entry-hash reuse is retained for the variable-width payload it was designed to
+            // amortize. Numeric vectors now expose generations for other derived-state consumers, but enabling a
+            // second hash-cache cohort here would require its own activation and whole-query controls.
+            long contentGeneration = handlers[index].variableWidth() ? dictionaryValues.contentGeneration() : -1;
             boolean reusableEntryHashes = REUSE_DICTIONARY_ENTRY_HASHES &&
                     contentGeneration >= 0 &&
                     dictionaryHashedValues[index] == dictionaryValues &&
@@ -594,18 +834,24 @@ class FlatKeyLayout
         batchNullFreeSingleBinary = batchNullFreeSingleBinaryCandidate &&
                 (fieldBinaryIds[0] == null || dictionarySingleBinaryFastPathAdmitted);
 
+        if (batchMixedComposite && handlers.length > 3) {
+            prepareWideMixedLongDomains(values);
+        }
+
         // Decide once per batch whether the key can attempt array mode. Binary fields use query-stable interned
         // ids; small non-negative LONG fields use their value directly. Each radix reserves one digit for null,
         // which makes rollup grouping sets directly indexable instead of forcing their null-extended rows through
         // the hash table. A lazy dictionary may discover an id outside the binary radix later; compositeValueId
         // rejects just that position and the caller falls back to the normal hash table.
-        batchCompositeEligible = handlers.length > 0;
+        batchCompositeEncodable = handlers.length > 0;
+        batchCompositeEligible = batchCompositeEncodable;
         long compositeMultiplier = 1;
-        for (int orderIndex = 0; batchCompositeEligible && orderIndex < compositeOrder.length; orderIndex++) {
+        for (int orderIndex = 0; batchCompositeEncodable && orderIndex < compositeOrder.length; orderIndex++) {
             int index = compositeOrder[orderIndex];
             int radix;
             if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY) {
                 if (!fieldIdComparable[index] || fieldInterners[index] == null || fieldInterners[index].distinctCount() > COMPOSITE_STRIDE) {
+                    batchCompositeEncodable = false;
                     batchCompositeEligible = false;
                     break;
                 }
@@ -613,28 +859,142 @@ class FlatKeyLayout
             }
             else if (fieldKinds[index] == FlatTypeHandler.Kind.LONG && fieldLong[index] != null) {
                 if (!MIXED_COMPOSITE_IDS) {
+                    batchCompositeEncodable = false;
                     batchCompositeEligible = false;
                     break;
                 }
-                if (EARLY_REJECT_MIXED_COMPOSITE && hasEarlyOutOfRangeLong(index, values[index].length())) {
+                boolean compactWideLong = handlers.length > 3 && batchMixedComposite;
+                if (compactWideLong
+                        ? compactLongDomainRejected[index] || (!compactLongBaseSet[index] && !batchFieldAllNull[index])
+                        : EARLY_REJECT_MIXED_COMPOSITE && hasEarlyOutOfRangeLong(index, values[index].length())) {
+                    batchCompositeEncodable = false;
                     batchCompositeEligible = false;
                     break;
                 }
                 radix = LONG_COMPOSITE_RADIX;
             }
             else {
+                batchCompositeEncodable = false;
                 batchCompositeEligible = false;
                 break;
             }
-            compositeMultiplier *= radix;
+            try {
+                compositeMultiplier = Math.multiplyExact(compositeMultiplier, radix);
+            }
+            catch (ArithmeticException _) {
+                batchCompositeEncodable = false;
+                batchCompositeEligible = false;
+                break;
+            }
             if (compositeMultiplier > COMPOSITE_MAX) {
                 batchCompositeEligible = false;
-                break;
             }
         }
+        if (DEBUG_MIXED_COMPOSITE && batchMixedComposite && !debugMixedCompositePrinted) {
+            debugMixedCompositePrinted = true;
+            int[] radices = new int[compositeOrder.length];
+            for (int orderIndex = 0; orderIndex < compositeOrder.length; orderIndex++) {
+                int index = compositeOrder[orderIndex];
+                radices[orderIndex] = fieldKinds[index] == FlatTypeHandler.Kind.BINARY
+                        ? compositeRadix(index)
+                        : LONG_COMPOSITE_RADIX;
+            }
+            System.err.printf("[mixed-composite] fields=%d eligible=%s product=%d radices=%s%n",
+                    handlers.length, batchCompositeEligible, compositeMultiplier, Arrays.toString(radices));
+        }
         batchNormalizedIntKeyEligible = normalizedIntKeyShape && sampledNormalizedIntKeyDomain(values, nulls);
+        prepareConstantNullMixedComposite3();
         batchAccessorsReady = true;
+        prepareGeneratedDictionaryRecordEquality();
         decideDiscriminatingHashField(values, nulls);
+    }
+
+    private void prepareGeneratedDictionaryRecordEquality()
+    {
+        if (!GENERATED_DICTIONARY_RECORD_EQUALITY ||
+                !embedIdOnlyBinaryIds ||
+                compactEmbeddedBinaryRecords ||
+                handlers.length < 5 ||
+                handlers.length > 7) {
+            return;
+        }
+        int nullShapes = 0;
+        int binaryFields = 0;
+        long offsets = 0;
+        int order = 0;
+        for (int field = 0; field < handlers.length; field++) {
+            if (fixedOffsets[field] < 0 || fixedOffsets[field] > 0xFF) {
+                return;
+            }
+            offsets |= (long) fixedOffsets[field] << (field * 8);
+            nullShapes |= batchNullShape(field) << (field * 2);
+            if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
+                if (!fieldIdComparable[field] || batchDictionaryIds[field] == null) {
+                    return;
+                }
+                binaryFields |= 1 << field;
+            }
+            else if (fieldKinds[field] != FlatTypeHandler.Kind.LONG || fieldLong[field] == null) {
+                return;
+            }
+        }
+        for (int index = 0; index < comparisonOrder.length; index++) {
+            order |= comparisonOrder[index] << (index * 3);
+        }
+        generatedRecordEqualityKernel = DictionaryRecordEqualityKernelGenerator.create(
+                new DictionaryRecordEqualityKernelGenerator.Shape(handlers.length, nullShapes, binaryFields, offsets, order));
+    }
+
+    private void prepareConstantNullMixedComposite3()
+    {
+        batchMixedComposite3ConstantNullMask = -1;
+        batchMixedComposite3Prepared = false;
+        if (!FAST_CONSTANT_NULL_MIXED_COMPOSITE_3 ||
+                !FAST_MIXED_COMPOSITE_3 ||
+                !batchCompositeEligible ||
+                !batchMixedComposite ||
+                compositeOrder.length != 3) {
+            return;
+        }
+
+        int longIndex = compositeOrder[0];
+        int firstBinary = compositeOrder[1];
+        int secondBinary = compositeOrder[2];
+        if (fieldKinds[longIndex] != FlatTypeHandler.Kind.LONG ||
+                fieldKinds[firstBinary] != FlatTypeHandler.Kind.BINARY ||
+                fieldKinds[secondBinary] != FlatTypeHandler.Kind.BINARY ||
+                fieldLazyIntern[firstBinary] ||
+                fieldLazyIntern[secondBinary]) {
+            return;
+        }
+
+        batchMixedComposite3LongIndex = longIndex;
+        batchMixedComposite3FirstBinary = firstBinary;
+        batchMixedComposite3SecondBinary = secondBinary;
+        batchMixedComposite3FirstRadix = compositeRadix(firstBinary);
+        batchMixedComposite3SecondRadix = compositeRadix(secondBinary);
+        batchMixedComposite3Prepared = true;
+        if (!constantNullShape(longIndex) ||
+                !constantNullShape(firstBinary) ||
+                !constantNullShape(secondBinary)) {
+            return;
+        }
+        int nullMask = (batchFieldAllNull[longIndex] ? 1 : 0) |
+                (batchFieldAllNull[firstBinary] ? 2 : 0) |
+                (batchFieldAllNull[secondBinary] ? 4 : 0);
+        batchMixedComposite3ConstantNullMask = nullMask;
+        if (DEBUG_CONSTANT_NULL_MIXED_COMPOSITE_3 && !debugConstantNullMixedComposite3Printed) {
+            debugConstantNullMixedComposite3Printed = true;
+            System.err.printf("[constant-null-mixed-composite-3] nullMask=%d radices=%d/%d%n",
+                    nullMask,
+                    batchMixedComposite3FirstRadix,
+                    batchMixedComposite3SecondRadix);
+        }
+    }
+
+    private boolean constantNullShape(int fieldIndex)
+    {
+        return batchFieldAllNull[fieldIndex] || batchFieldNullFree[fieldIndex];
     }
 
     /**
@@ -767,7 +1127,7 @@ class FlatKeyLayout
     {
         int sampleSize = Math.min(length, 32);
         for (int position = 0; position < sampleSize; position++) {
-            if (!batchFieldNullFree[fieldIndex] && fieldNullAccess[fieldIndex].value(position)) {
+            if (inputFieldNull(fieldIndex, null, position)) {
                 continue;
             }
             long value = fieldLong[fieldIndex].value(position);
@@ -778,17 +1138,58 @@ class FlatKeyLayout
         return false;
     }
 
+    private void prepareWideMixedLongDomains(Vector[] values)
+    {
+        for (int index = 0; index < handlers.length; index++) {
+            if (fieldKinds[index] != FlatTypeHandler.Kind.LONG || compactLongBaseSet[index] || compactLongDomainRejected[index]) {
+                continue;
+            }
+            if (batchFieldAllNull[index]) {
+                continue;
+            }
+            int channel = inputChannels[index];
+            int length = values[channel].length();
+            VectorAccess.BooleanValues nulls = fieldNullAccess[index];
+            long minimum = Long.MAX_VALUE;
+            long maximum = Long.MIN_VALUE;
+            for (int position = 0; position < length; position++) {
+                if (nulls != null && nulls.value(position)) {
+                    continue;
+                }
+                long value = fieldLong[index].value(position);
+                minimum = Math.min(minimum, value);
+                maximum = Math.max(maximum, value);
+            }
+            if (minimum == Long.MAX_VALUE) {
+                continue;
+            }
+            long range;
+            try {
+                range = Math.subtractExact(maximum, minimum);
+            }
+            catch (ArithmeticException _) {
+                range = Long.MAX_VALUE;
+            }
+            if (range >= LONG_COMPOSITE_CARDINALITY) {
+                compactLongDomainRejected[index] = true;
+                continue;
+            }
+            compactLongBase[index] = minimum;
+            compactLongBaseSet[index] = true;
+        }
+    }
+
     /**
-     * The composite value id for the key at {@code position} (id0 + id1*STRIDE + …) when the batch is array-mode
-     * eligible, else -1. Fields are packed in ascending-radix order so a small grouping-id field occupies the low
-     * digit instead of sparsely multiplying the common binary ids. The mapping is a stable bijection across batches;
-     * FlatGroupingTable uses it as a direct array index.
-     */
-    /**
-     * Whether this batch resolves group keys by composite (array-mode) id without hashing. The decoupled
-     * hash-then-probe driver skips its precompute pass when this holds.
+     * Whether this batch exposes stable composite ids. A grouping table may resolve them through either a direct
+     * array or a sparse primitive cache; the table decides whether that representation makes eager hash
+     * precomputation unnecessary.
      */
     boolean batchArrayModeEligible()
+    {
+        return batchCompositeEncodable;
+    }
+
+    boolean batchDirectCompositeEligible()
     {
         return batchCompositeEligible;
     }
@@ -858,7 +1259,7 @@ class FlatKeyLayout
 
     long compositeValueId(int position)
     {
-        if (!batchCompositeEligible) {
+        if (!batchCompositeEncodable) {
             return -1;
         }
         if (FAST_NULL_FREE_LONG_BINARY_COMPOSITE && batchNullFreeLongBinary && !fieldLazyIntern[1]) {
@@ -876,6 +1277,35 @@ class FlatKeyLayout
             }
             return binaryDigit + (long) binaryRadix * longDigit;
         }
+        if (batchMixedComposite3ConstantNullMask >= 0) {
+            int nullMask = batchMixedComposite3ConstantNullMask;
+            long longDigit = (nullMask & 1) != 0
+                    ? LONG_COMPOSITE_CARDINALITY
+                    : fieldLong[batchMixedComposite3LongIndex].value(position);
+            long longLimit = (nullMask & 1) != 0 ? LONG_COMPOSITE_RADIX : LONG_COMPOSITE_CARDINALITY;
+            if (longDigit < 0 || longDigit >= longLimit) {
+                return -1;
+            }
+
+            int firstRadix = batchMixedComposite3FirstRadix;
+            long firstDigit = (nullMask & 2) != 0
+                    ? firstRadix - 1L
+                    : batchEntryGlobalId[batchMixedComposite3FirstBinary][batchDictionaryIds[batchMixedComposite3FirstBinary][position]];
+            long firstLimit = (nullMask & 2) != 0 ? firstRadix : firstRadix - 1L;
+            if (firstDigit < 0 || firstDigit >= firstLimit) {
+                return -1;
+            }
+
+            int secondRadix = batchMixedComposite3SecondRadix;
+            long secondDigit = (nullMask & 4) != 0
+                    ? secondRadix - 1L
+                    : batchEntryGlobalId[batchMixedComposite3SecondBinary][batchDictionaryIds[batchMixedComposite3SecondBinary][position]];
+            long secondLimit = (nullMask & 4) != 0 ? secondRadix : secondRadix - 1L;
+            if (secondDigit < 0 || secondDigit >= secondLimit) {
+                return -1;
+            }
+            return longDigit + LONG_COMPOSITE_RADIX * (firstDigit + (long) firstRadix * secondDigit);
+        }
         if (FAST_MIXED_COMPOSITE_3 && batchMixedComposite && compositeOrder.length == 3) {
             // compositeOrder puts the LONG digit first. The mixed-composite policy eagerly interns both
             // dictionary bases, so their entry->global-id maps contain no lazy sentinels and can be read
@@ -888,21 +1318,21 @@ class FlatKeyLayout
                     fieldKinds[firstBinary] == FlatTypeHandler.Kind.BINARY &&
                     fieldKinds[secondBinary] == FlatTypeHandler.Kind.BINARY &&
                     !fieldLazyIntern[firstBinary] && !fieldLazyIntern[secondBinary]) {
-                boolean longNull = !batchFieldNullFree[longIndex] && fieldNullAccess[longIndex].value(position);
+                boolean longNull = inputFieldNull(longIndex, null, position);
                 long longDigit = longNull ? LONG_COMPOSITE_CARDINALITY : fieldLong[longIndex].value(position);
                 if (longDigit < 0 || (!longNull && longDigit >= LONG_COMPOSITE_CARDINALITY)) {
                     return -1;
                 }
 
                 int firstRadix = compositeRadix(firstBinary);
-                boolean firstNull = !batchFieldNullFree[firstBinary] && fieldNullAccess[firstBinary].value(position);
+                boolean firstNull = inputFieldNull(firstBinary, null, position);
                 long firstDigit = firstNull ? firstRadix - 1L : batchEntryGlobalId[firstBinary][batchDictionaryIds[firstBinary][position]];
                 if (firstDigit < 0 || (!firstNull && firstDigit >= firstRadix - 1L)) {
                     return -1;
                 }
 
                 int secondRadix = compositeRadix(secondBinary);
-                boolean secondNull = !batchFieldNullFree[secondBinary] && fieldNullAccess[secondBinary].value(position);
+                boolean secondNull = inputFieldNull(secondBinary, null, position);
                 long secondDigit = secondNull ? secondRadix - 1L : batchEntryGlobalId[secondBinary][batchDictionaryIds[secondBinary][position]];
                 if (secondDigit < 0 || (!secondNull && secondDigit >= secondRadix - 1L)) {
                     return -1;
@@ -935,6 +1365,9 @@ class FlatKeyLayout
                 }
                 else {
                     digit = fieldLong[index].value(position);
+                    if (handlers.length > 3 && batchMixedComposite && compactLongBaseSet[index]) {
+                        digit -= compactLongBase[index];
+                    }
                     if (digit < 0 || digit >= LONG_COMPOSITE_CARDINALITY) {
                         return -1;
                     }
@@ -944,6 +1377,90 @@ class FlatKeyLayout
             multiplier *= radix;
         }
         return composite;
+    }
+
+    /**
+     * Assign a complete batch through the prepared constant-null three-field recipe. The ordinary per-position
+     * driver has to cross both the table and layout abstraction for every row even though {@link #beginBatch}
+     * already resolved the physical arrays, field order, radices, and null shape. Keep that abstraction at the
+     * batch boundary: the loop below uses the exact same composite id and falls back to the ordinary hash table for
+     * an out-of-domain digit or the first occurrence of a composite. A negative return means this batch does not
+     * expose the concrete recipe and the caller must use its existing driver.
+     */
+    long assignMixedComposite3Batch(
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (DEBUG_CONSTANT_NULL_MIXED_COMPOSITE_3 &&
+                batchMixedComposite &&
+                compositeOrder.length == 3 &&
+                debugConstantNullMixedComposite3BatchMask != batchMixedComposite3ConstantNullMask &&
+                debugConstantNullMixedComposite3BatchTransitions++ < 12) {
+            debugConstantNullMixedComposite3BatchMask = batchMixedComposite3ConstantNullMask;
+            System.err.printf("[constant-null-mixed-composite-3-batch] mask=%d rows=%d enabled=%s%n",
+                    batchMixedComposite3ConstantNullMask,
+                    mask.selectedCount(),
+                    FAST_MIXED_COMPOSITE_3_BATCH);
+        }
+        if (!FAST_MIXED_COMPOSITE_3_BATCH || !batchMixedComposite3Prepared) {
+            return -1;
+        }
+
+        int longIndex = batchMixedComposite3LongIndex;
+        int firstBinary = batchMixedComposite3FirstBinary;
+        int secondBinary = batchMixedComposite3SecondBinary;
+        VectorAccess.LongValues longValues = fieldLong[batchMixedComposite3LongIndex];
+        int[] firstIds = batchDictionaryIds[firstBinary];
+        int[] firstGlobalIds = batchEntryGlobalId[firstBinary];
+        int[] secondIds = batchDictionaryIds[secondBinary];
+        int[] secondGlobalIds = batchEntryGlobalId[secondBinary];
+        VectorAccess.BooleanValues longNulls = fieldNullAccess[longIndex];
+        VectorAccess.BooleanValues firstNulls = fieldNullAccess[firstBinary];
+        VectorAccess.BooleanValues secondNulls = fieldNullAccess[secondBinary];
+        int firstRadix = batchMixedComposite3FirstRadix;
+        int secondRadix = batchMixedComposite3SecondRadix;
+        int shape = MixedComposite3GroupingKernelGenerator.shape(
+                batchNullShape(longIndex),
+                batchNullShape(firstBinary),
+                batchNullShape(secondBinary));
+        MixedComposite3GroupingKernel kernel = MixedComposite3GroupingKernelGenerator.create(shape);
+        int[] compositeCache = table.prepareCompositeCache(Math.multiplyExact(
+                LONG_COMPOSITE_RADIX,
+                Math.multiplyExact(firstRadix, secondRadix)));
+        return kernel.assign(
+                mask.selectedPositions(),
+                mask.selectedCount(),
+                longValues,
+                longNulls,
+                firstIds,
+                firstGlobalIds,
+                firstNulls,
+                secondIds,
+                secondGlobalIds,
+                secondNulls,
+                firstRadix,
+                secondRadix,
+                table,
+                values,
+                nulls,
+                nextGroupId,
+                result.values(),
+                compositeCache);
+    }
+
+    private int batchNullShape(int fieldIndex)
+    {
+        if (batchFieldAllNull[fieldIndex]) {
+            return MixedComposite3GroupingKernelGenerator.ALL_NULL;
+        }
+        if (batchFieldNullFree[fieldIndex]) {
+            return MixedComposite3GroupingKernelGenerator.NULL_FREE;
+        }
+        return MixedComposite3GroupingKernelGenerator.MIXED;
     }
 
     /**
@@ -1042,6 +1559,21 @@ class FlatKeyLayout
         return false;
     }
 
+    private boolean hasCompactDirectBinaryDictionary(Vector[] values)
+    {
+        for (int index = 0; index < fieldKinds.length; index++) {
+            int channel = inputChannels[index];
+            if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY &&
+                    channel < values.length &&
+                    values[channel] instanceof DictionaryVector dictionary &&
+                    dictionary.values() instanceof BinaryVector base &&
+                    base.length() <= COMPOSITE_STRIDE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * The global value id for dictionary entry {@code dictId} of {@code fieldIndex}, interning it on first
      * reference for a lazily-populated (large) base. Eager fields short-circuit on the first read.
@@ -1102,7 +1634,15 @@ class FlatKeyLayout
                 return null;
             }
             int globalId;
-            if (embedIdOnlyBinaryIds) {
+            if (compactBinaryRecord(fieldIndex)) {
+                byte[] chunk = table.fixedChunk(recordIndex);
+                int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+                globalId = (int) GROUP_INT_HANDLE.get(chunk, offset);
+                if (globalId < 0) {
+                    return null;
+                }
+            }
+            else if (embedIdOnlyBinaryIds) {
                 byte[] chunk = table.fixedChunk(recordIndex);
                 int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
                 if ((int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2) >= 0) {
@@ -1146,7 +1686,7 @@ class FlatKeyLayout
             org.weakref.nitro.data.Allocator allocator,
             org.weakref.nitro.data.Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || !fieldUsesIdOnlyRecords[fieldIndex]) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
             return null;
         }
         long totalBytes = 0;
@@ -1157,8 +1697,16 @@ class FlatKeyLayout
             }
             byte[] chunk = table.fixedChunk(recordIndex);
             int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
-            int length = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
-            totalBytes += length < 0 ? fieldInterners[fieldIndex].valueLength(recordDictionaryId(fieldIndex, chunk, offset, recordIndex)) : length;
+            if (compactBinaryRecord(fieldIndex)) {
+                int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+                totalBytes += token >= 0
+                        ? fieldInterners[fieldIndex].valueLength(token)
+                        : compactBinaryLength(compactBinaryFallback(fieldIndex, ~token));
+            }
+            else {
+                int length = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+                totalBytes += length < 0 ? fieldInterners[fieldIndex].valueLength(recordDictionaryId(fieldIndex, chunk, offset, recordIndex)) : length;
+            }
         }
         if (totalBytes > Integer.MAX_VALUE) {
             throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
@@ -1181,12 +1729,28 @@ class FlatKeyLayout
             else {
                 byte[] chunk = table.fixedChunk(recordIndex);
                 int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
-                int length = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
-                if (length < 0) {
-                    fieldInterners[fieldIndex].copyValue(recordDictionaryId(fieldIndex, chunk, offset, recordIndex), result, groupId);
+                if (compactBinaryRecord(fieldIndex)) {
+                    int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+                    if (token >= 0) {
+                        fieldInterners[fieldIndex].copyValue(token, result, groupId);
+                    }
+                    else {
+                        long fallback = compactBinaryFallback(fieldIndex, ~token);
+                        result.setBytes(
+                                groupId,
+                                table.variableWidthArena().chunk(compactBinaryChunkIndex(fallback)),
+                                compactBinaryChunkOffset(fallback),
+                                compactBinaryLength(fallback));
+                    }
                 }
                 else {
-                    FlatTypeHandlers.BINARY.copyBinaryTo(chunk, offset, table.variableWidthArena(), result, groupId);
+                    int length = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+                    if (length < 0) {
+                        fieldInterners[fieldIndex].copyValue(recordDictionaryId(fieldIndex, chunk, offset, recordIndex), result, groupId);
+                    }
+                    else {
+                        FlatTypeHandlers.BINARY.copyBinaryTo(chunk, offset, table.variableWidthArena(), result, groupId);
+                    }
                 }
             }
             previous = groupId + 1;
@@ -1204,6 +1768,7 @@ class FlatKeyLayout
     public void endBatch()
     {
         batchAccessorsReady = false;
+        generatedRecordEqualityKernel = null;
         batchNullFreeLongBinary = false;
         batchNullFreeSingleBinaryCandidate = false;
         batchNullFreeSingleBinary = false;
@@ -1221,8 +1786,7 @@ class FlatKeyLayout
     {
         if (batchNullFreeSingleBinary) {
             BinaryVector binary = fieldBinaryBase[0];
-            int[] ids = fieldBinaryIds[0];
-            int entry = ids == null ? position : ids[position];
+            int entry = binaryEntry(0, position);
             return 31 + OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(entry), binary.length(entry));
         }
         if (batchNullFreeLongBinary) {
@@ -1252,6 +1816,120 @@ class FlatKeyLayout
             }
         }
         return result;
+    }
+
+    /**
+     * Hashes a dense physical batch when each key field either exposes dictionary-id/exact-entry-hash arrays or a
+     * resolved integer accessor prepared by {@link #beginBatch}. The latter preserves the oversized-dictionary cost
+     * guard: only referenced rows are read, rather than eagerly hashing a large join-output base. The generated loop
+     * specializes only physical hash/null shapes; query identities are absent, and the hashes are byte-for-byte
+     * identical to {@link #hash} so fallback batches remain in the same authoritative table domain.
+     */
+    boolean prepareGeneratedDictionaryBatchHashes(int count, long[] output)
+    {
+        DictionaryHashBatchKernel kernel = generatedDictionaryHashKernel(count);
+        if (kernel == null) {
+            return false;
+        }
+        kernel.hash(
+                count,
+                dictionaryHashedIds,
+                dictionaryEntryHashes,
+                fieldLong,
+                fieldNullAccess,
+                output);
+        return true;
+    }
+
+    long assignGeneratedDictionaryBatch(
+            int count,
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nulls,
+            long nextGroupId,
+            long[] output)
+    {
+        DictionaryHashBatchKernel kernel = generatedDictionaryHashKernel(count);
+        if (kernel == null) {
+            return -1;
+        }
+        return kernel.assign(
+                count,
+                dictionaryHashedIds,
+                dictionaryEntryHashes,
+                fieldLong,
+                fieldNullAccess,
+                table,
+                values,
+                nulls,
+                nextGroupId,
+                output);
+    }
+
+    private DictionaryHashBatchKernel generatedDictionaryHashKernel(int count)
+    {
+        if (!GENERATED_DICTIONARY_HASH_BATCH ||
+                count < GENERATED_DICTIONARY_HASH_BATCH_MIN_ROWS ||
+                handlers.length < 2 ||
+                handlers.length > 7 ||
+                dictionaryHashedIds == null) {
+            return null;
+        }
+        int shape = handlers.length;
+        int accessorHashedFields = 0;
+        boolean allFieldsNullFree = true;
+        for (int field = 0; field < handlers.length; field++) {
+            int nullShape = batchNullShape(field);
+            shape |= nullShape << (4 + field * 2);
+            allFieldsNullFree &= nullShape == DictionaryHashBatchKernelGenerator.NULL_FREE;
+            if (nullShape == DictionaryHashBatchKernelGenerator.ALL_NULL) {
+                continue;
+            }
+            if (dictionaryHashedIds[field] != null && dictionaryEntryHashes[field] != null) {
+                continue;
+            }
+            if (handlers.length >= GENERATED_HYBRID_HASH_BATCH_MIN_FIELDS &&
+                    fieldKinds[field] == FlatTypeHandler.Kind.LONG &&
+                    fieldLong[field] != null) {
+                shape |= DictionaryHashBatchKernelGenerator.LONG_ACCESSOR_HASH <<
+                        (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
+                accessorHashedFields++;
+                continue;
+            }
+            if (DEBUG_GENERATED_DICTIONARY_HASH_BATCH && !debugGeneratedDictionaryHashBatchRejectedPrinted) {
+                debugGeneratedDictionaryHashBatchRejectedPrinted = true;
+                System.err.printf("[generated-dictionary-hash-batch-rejected] fields=%d field=%d ids=%s hashes=%s rows=%d%n",
+                        handlers.length,
+                        field,
+                        dictionaryHashedIds[field] != null,
+                        dictionaryEntryHashes[field] != null,
+                        count);
+            }
+            return null;
+        }
+        if (accessorHashedFields > 0 && accessorHashedFields < GENERATED_HYBRID_HASH_BATCH_MIN_ACCESSOR_FIELDS) {
+            return null;
+        }
+        if (handlers.length == 2 &&
+                accessorHashedFields == 0 &&
+                allFieldsNullFree &&
+                count < GENERATED_DICTIONARY_HASH_BATCH_NULL_FREE_PAIR_MIN_ROWS) {
+            return null;
+        }
+        DictionaryHashBatchKernel kernel = DictionaryHashBatchKernelGenerator.create(shape);
+        if (DEBUG_GENERATED_DICTIONARY_HASH_BATCH && !debugGeneratedDictionaryHashBatchPrinted) {
+            debugGeneratedDictionaryHashBatchPrinted = true;
+            System.err.printf("[generated-dictionary-hash-batch] fields=%d shape=%d rows=%d compact=%s kinds=%s ids=%s offsets=%s order=%s%n",
+                    handlers.length,
+                    shape,
+                    count,
+                    compactEmbeddedBinaryRecords,
+                    Arrays.toString(fieldKinds),
+                    Arrays.toString(fieldIdComparable),
+                    Arrays.toString(fixedOffsets),
+                    Arrays.toString(comparisonOrder));
+        }
+        return kernel;
     }
 
     private long fieldHash(int fieldIndex, int channel, Vector value, int position)
@@ -1293,44 +1971,81 @@ class FlatKeyLayout
         if (base == null) {
             return FlatTypeHandlers.BINARY.hashInput(value, position);
         }
-        int[] ids = fieldBinaryIds[fieldIndex];
-        int entry = ids == null ? position : ids[position];
+        if (isSingleRunBinaryField(fieldIndex)) {
+            return fieldBinaryConstantHash[fieldIndex];
+        }
+        int entry = binaryEntry(fieldIndex, position);
         return OperatorVectorSupport.binaryHash(base.data(), base.startOffset(entry), base.length(entry));
     }
 
-    private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    private int binaryEntry(int fieldIndex, int position)
+    {
+        if (isSingleRunBinaryField(fieldIndex)) {
+            return 0;
+        }
+        int[] ids = fieldBinaryIds[fieldIndex];
+        return ids == null ? position : ids[position];
+    }
+
+    private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
     {
         if (!batchAccessorsReady) {
+            if (compactBinaryRecord(fieldIndex)) {
+                writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
+                return;
+            }
             writeFlatByKind(fieldKinds[fieldIndex], value, position, fixedChunk, fixedOffset, arena);
             return;
         }
         switch (fieldKinds[fieldIndex]) {
             case LONG -> GROUP_LONG_HANDLE.set(fixedChunk, fixedOffset, fieldLong[fieldIndex].value(position));
-            case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena);
+            case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
             case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
         }
     }
 
-    private void writeBinaryField(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    private void writeBinaryField(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
     {
-        if (ID_ONLY_BINARY_RECORDS && fieldIdComparable[fieldIndex] && batchDictionaryIds[fieldIndex] != null) {
-            int globalId = globalIdFor(fieldIndex, batchDictionaryIds[fieldIndex][position]);
+        if (ID_ONLY_BINARY_RECORDS && isSingleRunBinaryField(fieldIndex)) {
+            int globalId = fieldBinaryConstantGlobalId[fieldIndex];
             if (globalId >= 0) {
                 GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, embedIdOnlyBinaryIds ? globalId : 0);
-                GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, 0);
-                GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, -1);
+                if (!compactBinaryRecord(fieldIndex)) {
+                    GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, 0);
+                    GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, -1);
+                }
                 fieldUsesIdOnlyRecords[fieldIndex] = true;
                 return;
             }
         }
-        BinaryVector base = fieldBinaryBase[fieldIndex];
+        if (ID_ONLY_BINARY_RECORDS && fieldIdComparable != null && fieldIdComparable[fieldIndex] && batchDictionaryIds[fieldIndex] != null) {
+            int globalId = globalIdFor(fieldIndex, batchDictionaryIds[fieldIndex][position]);
+            if (globalId >= 0) {
+                GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, embedIdOnlyBinaryIds ? globalId : 0);
+                if (!compactBinaryRecord(fieldIndex)) {
+                    GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, 0);
+                    GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES * 2, -1);
+                }
+                fieldUsesIdOnlyRecords[fieldIndex] = true;
+                return;
+            }
+        }
+        BinaryVector base = fieldBinaryBase == null ? null : fieldBinaryBase[fieldIndex];
+        if (compactBinaryRecord(fieldIndex)) {
+            if (base == null) {
+                writeCompactBinaryFallback(fieldIndex, value, position, fixedChunk, fixedOffset, arena);
+                return;
+            }
+            int entry = binaryEntry(fieldIndex, position);
+            writeCompactBinaryFallback(fieldIndex, base.data(), base.startOffset(entry), base.length(entry), fixedChunk, fixedOffset, arena);
+            return;
+        }
         if (base == null) {
             FlatTypeHandlers.BINARY.writeFlat(value, position, fixedChunk, fixedOffset, arena);
             return;
         }
-        int[] ids = fieldBinaryIds[fieldIndex];
-        int entry = ids == null ? position : ids[position];
+        int entry = binaryEntry(fieldIndex, position);
         long pointer = arena.append(base.data(), base.startOffset(entry), base.length(entry));
         GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, FlatGroupingTable.FlatVariableWidthArena.chunkIndex(pointer));
         GROUP_INT_HANDLE.set(fixedChunk, fixedOffset + Integer.BYTES, FlatGroupingTable.FlatVariableWidthArena.chunkOffset(pointer));
@@ -1352,6 +2067,33 @@ class FlatKeyLayout
 
     private boolean identicalBinaryField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position, int recordIndex)
     {
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+            if (token >= 0) {
+                return idOnlyBinaryEquals(fieldIndex, token, value, position);
+            }
+            long fallback = compactBinaryFallback(fieldIndex, ~token);
+            int length = compactBinaryLength(fallback);
+            BinaryVector base = fieldBinaryBase[fieldIndex];
+            if (base != null) {
+                int entry = binaryEntry(fieldIndex, position);
+                if (base.length(entry) != length) {
+                    return false;
+                }
+                return OperatorVectorSupport.binaryEquals(
+                        base.data(),
+                        base.startOffset(entry),
+                        arena.chunk(compactBinaryChunkIndex(fallback)),
+                        compactBinaryChunkOffset(fallback),
+                        length);
+            }
+            return OperatorVectorSupport.binaryEquals(
+                    value,
+                    position,
+                    arena.chunk(compactBinaryChunkIndex(fallback)),
+                    compactBinaryChunkOffset(fallback),
+                    length);
+        }
         int length = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES * 2);
         if (length < 0) {
             return idOnlyBinaryEquals(
@@ -1364,8 +2106,7 @@ class FlatKeyLayout
         if (base == null) {
             return FlatTypeHandlers.BINARY.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
         }
-        int[] ids = fieldBinaryIds[fieldIndex];
-        int entry = ids == null ? position : ids[position];
+        int entry = binaryEntry(fieldIndex, position);
         if (base.length(entry) != length) {
             return false;
         }
@@ -1376,6 +2117,9 @@ class FlatKeyLayout
 
     private boolean idOnlyBinaryEquals(int fieldIndex, int recordId, Vector value, int position)
     {
+        if (isSingleRunBinaryField(fieldIndex) && fieldBinaryConstantGlobalId[fieldIndex] >= 0) {
+            return recordId == fieldBinaryConstantGlobalId[fieldIndex];
+        }
         return switch (value) {
             case BinaryVector binary -> fieldInterners[fieldIndex].valueEquals(
                     recordId,
@@ -1386,6 +2130,90 @@ class FlatKeyLayout
             case org.weakref.nitro.data.RleVector rle -> idOnlyBinaryEquals(fieldIndex, recordId, rle.values(), OperatorVectorSupport.runIndex(rle, position));
             default -> throw new IllegalArgumentException("Expected binary vector but found " + value.getClass().getSimpleName());
         };
+    }
+
+    private boolean isSingleRunBinaryField(int fieldIndex)
+    {
+        return fieldIndex < Long.SIZE && (batchSingleRunBinaryFields & (1L << fieldIndex)) != 0;
+    }
+
+    private boolean compactBinaryRecord(int fieldIndex)
+    {
+        return compactEmbeddedBinaryRecords && fieldKinds[fieldIndex] == FlatTypeHandler.Kind.BINARY;
+    }
+
+    private void writeCompactBinaryFallback(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    {
+        switch (value) {
+            case BinaryVector binary -> writeCompactBinaryFallback(fieldIndex, binary.data(), binary.startOffset(position), binary.length(position), fixedChunk, fixedOffset, arena);
+            case DictionaryVector dictionary -> writeCompactBinaryFallback(fieldIndex, dictionary.values(), dictionary.ids()[position], fixedChunk, fixedOffset, arena);
+            case org.weakref.nitro.data.RleVector rle -> writeCompactBinaryFallback(fieldIndex, rle.values(), OperatorVectorSupport.runIndex(rle, position), fixedChunk, fixedOffset, arena);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + value.getClass().getSimpleName());
+        }
+    }
+
+    private void writeCompactBinaryFallback(int fieldIndex, byte[] source, int sourceOffset, int length, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
+    {
+        long pointer = arena.append(source, sourceOffset, length);
+        int ordinal = appendCompactBinaryFallback(fieldIndex, pointer, length);
+        GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, ~ordinal);
+    }
+
+    private int appendCompactBinaryFallback(int fieldIndex, long pointer, int length)
+    {
+        if (compactBinaryFallbacks == null) {
+            compactBinaryFallbacks = new long[handlers.length][];
+            compactBinaryFallbackCounts = new int[handlers.length];
+        }
+        int count = compactBinaryFallbackCounts[fieldIndex];
+        long[] fallbacks = compactBinaryFallbacks[fieldIndex];
+        if (fallbacks == null) {
+            fallbacks = borrowLongs(16);
+            compactBinaryFallbacks[fieldIndex] = fallbacks;
+        }
+        else if (count == fallbacks.length) {
+            long[] previous = fallbacks;
+            fallbacks = borrowLongs(Math.multiplyExact(previous.length, 2));
+            System.arraycopy(previous, 0, fallbacks, 0, previous.length);
+            compactBinaryFallbacks[fieldIndex] = fallbacks;
+            release(previous);
+        }
+        fallbacks[count] = packCompactBinaryFallback(pointer, length);
+        compactBinaryFallbackCounts[fieldIndex] = count + 1;
+        return count;
+    }
+
+    private long compactBinaryFallback(int fieldIndex, int ordinal)
+    {
+        if (compactBinaryFallbacks == null || ordinal < 0 || ordinal >= compactBinaryFallbackCounts[fieldIndex]) {
+            throw new IllegalStateException("Invalid compact binary fallback ordinal " + ordinal + " for field " + fieldIndex);
+        }
+        return compactBinaryFallbacks[fieldIndex][ordinal];
+    }
+
+    private static long packCompactBinaryFallback(long pointer, int length)
+    {
+        int chunkIndex = FlatGroupingTable.FlatVariableWidthArena.chunkIndex(pointer);
+        int chunkOffset = FlatGroupingTable.FlatVariableWidthArena.chunkOffset(pointer);
+        if (chunkIndex < 0 || chunkIndex >= (1 << 22) || chunkOffset < 0 || chunkOffset > (1 << 20) || length < 0 || length > (1 << 20)) {
+            throw new IllegalStateException("Compact binary fallback exceeds arena encoding: chunk=" + chunkIndex + ", offset=" + chunkOffset + ", length=" + length);
+        }
+        return ((long) chunkIndex << 42) | ((long) chunkOffset << 21) | length;
+    }
+
+    private static int compactBinaryChunkIndex(long fallback)
+    {
+        return (int) (fallback >>> 42);
+    }
+
+    private static int compactBinaryChunkOffset(long fallback)
+    {
+        return (int) ((fallback >>> 21) & ((1 << 21) - 1));
+    }
+
+    private static int compactBinaryLength(long fallback)
+    {
+        return (int) (fallback & ((1 << 21) - 1));
     }
 
     private static long hashByKind(FlatTypeHandler.Kind kind, Vector value, int position)
@@ -1421,7 +2249,10 @@ class FlatKeyLayout
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         if (batchNullFreeSingleBinary) {
-            writeBinaryField(0, values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
+            if (nullByteCount > 0) {
+                fixedChunk[fixedOffset] = 0;
+            }
+            writeBinaryField(0, values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, recordIndex);
             // Dictionary-backed single fields keep their stable value id in the ordinary sidecar because the
             // single-field record layout deliberately does not embed it. Flat input has no comparable id, so this
             // is a no-op there. Keeping the ownership in the layout makes the same monomorphic write path exact for
@@ -1434,7 +2265,7 @@ class FlatKeyLayout
                 fixedChunk[fixedOffset] = 0;
             }
             GROUP_LONG_HANDLE.set(fixedChunk, fixedOffset + fixedOffsets[0], fieldLong[0].value(position));
-            writeBinaryField(1, values[inputChannels[1]], position, fixedChunk, fixedOffset + fixedOffsets[1], variableWidthArena);
+            writeBinaryField(1, values[inputChannels[1]], position, fixedChunk, fixedOffset + fixedOffsets[1], variableWidthArena, recordIndex);
             storeRecordDictionaryIds(recordIndex, position);
             return;
         }
@@ -1456,7 +2287,7 @@ class FlatKeyLayout
                 setNullBit(fixedChunk, fixedOffset, index);
             }
             else {
-                writeFieldFlat(index, values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena);
+                writeFieldFlat(index, values[inputChannels[index]], position, fixedChunk, fixedOffset + fixedOffsets[index], variableWidthArena, recordIndex);
             }
         }
         storeRecordDictionaryIds(recordIndex, position);
@@ -1464,6 +2295,10 @@ class FlatKeyLayout
 
     public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
+        int generatedResult = generatedDictionaryRecordEquality(fixedChunk, fixedOffset, position);
+        if (generatedResult != DictionaryRecordEqualityKernel.FALLBACK) {
+            return generatedResult == DictionaryRecordEqualityKernel.IDENTICAL;
+        }
         if (batchNullFreeSingleBinary) {
             return identicalBinaryField(0, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position, recordIndex);
         }
@@ -1523,8 +2358,45 @@ class FlatKeyLayout
         return true;
     }
 
+    int generatedDictionaryRecordEquality(byte[] fixedChunk, int fixedOffset, int position)
+    {
+        return generatedRecordEqualityKernel == null
+                ? DictionaryRecordEqualityKernel.FALLBACK
+                : generatedRecordEqualityKernel.identical(this, fixedChunk, fixedOffset, position);
+    }
+
+    boolean generatedEqualityInputNull(int field, int position)
+    {
+        return fieldNullAccess[field].value(position);
+    }
+
+    long generatedEqualityInputLong(int field, int position)
+    {
+        return fieldLong[field].value(position);
+    }
+
+    int generatedEqualityInputGlobalId(int field, int position)
+    {
+        return globalIdFor(field, batchDictionaryIds[field][position]);
+    }
+
+    static int generatedEqualityRecordInt(byte[] fixedChunk, int fixedOffset)
+    {
+        return (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+    }
+
+    static long generatedEqualityRecordLong(byte[] fixedChunk, int fixedOffset)
+    {
+        return (long) GROUP_LONG_HANDLE.get(fixedChunk, fixedOffset);
+    }
+
     private boolean idComparable(int fieldIndex, byte[] fixedChunk, int fixedOffset, int recordIndex)
     {
+        if (compactBinaryRecord(fieldIndex)) {
+            return anyFieldIdComparable
+                    && fieldIdComparable[fieldIndex]
+                    && (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset) >= 0;
+        }
         if (embedIdOnlyBinaryIds && fieldKinds[fieldIndex] == FlatTypeHandler.Kind.BINARY) {
             return anyFieldIdComparable
                     && fieldIdComparable[fieldIndex]
@@ -1548,6 +2420,9 @@ class FlatKeyLayout
 
     private int recordDictionaryId(int fieldIndex, byte[] fixedChunk, int fixedOffset, int recordIndex)
     {
+        if (compactBinaryRecord(fieldIndex)) {
+            return (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+        }
         if (embedIdOnlyBinaryIds && fieldKinds[fieldIndex] == FlatTypeHandler.Kind.BINARY) {
             return (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
         }
@@ -1654,11 +2529,24 @@ class FlatKeyLayout
             }
             Arrays.fill(recordDictionaryIds, null);
         }
+        if (compactBinaryFallbacks != null) {
+            for (long[] fallbacks : compactBinaryFallbacks) {
+                release(fallbacks);
+            }
+            Arrays.fill(compactBinaryFallbacks, null);
+            Arrays.fill(compactBinaryFallbackCounts, 0);
+        }
         if (composedDictionaryIds != null) {
             for (int[] ids : composedDictionaryIds) {
                 release(ids);
             }
             Arrays.fill(composedDictionaryIds, null);
+        }
+        if (composedNullDictionaryIds != null) {
+            for (int[] ids : composedNullDictionaryIds) {
+                release(ids);
+            }
+            Arrays.fill(composedNullDictionaryIds, null);
         }
         release(packedRecordDictionaryIds);
         packedRecordDictionaryIds = null;
@@ -1678,6 +2566,54 @@ class FlatKeyLayout
         batchNormalizedIntKeyEligible = false;
         dictionarySingleBinaryFastPathDecided = false;
         dictionarySingleBinaryFastPathAdmitted = false;
+    }
+
+    /**
+     * Resolves a dictionary-backed null stream once at the batch boundary. Join output commonly wraps the value
+     * and NULLS streams in the same dictionary chain; walking that chain for every hash and equality comparison
+     * duplicates work that is invariant for the whole batch. A single dictionary layer reads its mapping directly.
+     * Deeper chains compose into pooled, high-water scratch and then perform one mapping lookup per row.
+     */
+    private VectorAccess.BooleanValues resolveNullAccessor(int fieldIndex, Vector nulls)
+    {
+        if (!RESOLVE_DICTIONARY_NULLS || handlers.length < DICTIONARY_NULL_RESOLUTION_MIN_FIELDS || !(nulls instanceof DictionaryVector dictionary)) {
+            return VectorAccess.booleanValues(nulls);
+        }
+
+        int[] positions = dictionary.ids();
+        Vector leaf = dictionary.values();
+        if (leaf instanceof DictionaryVector) {
+            if (!COMPOSE_NESTED_DICTIONARY_NULLS) {
+                return VectorAccess.booleanValues(nulls);
+            }
+            int length = dictionary.length();
+            int[] composed = composedNullDictionaryIds[fieldIndex];
+            if (composed == null || composed.length < length) {
+                int[] previous = composed;
+                composed = borrowInts(length);
+                composedNullDictionaryIds[fieldIndex] = composed;
+                release(previous);
+            }
+            System.arraycopy(positions, 0, composed, 0, length);
+            do {
+                DictionaryVector nested = (DictionaryVector) leaf;
+                int[] nestedIds = nested.ids();
+                for (int position = 0; position < length; position++) {
+                    composed[position] = nestedIds[composed[position]];
+                }
+                leaf = nested.values();
+            }
+            while (leaf instanceof DictionaryVector);
+            positions = composed;
+        }
+
+        int[] resolvedPositions = positions;
+        if (leaf instanceof BooleanVector values) {
+            boolean[] resolvedValues = values.values();
+            return position -> resolvedValues[resolvedPositions[position]];
+        }
+        VectorAccess.BooleanValues resolvedValues = VectorAccess.booleanValues(leaf);
+        return position -> resolvedValues.value(resolvedPositions[position]);
     }
 
     private int[] borrowInts(int length)
@@ -1723,6 +2659,9 @@ class FlatKeyLayout
      */
     private boolean inputFieldNull(int fieldIndex, Vector[] nulls, int position)
     {
+        if (batchFieldAllNull != null && batchFieldAllNull[fieldIndex]) {
+            return true;
+        }
         if (batchFieldNullFree != null && batchFieldNullFree[fieldIndex]) {
             return false;
         }

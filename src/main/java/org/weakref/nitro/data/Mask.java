@@ -33,6 +33,8 @@ public class Mask
     private static final VectorSpecies<Long> LONG_SPECIES = LongVector.SPECIES_PREFERRED;
     private static final boolean VECTORIZED_DENSE_INT_CONSTANT_RANGE =
             Boolean.parseBoolean(System.getProperty("nitro.mask.vectorizedDenseIntConstantRange", "true"));
+    private static final boolean BRANCHLESS_DENSE_DOUBLE_LESS_THAN =
+            Boolean.parseBoolean(System.getProperty("nitro.mask.branchlessDenseDoubleLessThan", "true"));
 
     private Mask trackedPrevious;
     private Mask trackedNext;
@@ -884,6 +886,11 @@ public class Mask
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
         int count = 0;
+        if (dense && BRANCHLESS_DENSE_DOUBLE_LESS_THAN && operator == ComparisonOperator.LESS_THAN) {
+            count = retainDenseDoubleLessThan(values, size, literal, buffer);
+            setSelection(size, count, count == size);
+            return;
+        }
         switch (operator) {
             case EQUAL -> {
                 for (int index = 0; index < iterations; index++) {
@@ -935,6 +942,18 @@ public class Mask
             }
         }
         setSelection(size, count, count == size);
+    }
+
+    private static int retainDenseDoubleLessThan(double[] values, int size, double literal, int[] output)
+    {
+        int count = 0;
+        for (int position = 0; position < size; position++) {
+            // A rejected position is overwritten by the next iteration. The unconditional store plus conditional
+            // cursor increment lets C2 use a setcc-style comparison instead of a hard-to-predict branch.
+            output[count] = position;
+            count += values[position] < literal ? 1 : 0;
+        }
+        return count;
     }
 
     /**

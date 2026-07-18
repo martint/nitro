@@ -27,6 +27,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Verification tool: dump each Nitro ClickBench query (query01..43 = standard ClickBench Q0..Q42) over the real
@@ -43,7 +45,15 @@ public class DumpResults
         Path out = Path.of("/tmp/cb_nitro_dump");
         Files.createDirectories(out);
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
+        String only = System.getProperty("nitro.dump.only");
+        Set<Integer> selectedQueries = only == null ? Set.of() : java.util.Arrays.stream(only.split(","))
+                .map(String::trim)
+                .map(Integer::parseInt)
+                .collect(Collectors.toUnmodifiableSet());
         for (int q = 1; q <= 43; q++) {
+            if (!selectedQueries.isEmpty() && !selectedQueries.contains(q)) {
+                continue;
+            }
             String name = String.format("query%02d", q);
             Operator operator = null;
             try {

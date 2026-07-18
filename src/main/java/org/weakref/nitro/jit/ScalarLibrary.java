@@ -82,6 +82,12 @@ public final class ScalarLibrary
         register("divide_i64_to_f64", arguments ->
                 "((double) " + arguments.get(0) + " / (double) " + arguments.get(1) + ")");
         DOUBLE_RESULTS.add("divide_i64_to_f64");
+        // SQL round(DOUBLE) semantics used at result boundaries: nearest integer with exact halves away from zero.
+        // Math.round differs for negative halves, so express the rule directly and keep it available to every
+        // compiled shape through the scalar registry rather than embedding it in a query lowering.
+        register("round_f64", arguments ->
+                "Math.copySign(Math.floor(Math.abs(" + arguments.get(0) + ") + 0.5d), " + arguments.get(0) + ")");
+        DOUBLE_RESULTS.add("round_f64");
         // True double / double division (IEEE), mirroring the interpreted divide_f64 primitive. Both operands arrive
         // already decoded to doubles (the projection resolver decodes a DOUBLE column), so this is a plain division;
         // the projection re-encodes the double result. Used for the coefficient of variation (stddev_samp / avg).

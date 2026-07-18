@@ -46,9 +46,12 @@ final class AdaptiveLongGroupingTableGenerator
 
     private static final ConcurrentHashMap<Integer, MethodHandle> CONSTRUCTORS = new ConcurrentHashMap<>();
 
-    static AdaptiveLongGroupingTable create(int arity, int expectedSize)
+    static AdaptiveLongGroupingTable create(int arity, int expectedSize, boolean groupedProbeEligible)
     {
-        MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(arity, AdaptiveLongGroupingTableGenerator::generate);
+        int shape = arity << 1 | (groupedProbeEligible ? 1 : 0);
+        MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(
+                shape,
+                key -> generate(key >>> 1, (key & 1) != 0));
         try {
             return (AdaptiveLongGroupingTable) constructor.invoke(expectedSize);
         }
@@ -57,12 +60,13 @@ final class AdaptiveLongGroupingTableGenerator
         }
     }
 
-    private static MethodHandle generate(int arity)
+    private static MethodHandle generate(int arity, boolean groupedProbeEligible)
     {
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable" + arity);
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedAdaptiveLongGroupingTable" + arity +
+                (groupedProbeEligible ? "Distinct" : "Grouping"));
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_BASE);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
@@ -70,16 +74,19 @@ final class AdaptiveLongGroupingTableGenerator
                 code.aload(0);
                 code.loadConstant(arity);
                 code.iload(1);
-                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int));
+                code.loadConstant(groupedProbeEligible ? 1 : 0);
+                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int, CD_boolean));
                 code.return_();
             });
             builder.withMethodBody("normalizeBatch", normalizeType(), ClassFile.ACC_PUBLIC, code -> emitNormalize(code, arity));
             builder.withMethodBody("equalsRecord", MethodTypeDesc.of(CD_boolean, CD_int, CD_int), ClassFile.ACC_PUBLIC, code -> emitEquals(code, arity));
             builder.withMethodBody("storeRecord", MethodTypeDesc.of(CD_void, CD_int, CD_int), ClassFile.ACC_PUBLIC, code -> emitStore(code, arity));
-            builder.withMethodBody("assignCompactBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, false, false));
-            builder.withMethodBody("assignCompactNullFreeBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, false));
-            builder.withMethodBody("assignCompactDenseBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, false, true));
-            builder.withMethodBody("assignCompactDenseNullFreeBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, true));
+            builder.withMethodBody("assignCompactBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, false, false, false));
+            builder.withMethodBody("assignCompactNullFreeBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, false, false));
+            builder.withMethodBody("assignCompactDenseBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, false, true, false));
+            builder.withMethodBody("assignCompactDenseNullFreeBatch", assignType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, true, false));
+            builder.withMethodBody("assignCompactDistinctNullFreeBatch", assignDistinctType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, false, true));
+            builder.withMethodBody("assignCompactDenseDistinctNullFreeBatch", assignDistinctType(), ClassFile.ACC_PUBLIC, code -> emitAssign(code, arity, true, true, true));
         });
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
@@ -99,6 +106,11 @@ final class AdaptiveLongGroupingTableGenerator
     private static MethodTypeDesc assignType()
     {
         return MethodTypeDesc.of(CD_long, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_long.arrayType(), CD_long);
+    }
+
+    private static MethodTypeDesc assignDistinctType()
+    {
+        return MethodTypeDesc.of(CD_long, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_INT_ARRAY, CD_long);
     }
 
     // boolean normalizeBatch(LongValues[] keys, BooleanValues[] nulls, int[] positions, int count)
@@ -222,7 +234,7 @@ final class AdaptiveLongGroupingTableGenerator
     }
 
     // Fused per-row kernel. Arity is a generation-time constant; no field loop or staged key frame remains.
-    private static void emitAssign(CodeBuilder code, int arity, boolean nullFree, boolean dense)
+    private static void emitAssign(CodeBuilder code, int arity, boolean nullFree, boolean dense, boolean distinct)
     {
         int keyAccessorBase = 8;
         int nullAccessorBase = keyAccessorBase + arity;
@@ -242,6 +254,7 @@ final class AdaptiveLongGroupingTableGenerator
         int pairArrayBase = slotsArrayVar + 1;
         int tailArrayVar = pairArrayBase + arity / 2;
         int nullArrayVar = tailArrayVar + 1;
+        int distinctCountVar = nullArrayVar + 1;
 
         for (int column = 0; column < arity; column++) {
             code.aload(1);
@@ -274,6 +287,10 @@ final class AdaptiveLongGroupingTableGenerator
             code.aload(0);
             code.getfield(CD_BASE, "nullMasksByGroup", CD_BYTE_ARRAY);
             code.astore(nullArrayVar);
+        }
+        if (distinct) {
+            code.loadConstant(0);
+            code.istore(distinctCountVar);
         }
         code.loadConstant(0);
         code.istore(rowVar);
@@ -412,6 +429,14 @@ final class AdaptiveLongGroupingTableGenerator
         Label advance = code.newLabel();
         Label matched = code.newLabel();
         code.labelBinding(probe);
+        code.aload(0);
+        code.aload(slotsArrayVar);
+        code.iload(slotVar);
+        code.aload(0);
+        code.getfield(CD_BASE, "slotMask", CD_int);
+        code.iload(fragmentVar);
+        code.invokevirtual(CD_BASE, "nextProbeCandidate", MethodTypeDesc.of(CD_int, CD_INT_ARRAY, CD_int, CD_int, CD_int));
+        code.istore(slotVar);
         code.aload(slotsArrayVar);
         code.iload(slotVar);
         code.iaload();
@@ -538,12 +563,22 @@ final class AdaptiveLongGroupingTableGenerator
         code.ladd();
         code.lstore(6);
 
+        if (distinct) {
+            code.aload(5);
+            code.iload(distinctCountVar);
+            code.iload(positionVar);
+            code.iastore();
+            code.iinc(distinctCountVar, 1);
+        }
+
         code.labelBinding(matched);
-        code.aload(5);
-        code.iload(positionVar);
-        code.iload(groupIdVar);
-        code.i2l();
-        code.lastore();
+        if (!distinct) {
+            code.aload(5);
+            code.iload(positionVar);
+            code.iload(groupIdVar);
+            code.i2l();
+            code.lastore();
+        }
         code.iinc(rowVar, 1);
         code.goto_(rowLoop);
 

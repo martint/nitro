@@ -35,20 +35,30 @@ import static java.lang.Math.toIntExact;
 
 final class GroupingState
 {
+    private static final Object ZEROED_LONG_DIRECT_IDS_FAMILY = new Object();
+    private static final boolean ZEROED_LONG_DIRECT_IDS_POOL =
+            Boolean.parseBoolean(System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"));
     private static final VectorAccess.BooleanValues NEVER_NULL = _ -> false;
     private static final boolean DEBUG_GROUPING_SHAPES = Boolean.getBoolean("nitro.debug.groupingShapes");
+    private static final boolean DEBUG_FLAT_PACKED_IDENTITY = Boolean.getBoolean("nitro.debug.flatPackedIdentity");
     private static final boolean SHARED_DICTIONARY_COMPOSITE_GROUPING =
             Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryComposite", "true"));
     // The shared-dictionary shortcut stores owned object keys for materialization. That is excellent for narrow
-    // composites (for example Q45's city/zip pair), but copying and retaining many high-cardinality binary fields
-    // per group overwhelms the saved row hashes. Route wide composites to FlatGroupingTable, whose packed records
-    // and value-id equality are designed for that shape.
+    // composites, but at four fields the object-key array, per-field wrappers, and polymorphic equality outweigh the
+    // saved row hashes even under strong id reuse. Route wider composites to FlatGroupingTable, whose packed records
+    // and dictionary cache preserve the same reuse without an object graph per group.
     private static final int SHARED_DICTIONARY_MAX_FIELDS =
-            Integer.getInteger("nitro.group.sharedDictionaryMaxFields", 4);
+            Integer.getInteger("nitro.group.sharedDictionaryMaxFields", 3);
     private static final int SHARED_DICTIONARY_SAMPLE_SIZE =
             Integer.getInteger("nitro.group.sharedDictionarySampleSize", 128);
     private static final int SHARED_DICTIONARY_MAX_DISTINCT_PERCENT =
             Integer.getInteger("nitro.group.sharedDictionaryMaxDistinctPercent", 75);
+    private static final boolean SHARED_DICTIONARY_FLAT_BACKING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryFlatBacking", "true"));
+    private static final int SHARED_DICTIONARY_FLAT_BACKING_MIN_FIELDS =
+            Integer.getInteger("nitro.group.sharedDictionaryFlatBackingMinFields", 3);
+    private static final int SHARED_DICTIONARY_FLAT_BACKING_MIN_ROWS =
+            Integer.getInteger("nitro.group.sharedDictionaryFlatBackingMinRows", 1 << 12);
     private static final boolean PACKED_INT_PAIR_GROUPING =
             Boolean.parseBoolean(System.getProperty("nitro.group.packedIntPair", "true"));
     private static final boolean PACKED_INT_TRIPLE_GROUPING =
@@ -82,6 +92,26 @@ final class GroupingState
             Integer.getInteger("nitro.group.flatSingleKeyRecordIdentitySampleSize", 256);
     private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT =
             Integer.getInteger("nitro.group.flatSingleKeyRecordIdentityMinDistinctPercent", 90);
+    // Self-contained {hash,record} slots remove a dependent record load but widen every hash generation. Admit only
+    // a sustained source (the producer proves another batch exists), a narrow physical key, and a high-cardinality
+    // first batch. One-batch sinks retain the compact ordinary slot and do not even pay for the admission sample.
+    private static final boolean PACKED_FLAT_IDENTITY_SLOTS =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.packedHashRecordSlots", "true"));
+    private static final int PACKED_FLAT_IDENTITY_MAX_FIELDS =
+            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMaxFields", 2);
+    private static final int PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS =
+            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMinBatchRows", 1 << 12);
+    private static final int PACKED_FLAT_IDENTITY_BLOCKING_MIN_BATCH_ROWS =
+            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsBlockingMinBatchRows", 10_000);
+    private static final int PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT =
+            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMinDistinctPercent", 80);
+    // Direct, nearly unique primitive pairs otherwise duplicate full-width keys in both hash slots and the reverse
+    // materialization map. Keep the exact 32-bit hash and identity record id together; dictionary-mapped pairs retain
+    // their generated path because the physical id reuse makes that duplication cheaper than flat record probing.
+    private static final boolean FULL_WIDTH_PAIR_PACKED_IDENTITY =
+            Boolean.parseBoolean(System.getProperty("nitro.group.fullWidthPairPackedIdentity", "true"));
+    private static final int FULL_WIDTH_PAIR_PACKED_IDENTITY_MIN_BATCH_ROWS =
+            Integer.getInteger("nitro.group.fullWidthPairPackedIdentityMinBatchRows", 1 << 10);
     private static final boolean LONG_GROUP_RUN_CACHE =
             Boolean.parseBoolean(System.getProperty("nitro.group.longRunCache", "true"));
     private static final boolean ADAPTIVE_FLAT_GROUP_LOOKAHEAD =
@@ -94,21 +124,53 @@ final class GroupingState
             Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinRows", 1 << 13);
     private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_NEW_PERCENT =
             Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinNewPercent", 20);
-
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
-    // Single-long grouping key -> group id, as an open-addressed table probed with one fused
-    // find-or-insert per row. A slot is empty iff its id is -1; ids are dense, assigned in first-seen
-    // scan order (the hash only chooses the slot, never the id). longKeysByGroup is the reverse map.
+    // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
+    // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
+    // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
+    // longKeysByGroup. Ids remain dense first-seen order in both layouts; the hash only chooses the slot.
     private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
+    private final boolean idIndexedLongGrouping =
+            Boolean.parseBoolean(System.getProperty("nitro.group.idIndexedLong", "true"));
+    private final int idIndexedLongGroupingMinGroups =
+            Integer.getInteger("nitro.group.idIndexedLongMinGroups", 1 << 20);
+    private final int idIndexedLongGroupingMaxGroups =
+            Math.min(Integer.getInteger("nitro.group.idIndexedLongMaxGroups", ID_INDEXED_LONG_GROUP_MASK), ID_INDEXED_LONG_GROUP_MASK);
+    private final boolean idIndexedLongDenseRehash =
+            Boolean.parseBoolean(System.getProperty("nitro.group.idIndexedLongDenseRehash", "true"));
+    private final int idIndexedLongActivationCapacityMultiplier =
+            Integer.getInteger("nitro.group.idIndexedLongActivationCapacityMultiplier", 16);
+    private static final int ID_INDEXED_LONG_GROUP_MASK = 0x03FF_FFFF;
+    private static final int ID_INDEXED_LONG_HASH_SHIFT = 26;
+    private static final boolean LONG_DIRECT_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.longDirectGrouping", "true"));
     private static final int LONG_DIRECT_MIN_GROUPS =
             Integer.getInteger("nitro.group.longDirectMinGroups", 1 << 13);
     private static final int LONG_DIRECT_MAX_RANGE =
             Integer.getInteger("nitro.group.longDirectMaxRange", 1 << 17);
     private static final int LONG_DIRECT_LATEST_ADMISSION_GROUPS =
             Integer.getInteger("nitro.group.longDirectLatestAdmissionGroups", 1 << 14);
-    private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR =
-            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupNumerator", 23);
+    // Staged aggregation can amortize migration over a much larger high-cardinality stream without coupling a
+    // direct lookup to every accumulator update. Keep this admission separate from the fused kernel: broadening
+    // the fused range reduced wall time on some shapes but substantially increased retired work and allocation.
+    private static final int STAGED_LONG_DIRECT_MAX_RANGE =
+            Integer.getInteger("nitro.group.stagedLongDirectMaxRange", 1 << 22);
+    private static final int STAGED_LONG_DIRECT_LATEST_ADMISSION_GROUPS =
+            Integer.getInteger("nitro.group.stagedLongDirectLatestAdmissionGroups", 1 << 20);
+    private static final boolean STAGED_COMPRESSED_LONG_DIRECT_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.group.stagedCompressedLongDirectGrouping", "true"));
+    private static final int STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS =
+            Integer.getInteger("nitro.group.stagedCompressedLongDirectMinGroups", 1 << 20);
+    private static final int STAGED_COMPRESSED_LONG_DIRECT_MAX_RANGE =
+            Integer.getInteger("nitro.group.stagedCompressedLongDirectMaxRange", 1 << 26);
+    private static final int STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS =
+            Integer.getInteger("nitro.group.stagedCompressedLongDirectLatestAdmissionGroups", 1 << 23);
+    // Recycling a direct table through the dedicated zeroed family clears only occupied keys. That removes the
+    // capacity-sized fill which made a somewhat wider sparse domain unprofitable, so admit up to 13 slots/group
+    // with that lifecycle. The ordinary generic pool retains the established 11.5 slots/group threshold.
+    private int longDirectMaxRangePerGroupNumerator =
+            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupNumerator", ZEROED_LONG_DIRECT_IDS_POOL ? 26 : 23);
     private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR =
             Integer.getInteger("nitro.group.longDirectMaxRangePerGroupDenominator", 2);
     private static final boolean DEBUG_LONG_DIRECT_GROUPING = Boolean.getBoolean("nitro.debug.longDirectGrouping");
@@ -123,6 +185,7 @@ final class GroupingState
     private OperatorKeySemantics.Key[] reusableProbeKeys;
     private OperatorKeySemantics.CompositeProbeKey reusableCompositeProbeKey;
     private FlatGroupingTable flatGroupingTable;
+    private FlatKeyLayout flatGroupingLayout;
     private FlatTypeHandler[] keyHandlers;
     private Set<BinaryVector.Trait>[] binaryTraits;
     long[] longKeysByGroup = new long[0];
@@ -137,11 +200,16 @@ final class GroupingState
     long nextGroupId;
     private long nullGroup = -1;
     private boolean useLongGrouping;
+    private boolean useIdIndexedLongGrouping;
     private boolean longRunCacheValid;
     private long longRunCacheKey;
     private int longRunCacheGroupId;
     private boolean useLongDirectGrouping;
+    private boolean useCompressedLongDirectGrouping;
+    private long longDirectCompressionMask = -1;
+    private long longDirectConstantBits;
     private boolean longDirectGroupingDisabled;
+    private boolean stagedLongDirectGroupingDisabled;
     private int longDirectNextCheck = LONG_DIRECT_MIN_GROUPS;
     private boolean usePackedIntPairGrouping;
     private int packedIntGroupingArity;
@@ -150,13 +218,18 @@ final class GroupingState
     private byte[] packedIntTripleNullMasksByGroup = new byte[0];
     private int[] packedIntTripleTailByGroup = new int[0];
     private boolean useMultiLongGrouping;
+    private boolean useFullWidthPairPackedIdentity;
     private int multiLongArity;
     private int[] densePositionsCache = new int[0];
     private boolean useFlatGrouping;
     private boolean flatSingleIdentityAdmissionDecided;
+    private boolean flatPackedIdentityAdmissionDecided;
+    private boolean moreInputExpectedForCurrentBatch;
+    private boolean blockingAggregationForCurrentBatch;
     private boolean flatSingleNullInTable;
     private int flatGroupingBatchCount;
     private boolean useSharedDictionaryGrouping;
+    private boolean sharedDictionaryFlatBacking;
     private boolean initialized;
     private LongGroupingTable multiLongTable;
 
@@ -168,6 +241,11 @@ final class GroupingState
     public boolean isInitialized()
     {
         return initialized;
+    }
+
+    boolean usesPackedFlatIdentitySlots()
+    {
+        return useFlatGrouping && flatGroupingTable.usesPackedHashRecordSlots();
     }
 
     /** Number of distinct groups assigned so far; the max assigned group id is {@code groupCount() - 1}. */
@@ -184,19 +262,34 @@ final class GroupingState
 
     boolean prepareSingleLongDirectGrouping(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
     {
-        if (longDirectGroupingDisabled) {
+        if (!LONG_DIRECT_GROUPING || longDirectGroupingDisabled) {
+            return false;
+        }
+        // The generated fused kernel indexes raw keys directly. Compressed direct tables are admitted only after
+        // that fused phase has ended; if an encoded shape later re-enters the fused path, restore the exact hash
+        // representation before it can observe the table.
+        if (useCompressedLongDirectGrouping) {
+            disableLongDirectGrouping();
+            longDirectGroupingDisabled = true;
             return false;
         }
         if (!useLongDirectGrouping && nextGroupId < longDirectNextCheck) {
             return false;
         }
-        if (!useLongDirectGrouping && nextGroupId > LONG_DIRECT_LATEST_ADMISSION_GROUPS) {
+        // A large first batch can cross the ordinary latest-admission threshold before there has been any
+        // opportunity to inspect the domain. Always allow that first check; only a later failed check closes
+        // admission. This remains bounded to one historical-key pass for a sparse/high-key workload.
+        if (!useLongDirectGrouping && nextGroupId > LONG_DIRECT_LATEST_ADMISSION_GROUPS &&
+                longDirectNextCheck != LONG_DIRECT_MIN_GROUPS) {
             longDirectGroupingDisabled = true;
             return false;
         }
 
         long batchMax = -1;
-        for (int position : mask) {
+        int[] positions = mask.selectedPositions();
+        int count = mask.count();
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
             int keyPosition = keyIds == null ? position : keyIds[position];
             long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
             if (key < 0 || key >= LONG_DIRECT_MAX_RANGE) {
@@ -207,13 +300,175 @@ final class GroupingState
             batchMax = Math.max(batchMax, key);
         }
 
+        return prepareSingleLongDirectGrouping(mask.count(), batchMax, LONG_DIRECT_MAX_RANGE);
+    }
+
+    private boolean prepareSingleLongDirectGrouping(
+            Mask mask,
+            VectorAccess.LongValues keyValues,
+            VectorAccess.BooleanValues nullValues)
+    {
+        if (!LONG_DIRECT_GROUPING || longDirectGroupingDisabled ||
+                (stagedLongDirectGroupingDisabled && !STAGED_COMPRESSED_LONG_DIRECT_GROUPING)) {
+            return false;
+        }
+        if (!useLongDirectGrouping && nextGroupId < longDirectNextCheck) {
+            return false;
+        }
+        int latestAdmissionGroups = STAGED_COMPRESSED_LONG_DIRECT_GROUPING
+                ? STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS
+                : STAGED_LONG_DIRECT_LATEST_ADMISSION_GROUPS;
+        if (!useLongDirectGrouping && nextGroupId > latestAdmissionGroups &&
+                longDirectNextCheck != LONG_DIRECT_MIN_GROUPS) {
+            longDirectGroupingDisabled = true;
+            return false;
+        }
+
+        long batchMax = -1;
+        boolean rawDomain = true;
+        int[] positions = mask.selectedPositions();
+        int count = mask.count();
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
+            if (nullValues.value(position)) {
+                continue;
+            }
+            long key = keyValues.value(position);
+            if (key < 0 || key >= STAGED_LONG_DIRECT_MAX_RANGE) {
+                rawDomain = false;
+            }
+            batchMax = Math.max(batchMax, key);
+        }
+        if (useCompressedLongDirectGrouping) {
+            return validateCompressedLongDirectBatch(mask, keyValues, nullValues);
+        }
+        if (!stagedLongDirectGroupingDisabled &&
+                rawDomain &&
+                prepareSingleLongDirectGrouping(mask.count(), batchMax, STAGED_LONG_DIRECT_MAX_RANGE)) {
+            return true;
+        }
+        if (STAGED_COMPRESSED_LONG_DIRECT_GROUPING &&
+                nextGroupId < STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS &&
+                (!rawDomain || stagedLongDirectGroupingDisabled)) {
+            longDirectNextCheck = STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS;
+            return false;
+        }
+        if (STAGED_COMPRESSED_LONG_DIRECT_GROUPING && nextGroupId >= STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS) {
+            return prepareCompressedLongDirectGrouping(mask, keyValues, nullValues);
+        }
+        if (!rawDomain && !STAGED_COMPRESSED_LONG_DIRECT_GROUPING) {
+            disableLongDirectGrouping();
+            longDirectGroupingDisabled = true;
+        }
+        return false;
+    }
+
+    private boolean prepareCompressedLongDirectGrouping(
+            Mask mask,
+            VectorAccess.LongValues keyValues,
+            VectorAccess.BooleanValues nullValues)
+    {
+        long andBits = -1;
+        long orBits = 0;
+        boolean observed = false;
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group == nullGroup) {
+                continue;
+            }
+            long key = longKeysByGroup[group];
+            if (key < 0) {
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+            andBits &= key;
+            orBits |= key;
+            observed = true;
+        }
+        int[] positions = mask.selectedPositions();
+        int count = mask.count();
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
+            if (nullValues.value(position)) {
+                continue;
+            }
+            long key = keyValues.value(position);
+            if (key < 0) {
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+            andBits &= key;
+            orBits |= key;
+            observed = true;
+        }
+        if (!observed) {
+            return false;
+        }
+
+        long compressionMask = andBits ^ orBits;
+        if (Long.bitCount(compressionMask) >= Integer.SIZE) {
+            return false;
+        }
+        long compressedMax = 0;
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group != nullGroup) {
+                compressedMax = Math.max(compressedMax, Long.compress(longKeysByGroup[group], compressionMask));
+            }
+        }
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
+            if (!nullValues.value(position)) {
+                compressedMax = Math.max(compressedMax, Long.compress(keyValues.value(position), compressionMask));
+            }
+        }
+        if (compressedMax >= STAGED_COMPRESSED_LONG_DIRECT_MAX_RANGE ||
+                (compressedMax + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
+                        > Math.max(1, nextGroupId) * longDirectMaxRangePerGroupNumerator) {
+            longDirectNextCheck = toIntExact(Math.min(
+                    (long) STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS,
+                    Math.max(nextGroupId + 1, nextGroupId * 2)));
+            return false;
+        }
+
+        longDirectCompressionMask = compressionMask;
+        longDirectConstantBits = andBits & ~compressionMask;
+        useCompressedLongDirectGrouping = true;
+        rebuildLongDirectTable(toPowerOfTwoCapacity(toIntExact(compressedMax + 1)), compressedMax);
+        return true;
+    }
+
+    private boolean validateCompressedLongDirectBatch(
+            Mask mask,
+            VectorAccess.LongValues keyValues,
+            VectorAccess.BooleanValues nullValues)
+    {
+        long constantMask = ~longDirectCompressionMask;
+        int[] positions = mask.selectedPositions();
+        int count = mask.count();
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
+            if (nullValues.value(position)) {
+                continue;
+            }
+            long key = keyValues.value(position);
+            long compressed = Long.compress(key, longDirectCompressionMask);
+            if (key < 0 || (key & constantMask) != longDirectConstantBits || compressed >= longGroupIds.length) {
+                disableLongDirectGrouping();
+                longDirectGroupingDisabled = true;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean prepareSingleLongDirectGrouping(int batchCount, long batchMax, int maxRange)
+    {
         if (useLongDirectGrouping) {
             if (batchMax < longGroupIds.length) {
                 return true;
             }
-            long possibleGroups = Math.max(1, nextGroupId + mask.count());
+            long possibleGroups = Math.max(1, nextGroupId + batchCount);
             if ((batchMax + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
-                    > possibleGroups * LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR) {
+                    > possibleGroups * longDirectMaxRangePerGroupNumerator) {
                 disableLongDirectGrouping();
                 longDirectGroupingDisabled = true;
                 return false;
@@ -222,7 +477,7 @@ final class GroupingState
             return true;
         }
 
-        longDirectNextCheck = toIntExact(Math.min((long) LONG_DIRECT_MAX_RANGE, Math.max(nextGroupId + 1, nextGroupId * 2)));
+        longDirectNextCheck = toIntExact(Math.min((long) maxRange, Math.max(nextGroupId + 1, nextGroupId * 2)));
 
         long max = batchMax;
         for (int group = 0; group < nextGroupId; group++) {
@@ -230,14 +485,16 @@ final class GroupingState
                 continue;
             }
             long key = longKeysByGroup[group];
-            if (key < 0 || key >= LONG_DIRECT_MAX_RANGE) {
-                longDirectGroupingDisabled = true;
+            if (key < 0 || key >= maxRange) {
+                if (!STAGED_COMPRESSED_LONG_DIRECT_GROUPING) {
+                    longDirectGroupingDisabled = true;
+                }
                 return false;
             }
             max = Math.max(max, key);
         }
         if (max < 0 || (max + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
-                > Math.max(1, nextGroupId) * LONG_DIRECT_MAX_RANGE_PER_GROUP_NUMERATOR) {
+                > Math.max(1, nextGroupId) * longDirectMaxRangePerGroupNumerator) {
             return false;
         }
         rebuildLongDirectTable(toPowerOfTwoCapacity(toIntExact(max + 1)), max);
@@ -247,6 +504,109 @@ final class GroupingState
     boolean usesLongDirectGrouping()
     {
         return useLongDirectGrouping;
+    }
+
+    /**
+     * Drops the duplicate key-by-slot array once a high-cardinality generated aggregation has proved that adjacent
+     * runs amortize most successful probes. Occupied slots remain exact: their dense group id indexes the canonical
+     * key in {@link #longKeysByGroup}. Activation may reserve a bounded geometric capacity horizon and rebuild from
+     * the dense canonical map, avoiding repeated sparse-table rehashes while the high-cardinality stream grows.
+     */
+    boolean prepareSingleLongIdIndexedGrouping(boolean runHeavyInput, long maximumNextGroupId)
+    {
+        if (useIdIndexedLongGrouping) {
+            if (maximumNextGroupId >= idIndexedLongGroupingMaxGroups) {
+                rebuildOrdinaryLongGroupingTable();
+                return false;
+            }
+            return true;
+        }
+        if (!idIndexedLongGrouping || useLongDirectGrouping || !runHeavyInput || nextGroupId < idIndexedLongGroupingMinGroups || maximumNextGroupId >= idIndexedLongGroupingMaxGroups) {
+            return false;
+        }
+        long[] previousKeys = longGroupKeys;
+        int[] previousIds = longGroupIds;
+        int targetCapacity = previousIds.length;
+        for (int multiplier = 1; multiplier < idIndexedLongActivationCapacityMultiplier; multiplier <<= 1) {
+            if (targetCapacity >= ID_INDEXED_LONG_GROUP_MASK / 2) {
+                break;
+            }
+            targetCapacity <<= 1;
+        }
+        if (targetCapacity == previousIds.length) {
+            for (int slot = 0; slot < previousIds.length; slot++) {
+                int id = previousIds[slot];
+                if (id != -1) {
+                    previousIds[slot] = encodeIdIndexedLongGroup(hashLong(previousKeys[slot]), id);
+                }
+                else {
+                    previousIds[slot] = 0;
+                }
+            }
+        }
+        else {
+            longGroupIds = arrayPool.borrowInts(targetCapacity);
+            Arrays.fill(longGroupIds, 0);
+            longGroupMask = targetCapacity - 1;
+            longGroupMaxFill = (int) (targetCapacity * LONG_GROUP_LOAD_FACTOR);
+            for (int id = 0; id < longGroupCount; id++) {
+                if (id == nullGroup) {
+                    continue;
+                }
+                long key = longKeysByGroup[id];
+                int hash = hashLong(key);
+                int slot = hash & longGroupMask;
+                while (longGroupIds[slot] != 0) {
+                    slot = (slot + 1) & longGroupMask;
+                }
+                longGroupIds[slot] = encodeIdIndexedLongGroup(hash, id);
+            }
+            arrayPool.release(previousIds);
+        }
+        longGroupKeys = new long[0];
+        useIdIndexedLongGrouping = true;
+        arrayPool.release(previousKeys);
+        return true;
+    }
+
+    boolean usesIdIndexedLongGrouping()
+    {
+        return useIdIndexedLongGrouping;
+    }
+
+    private void rebuildOrdinaryLongGroupingTable()
+    {
+        int[] previousIds = longGroupIds;
+        longGroupKeys = arrayPool.borrowLongs(previousIds.length);
+        Arrays.fill(previousIds, -1);
+        for (int id = 0; id < nextGroupId; id++) {
+            if (id == nullGroup) {
+                continue;
+            }
+            long key = longKeysByGroup[id];
+            int slot = hashLong(key) & longGroupMask;
+            while (previousIds[slot] != -1) {
+                slot = (slot + 1) & longGroupMask;
+            }
+            longGroupKeys[slot] = key;
+            previousIds[slot] = id;
+        }
+        useIdIndexedLongGrouping = false;
+    }
+
+    private static int encodeIdIndexedLongGroup(int hash, int groupId)
+    {
+        return (hash >>> ID_INDEXED_LONG_HASH_SHIFT) << ID_INDEXED_LONG_HASH_SHIFT | (groupId + 1);
+    }
+
+    private static int decodeIdIndexedLongGroup(int encoded)
+    {
+        return (encoded & ID_INDEXED_LONG_GROUP_MASK) - 1;
+    }
+
+    void disableStagedLongDirectGrouping()
+    {
+        stagedLongDirectGroupingDisabled = true;
     }
 
     boolean usesFlatSingleRecordIdentity()
@@ -274,6 +634,11 @@ final class GroupingState
     public void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result)
     {
         assignGroups(new Vector[] {values}, new Vector[] {nulls}, mask, result);
+    }
+
+    void assignGroups(Vector values, Vector nulls, Mask mask, I64Vector result, boolean moreInputExpected)
+    {
+        assignGroups(new Vector[] {values}, new Vector[] {nulls}, mask, result, moreInputExpected);
     }
 
     /**
@@ -322,7 +687,57 @@ final class GroupingState
     @SuppressWarnings("unchecked")
     public void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
+        assignGroups(values, nulls, mask, result, false);
+    }
+
+    void assignGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result, boolean moreInputExpected)
+    {
+        assignGroups(values, nulls, mask, result, moreInputExpected, false);
+    }
+
+    /**
+     * Assigns groups for a blocking aggregation that consumes its complete source. Unlike a streaming group-id
+     * producer, this lifecycle does not need to call {@code source.hasNext()} while the current batch is borrowed
+     * merely to prove a second batch exists. The first-batch cardinality sample still decides whether the wider
+     * self-contained hash slots pay for this input.
+     */
+    void assignGroupsForBlockingAggregation(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
+    {
+        assignGroups(values, nulls, mask, result, false, true);
+    }
+
+    private void assignGroups(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            boolean moreInputExpected,
+            boolean blockingAggregation)
+    {
+        moreInputExpectedForCurrentBatch = moreInputExpected;
+        blockingAggregationForCurrentBatch = blockingAggregation;
+        if (!initialized) {
+            useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
+        }
         initializeIfNecessary(values, nulls);
+        if (nextGroupId == 0 && useMultiLongGrouping &&
+                admitsFullWidthPairPackedIdentity(values, nulls, mask)) {
+            multiLongTable.releaseBuffers();
+            multiLongTable = null;
+            useMultiLongGrouping = false;
+            useFlatGrouping = true;
+            useFullWidthPairPackedIdentity = true;
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls));
+            flatGroupingTable = new FlatGroupingTable(
+                    flatGroupingLayout,
+                    Math.max(16, values[0].length()),
+                    true,
+                    true);
+            flatPackedIdentityAdmissionDecided = true;
+            if (DEBUG_GROUPING_SHAPES) {
+                System.err.printf("[full-width-pair-packed-identity] rows=%d deferred=true%n", values[0].length());
+            }
+        }
         reserveAdditionalGroups(mask.count() + 1L);
         if (useLongGrouping) {
             assignLongGroups(values[0], nulls[0], mask, result);
@@ -397,7 +812,6 @@ final class GroupingState
         if (ids == null || !sharedDictionaryNullsCompatible(nulls, ids, ((DictionaryVector) values[0]).length())) {
             return false;
         }
-
         Vector[] dictionaryValues = new Vector[values.length];
         int dictionarySize = 0;
         for (int index = 0; index < values.length; index++) {
@@ -406,26 +820,45 @@ final class GroupingState
         }
         ensureSharedDictionaryCacheCapacity(dictionarySize);
         int generation = currentSharedDictionaryGeneration(dictionaryValues);
-
-        OperatorKeySemantics.Key[] probeKeys = new OperatorKeySemantics.Key[values.length];
+        OperatorKeySemantics.Key[] probeKeys = sharedDictionaryFlatBacking ? null : new OperatorKeySemantics.Key[values.length];
         long[] output = result.values();
-        for (int position : mask) {
-            int dictionaryId = ids[position];
-            long entry = sharedDictionaryEntriesById[dictionaryId];
-            if (sharedDictionaryEntryGeneration(entry) != generation) {
-                for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
-                    probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
-                }
-                long groupId = groupForKeys(probeKeys);
-                if (!canPackSharedDictionaryGroup(groupId)) {
-                    return false;
-                }
-                entry = sharedDictionaryEntry(generation, groupId);
-                sharedDictionaryEntriesById[dictionaryId] = entry;
-            }
-            output[position] = sharedDictionaryEntryGroup(entry);
+        if (sharedDictionaryFlatBacking) {
+            flatGroupingTable.beginBatch(values, nulls);
         }
-        return true;
+        try {
+            for (int position : mask) {
+                int dictionaryId = ids[position];
+                long entry = sharedDictionaryEntriesById[dictionaryId];
+                if (sharedDictionaryEntryGeneration(entry) != generation) {
+                    long groupId;
+                    if (sharedDictionaryFlatBacking) {
+                        long newGroupId = nextGroupId;
+                        groupId = flatGroupingTable.assignGroup(values, nulls, position, newGroupId);
+                        if (groupId == newGroupId) {
+                            nextGroupId++;
+                        }
+                    }
+                    else {
+                        for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                            probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
+                        }
+                        groupId = groupForKeys(probeKeys);
+                    }
+                    if (!canPackSharedDictionaryGroup(groupId)) {
+                        return false;
+                    }
+                    entry = sharedDictionaryEntry(generation, groupId);
+                    sharedDictionaryEntriesById[dictionaryId] = entry;
+                }
+                output[position] = sharedDictionaryEntryGroup(entry);
+            }
+            return true;
+        }
+        finally {
+            if (sharedDictionaryFlatBacking) {
+                flatGroupingTable.endBatch();
+            }
+        }
     }
 
     private static int[] sharedDictionaryIds(Vector[] values)
@@ -578,6 +1011,20 @@ final class GroupingState
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
+        if (useFullWidthPairPackedIdentity) {
+            useFlatGrouping = true;
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, nullableCompositeKeys);
+            flatGroupingTable = new FlatGroupingTable(
+                    flatGroupingLayout,
+                    Math.max(16, values[0].length()),
+                    true,
+                    true);
+            flatPackedIdentityAdmissionDecided = true;
+            if (DEBUG_GROUPING_SHAPES) {
+                System.err.printf("[full-width-pair-packed-identity] rows=%d%n", values[0].length());
+            }
+            return;
+        }
         if (values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
             if (ADAPTIVE_COMPACT_LONG_GROUPING ||
                     (GENERATED_COMPACT_LONG_PAIR_GROUPING && values.length == 2) ||
@@ -622,12 +1069,29 @@ final class GroupingState
                 sharedDictionaryIds(values) != null &&
                 admitsSharedDictionaryGrouping(values, nulls, flatKeyLayout)) {
             useSharedDictionaryGrouping = true;
-            initializeObjectKeyGrouping(values);
+            if (SHARED_DICTIONARY_FLAT_BACKING &&
+                    values.length >= SHARED_DICTIONARY_FLAT_BACKING_MIN_FIELDS &&
+                    values[0].length() >= SHARED_DICTIONARY_FLAT_BACKING_MIN_ROWS &&
+                    flatKeyLayout != null) {
+                sharedDictionaryFlatBacking = true;
+                flatGroupingLayout = flatKeyLayout;
+                flatGroupingTable = new FlatGroupingTable(
+                        flatKeyLayout,
+                        Math.max(16, values[0].length()),
+                        true);
+                if (DEBUG_GROUPING_SHAPES) {
+                    System.err.printf("[shared-dictionary-flat-backing] fields=%d rows=%d%n", values.length, values[0].length());
+                }
+            }
+            else {
+                initializeObjectKeyGrouping(values);
+            }
             return;
         }
 
         if (flatKeyLayout != null) {
             useFlatGrouping = true;
+            flatGroupingLayout = flatKeyLayout;
             // Single-key grouping assigns NULL a group id outside the table, so its ids can contain a hole.
             // Composite grouping stores its null combinations in the table and remains insertion-order dense.
             flatGroupingTable = new FlatGroupingTable(
@@ -638,6 +1102,51 @@ final class GroupingState
         }
 
         initializeObjectKeyGrouping(values);
+    }
+
+    private boolean admitsFullWidthPairPackedIdentity(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        if (!FULL_WIDTH_PAIR_PACKED_IDENTITY || values.length != 2 ||
+                values[0] instanceof DictionaryVector || values[1] instanceof DictionaryVector ||
+                mask.count() < FULL_WIDTH_PAIR_PACKED_IDENTITY_MIN_BATCH_ROWS ||
+                !allSingleLongGroupingCandidates(values) ||
+                !sampleContainsFullWidthPairValue(values, nulls, mask)) {
+            return false;
+        }
+        int sampled = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls));
+        int distinct = sampledDistinctFlatKeys(layout, values, nulls, mask);
+        return (long) distinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT;
+    }
+
+    /**
+     * Keep signed-32 pairs on the generated compact table, where both keys share one packed reverse-map lane.
+     * The wider identity-record layout pays only when the actual key domain would promote that compact table to
+     * duplicate full-width slot and reverse-map storage. Sampling uses the same evenly spaced first-batch positions
+     * as cardinality admission and is conservative: a missed later wide value preserves exact generated promotion.
+     */
+    private static boolean sampleContainsFullWidthPairValue(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        int sampleSize = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        VectorAccess.LongValues first = VectorAccess.longValues(values[0]);
+        VectorAccess.LongValues second = VectorAccess.longValues(values[1]);
+        for (int sample = 0; sample < sampleSize; sample++) {
+            int selectedIndex = (int) ((long) sample * mask.count() / sampleSize);
+            int position = mask.position(selectedIndex);
+            if (!OperatorVectorSupport.isNull(nulls[0], position)) {
+                long value = first.value(position);
+                if ((long) (int) value != value) {
+                    return true;
+                }
+            }
+            if (!OperatorVectorSupport.isNull(nulls[1], position)) {
+                long value = second.value(position);
+                if ((long) (int) value != value) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -704,9 +1213,35 @@ final class GroupingState
                 !mask.none()) {
             decideFlatSingleIdentity(values, nulls, mask);
         }
+        if (values.length > 1 && !flatPackedIdentityAdmissionDecided && !mask.none()) {
+            decideFlatPackedIdentity(values, nulls, mask);
+        }
         flatGroupingTable.beginBatch(values, nulls);
-        flatGroupingTable.prepareBatchHashes(values, nulls, mask);
         try {
+            long generatedNextGroupId = flatGroupingTable.assignGeneratedDictionaryBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (generatedNextGroupId >= 0) {
+                nextGroupId = generatedNextGroupId;
+                return;
+            }
+            flatGroupingTable.prepareBatchHashes(values, nulls, mask);
+            long batchNextGroupId = flatGroupingTable.assignMixedComposite3Batch(
+                    values, nulls, mask, result, nextGroupId);
+            if (batchNextGroupId >= 0) {
+                nextGroupId = batchNextGroupId;
+                return;
+            }
+            if (flatGroupingTable.singleDictionaryGroupCacheActive()) {
+                for (int position : mask) {
+                    long newGroupId = nextGroupId;
+                    long groupId = flatGroupingTable.assignGroupCached(values, nulls, position, newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    result.values()[position] = groupId;
+                }
+                return;
+            }
             if (values.length == 1 && !flatSingleNullInTable) {
                 Vector nullVector = nulls[0];
                 for (int position : mask) {
@@ -760,9 +1295,16 @@ final class GroupingState
         if (sampled > 0 &&
                 (long) sampledDistinct * 100 >= (long) sampled * FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT) {
             flatGroupingTable.releaseBuffers();
-            flatGroupingTable = new FlatGroupingTable(identityLayout, Math.max(16, mask.count()), true);
+            boolean packedSlots = admitsFlatPackedIdentity(values.length, mask.count(), sampled, sampledDistinct);
+            flatGroupingLayout = identityLayout;
+            flatGroupingTable = new FlatGroupingTable(
+                    identityLayout,
+                    Math.max(16, mask.count()),
+                    true,
+                    packedSlots);
             flatSingleNullInTable = true;
         }
+        flatPackedIdentityAdmissionDecided = true;
         if (DEBUG_GROUPING_SHAPES) {
             System.err.printf(
                     "[flat-single-identity] selected=%d sampled=%d distinct=%d admitted=%s%n",
@@ -771,6 +1313,62 @@ final class GroupingState
                     sampledDistinct,
                     flatSingleNullInTable);
         }
+    }
+
+    /** Selects the immutable slot/record split before the first composite key is inserted. */
+    private void decideFlatPackedIdentity(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        flatPackedIdentityAdmissionDecided = true;
+        int sampled = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        // Two-field streams already have dedicated direct-pair and producer-lookahead admissions; broadening the
+        // blocking hint to dictionary-backed pairs moved their allocation and translation regime. Use this extra
+        // lifecycle evidence only for a dense, otherwise-unserved three-field cohort. A partial first-batch mask
+        // retains the compact ordinary slots: filtered three-field cohorts did not consistently amortize them.
+        boolean blockingHorizon = blockingAggregationForCurrentBatch &&
+                values.length == 3 &&
+                mask.all() &&
+                mask.count() >= PACKED_FLAT_IDENTITY_BLOCKING_MIN_BATCH_ROWS;
+        boolean sustainedInput = moreInputExpectedForCurrentBatch || blockingHorizon;
+        boolean eligibleFields = values.length <= PACKED_FLAT_IDENTITY_MAX_FIELDS || blockingHorizon;
+        int sampledDistinct = sustainedInput &&
+                flatGroupingLayout != null &&
+                PACKED_FLAT_IDENTITY_SLOTS &&
+                eligibleFields &&
+                mask.count() >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS
+                ? sampledDistinctFlatKeys(flatGroupingLayout, values, nulls, mask)
+                : 0;
+        boolean admitted = nextGroupId == 0 && sustainedInput && eligibleFields &&
+                PACKED_FLAT_IDENTITY_SLOTS &&
+                mask.count() >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS &&
+                sampled > 0 &&
+                (long) sampledDistinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT &&
+                (!blockingHorizon || sampledDistinct == sampled);
+        if (admitted) {
+            flatGroupingTable.releaseBuffers();
+            flatGroupingTable = new FlatGroupingTable(
+                    flatGroupingLayout,
+                    Math.max(16, mask.count()),
+                    true,
+                    true);
+        }
+        if (DEBUG_GROUPING_SHAPES || DEBUG_FLAT_PACKED_IDENTITY) {
+            System.err.printf(
+                    "[flat-packed-identity] fields=%d selected=%d sampled=%d distinct=%d admitted=%s%n",
+                    values.length,
+                    mask.count(),
+                    sampled,
+                    sampledDistinct,
+                    admitted);
+        }
+    }
+
+    private static boolean admitsFlatPackedIdentity(int fields, int selectedRows, int sampled, int sampledDistinct)
+    {
+        return PACKED_FLAT_IDENTITY_SLOTS &&
+                fields <= PACKED_FLAT_IDENTITY_MAX_FIELDS &&
+                selectedRows >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS &&
+                sampled > 0 &&
+                (long) sampledDistinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT;
     }
 
     /**
@@ -820,8 +1418,21 @@ final class GroupingState
         VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
         VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nullVector);
         long[] out = result.values();
-        if (useLongDirectGrouping) {
-            for (int position : mask) {
+        boolean directBatchPrepared = false;
+        // Keep a rejected/non-candidate state on the original compact hash loop. In particular, do not pay a
+        // helper call on every later batch after one out-of-domain key has permanently closed admission.
+        if (LONG_DIRECT_GROUPING && !longDirectGroupingDisabled && !stagedLongDirectGroupingDisabled &&
+                (useLongDirectGrouping || nextGroupId >= longDirectNextCheck)) {
+            directBatchPrepared = prepareSingleLongDirectGrouping(mask, keyValues, nullValues);
+        }
+        // prepareSingleLongDirectGrouping already proves that every non-null key in this batch fits the direct
+        // table (and grows it when needed). Retain the defensive pass only for callers that established direct
+        // mode outside this ordinary staged path.
+        if (useLongDirectGrouping && !directBatchPrepared) {
+            int[] positions = mask.selectedPositions();
+            int count = mask.count();
+            for (int index = 0; index < count; index++) {
+                int position = positions == null ? index : positions[index];
                 if (nullValues.value(position)) {
                     continue;
                 }
@@ -835,7 +1446,35 @@ final class GroupingState
         }
         if (useLongDirectGrouping) {
             int[] directGroups = longGroupIds;
-            for (int position : mask) {
+            int[] positions = mask.selectedPositions();
+            int count = mask.count();
+            if (useCompressedLongDirectGrouping) {
+                long compressionMask = longDirectCompressionMask;
+                for (int index = 0; index < count; index++) {
+                    int position = positions == null ? index : positions[index];
+                    if (nullValues.value(position)) {
+                        out[position] = nullGroup();
+                        continue;
+                    }
+                    long key = keyValues.value(position);
+                    int directKey = toIntExact(Long.compress(key, compressionMask));
+                    int encodedGroup = directGroups[directKey];
+                    if (encodedGroup == 0) {
+                        int groupId = (int) nextGroupId++;
+                        directGroups[directKey] = groupId + 1;
+                        ensureLongGroupingCapacity(groupId);
+                        longKeysByGroup[groupId] = key;
+                        longGroupCount++;
+                        out[position] = groupId;
+                    }
+                    else {
+                        out[position] = encodedGroup - 1;
+                    }
+                }
+                return;
+            }
+            for (int index = 0; index < count; index++) {
+                int position = positions == null ? index : positions[index];
                 if (nullValues.value(position)) {
                     out[position] = nullGroup();
                     continue;
@@ -872,13 +1511,16 @@ final class GroupingState
                 }
 
                 long key = keyValues.value(position);
-                int slot = hashLong(key) & tableMask;
+                int hash = hashLong(key);
+                int slot = hash & tableMask;
                 while (true) {
-                    int id = tableIds[slot];
-                    if (id == -1) {
+                    int encoded = tableIds[slot];
+                    if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
                         int groupId = (int) nextGroupId++;
-                        tableKeys[slot] = key;
-                        tableIds[slot] = groupId;
+                        if (!useIdIndexedLongGrouping) {
+                            tableKeys[slot] = key;
+                        }
+                        tableIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, groupId) : groupId;
                         ensureLongGroupingCapacity(groupId);
                         longKeysByGroup[groupId] = key;
                         out[position] = groupId;
@@ -893,7 +1535,9 @@ final class GroupingState
                         }
                         break;
                     }
-                    if (tableKeys[slot] == key) {
+                    int id = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+                    if ((!useIdIndexedLongGrouping || encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT)
+                            && (useIdIndexedLongGrouping ? longKeysByGroup[id] : tableKeys[slot]) == key) {
                         out[position] = id;
                         cached = true;
                         cachedKey = key;
@@ -919,13 +1563,16 @@ final class GroupingState
                 out[position] = cachedGroupId;
                 continue;
             }
-            int slot = hashLong(key) & tableMask;
+            int hash = hashLong(key);
+            int slot = hash & tableMask;
             while (true) {
-                int id = tableIds[slot];
-                if (id == -1) {
+                int encoded = tableIds[slot];
+                if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
                     int groupId = (int) nextGroupId++;
-                    tableKeys[slot] = key;
-                    tableIds[slot] = groupId;
+                    if (!useIdIndexedLongGrouping) {
+                        tableKeys[slot] = key;
+                    }
+                    tableIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, groupId) : groupId;
                     ensureLongGroupingCapacity(groupId);
                     longKeysByGroup[groupId] = key;
                     out[position] = groupId;
@@ -940,7 +1587,9 @@ final class GroupingState
                     }
                     break;
                 }
-                if (tableKeys[slot] == key) {
+                int id = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+                if ((!useIdIndexedLongGrouping || encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT)
+                        && (useIdIndexedLongGrouping ? longKeysByGroup[id] : tableKeys[slot]) == key) {
                     out[position] = id;
                     cached = true;
                     cachedKey = key;
@@ -1306,7 +1955,7 @@ final class GroupingState
         }
         longGroupKeys = arrayPool.borrowLongs(capacity);
         longGroupIds = arrayPool.borrowInts(capacity);
-        Arrays.fill(longGroupIds, -1);
+        Arrays.fill(longGroupIds, useIdIndexedLongGrouping ? 0 : -1);
         longGroupMask = capacity - 1;
         longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
         longGroupCount = 0;
@@ -1316,24 +1965,46 @@ final class GroupingState
     {
         long[] previousKeys = longGroupKeys;
         int[] previousIds = longGroupIds;
-        int capacity = previousKeys.length * 2;
-        longGroupKeys = arrayPool.borrowLongs(capacity);
+        int capacity = previousIds.length * 2;
+        longGroupKeys = useIdIndexedLongGrouping ? new long[0] : arrayPool.borrowLongs(capacity);
         longGroupIds = arrayPool.borrowInts(capacity);
-        Arrays.fill(longGroupIds, -1);
+        Arrays.fill(longGroupIds, useIdIndexedLongGrouping ? 0 : -1);
         longGroupMask = capacity - 1;
         longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
-        for (int index = 0; index < previousKeys.length; index++) {
-            int id = previousIds[index];
-            if (id == -1) {
-                continue;
+        if (useIdIndexedLongGrouping && idIndexedLongDenseRehash) {
+            // Dense group ids and the canonical reverse map are a cheaper iteration domain than the sparse old
+            // slots. This also removes the unpredictable occupied/empty branch from large-table rehashes.
+            for (int id = 0; id < longGroupCount; id++) {
+                if (id == nullGroup) {
+                    continue;
+                }
+                long key = longKeysByGroup[id];
+                int hash = hashLong(key);
+                int slot = hash & longGroupMask;
+                while (longGroupIds[slot] != 0) {
+                    slot = (slot + 1) & longGroupMask;
+                }
+                longGroupIds[slot] = encodeIdIndexedLongGroup(hash, id);
             }
-            long key = previousKeys[index];
-            int slot = hashLong(key) & longGroupMask;
-            while (longGroupIds[slot] != -1) {
-                slot = (slot + 1) & longGroupMask;
+        }
+        else {
+            for (int index = 0; index < previousIds.length; index++) {
+                int encoded = previousIds[index];
+                if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
+                    continue;
+                }
+                int id = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+                long key = useIdIndexedLongGrouping ? longKeysByGroup[id] : previousKeys[index];
+                int hash = hashLong(key);
+                int slot = hash & longGroupMask;
+                while (longGroupIds[slot] != (useIdIndexedLongGrouping ? 0 : -1)) {
+                    slot = (slot + 1) & longGroupMask;
+                }
+                if (!useIdIndexedLongGrouping) {
+                    longGroupKeys[slot] = key;
+                }
+                longGroupIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, id) : id;
             }
-            longGroupKeys[slot] = key;
-            longGroupIds[slot] = id;
         }
         arrayPool.release(previousKeys);
         arrayPool.release(previousIds);
@@ -1343,16 +2014,19 @@ final class GroupingState
     {
         int[] previousIds = longGroupIds;
         long[] previousKeys = longGroupKeys;
-        longGroupIds = arrayPool.borrowInts(capacity);
-        Arrays.fill(longGroupIds, 0);
+        boolean previousDirect = useLongDirectGrouping;
+        longGroupIds = borrowZeroedLongDirectIds(capacity);
         longGroupKeys = new long[0];
         for (int group = 0; group < nextGroupId; group++) {
             if (group == nullGroup) {
                 continue;
             }
-            int key = toIntExact(longKeysByGroup[group]);
+            long originalKey = longKeysByGroup[group];
+            int key = useCompressedLongDirectGrouping
+                    ? toIntExact(Long.compress(originalKey, longDirectCompressionMask))
+                    : toIntExact(originalKey);
             if (longGroupIds[key] != 0) {
-                throw new IllegalStateException("Duplicate key while building direct grouping table: " + key);
+                throw new IllegalStateException("Duplicate key while building direct grouping table: " + originalKey);
             }
             longGroupIds[key] = group + 1;
         }
@@ -1360,9 +2034,15 @@ final class GroupingState
         longGroupMaxFill = capacity;
         useLongDirectGrouping = true;
         if (DEBUG_LONG_DIRECT_GROUPING) {
-            System.err.printf("[long-direct-grouping] enable groups=%d max=%d capacity=%d%n", nextGroupId, observedMax, capacity);
+            System.err.printf(
+                    "[long-direct-grouping] enable groups=%d max=%d capacity=%d compressed=%s mask=%x%n",
+                    nextGroupId,
+                    observedMax,
+                    capacity,
+                    useCompressedLongDirectGrouping,
+                    longDirectCompressionMask);
         }
-        arrayPool.release(previousIds);
+        releaseLongGroupIds(previousIds, previousDirect);
         arrayPool.release(previousKeys);
     }
 
@@ -1394,11 +2074,53 @@ final class GroupingState
             longGroupKeys[slot] = key;
             longGroupIds[slot] = group;
         }
+        releaseLongGroupIds(previousIds, true);
         useLongDirectGrouping = false;
+        useCompressedLongDirectGrouping = false;
+        longDirectCompressionMask = -1;
+        longDirectConstantBits = 0;
         if (DEBUG_LONG_DIRECT_GROUPING) {
             System.err.printf("[long-direct-grouping] disable groups=%d hashCapacity=%d%n", nextGroupId, capacity);
         }
-        arrayPool.release(previousIds);
+    }
+
+    private int[] borrowZeroedLongDirectIds(int capacity)
+    {
+        if (!ZEROED_LONG_DIRECT_IDS_POOL) {
+            int[] ids = arrayPool.borrowInts(capacity);
+            Arrays.fill(ids, 0);
+            return ids;
+        }
+        int[] ids = arrayPool.borrow(ZEROED_LONG_DIRECT_IDS_FAMILY, capacity, int[].class);
+        return ids == null ? new int[capacity] : ids;
+    }
+
+    private void releaseLongGroupIds(int[] ids, boolean direct)
+    {
+        if (ids == null) {
+            return;
+        }
+        if (!direct || !ZEROED_LONG_DIRECT_IDS_POOL) {
+            arrayPool.release(ids);
+            return;
+        }
+        for (int group = 0; group < nextGroupId; group++) {
+            if (group == nullGroup) {
+                continue;
+            }
+            long key = longKeysByGroup[group];
+            long directKey = useCompressedLongDirectGrouping
+                    ? Long.compress(key, longDirectCompressionMask)
+                    : key;
+            if (directKey >= 0 && directKey < ids.length) {
+                ids[(int) directKey] = 0;
+            }
+        }
+        arrayPool.retain(
+                ZEROED_LONG_DIRECT_IDS_FAMILY,
+                ids.length,
+                (long) ids.length * Integer.BYTES,
+                ids);
     }
 
     private static int toPowerOfTwoCapacity(int needed)
@@ -1413,16 +2135,36 @@ final class GroupingState
     private int longGroupGet(long key)
     {
         if (useLongDirectGrouping) {
-            if (key < 0 || key >= longGroupIds.length) {
+            if (key < 0) {
                 return -1;
             }
-            return longGroupIds[(int) key] - 1;
+            long directKey = key;
+            if (useCompressedLongDirectGrouping) {
+                if ((key & ~longDirectCompressionMask) != longDirectConstantBits) {
+                    return -1;
+                }
+                directKey = Long.compress(key, longDirectCompressionMask);
+            }
+            if (directKey >= longGroupIds.length) {
+                return -1;
+            }
+            return longGroupIds[(int) directKey] - 1;
         }
-        int slot = hashLong(key) & longGroupMask;
+        int hash = hashLong(key);
+        int slot = hash & longGroupMask;
         while (true) {
-            int id = longGroupIds[slot];
-            if (id == -1 || longGroupKeys[slot] == key) {
-                return id;
+            int encoded = longGroupIds[slot];
+            if (useIdIndexedLongGrouping) {
+                if (encoded == 0) {
+                    return -1;
+                }
+                int id = decodeIdIndexedLongGroup(encoded);
+                if (encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT && longKeysByGroup[id] == key) {
+                    return id;
+                }
+            }
+            else if (encoded == -1 || longGroupKeys[slot] == key) {
+                return encoded;
             }
             slot = (slot + 1) & longGroupMask;
         }
@@ -1561,7 +2303,7 @@ final class GroupingState
                     materializeMultiLongGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
                     materializeMultiLongNulls(groupedColumnIndex, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
         }
-        if (useFlatGrouping) {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
             return flatGroupingTable.groupedValues(groupedColumnIndex, mask, output, allocator, allocationContext);
         }
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
@@ -1881,11 +2623,22 @@ final class GroupingState
 
     void releaseBuffers()
     {
+        if (DEBUG_GROUPING_SHAPES) {
+            System.err.printf(
+                    "[grouping-final] groups=%d single-long=%s direct=%s id-indexed=%s disabled=%s staged-disabled=%s next-check=%d%n",
+                    nextGroupId,
+                    useLongGrouping,
+                    useLongDirectGrouping,
+                    useIdIndexedLongGrouping,
+                    longDirectGroupingDisabled,
+                    stagedLongDirectGroupingDisabled,
+                    longDirectNextCheck);
+        }
         arrayPool.release(packedIntPairControl);
         packedIntPairControl = null;
         arrayPool.release(longGroupKeys);
         longGroupKeys = null;
-        arrayPool.release(longGroupIds);
+        releaseLongGroupIds(longGroupIds, useLongDirectGrouping);
         longGroupIds = null;
         arrayPool.release(longKeysByGroup);
         longKeysByGroup = new long[0];
@@ -1911,6 +2664,7 @@ final class GroupingState
             flatGroupingTable.releaseBuffers();
             flatGroupingTable = null;
         }
+        flatGroupingLayout = null;
     }
 
     private static boolean isSingleLongGroupingCandidate(Vector values)

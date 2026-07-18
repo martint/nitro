@@ -15,17 +15,26 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AccumulatorFusion;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
 
+import static org.weakref.nitro.operator.evaluator.ir.Stream.VALUES;
+
 public class AggregationOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AggregationOperator");
+    private static final boolean DEFER_RESULT_MATERIALIZATION =
+            Boolean.parseBoolean(System.getProperty("nitro.aggregate.deferResultMaterialization", "true"));
+    private static final Object ALLOCATION_POOL = new Object();
     private final Allocator allocator;
+    // Every live operator owns an independent lease scope. Instances still share ALLOCATION_POOL so a closed
+    // aggregate's buffers can be recycled by a later aggregate, but closing a nested aggregate must never release
+    // the state or result vectors of an outer aggregate that is still consuming its source.
+    private final Allocator.Context allocationContext = new Allocator.Context("AggregationOperator", ALLOCATION_POOL);
 
     private final Operator source;
     private final List<Accumulator> aggregations;
@@ -57,14 +66,14 @@ public class AggregationOperator
     public Batch next()
     {
         done = true;
-        BatchState batchState = new BatchState(allocator.allocateAllMask(ALLOCATION_CONTEXT, 1));
+        BatchState batchState = new BatchState(allocator.allocateAllMask(allocationContext, 1));
         currentBatchState = batchState;
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             int output = outputIndex;
             outputs[outputIndex] = resultOutput(batchState, output);
         }
-        return new Batch(batchState.mask, batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchState.mask, batchState::constrain, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
     }
 
     @Override
@@ -89,7 +98,7 @@ public class AggregationOperator
                     doAggregationIfNeeded(batchState);
                     return batchState.results[output].get(stream);
                 },
-                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                (stream, vector) -> allocator.transfer(allocationContext, vector));
     }
 
     private void doAggregationIfNeeded(BatchState batchState)
@@ -99,13 +108,17 @@ public class AggregationOperator
 
             Streams[] state = new Streams[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = aggregations.get(i).allocate(allocator, ALLOCATION_CONTEXT, 1);
+                state[i] = aggregations.get(i).allocate(allocator, allocationContext, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
-                reusableResults[i] = aggregations.get(i).result(0, state[i], reusableResults[i], allocator, ALLOCATION_CONTEXT);
-                batchState.results[i] = reusableResults[i];
+            }
+            if (!DEFER_RESULT_MATERIALIZATION) {
+                materializeResults(state, batchState);
             }
 
             if (batchState.mask.none()) {
+                if (DEFER_RESULT_MATERIALIZATION) {
+                    materializeResults(state, batchState);
+                }
                 return;
             }
 
@@ -117,20 +130,60 @@ public class AggregationOperator
                     }
                     for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
                         Accumulator accumulator = aggregations.get(aggregation);
-                        accumulator.accumulate(state[aggregation], 0, mask, StreamAccessors.forBatch(batch));
-                        reusableResults[aggregation] = accumulator.result(0, state[aggregation], reusableResults[aggregation], allocator, ALLOCATION_CONTEXT);
-                        batchState.results[aggregation] = reusableResults[aggregation];
+                        int filterColumn = accumulator.filterInputColumn();
+                        Mask aggregationMask = filterColumn < 0 ? mask : filterMask(batch, filterColumn, mask);
+                        try {
+                            accumulator.accumulate(state[aggregation], 0, aggregationMask, StreamAccessors.forBatch(batch));
+                        }
+                        finally {
+                            if (aggregationMask != mask) {
+                                allocator.release(allocationContext, aggregationMask);
+                            }
+                        }
+                        if (!DEFER_RESULT_MATERIALIZATION) {
+                            reusableResults[aggregation] = accumulator.result(0, state[aggregation], reusableResults[aggregation], allocator, allocationContext);
+                            batchState.results[aggregation] = reusableResults[aggregation];
+                        }
                     }
                 }
             }
+            if (DEFER_RESULT_MATERIALIZATION) {
+                materializeResults(state, batchState);
+            }
         }
+    }
+
+    private void materializeResults(Streams[] state, BatchState batchState)
+    {
+        for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
+            reusableResults[aggregation] = aggregations.get(aggregation).result(
+                    0,
+                    state[aggregation],
+                    reusableResults[aggregation],
+                    allocator,
+                    allocationContext);
+            batchState.results[aggregation] = reusableResults[aggregation];
+        }
+    }
+
+    private Mask filterMask(Batch batch, int filterColumn, Mask mask)
+    {
+        Output output = batch.output(filterColumn);
+        Mask direct = output.tryBorrowMask(VALUES, mask, true, allocator, allocationContext);
+        if (direct != null) {
+            return direct;
+        }
+        Mask selected = allocator.copyMask(allocationContext, mask);
+        var values = VectorAccess.booleanValues(output.borrow(VALUES));
+        selected.retainIf(position -> values.value(position));
+        return selected;
     }
 
     @Override
     public void close()
     {
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private final class BatchState

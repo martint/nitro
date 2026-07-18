@@ -174,7 +174,7 @@ public final class ExtractHostUtf8
     private static int extractLength(Vector values, int position)
     {
         return switch (values) {
-            case BinaryVector vector -> rangeLength(extractRange(vector.data(), vector.startOffset(position), vector.endOffset(position)));
+            case BinaryVector vector -> extractedLength(extractRange(vector.data(), vector.startOffset(position), vector.endOffset(position)));
             case DictionaryVector vector -> extractLength(vector.values(), vector.ids()[position]);
             case RleVector vector -> extractLength(vector.values(), vector.runIndex(position));
             default -> throw new IllegalArgumentException("Unsupported extract_host_utf8 vector type: " + values.getClass().getSimpleName());
@@ -187,6 +187,11 @@ public final class ExtractHostUtf8
             case BinaryVector vector -> {
                 long range = extractRange(vector.data(), vector.startOffset(inputPosition), vector.endOffset(inputPosition));
                 output.setBytes(outputPosition, vector.data(), rangeStart(range), rangeLength(range));
+                if (retainsFinalLineFeed(range)) {
+                    int outputOffset = output.endOffset(outputPosition);
+                    output.data()[outputOffset] = '\n';
+                    output.offsets()[outputPosition + 1] = outputOffset + 1;
+                }
             }
             case DictionaryVector vector -> writeExtracted(vector.values(), vector.ids()[inputPosition], output, outputPosition);
             case RleVector vector -> writeExtracted(vector.values(), vector.runIndex(inputPosition), output, outputPosition);
@@ -206,20 +211,28 @@ public final class ExtractHostUtf8
         else {
             // The specialized ClickBench expression is anchored to http(s). A non-matching regexp_replace returns
             // its input unchanged, so preserve the whole value rather than treating an arbitrary path as a host.
-            return packRange(start, end - start);
+            return packRange(start, end - start, false);
         }
         int hostEnd = hostStart;
         while (hostEnd < end && data[hostEnd] != '/') {
             hostEnd++;
         }
-        if (hostEnd == end) {
-            // The regexp requires a slash and trailing path after the authority; without it there is no match.
-            return packRange(start, end - start);
+        if (hostEnd == hostStart || hostEnd == end) {
+            // The regexp requires a non-empty authority followed by a slash. Preserve the complete input when
+            // either condition fails, matching regexp_replace's no-match result.
+            return packRange(start, end - start, false);
+        }
+        for (int index = hostEnd + 1; index < end - 1; index++) {
+            if (data[index] == '\n') {
+                // Joni's dot does not consume LF. The regexp's final `$` may match immediately before one final
+                // LF, but an earlier LF prevents the anchored expression from matching at all.
+                return packRange(start, end - start, false);
+            }
         }
         if (hostEnd - hostStart > WWW_PREFIX.length && startsWith(data, hostStart, hostEnd, WWW_PREFIX)) {
             hostStart += WWW_PREFIX.length;
         }
-        return packRange(hostStart, hostEnd - hostStart);
+        return packRange(hostStart, hostEnd - hostStart, end > hostEnd + 1 && data[end - 1] == '\n');
     }
 
     private static boolean startsWith(byte[] data, int start, int end, byte[] prefix)
@@ -235,9 +248,9 @@ public final class ExtractHostUtf8
         return true;
     }
 
-    private static long packRange(int start, int length)
+    private static long packRange(int start, int length, boolean retainsFinalLineFeed)
     {
-        return (((long) start) << 32) | (length & 0xFFFF_FFFFL);
+        return (((long) start) << 32) | (length & 0x7FFF_FFFFL) | (retainsFinalLineFeed ? 0x8000_0000L : 0);
     }
 
     private static int rangeStart(long range)
@@ -247,7 +260,17 @@ public final class ExtractHostUtf8
 
     private static int rangeLength(long range)
     {
-        return (int) range;
+        return (int) range & 0x7FFF_FFFF;
+    }
+
+    private static boolean retainsFinalLineFeed(long range)
+    {
+        return ((int) range) < 0;
+    }
+
+    private static int extractedLength(long range)
+    {
+        return rangeLength(range) + (retainsFinalLineFeed(range) ? 1 : 0);
     }
 
     private static void copyNulls(VectorAccess.BooleanValues inputNulls, Mask mask, BooleanVector output)

@@ -19,6 +19,7 @@ public class I64Vector
         implements FlatVector
 {
     private final long[] values;
+    private long contentGeneration;
 
     public I64Vector(int size)
     {
@@ -33,6 +34,12 @@ public class I64Vector
     public long[] values()
     {
         return values;
+    }
+
+    @Override
+    public long contentGeneration()
+    {
+        return contentGeneration;
     }
 
     /** Generated aggregation kernels use this common state update shape. */
@@ -132,6 +139,7 @@ public class I64Vector
     @Override
     public void clearForReuse()
     {
+        contentGeneration++;
         // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
     }
 

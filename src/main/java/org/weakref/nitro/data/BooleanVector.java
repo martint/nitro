@@ -19,12 +19,14 @@ public class BooleanVector
         implements FlatVector
 {
     private final boolean[] values;
-    // Lazily computed "are all entries false" flag. null = unknown (caller must scan), TRUE/FALSE = known.
+    private long contentGeneration;
+    // Lazily computed constant-content flags. null = unknown (caller must scan), TRUE/FALSE = known.
     // Reset to null on clearForReuse since the producer may write new values after reuse. Producers that
     // directly mutate {@link #values()} after publication invalidate this cache; in the Nitro codebase
     // BooleanVector instances are treated as immutable after they're exposed via {@link Streams}, so this
     // is safe. See {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}.
     private Boolean isAllFalseCache;
+    private Boolean isAllTrueCache;
 
     public BooleanVector(int size)
     {
@@ -39,6 +41,12 @@ public class BooleanVector
     public boolean[] values()
     {
         return values;
+    }
+
+    @Override
+    public long contentGeneration()
+    {
+        return contentGeneration;
     }
 
     /**
@@ -66,6 +74,22 @@ public class BooleanVector
         return true;
     }
 
+    public boolean isAllTrue()
+    {
+        Boolean cached = isAllTrueCache;
+        if (cached != null) {
+            return cached;
+        }
+        for (boolean value : values) {
+            if (!value) {
+                isAllTrueCache = Boolean.FALSE;
+                return false;
+            }
+        }
+        isAllTrueCache = Boolean.TRUE;
+        return true;
+    }
+
     /**
      * Records that every element is false and clears any stale true bits from a pooled backing array.
      * Nitro treats a {@link BooleanVector} as immutable once it has been published through
@@ -77,6 +101,14 @@ public class BooleanVector
     {
         Arrays.fill(values, false);
         isAllFalseCache = Boolean.TRUE;
+        isAllTrueCache = values.length == 0 ? Boolean.TRUE : Boolean.FALSE;
+    }
+
+    public void markAllTrue()
+    {
+        Arrays.fill(values, true);
+        isAllTrueCache = Boolean.TRUE;
+        isAllFalseCache = values.length == 0 ? Boolean.TRUE : Boolean.FALSE;
     }
 
     @Override
@@ -170,8 +202,10 @@ public class BooleanVector
     @Override
     public void clearForReuse()
     {
+        contentGeneration++;
         Arrays.fill(values, false);
         isAllFalseCache = null;
+        isAllTrueCache = null;
     }
 
     @Override

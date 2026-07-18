@@ -25,6 +25,7 @@ import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -95,8 +96,10 @@ class TestFusedGroupedAggregation
     }
 
     @Test
-    void fusedHighCardinalityMappedKeysRemainFused()
+    void fusedMappedOnlyKeysCrossToStagedBeyondLocalBoundary()
     {
+        // Dictionary mapping keeps key access compact through the local boundary, but without repeated adjacent
+        // groups a larger accumulator state returns to the staged path for dTLB locality.
         Map<Long, long[]> reference = new HashMap<>();
         List<TableOperator.Page> pages = new ArrayList<>();
         for (int start = 0; start < 100_000; start += 4_096) {
@@ -128,7 +131,9 @@ class TestFusedGroupedAggregation
     @Test
     void fusedHighCardinalityAdjacentRunsRemainFused()
     {
-        int rows = 100_000;
+        // Cross the ordinary 64K local-state boundary. Once adjacent reuse is physically proven, switching
+        // to staged grouping part-way through duplicates growth work and discards the generated loop's benefit.
+        int rows = 200_000;
         int batch = 4_096;
         Map<Long, long[]> reference = new HashMap<>();
         List<TableOperator.Page> pages = new ArrayList<>();
@@ -149,6 +154,58 @@ class TestFusedGroupedAggregation
             pages.add(TableOperator.Page.values(size, new Vector[] {new I64Vector(keys), new I64Vector(values)}, Mask.all(size)));
         }
         assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountAll()), reference, true);
+    }
+
+    @Test
+    void fusedRunCountCanDropDuplicateSlotKeysAcrossRehashes()
+    {
+        String enabled = System.getProperty("nitro.group.idIndexedLong");
+        String minimumGroups = System.getProperty("nitro.group.idIndexedLongMinGroups");
+        String maximumGroups = System.getProperty("nitro.group.idIndexedLongMaxGroups");
+        String capacityMultiplier = System.getProperty("nitro.group.idIndexedLongActivationCapacityMultiplier");
+        System.setProperty("nitro.group.idIndexedLong", "true");
+        System.setProperty("nitro.group.idIndexedLongMinGroups", "1024");
+        System.setProperty("nitro.group.idIndexedLongMaxGroups", "20000");
+        System.setProperty("nitro.group.idIndexedLongActivationCapacityMultiplier", "16");
+        try {
+            int rows = 200_000;
+            int batchSize = 4_096;
+            List<TableOperator.Page> pages = new ArrayList<>();
+            for (int start = 0; start < rows; start += batchSize) {
+                int size = Math.min(batchSize, rows - start);
+                long[] keys = new long[size];
+                for (int index = 0; index < size; index++) {
+                    keys[index] = (start + index) / 2;
+                }
+                pages.add(TableOperator.Page.values(size, new Vector[] {new I64Vector(keys)}, Mask.all(size)));
+            }
+
+            Allocator allocator = new Allocator();
+            Operator operator = new GroupedAggregationOperator(
+                    allocator,
+                    List.of(0),
+                    List.of(new CountAll()),
+                    new TableOperator(1, pages));
+            int groups = 0;
+            try (operator) {
+                while (operator.hasNext()) {
+                    try (Batch result = operator.next()) {
+                        I64Vector counts = (I64Vector) result.output(1).borrow(Stream.VALUES);
+                        for (int position : result.borrowMask()) {
+                            assertThat(counts.values()[position]).isEqualTo(2);
+                            groups++;
+                        }
+                    }
+                }
+            }
+            assertThat(groups).isEqualTo(rows / 2);
+        }
+        finally {
+            restoreProperty("nitro.group.idIndexedLong", enabled);
+            restoreProperty("nitro.group.idIndexedLongMinGroups", minimumGroups);
+            restoreProperty("nitro.group.idIndexedLongMaxGroups", maximumGroups);
+            restoreProperty("nitro.group.idIndexedLongActivationCapacityMultiplier", capacityMultiplier);
+        }
     }
 
     @Test
@@ -307,6 +364,92 @@ class TestFusedGroupedAggregation
         assertGroupedSumAndCount(pages, List.of(new Sum(1), new CountColumn(1)), reference, true);
     }
 
+    @Test
+    void fusedPlainAggregationWritesGroupsForFilteredAccumulator()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 120_000; start += 4_096) {
+            int size = Math.min(4_096, 120_000 - start);
+            long[] keys = new long[size];
+            long[] values = new long[size];
+            boolean[] marker = new boolean[size];
+            for (int index = 0; index < size; index++) {
+                long row = start + index;
+                long key = row % 2_000;
+                long value = row * 7 - 3;
+                boolean selected = row % 5 == 0;
+                keys[index] = key;
+                values[index] = value;
+                marker[index] = selected;
+                long[] state = reference.computeIfAbsent(key, ignored -> new long[2]);
+                state[0] += value;
+                if (selected) {
+                    state[1]++;
+                }
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {new I64Vector(keys), new I64Vector(values), new BooleanVector(marker)},
+                    Mask.all(size)));
+        }
+
+        assertGroupedSumAndCount(
+                pages,
+                List.of(new Sum(1), new FilteredAccumulator(new CountAll(), 2)),
+                reference,
+                true);
+    }
+
+    @Test
+    void fusedGroupingOnlyWritesGroupsForFilteredAccumulator()
+    {
+        Map<Long, Long> expected = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        for (int start = 0; start < 120_000; start += 4_096) {
+            int size = Math.min(4_096, 120_000 - start);
+            long[] keys = new long[size];
+            boolean[] marker = new boolean[size];
+            for (int index = 0; index < size; index++) {
+                long row = start + index;
+                long key = row % 2_000;
+                boolean selected = row % 5 == 0;
+                keys[index] = key;
+                marker[index] = selected;
+                if (selected) {
+                    expected.merge(key, 1L, Long::sum);
+                }
+                else {
+                    expected.putIfAbsent(key, 0L);
+                }
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {new I64Vector(keys), new BooleanVector(marker)},
+                    Mask.all(size)));
+        }
+
+        Allocator allocator = new Allocator();
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new FilteredAccumulator(new CountAll(), 1)),
+                new TableOperator(2, pages));
+        Map<Long, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues keys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    I64Vector counts = (I64Vector) result.output(1).borrow(Stream.VALUES);
+                    for (int position : result.borrowMask()) {
+                        actual.put(keys.value(position), counts.values()[position]);
+                    }
+                }
+            }
+        }
+        assertThat(actual).isEqualTo(expected);
+    }
+
     private static List<TableOperator.Page> buildNullFreePages(int rows, int groups, int batch, Map<Long, long[]> reference)
     {
         List<TableOperator.Page> pages = new ArrayList<>();
@@ -329,6 +472,16 @@ class TestFusedGroupedAggregation
         return pages;
     }
 
+    private static void restoreProperty(String name, String value)
+    {
+        if (value == null) {
+            System.clearProperty(name);
+        }
+        else {
+            System.setProperty(name, value);
+        }
+    }
+
     private static void assertGroupedSumAndCount(
             List<TableOperator.Page> pages,
             List<Accumulator> aggregations,
@@ -336,7 +489,11 @@ class TestFusedGroupedAggregation
             boolean checkCount)
     {
         Allocator allocator = new Allocator();
-        Operator operator = new GroupedAggregationOperator(allocator, List.of(0), aggregations, new TableOperator(2, pages));
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                aggregations,
+                new TableOperator(pages.getFirst().columns().length, pages));
 
         Map<Long, Long> actualSum = new HashMap<>();
         Map<Long, Long> actualCount = new HashMap<>();

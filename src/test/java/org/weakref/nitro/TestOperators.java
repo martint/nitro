@@ -23,6 +23,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -38,23 +39,29 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
+import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.ConditionalSum;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.Sum;
+import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -75,6 +82,7 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -591,6 +599,54 @@ public class TestOperators
             try (Batch batch = operator.next()) {
                 assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(11L, 22L, 23L);
             }
+        }
+    }
+
+    @Test
+    void testDictionaryComposesBasePositionsIntoCallerScratch()
+    {
+        I64Vector base = new I64Vector(new long[] {10, 20, 30, 40});
+        DictionaryVector inner = DictionaryVector.wrapNested(new int[] {3, 1, 0, 2}, 4, base);
+        DictionaryVector middle = DictionaryVector.wrapNested(new int[] {2, 0, 3}, 3, inner);
+        DictionaryVector outer = DictionaryVector.wrapNested(new int[] {1, 2, 0, 2}, 3, middle);
+        int[] composed = {-1, -1, -1, -1, -1};
+
+        Vector resolvedBase = outer.composeBasePositions(composed);
+
+        assertThat(resolvedBase).isSameAs(base);
+        assertThat(composed).containsExactly(3, 2, 0, -1, -1);
+    }
+
+    @Test
+    void testFusedProjectionReadsNestedDoubleDictionaryWithoutFlatteningValues()
+    {
+        F64Vector base = new F64Vector(new double[] {10, 20, 30, 40});
+        DictionaryVector inner = DictionaryVector.wrapNested(new int[] {3, 1, 0, 2}, 4, base);
+        DictionaryVector middle = DictionaryVector.wrapNested(new int[] {2, 0, 3}, 3, inner);
+        DictionaryVector outer = DictionaryVector.wrapNested(new int[] {1, 2, 0}, 3, middle);
+        Operator source = singleBatchOperator(Streams.ofValues(outer));
+
+        Variable one = new Variable(0);
+        Variable two = new Variable(1);
+        Variable incremented = new Variable(2);
+        Variable doubled = new Variable(3);
+        Reference result = new Reference(doubled, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1.0), AllMask.ALL),
+                        new Assignment(two, new Literal(2.0), AllMask.ALL),
+                        new Assignment(incremented, new Call("add_f64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(doubled, new Call("multiply_f64", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                new Reference(two, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        assertThat(FusedProjectionCompiler.tryCompile(plan, List.of(result))).isPresent();
+        try (ProjectOperator operator = new ProjectOperator(allocator, plan, primitiveRegistry(), source);
+                Batch batch = operator.next()) {
+            assertThat(((F64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(82.0, 62.0, 22.0);
         }
     }
 
@@ -1440,6 +1496,30 @@ public class TestOperators
     }
 
     @Test
+    void testAggregationOperatorMaterializesResultOnlyAfterAllInputBatches()
+    {
+        AtomicInteger resultMaterializations = new AtomicInteger();
+        Sum sum = new Sum(0)
+        {
+            @Override
+            public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
+            {
+                resultMaterializations.incrementAndGet();
+                return super.result(maxGroup, state, output, allocator, allocationContext);
+            }
+        };
+
+        try (Operator operator = new AggregationOperator(
+                allocator,
+                List.of(sum),
+                new GeneratorOperator(allocator, 25_000, 10_000, List.of(new SequenceGenerator(1))))) {
+            Batch batch = operator.next();
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()[0]).isEqualTo(312_512_500L);
+            assertThat(resultMaterializations).hasValue(1);
+        }
+    }
+
+    @Test
     void testLimitOperatorDefersPayloadBorrowsAndHonorsBatchConstraint()
     {
         AtomicInteger payloadBorrows = new AtomicInteger();
@@ -2264,6 +2344,68 @@ public class TestOperators
     }
 
     @Test
+    void testNestedAggregationsDoNotReleaseOuterState()
+    {
+        Operator firstEmptySemiJoin = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of()),
+                0,
+                new AggregationOperator(
+                        allocator,
+                        List.of(new Sum(0)),
+                        new ConstantTableOperator(allocator, 1, List.of(row(7L)))),
+                0);
+        Operator secondEmptySemiJoin = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of()),
+                0,
+                new AggregationOperator(
+                        allocator,
+                        List.of(new Sum(0)),
+                        new ConstantTableOperator(allocator, 1, List.of(row(11L)))),
+                0);
+
+        assertThat(operator(new AggregationOperator(
+                allocator,
+                List.of(new Sum(0)),
+                new UnionAllOperator(1, List.of(firstEmptySemiJoin, secondEmptySemiJoin)))))
+                .matchesExactly(List.of(row((Object) null)));
+    }
+
+    @Test
+    void testFusedF64SumAvgPreservesIndependentResultsAndNulls()
+    {
+        Operator global = new AggregationOperator(
+                allocator,
+                List.of(new SumF64(0), new AvgF64(0)),
+                new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(row(1.5), row((Object) null), row(2.5), row(4.0))));
+        assertThat(operator(global))
+                .matchesExactly(List.of(row(8.0, 8.0 / 3)));
+
+        // Reverse accumulator order exercises an AVG scanner writing its SUM follower's state.
+        Operator grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new AvgF64(1), new SumF64(1)),
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(1L, 1.0),
+                                row(1L, null),
+                                row(1L, 3.0),
+                                row(2L, null),
+                                row(2L, 5.0))));
+        assertThat(operator(grouped))
+                .matchesExactly(List.of(
+                        row(1L, 2.0, 4.0),
+                        row(2L, 5.0, 5.0)));
+    }
+
+    @Test
     void testCountColumn()
     {
         assertThat(operator(
@@ -2283,6 +2425,27 @@ public class TestOperators
                                         row(4L, null, 40L),
                                 row(5L, null, 50L))))))
                 .matchesExactly(List.of(row(4L, 0L, 5L)));
+    }
+
+    @Test
+    void testGroupedAccumulatorStateSurvivesFilterConstraint()
+    {
+        Operator grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Sum(1), new CountColumn(1)),
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(4L, 10L),
+                                row(4L, null),
+                                row(4L, 20L))));
+
+        // Resolving COUNT for the predicate and then constraining the grouped batch must not recycle the live
+        // accumulator state before downstream consumers borrow it again.
+        assertThat(operator(filterDivisibleBy(grouped, 2, 1, primitiveRegistry())))
+                .matchesExactly(List.of(row(4L, 30L, 2L)));
     }
 
     @Test
@@ -2538,6 +2701,59 @@ public class TestOperators
     }
 
     @Test
+    void testMarkDistinctMarkerPreservesRowsAndAddsMarker()
+    {
+        assertThat(operator(
+                new MarkDistinctMarkerOperator(
+                        allocator,
+                        new int[] {0, 1},
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 7L),
+                                        row(1L, 7L),
+                                        row(1L, 8L),
+                                        row(2L, 9L),
+                                        row(2L, 9L))))))
+                .matchesExactly(List.of(
+                        row(1L, 7L, 1L),
+                        row(1L, 7L, 0L),
+                        row(1L, 8L, 1L),
+                        row(2L, 9L, 1L),
+                        row(2L, 9L, 0L)));
+    }
+
+    @Test
+    void testGroupedAggregationConsumesSeparateDistinctMarkerThroughGenericFilter()
+    {
+        Operator marked = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 3},
+                new ConstantTableOperator(
+                        allocator,
+                        4,
+                        List.of(
+                                row(1L, 10L, 100L, 1000L),
+                                row(1L, 20L, 200L, 1000L),
+                                row(1L, 30L, 300L, 2000L),
+                                row(2L, 40L, 100L, 3000L),
+                                row(2L, 50L, 200L, 3000L),
+                                row(2L, 60L, 300L, 4000L))));
+
+        assertThat(operator(
+                new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        List.of(0),
+                        List.of(new Sum(1), new CountAll(), new Avg(2), new FilteredAccumulator(new CountAll(), 4)),
+                        marked)))
+                .matchesExactly(List.of(
+                        row(1L, 60L, 3L, 200.0, 2L),
+                        row(2L, 150L, 3L, 200.0, 2L)));
+    }
+
+    @Test
     void testInlineGroupedLongDistinctHandlesZeroNullAndPerGroupDuplicates()
     {
         assertThat(operator(
@@ -2557,10 +2773,19 @@ public class TestOperators
                                         row(2L, 0L),
                                         row(2L, 10L),
                                         row(2L, 10L),
-                                        row(2L, 20L))))))
+                                        row(2L, 20L),
+                                        row(3L, 0L),
+                                        row(3L, 1L),
+                                        row(3L, 2L),
+                                        row(3L, 3L),
+                                        row(3L, 4L),
+                                        row(3L, 5L),
+                                        row(3L, 5L),
+                                        row(3L, (Object) null))))))
                 .matchesExactly(List.of(
                         row(1L, 2L),
-                        row(2L, 3L)));
+                        row(2L, 3L),
+                        row(3L, 6L)));
     }
 
     @Test
@@ -2637,6 +2862,33 @@ public class TestOperators
                         row(20L, 107L, 147L, 635L, 5L),
                         row(21L, 108L, 148L, 640L, 5L),
                         row(22L, 109L, 149L, 645L, 5L)));
+    }
+
+    @Test
+    void testFusedMinMaxLargeGroupedNullableResults()
+    {
+        // More than the shared-state admission floor exercises the fused follower's independent
+        // result ownership. Some groups remain SQL NULL while the others receive multiple values.
+        List<org.weakref.nitro.data.Row> input = new ArrayList<>();
+        List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
+        for (long group = 0; group < 100; group++) {
+            if (group % 10 == 0) {
+                input.add(row(group, null));
+                expected.add(row(group, null, null));
+            }
+            else {
+                input.add(row(group, group + 10));
+                input.add(row(group, group - 10));
+                expected.add(row(group, group - 10, group + 10));
+            }
+        }
+
+        assertThat(operator(new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new Min(1), new Max(1)),
+                new ConstantTableOperator(allocator, 2, input))))
+                .matchesExactly(expected);
     }
 
     @Test
@@ -2913,6 +3165,59 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinBinaryDictionaryProbeCacheTracksBaseIdentityAndNulls()
+    {
+        BinaryVector buildKeys = new BinaryVector(3, 14);
+        buildKeys.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        buildKeys.setBytes(0, "alpha".getBytes(UTF_8));
+        buildKeys.setBytes(1, "beta".getBytes(UTF_8));
+        buildKeys.setBytes(2, "gamma".getBytes(UTF_8));
+
+        BinaryVector firstBase = new BinaryVector(3, 17);
+        firstBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        firstBase.setBytes(0, "gamma".getBytes(UTF_8));
+        firstBase.setBytes(1, "alpha".getBytes(UTF_8));
+        firstBase.setBytes(2, "missing".getBytes(UTF_8));
+        DictionaryVector firstProbe = DictionaryVector.wrap(new int[] {1, 0, 2, 1, 0, 2, 1, 0}, firstBase);
+
+        BinaryVector secondBase = new BinaryVector(3, 16);
+        secondBase.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        secondBase.setBytes(0, "beta".getBytes(UTF_8));
+        secondBase.setBytes(1, "absent".getBytes(UTF_8));
+        secondBase.setBytes(2, "alpha".getBytes(UTF_8));
+        DictionaryVector secondProbe = DictionaryVector.wrap(new int[] {0, 1, 2, 0, 1, 2}, secondBase);
+
+        Operator probe = new TableOperator(
+                1,
+                List.of(
+                        new TableOperator.Page(
+                                firstProbe.length(),
+                                new Streams[] {Streams.ofValuesAndNulls(
+                                        firstProbe,
+                                        new BooleanVector(new boolean[] {false, false, false, true, false, false, false, false}))},
+                                Mask.all(firstProbe.length())),
+                        TableOperator.Page.values(
+                                secondProbe.length(),
+                                new Vector[] {secondProbe},
+                                Mask.all(secondProbe.length()))));
+        Operator build = new TableOperator(
+                1,
+                List.of(TableOperator.Page.values(3, new Vector[] {buildKeys}, Mask.all(3))));
+
+        assertThat(operator(new HashJoinOperator(allocator, probe, 0, build, 0)))
+                .matchesExactly(List.of(
+                        row("alpha", "alpha"),
+                        row("gamma", "gamma"),
+                        row("gamma", "gamma"),
+                        row("alpha", "alpha"),
+                        row("gamma", "gamma"),
+                        row("beta", "beta"),
+                        row("alpha", "alpha"),
+                        row("beta", "beta"),
+                        row("alpha", "alpha")));
+    }
+
+    @Test
     void testHashJoinPromotesImplicitBuildRowReferencesOnNullGap()
     {
         assertThat(operator(
@@ -2972,6 +3277,52 @@ public class TestOperators
                         0)
                         .withOutputs(0)))
                 .matchesExactly(List.of(row(7L), row(7L), row(7L)));
+    }
+
+    @Test
+    void testHashJoinKeyOnlyDirectRangeBuildPreservesDuplicateMultiplicityAcrossBatches()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 1, List.of(row(7L), row(8L), row(9L))),
+                        0,
+                        new GeneratorOperator(allocator, 8, 4, List.of(new SequenceGenerator(7, 9))),
+                        0)
+                        .withOutputs(0)))
+                .matchesExactly(List.of(
+                        row(7L), row(7L), row(7L), row(7L),
+                        row(8L), row(8L), row(8L), row(8L)));
+    }
+
+    @Test
+    void testHashJoinDirectRangeBuildPreservesMultipleSparseDuplicateGroups()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 1, List.of(row(7L), row(70_000L), row(900_000L))),
+                        0,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(7L, 70L),
+                                        row(70_000L, 700_001L),
+                                        row(7L, 71L),
+                                        row(900_000L, 9_000_001L),
+                                        row(70_000L, 700_002L),
+                                        row(900_000L, 9_000_002L),
+                                        row(900_000L, 9_000_003L))),
+                        0)))
+                .matchesExactly(List.of(
+                        row(7L, 7L, 70L),
+                        row(7L, 7L, 71L),
+                        row(70_000L, 70_000L, 700_001L),
+                        row(70_000L, 70_000L, 700_002L),
+                        row(900_000L, 900_000L, 9_000_001L),
+                        row(900_000L, 900_000L, 9_000_002L),
+                        row(900_000L, 900_000L, 9_000_003L)));
     }
 
     @Test
@@ -3216,6 +3567,32 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinDenseLongPairPromotesSingleBatchPositionsAcrossBatches()
+    {
+        Operator build = new TableOperator(
+                3,
+                List.of(
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {2}), new I64Vector(new long[] {100})},
+                                Mask.all(1)),
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {2}), new I64Vector(new long[] {200})},
+                                Mask.all(1))));
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 3, List.of(row(1L, 2L, 10L))),
+                        new int[] {0, 1},
+                        build,
+                        new int[] {0, 1})))
+                .matchesExactly(List.of(
+                        row(1L, 2L, 10L, 1L, 2L, 100L),
+                        row(1L, 2L, 10L, 1L, 2L, 200L)));
+    }
+
+    @Test
     void testHashJoinKeyOnlyLongPairPreservesWideKeyDuplicateMultiplicity()
     {
         long wideKey = 0x1_0000_0001L;
@@ -3385,6 +3762,72 @@ public class TestOperators
             assertThat(projectedPayloads.values()[0]).isEqualTo(900L);
             assertThat(payloadBorrows).hasValue(1);
             assertThat(constrainedMask.get()).containsExactly(2);
+        }
+    }
+
+    @Test
+    void testHashJoinForwardsFullyConsumedIdentityOuterPayload()
+    {
+        AtomicReference<Mask> constrainedMask = new AtomicReference<>();
+        I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
+        I64Vector payload = new I64Vector(new long[] {10L, 20L, 30L});
+        Operator outer = new Operator()
+        {
+            private boolean done;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !done;
+            }
+
+            @Override
+            public Batch next()
+            {
+                done = true;
+                return new Batch(
+                        Mask.all(3),
+                        constrainedMask::set,
+                        Function.identity(),
+                        new Output(Set.of(Stream.VALUES), ignored -> keys),
+                        new Output(Set.of(Stream.VALUES), ignored -> payload));
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                constrainedMask.set(mask);
+            }
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return true;
+            }
+
+            @Override
+            public void close()
+            {
+            }
+        };
+
+        try (Operator join = new HashJoinOperator(
+                allocator,
+                outer,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                0)) {
+            try (Batch batch = join.next()) {
+                assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
+                assertThat(batch.output(1).borrow(Stream.VALUES)).isSameAs(payload);
+                assertThat(constrainedMask.get()).isNull();
+            }
         }
     }
 
@@ -3637,6 +4080,39 @@ public class TestOperators
                         row(7L, 98L, -49L),
                         row(8L, 128L, -64L),
                         row(9L, 162L, -81L)));
+    }
+
+    private static Operator singleBatchOperator(Streams streams)
+    {
+        return new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(Mask.all(streams.values().length()), Output.of(streams));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
     }
 
     private FilterOperator filterDivisibleBy(Operator source, int inputColumn, long divisor, PrimitiveRegistry primitiveRegistry)

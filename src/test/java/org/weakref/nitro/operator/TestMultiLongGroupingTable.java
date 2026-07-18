@@ -160,6 +160,83 @@ class TestMultiLongGroupingTable
     }
 
     @Test
+    void testAdaptiveDirectDistinctKernelDenseSparseAndPromotion()
+    {
+        int arity = 3;
+        long[][] keys = {
+                {10, 10, 20, 10, 30, 20, 40, 50},
+                {1, 1, 2, 1, 3, 2, 4, 5},
+                {7, 7, 8, 7, 9, 8, 10, 11},
+        };
+        VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[arity];
+        for (int column = 0; column < arity; column++) {
+            long[] columnKeys = keys[column];
+            keyAccessors[column] = position -> columnKeys[position];
+        }
+
+        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(arity, 16);
+        int[] distinctPositions = new int[keys[0].length];
+
+        long nextGroupId = table.assignDistinctBatch(
+                keyAccessors, null, 6, keys[0].length, distinctPositions, 0);
+        assertThat(nextGroupId).isEqualTo(3);
+        assertThat(distinctPositions).startsWith(0, 2, 4);
+
+        int[] sparsePositions = {1, 5, 6, 7};
+        nextGroupId = table.assignDistinctBatch(
+                keyAccessors, sparsePositions, sparsePositions.length, keys[0].length, distinctPositions, nextGroupId);
+        assertThat(nextGroupId).isEqualTo(5);
+        assertThat(distinctPositions).startsWith(6, 7);
+
+        // A wide value after an already-inserted compact prefix forces promotion. The replay must neither
+        // duplicate that prefix nor lose its first-seen position, and subsequent promoted batches must retain
+        // the same direct-distinct contract.
+        keys[0][1] = 60;
+        keys[1][1] = 6;
+        keys[2][1] = 12;
+        keys[0][3] = 1L << 40;
+        keys[1][3] = 13;
+        keys[2][3] = 14;
+        int[] promotionPositions = {1, 3, 3};
+        nextGroupId = table.assignDistinctBatch(
+                keyAccessors, promotionPositions, promotionPositions.length, keys[0].length, distinctPositions, nextGroupId);
+        assertThat(nextGroupId).isEqualTo(7);
+        assertThat(distinctPositions).startsWith(1, 3);
+
+        int[] promotedPositions = {0, 3, 1, 4};
+        nextGroupId = table.assignDistinctBatch(
+                keyAccessors, promotedPositions, promotedPositions.length, keys[0].length, distinctPositions, nextGroupId);
+        assertThat(nextGroupId).isEqualTo(7);
+        table.releaseBuffers();
+    }
+
+    @Test
+    void testAdaptiveDistinctGroupedProbePreservesLinearOrderAndWrap()
+    {
+        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(2, 800_000);
+        int fragment = 0xA5;
+        int mismatch = 0x81 << 24 | 1;
+        int last = table.slots.length - 1;
+
+        for (int slot = 64; slot < 71; slot++) {
+            table.slots[slot] = mismatch;
+        }
+        table.slots[71] = fragment << 24 | 2;
+        assertThat(table.nextProbeCandidate(table.slots, 64, table.slotMask, fragment)).isEqualTo(71);
+
+        for (int slot = last - 3; slot <= last; slot++) {
+            table.slots[slot] = mismatch;
+        }
+        table.slots[0] = mismatch;
+        table.slots[1] = fragment << 24 | 3;
+        assertThat(table.nextProbeCandidate(table.slots, last - 3, table.slotMask, fragment)).isEqualTo(1);
+
+        table.slots[last] = 0;
+        assertThat(table.nextProbeCandidate(table.slots, last - 1, table.slotMask, fragment)).isEqualTo(last);
+        table.releaseBuffers();
+    }
+
+    @Test
     void testAdaptivePerColumnNullFreeAccessors()
     {
         int arity = 5;

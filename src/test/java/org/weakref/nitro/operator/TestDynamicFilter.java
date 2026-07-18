@@ -33,6 +33,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestDynamicFilter
 {
     @Test
+    void testCollectedValuesPreserveExactMembershipAndDistinctSize()
+    {
+        long[] values = {0, -7, 12, -7, 12, 3};
+        DynamicFilter filter = DynamicFilter.fromCollectedValues(2, values, values.length, -7, 12);
+
+        assertThat(filter.column()).isEqualTo(2);
+        assertThat(filter.size()).isEqualTo(4);
+        assertThat(filter.accepts(-7)).isTrue();
+        assertThat(filter.accepts(0)).isTrue();
+        assertThat(filter.accepts(3)).isTrue();
+        assertThat(filter.accepts(12)).isTrue();
+        assertThat(filter.accepts(-8)).isFalse();
+        assertThat(filter.accepts(1)).isFalse();
+        assertThat(filter.accepts(13)).isFalse();
+    }
+
+    @Test
+    void testCollectedValuesUseExactSparseFallback()
+    {
+        long[] values = {Long.MIN_VALUE, 5, Long.MAX_VALUE, 5};
+        DynamicFilter filter = DynamicFilter.fromCollectedValues(
+                0,
+                values,
+                values.length,
+                Long.MIN_VALUE,
+                Long.MAX_VALUE);
+
+        assertThat(filter.size()).isEqualTo(3);
+        assertThat(filter.accepts(Long.MIN_VALUE)).isTrue();
+        assertThat(filter.accepts(5)).isTrue();
+        assertThat(filter.accepts(Long.MAX_VALUE)).isTrue();
+        assertThat(filter.accepts(6)).isFalse();
+    }
+
+    @Test
     void inclusiveRange()
     {
         DynamicFilter filter = DynamicFilter.fromRange(3, 10, 12);

@@ -175,6 +175,12 @@ public class FilterOperator
     }
 
     @Override
+    public boolean supportsDynamicFilterPushdown(int column)
+    {
+        return source.supportsDynamicFilterPushdown(column);
+    }
+
+    @Override
     public boolean supportsRetainedBatches()
     {
         return source.supportsRetainedBatches();

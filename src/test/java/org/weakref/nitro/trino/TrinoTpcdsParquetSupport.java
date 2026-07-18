@@ -38,6 +38,7 @@ import io.trino.operator.WindowFunctionDefinition;
 import io.trino.operator.WindowOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.operator.join.JoinBridgeManager;
+import io.trino.operator.join.JoinOperatorFactory;
 import io.trino.operator.join.NestedLoopJoinBridge;
 import io.trino.operator.join.NestedLoopJoinPagesSupplier;
 import io.trino.operator.window.AggregationWindowFunctionSupplier;
@@ -1198,9 +1199,7 @@ public final class TrinoTpcdsParquetSupport
 
     private PipelinePlan query66Plan(TpcdsParquetTables tables)
     {
-        List<Type> monthlyRollupTypes = query66MonthlyRollupTypes(tables);
         List<Type> outputTypes = query66OutputTypes(tables);
-        Type warehouseSquareFeetType = monthlyRollupTypes.get(1);
 
         return new PipelinePlan(
                 new UnionPipelineSource(
@@ -1211,7 +1210,7 @@ public final class TrinoTpcdsParquetSupport
                 List.of(
                         namedFactoryStep("q66.group.final", hashAggregationFactory(
                                 66_20,
-                                monthlyRollupTypes.subList(0, 8),
+                                outputTypes.subList(0, 8),
                                 List.of(0, 1, 2, 3, 4, 5, 6, 7),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(9), OptionalInt.empty()),
@@ -1236,12 +1235,19 @@ public final class TrinoTpcdsParquetSupport
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(28), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(29), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(30), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(31), OptionalInt.empty()))),
-                        namedFactoryStep("q66.project.final", filterAndProjectFactory(
-                                66_21,
-                                Optional.empty(),
-                                query66FinalProjections(outputTypes, warehouseSquareFeetType),
-                                outputTypes)),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(31), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(32), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(33), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(34), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(35), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(36), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(37), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(38), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(39), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(40), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(41), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(42), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(43), OptionalInt.empty()))),
                         namedFactoryStep("q66.topn", topNFactory(
                                 66_22,
                                 outputTypes,
@@ -1337,7 +1343,12 @@ public final class TrinoTpcdsParquetSupport
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(28), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(29), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(30), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(31), OptionalInt.empty())))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(31), OptionalInt.empty()))),
+                        namedFactoryStep(queryName + ".project.channel_output", filterAndProjectFactory(
+                                66_600 + Math.abs(queryName.hashCode() % 100),
+                                Optional.empty(),
+                                query66FinalProjections(query66OutputTypes(tables), warehouseTypes.get(2)),
+                                query66OutputTypes(tables)))),
                 queryName + ".sink.channel");
     }
 
@@ -1384,7 +1395,10 @@ public final class TrinoTpcdsParquetSupport
             projections.add(field(index, BIGINT));
         }
         for (int month = 0; month < 12; month++) {
-            projections.add(divideRounded(field(8 + month, BIGINT), cast(field(1, warehouseSquareFeetType), warehouseSquareFeetType, BIGINT)));
+            // DECIMAL(?,2) / INTEGER is DECIMAL(?,6) in the authoritative SQL plan.  The
+            // monthly values are stored as cents, so retain four additional fractional
+            // digits to represent the SQL result as its unscaled BIGINT value.
+            projections.add(divideScaleRounded(field(8 + month, BIGINT), cast(field(1, warehouseSquareFeetType), warehouseSquareFeetType, BIGINT), 10_000L));
         }
         for (int index = 20; index < 32; index++) {
             projections.add(field(index, BIGINT));
@@ -2084,24 +2098,37 @@ public final class TrinoTpcdsParquetSupport
         List<Type> cumulativeTypes = query51ChannelTypes(tables);
         List<Type> mergedTypes = List.of(cumulativeTypes.get(0), cumulativeTypes.get(1), BIGINT, BIGINT);
         List<Type> windowedTypes = concatTypes(mergedTypes, List.of(BIGINT, BIGINT));
-        return appendPlan(
-                new PipelinePlan(
-                        new UnionPipelineSource(
+        PipelinePlan joined = appendPlan(
+                query51ChannelPlan(tables, "q51.web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price"),
+                List.of(
+                        namedHashJoinStep("q51.full_join.channels", new HashJoinSpec(
+                                51_20,
+                                cumulativeTypes,
+                                List.of(0, 1),
+                                query51ChannelPlan(tables, "q51.store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price"),
+                                cumulativeTypes,
+                                List.of(0, 1),
+                                JoinType.FULL)),
+                        namedFactoryStep("q51.project.coalesced_keys", filterAndProjectFactory(
+                                51_21,
+                                Optional.empty(),
                                 List.of(
-                                        query51MergedChannelPlan(tables, "q51.web", "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price", true),
-                                        query51MergedChannelPlan(tables, "q51.store", "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price", false)),
-                                "q51.union.channels"),
-                        List.of(
-                                namedFactoryStep("q51.group.day", hashAggregationFactory(
-                                        51_20,
-                                        mergedTypes.subList(0, 2),
-                                        List.of(0, 1),
-                                        FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
-                                        FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
-                        "q51.sink.day"),
+                                        coalesce(field(0, cumulativeTypes.get(0)), field(3, cumulativeTypes.get(0)), cumulativeTypes.get(0)),
+                                        coalesce(field(1, cumulativeTypes.get(1)), field(4, cumulativeTypes.get(1)), cumulativeTypes.get(1)),
+                                        field(2, BIGINT),
+                                        field(5, BIGINT)),
+                                mergedTypes))),
+                "q51.sink.joined",
+                mergedTypes);
+
+        // A FULL lookup join has a probe driver and a lookup-outer driver. Merge those
+        // streams at a pipeline boundary before the stateful window, matching Trino's
+        // local-exchange shape; running a separate window in each driver is not equivalent.
+        return new PipelinePlan(
+                new UnionPipelineSource(List.of(joined), "q51.source.joined"),
                 List.of(
                         namedFactoryStep("q51.window.cumulative", windowFactory(
-                                51_21,
+                                51_22,
                                 mergedTypes,
                                 List.of(0, 1, 2, 3),
                                 List.of(0),
@@ -2111,7 +2138,7 @@ public final class TrinoTpcdsParquetSupport
                                         aggregateWindowFunction("max", List.of(BIGINT), BIGINT, RUNNING_ROWS_FRAME, 2),
                                         aggregateWindowFunction("max", List.of(BIGINT), BIGINT, RUNNING_ROWS_FRAME, 3)))),
                         namedFactoryStep("q51.filter.project", filterAndProjectFactory(
-                                51_22,
+                                51_23,
                                 Optional.of(greaterThan(field(4, BIGINT), field(5, BIGINT), BIGINT)),
                                 List.of(
                                         field(0, cumulativeTypes.get(0)),
@@ -2122,29 +2149,13 @@ public final class TrinoTpcdsParquetSupport
                                         field(5, BIGINT)),
                                 query51OutputTypes(tables))),
                         namedFactoryStep("q51.topn", topNFactory(
-                                51_23,
+                                51_24,
                                 query51OutputTypes(tables),
                                 100,
                                 List.of(0, 1),
                                 List.of(ASC_NULLS_LAST, ASC_NULLS_LAST)))),
-                "q51.sink.final");
-    }
-
-    private PipelinePlan query51MergedChannelPlan(TpcdsParquetTables tables, String queryName, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn, boolean webChannel)
-    {
-        List<Type> channelTypes = query51ChannelTypes(tables);
-        return appendPlan(
-                query51ChannelPlan(tables, queryName, salesTable, soldDateColumn, itemColumn, salesPriceColumn),
-                List.of(namedFactoryStep(queryName + ".project.merged", filterAndProjectFactory(
-                        51_100 + Math.abs(queryName.hashCode() % 100),
-                        Optional.empty(),
-                        List.of(
-                                field(0, channelTypes.get(0)),
-                                field(1, channelTypes.get(1)),
-                                webChannel ? field(2, BIGINT) : nullConstant(BIGINT),
-                                webChannel ? nullConstant(BIGINT) : field(2, BIGINT)),
-                        List.of(channelTypes.get(0), channelTypes.get(1), BIGINT, BIGINT)))),
-                queryName + ".sink.merged");
+                "q51.sink.final",
+                query51OutputTypes(tables));
     }
 
     private PipelinePlan query51ChannelPlan(TpcdsParquetTables tables, String queryName, String salesTable, String soldDateColumn, String itemColumn, String salesPriceColumn)
@@ -2184,8 +2195,17 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0),
                                 List.of(1),
                                 List.of(ASC_NULLS_LAST),
-                                List.of(aggregateWindowFunction("sum", List.of(BIGINT), BIGINT, RUNNING_ROWS_FRAME, 2))))),
-                queryName + ".sink.cumulative");
+                                List.of(aggregateWindowFunction("sum", List.of(BIGINT), BIGINT, RUNNING_ROWS_FRAME, 2)))),
+                        namedFactoryStep(queryName + ".project.cumulative", filterAndProjectFactory(
+                                51_12 + Math.abs(queryName.hashCode() % 100),
+                                Optional.empty(),
+                                List.of(
+                                        field(0, outputTypes.get(0)),
+                                        field(1, outputTypes.get(1)),
+                                        field(3, BIGINT)),
+                                outputTypes))),
+                queryName + ".sink.cumulative",
+                outputTypes);
     }
 
     private List<Type> query51ChannelTypes(TpcdsParquetTables tables)
@@ -2548,13 +2568,13 @@ public final class TrinoTpcdsParquetSupport
                                         field(20, storeTypes.get(1)),
                                         field(21, storeTypes.get(2)),
                                         field(1, weeklyTypes.get(0)),
-                                        divideScaleRoundedSafe(field(3, BIGINT), field(12, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(4, BIGINT), field(13, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(5, BIGINT), field(14, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(6, BIGINT), field(15, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(7, BIGINT), field(16, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(8, BIGINT), field(17, BIGINT), 100L),
-                                        divideScaleRoundedSafe(field(9, BIGINT), field(18, BIGINT), 100L)),
+                                        divideScaleRoundedSafe(field(3, BIGINT), field(12, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(4, BIGINT), field(13, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(5, BIGINT), field(14, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(6, BIGINT), field(15, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(7, BIGINT), field(16, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(8, BIGINT), field(17, BIGINT), 1_000_000L),
+                                        divideScaleRoundedSafe(field(9, BIGINT), field(18, BIGINT), 1_000_000L)),
                                 outputTypes)),
                         namedFactoryStep("q59.topn", topNFactory(
                                 59_13,
@@ -2599,13 +2619,22 @@ public final class TrinoTpcdsParquetSupport
                 tables,
                 "date_dim",
                 List.of("d_date_sk", "d_week_seq", "d_day_name", "d_month_seq"),
-                Optional.of(and(
-                        greaterThan(field(3, dateTypes.get(3)), constant(minimumMonthSequenceInclusive - 1, dateTypes.get(3)), dateTypes.get(3)),
-                        lessThan(field(3, dateTypes.get(3)), constant(maximumMonthSequenceInclusive + 1, dateTypes.get(3)), dateTypes.get(3)))),
+                Optional.empty(),
                 List.of(field(0, dateTypes.get(0)), field(1, dateTypes.get(1)), field(2, dateTypes.get(2))),
                 List.of(dateTypes.get(0), dateTypes.get(1), dateTypes.get(2)),
                 queryName + ".scan.date_dim",
                 queryName + ".sink.date_dim");
+        PipelinePlan selectedWeeks = relationPlan(
+                tables,
+                "date_dim",
+                List.of("d_week_seq", "d_month_seq"),
+                Optional.of(and(
+                        greaterThan(field(1, dateTypes.get(3)), constant(minimumMonthSequenceInclusive - 1, dateTypes.get(3)), dateTypes.get(3)),
+                        lessThan(field(1, dateTypes.get(3)), constant(maximumMonthSequenceInclusive + 1, dateTypes.get(3)), dateTypes.get(3)))),
+                List.of(field(0, dateTypes.get(1))),
+                List.of(dateTypes.get(1)),
+                queryName + ".scan.selected_weeks",
+                queryName + ".sink.selected_weeks");
 
         return appendPlan(
                 relationPlan(
@@ -2634,7 +2663,14 @@ public final class TrinoTpcdsParquetSupport
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(7), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty())))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty()))),
+                        namedHashJoinStep(queryName + ".join.selected_weeks", new HashJoinSpec(
+                                59_5 + Math.abs(queryName.hashCode() % 100),
+                                outputTypes,
+                                List.of(0),
+                                selectedWeeks,
+                                List.of(dateTypes.get(1)),
+                                List.of(0)).withOutputs(rangeList(outputTypes.size()), List.of()))),
                 queryName + ".sink.final",
                 outputTypes);
     }
@@ -3114,14 +3150,12 @@ public final class TrinoTpcdsParquetSupport
                                         field(10, afterWebJoinTypes.get(10)),
                                         field(11, afterWebJoinTypes.get(11))),
                                 afterWebTypes)),
-                        // TPC-DS q78's catalog join has the well-known tautology cs_item_sk = cs_item_sk, so cs is
-                        // joined on (year, customer) only (cols 0, 2) — not item — fanning out across items.
-                        namedHashJoinStep("q78.join.catalog", new HashJoinSpec(78_22, afterWebTypes, List.of(0, 2), query78ChannelPlan(tables, "q78.catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_customer_sk", "cs_order_number", "cs_quantity", "cs_wholesale_cost", "cs_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number"), channelTypes, List.of(0, 2), JoinType.LEFT)),
+                        // SQL joins catalog on the same complete (year, item, customer) key as web.
+                        namedHashJoinStep("q78.join.catalog", new HashJoinSpec(78_22, afterWebTypes, List.of(0, 1, 2), query78ChannelPlan(tables, "q78.catalog", "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_bill_customer_sk", "cs_order_number", "cs_quantity", "cs_wholesale_cost", "cs_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number"), channelTypes, List.of(0, 1, 2), JoinType.LEFT)),
                         namedFactoryStep("q78.project.output", filterAndProjectFactory(
                                 78_23,
-                                // SQL keeps rows where BOTH coalesce(ws_qty,0) > 0 AND coalesce(cs_qty,0) > 0,
-                                // not merely where their sum is positive.
-                                Optional.of(and(greaterThan(webQuantity, constant(0L, BIGINT), BIGINT), greaterThan(catalogQuantity, constant(0L, BIGINT), BIGINT))),
+                                // SQL keeps a store group when either other channel contributes positive quantity.
+                                Optional.of(or(greaterThan(webQuantity, constant(0L, BIGINT), BIGINT), greaterThan(catalogQuantity, constant(0L, BIGINT), BIGINT))),
                                 List.of(
                                         field(0, channelTypes.get(0)),
                                         field(1, channelTypes.get(1)),
@@ -3384,7 +3418,7 @@ public final class TrinoTpcdsParquetSupport
         List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_current_addr_sk", "c_customer_sk", "c_current_cdemo_sk"));
         List<Type> eligibleCustomerTypes = List.of(customerTypes.get(0), customerTypes.get(1), customerTypes.get(2), addressTypes.get(1));
         List<Type> demographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count", "cd_dep_employed_count", "cd_dep_college_count"));
-        List<Type> groupKeyTypes = List.of(demographicsTypes.get(2), demographicsTypes.get(3), demographicsTypes.get(4), demographicsTypes.get(5), demographicsTypes.get(6));
+        List<Type> groupKeyTypes = List.of(demographicsTypes.get(1), demographicsTypes.get(2), demographicsTypes.get(3), demographicsTypes.get(4), demographicsTypes.get(5));
 
         PipelinePlan eligibleAddresses = relationPlan(
                 tables,
@@ -3449,11 +3483,11 @@ public final class TrinoTpcdsParquetSupport
                                 69_7,
                                 Optional.empty(),
                                 List.of(
+                                        field(5, demographicsTypes.get(1)),
                                         field(6, demographicsTypes.get(2)),
                                         field(7, demographicsTypes.get(3)),
                                         field(8, demographicsTypes.get(4)),
-                                        field(9, demographicsTypes.get(5)),
-                                        field(10, demographicsTypes.get(6))),
+                                        field(9, demographicsTypes.get(5))),
                                 groupKeyTypes)),
                         namedFactoryStep("q69.group.final", hashAggregationFactory(
                                 69_8,
@@ -3484,7 +3518,7 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query69OutputTypes(TpcdsParquetTables tables)
     {
-        List<Type> demographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating", "cd_dep_count"));
+        List<Type> demographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_gender", "cd_marital_status", "cd_education_status", "cd_purchase_estimate", "cd_credit_rating"));
         return List.of(demographicsTypes.get(0), demographicsTypes.get(1), demographicsTypes.get(2), BIGINT, demographicsTypes.get(3), BIGINT, demographicsTypes.get(4), BIGINT);
     }
 
@@ -3923,6 +3957,7 @@ public final class TrinoTpcdsParquetSupport
     private PipelinePlan query63Plan(TpcdsParquetTables tables)
     {
         List<Type> monthlySalesTypes = query63MonthlySalesTypes(tables);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
         return appendPlan(
                 query63MonthlySalesByManagerPlan(tables),
                 List.of(
@@ -3933,17 +3968,18 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0),
                                 List.of(),
                                 List.of(),
-                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), BIGINT, PARTITION_ROWS_FRAME, 2)))),
+                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), averageType, PARTITION_ROWS_FRAME, 2)))),
                         namedFactoryStep("q63.filter.project", filterAndProjectFactory(
                                 63_11,
-                                Optional.of(queryRelativeDeviationPredicate(2, 3, BIGINT, BIGINT)),
-                                List.of(field(0, monthlySalesTypes.get(0)), field(2, BIGINT), field(3, BIGINT)),
+                                Optional.of(queryRelativeDeviationPredicate(2, 3, BIGINT, averageType)),
+                                List.of(field(0, monthlySalesTypes.get(0)), field(2, BIGINT), field(3, averageType)),
                                 query63OutputTypes(tables))),
                         namedFactoryStep("q63.topn", topNFactory(
                                 63_12,
                                 query63OutputTypes(tables),
                                 100,
-                                List.of(2, 1, 0),
+                                // Trino benchmark SQL: i_manager_id, avg_monthly_sales, sum_sales.
+                                List.of(0, 2, 1),
                                 List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
                 "q63.sink.final");
     }
@@ -4006,12 +4042,14 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query63OutputTypes(TpcdsParquetTables tables)
     {
-        return List.of(query63MonthlySalesTypes(tables).get(0), BIGINT, BIGINT);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
+        return List.of(query63MonthlySalesTypes(tables).get(0), BIGINT, averageType);
     }
 
     private PipelinePlan query89Plan(TpcdsParquetTables tables)
     {
         List<Type> monthlySalesTypes = query89MonthlySalesTypes(tables);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
         return appendPlan(
                 query89MonthlySalesPlan(tables),
                 List.of(
@@ -4022,10 +4060,10 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0, 2, 3, 4),
                                 List.of(),
                                 List.of(),
-                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), BIGINT, PARTITION_ROWS_FRAME, 6)))),
+                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), averageType, PARTITION_ROWS_FRAME, 6)))),
                         namedFactoryStep("q89.filter.project", filterAndProjectFactory(
                                 89_11,
-                                Optional.of(queryRelativeDeviationPredicate(6, 7, BIGINT, BIGINT)),
+                                Optional.of(queryRelativeDeviationPredicate(6, 7, BIGINT, averageType)),
                                 List.of(
                                         field(0, monthlySalesTypes.get(0)),
                                         field(1, monthlySalesTypes.get(1)),
@@ -4034,8 +4072,8 @@ public final class TrinoTpcdsParquetSupport
                                         field(4, monthlySalesTypes.get(4)),
                                         field(5, monthlySalesTypes.get(5)),
                                         field(6, BIGINT),
-                                        field(7, BIGINT),
-                                        subtract(field(6, BIGINT), field(7, BIGINT), BIGINT)),
+                                        field(7, averageType),
+                                        subtract(cast(field(6, BIGINT), BIGINT, DOUBLE), field(7, averageType), DOUBLE)),
                                 query89OutputTypes(tables))),
                         namedFactoryStep("q89.topn", topNFactory(
                                 89_12,
@@ -4147,13 +4185,14 @@ public final class TrinoTpcdsParquetSupport
     private List<Type> query89OutputTypesWithoutSortKey(TpcdsParquetTables tables)
     {
         List<Type> monthlySalesTypes = query89MonthlySalesTypes(tables);
-        return List.of(monthlySalesTypes.get(0), monthlySalesTypes.get(1), monthlySalesTypes.get(2), monthlySalesTypes.get(3), monthlySalesTypes.get(4), monthlySalesTypes.get(5), BIGINT, BIGINT);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
+        return List.of(monthlySalesTypes.get(0), monthlySalesTypes.get(1), monthlySalesTypes.get(2), monthlySalesTypes.get(3), monthlySalesTypes.get(4), monthlySalesTypes.get(5), BIGINT, averageType);
     }
 
     private List<Type> query89OutputTypes(TpcdsParquetTables tables)
     {
         List<Type> types = new ArrayList<>(query89OutputTypesWithoutSortKey(tables));
-        types.add(BIGINT);
+        types.add(DOUBLE);
         return List.copyOf(types);
     }
 
@@ -4849,8 +4888,9 @@ public final class TrinoTpcdsParquetSupport
                                         field(2, boughtAddressTypes.get(1)),
                                         field(0, factTypes.get(4)),
                                         field(3, BIGINT),
-                                        field(4, BIGINT),
-                                        field(5, BIGINT)),
+                                        // SQL projects extended_tax before list_price.
+                                        field(5, BIGINT),
+                                        field(4, BIGINT)),
                                 query68OutputTypes(tables))),
                         namedFactoryStep("q68.topn", topNFactory(
                                 68_9,
@@ -5466,7 +5506,7 @@ public final class TrinoTpcdsParquetSupport
                         namedHashJoinStep("q44.join.scalar", new HashJoinSpec(44_10, itemAggregateTypes, List.of(0), query44ScalarAggregatePlan(tables), scalarTypes, List.of(0))),
                         namedFactoryStep("q44.project.averages", filterAndProjectFactory(
                                 44_11,
-                                Optional.of(query44ThresholdPredicate()),
+                                Optional.empty(),
                                 List.of(
                                         field(1, itemAggregateTypes.get(1)),
                                         divideRounded(field(2, BIGINT), field(3, BIGINT)),
@@ -5474,7 +5514,7 @@ public final class TrinoTpcdsParquetSupport
                                 averageTypes)),
                         namedFactoryStep("q44.project.item_average", filterAndProjectFactory(
                                 44_12,
-                                Optional.empty(),
+                                Optional.of(query44ThresholdPredicate()),
                                 List.of(field(0, averageTypes.get(0)), field(1, BIGINT)),
                                 rankingInputTypes)),
                         namedFactoryStep("q44.rank." + (descending ? "descending" : "ascending"), topNRankingFactory(
@@ -5579,6 +5619,7 @@ public final class TrinoTpcdsParquetSupport
     {
         List<Type> quarterlySalesTypes = query53QuarterlySalesTypes(tables);
         Type sumType = quarterlySalesTypes.get(2);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
         return appendPlan(
                 query53QuarterlySalesByManufactPlan(tables),
                 List.of(
@@ -5589,11 +5630,11 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0),
                                 List.of(),
                                 List.of(),
-                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), BIGINT, PARTITION_ROWS_FRAME, 2)))),
+                                List.of(aggregateWindowFunction("avg", List.of(BIGINT), averageType, PARTITION_ROWS_FRAME, 2)))),
                         namedFactoryStep("q53.filter.project", filterAndProjectFactory(
                                 53_11,
-                                Optional.of(queryRelativeDeviationPredicate(2, 3, sumType, BIGINT)),
-                                List.of(field(0, quarterlySalesTypes.get(0)), field(2, sumType), field(3, BIGINT)),
+                                Optional.of(queryRelativeDeviationPredicate(2, 3, sumType, averageType)),
+                                List.of(field(0, quarterlySalesTypes.get(0)), field(2, sumType), field(3, averageType)),
                                 query53OutputTypes(tables))),
                         namedFactoryStep("q53.topn", topNFactory(
                                 53_12,
@@ -5688,7 +5729,8 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query53OutputTypes(TpcdsParquetTables tables)
     {
-        return List.of(query53QuarterlySalesTypes(tables).get(0), BIGINT, BIGINT);
+        Type averageType = FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType();
+        return List.of(query53QuarterlySalesTypes(tables).get(0), BIGINT, averageType);
     }
 
     private PipelinePlan query52Plan(TpcdsParquetTables tables)
@@ -6252,7 +6294,7 @@ public final class TrinoTpcdsParquetSupport
                                 customerSalesWithMaxTypes)),
                         namedFactoryStep("q23.best_customers.filter", filterAndProjectFactory(
                                 23_14,
-                                Optional.of(query23HalfMaxPredicate()),
+                                Optional.of(query23BestCustomerPredicate()),
                                 List.of(field(0, customerSalesTypes.get(0))),
                                 List.of(customerSalesTypes.get(0))))),
                 "q23.best_customers.sink.final");
@@ -6374,24 +6416,24 @@ public final class TrinoTpcdsParquetSupport
         return appendPlan(
                 query24CustomerStoreItemSalesPlan(tables),
                 List.of(
-                        namedHashJoinStep("q24.join.store_details", new HashJoinSpec(24_10, customerStoreItemSalesTypes, List.of(3), storeDetails, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT), List.of(0))),
-                        namedHashJoinStep("q24.join.item", new HashJoinSpec(24_11, concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT)), List.of(4), items, itemTypes, List.of(0))),
-                        namedHashJoinStep("q24.join.address", new HashJoinSpec(24_12, concatTypes(concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT)), itemTypes), List.of(9), query24AddressLookupPlan(tables), addressLookupTypes, List.of(0))),
+                        namedHashJoinStep("q24.join.store_details", new HashJoinSpec(24_10, customerStoreItemSalesTypes, List.of(4), storeDetails, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT), List.of(0))),
+                        namedHashJoinStep("q24.join.item", new HashJoinSpec(24_11, concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT)), List.of(5), items, itemTypes, List.of(0))),
+                        namedHashJoinStep("q24.join.address", new HashJoinSpec(24_12, concatTypes(concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), storeTypes.get(2), storeTypes.get(3), BIGINT)), itemTypes), List.of(3, 10), query24AddressLookupPlan(tables), addressLookupTypes, List.of(0, 1))),
                         namedFactoryStep("q24.filter_project.sales", filterAndProjectFactory(
                                 24_13,
-                                Optional.of(equal(field(2, customerStoreItemSalesTypes.get(2)), field(17, addressLookupTypes.get(1)), customerStoreItemSalesTypes.get(2))),
+                                Optional.of(not(equal(field(2, customerStoreItemSalesTypes.get(2)), field(19, addressLookupTypes.get(2)), customerStoreItemSalesTypes.get(2)))),
                                 List.of(
                                         field(0, customerStoreItemSalesTypes.get(0)),
                                         field(1, customerStoreItemSalesTypes.get(1)),
-                                        field(7, storeTypes.get(2)),
-                                        field(18, addressLookupTypes.get(2)),
-                                        field(8, storeTypes.get(3)),
-                                        field(13, itemTypes.get(3)),
-                                        cast(round(multiply(cast(field(11, itemTypes.get(1)), itemTypes.get(1), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                        field(15, itemTypes.get(5)),
-                                        field(14, itemTypes.get(4)),
-                                        field(12, itemTypes.get(2)),
-                                        field(5, BIGINT)),
+                                        field(8, storeTypes.get(2)),
+                                        field(20, addressLookupTypes.get(3)),
+                                        field(9, storeTypes.get(3)),
+                                        field(14, itemTypes.get(3)),
+                                        cast(round(multiply(cast(field(12, itemTypes.get(1)), itemTypes.get(1), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
+                                        field(16, itemTypes.get(5)),
+                                        field(15, itemTypes.get(4)),
+                                        field(13, itemTypes.get(2)),
+                                        field(6, BIGINT)),
                                 query24SalesTypes(tables)))),
                 "q24.sink.sales");
     }
@@ -6419,18 +6461,18 @@ public final class TrinoTpcdsParquetSupport
         return appendPlan(
                 query24CustomerStoreItemSalesPlan(tables),
                 List.of(
-                        namedHashJoinStep("q24.join.store_join_key", new HashJoinSpec(24_14, customerStoreItemSalesTypes, List.of(3), storeJoinKey, List.of(storeTypes.get(0), BIGINT), List.of(0))),
-                        namedHashJoinStep("q24.join.address.average", new HashJoinSpec(24_15, concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), BIGINT)), List.of(7), query24AddressLookupPlan(tables), addressLookupTypes, List.of(0))),
+                        namedHashJoinStep("q24.join.store_join_key", new HashJoinSpec(24_14, customerStoreItemSalesTypes, List.of(4), storeJoinKey, List.of(storeTypes.get(0), BIGINT), List.of(0))),
+                        namedHashJoinStep("q24.join.address.average", new HashJoinSpec(24_15, concatTypes(customerStoreItemSalesTypes, List.of(storeTypes.get(0), BIGINT)), List.of(3, 8), query24AddressLookupPlan(tables), addressLookupTypes, List.of(0, 1))),
                         namedFactoryStep("q24.filter_project.average", filterAndProjectFactory(
                                 24_16,
-                                Optional.of(equal(field(2, customerStoreItemSalesTypes.get(2)), field(9, addressLookupTypes.get(1)), customerStoreItemSalesTypes.get(2))),
+                                Optional.of(not(equal(field(2, customerStoreItemSalesTypes.get(2)), field(11, addressLookupTypes.get(2)), customerStoreItemSalesTypes.get(2)))),
                                 List.of(
                                         field(0, customerStoreItemSalesTypes.get(0)),
                                         field(1, customerStoreItemSalesTypes.get(1)),
-                                        field(10, addressLookupTypes.get(2)),
-                                        field(3, BIGINT),
+                                        field(12, addressLookupTypes.get(3)),
                                         field(4, BIGINT),
-                                        field(5, BIGINT)),
+                                        field(5, BIGINT),
+                                        field(6, BIGINT)),
                                 query24AverageSalesTypes(tables)))),
                 "q24.sink.average_sales");
     }
@@ -6440,8 +6482,8 @@ public final class TrinoTpcdsParquetSupport
         List<String> factColumns = List.of("ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
         List<Type> returnTypes = tableColumnTypes(tables, "store_returns", List.of("sr_ticket_number", "sr_item_sk"));
-        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"));
-        List<Type> intermediateTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), factTypes.get(3), factTypes.get(1), BIGINT);
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk"));
+        List<Type> intermediateTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), customerTypes.get(4), factTypes.get(3), factTypes.get(1), BIGINT);
 
         PipelinePlan returns = relationPlan(
                 tables,
@@ -6455,7 +6497,7 @@ public final class TrinoTpcdsParquetSupport
         PipelinePlan customers = relationPlan(
                 tables,
                 "customer",
-                List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country"),
+                List.of("c_customer_sk", "c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk"),
                 Optional.empty(),
                 identityProjections(customerTypes),
                 customerTypes,
@@ -6474,33 +6516,35 @@ public final class TrinoTpcdsParquetSupport
                                         field(8, customerTypes.get(1)),
                                         field(9, customerTypes.get(2)),
                                         field(10, customerTypes.get(3)),
+                                        field(11, customerTypes.get(4)),
                                         field(3, factTypes.get(3)),
                                         field(1, factTypes.get(1)),
                                         cast(round(multiply(cast(field(4, factTypes.get(4)), factTypes.get(4), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT)),
                                 intermediateTypes)),
                         namedFactoryStep("q24.group.customer_store_item_sales", hashAggregationFactory(
                                 24_3,
-                                intermediateTypes.subList(0, 5),
-                                List.of(0, 1, 2, 3, 4),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))),
+                                intermediateTypes.subList(0, 6),
+                                List.of(0, 1, 2, 3, 4, 5),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(6), OptionalInt.empty())))),
                 "q24.sink.customer_store_item_sales");
     }
 
     private PipelinePlan query24AddressLookupPlan(TpcdsParquetTables tables)
     {
-        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_zip", "ca_state", "ca_country"));
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_zip", "ca_state", "ca_country"));
         List<Type> projectedTypes = query24AddressLookupTypes(tables);
         // SQL joins customer_address directly (no DISTINCT): duplicate (zip, country, state) rows fan out the
         // net-paid sum, so the address rows must not be de-duplicated before the join.
         return relationPlan(
                 tables,
                 "customer_address",
-                List.of("ca_zip", "ca_state", "ca_country"),
-                Optional.of(greaterThan(length(field(0, addressTypes.get(0)), addressTypes.get(0)), constant(0L, BIGINT), BIGINT)),
+                List.of("ca_address_sk", "ca_zip", "ca_state", "ca_country"),
+                Optional.of(greaterThan(length(field(1, addressTypes.get(1)), addressTypes.get(1)), constant(0L, BIGINT), BIGINT)),
                 List.of(
-                        cast(field(0, addressTypes.get(0)), addressTypes.get(0), BIGINT),
-                        upper(field(2, addressTypes.get(2)), addressTypes.get(2)),
-                        field(1, addressTypes.get(1))),
+                        field(0, addressTypes.get(0)),
+                        cast(field(1, addressTypes.get(1)), addressTypes.get(1), BIGINT),
+                        upper(field(3, addressTypes.get(3)), addressTypes.get(3)),
+                        field(2, addressTypes.get(2))),
                 projectedTypes,
                 "q24.scan.customer_address",
                 "q24.sink.address_lookup");
@@ -6508,15 +6552,15 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query24CustomerStoreItemSalesTypes(TpcdsParquetTables tables)
     {
-        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_last_name", "c_first_name", "c_birth_country"));
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk"));
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_store_sk", "ss_item_sk"));
-        return List.of(customerTypes.get(0), customerTypes.get(1), customerTypes.get(2), factTypes.get(0), factTypes.get(1), BIGINT);
+        return List.of(customerTypes.get(0), customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), factTypes.get(0), factTypes.get(1), BIGINT);
     }
 
     private List<Type> query24AddressLookupTypes(TpcdsParquetTables tables)
     {
-        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_state", "ca_country"));
-        return List.of(BIGINT, addressTypes.get(1), addressTypes.get(0));
+        List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_state", "ca_country"));
+        return List.of(addressTypes.get(0), BIGINT, addressTypes.get(2), addressTypes.get(1));
     }
 
     private List<Type> query24SalesTypes(TpcdsParquetTables tables)
@@ -7610,7 +7654,7 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(customerTotalReturnTypes.get(1)),
                                 List.of(1),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
                         namedFactoryStep("q81.project.state_average", filterAndProjectFactory(
                                 81_6,
                                 Optional.empty(),
@@ -7673,7 +7717,8 @@ public final class TrinoTpcdsParquetSupport
                                         divideRounded(multiply(field(2, BIGINT), constant(10_000L, BIGINT), BIGINT), multiply(add(add(field(1, BIGINT), field(2, BIGINT), BIGINT), field(3, BIGINT), BIGINT), constant(3L, BIGINT), BIGINT)),
                                         field(3, BIGINT),
                                         divideRounded(multiply(field(3, BIGINT), constant(10_000L, BIGINT), BIGINT), multiply(add(add(field(1, BIGINT), field(2, BIGINT), BIGINT), field(3, BIGINT), BIGINT), constant(3L, BIGINT), BIGINT)),
-                                        divideRounded(multiply(add(add(field(1, BIGINT), field(2, BIGINT), BIGINT), field(3, BIGINT), BIGINT), constant(10_000L, BIGINT), BIGINT), constant(3L, BIGINT))),
+                                        // BIGINT / DECIMAL '3.00' has six fractional digits in the benchmark SQL.
+                                        divideRounded(multiply(add(add(field(1, BIGINT), field(2, BIGINT), BIGINT), field(3, BIGINT), BIGINT), constant(1_000_000L, BIGINT), BIGINT), constant(3L, BIGINT))),
                                 query83OutputTypes(tables)))),
                 "q83.sink.final");
     }
@@ -8059,9 +8104,9 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0))),
                         namedFactoryStep("q95.project.filtered_sales", filterAndProjectFactory(
                                 95_3,
-                                Optional.empty(),
-                                List.of(field(0, factTypes.get(0)), scaledCents(field(5, factTypes.get(5)), factTypes.get(5)), scaledCents(field(6, factTypes.get(6)), factTypes.get(6)), field(4, factTypes.get(4))),
-                                List.of(BIGINT, BIGINT, BIGINT, BIGINT)))),
+                                Optional.of(not(isNull(field(4, factTypes.get(4))))),
+                                List.of(field(0, factTypes.get(0)), scaledCents(field(5, factTypes.get(5)), factTypes.get(5)), scaledCents(field(6, factTypes.get(6)), factTypes.get(6))),
+                                List.of(BIGINT, BIGINT, BIGINT)))),
                 "q95.sink.filtered_sales");
     }
 
@@ -8123,7 +8168,7 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query95FilteredSalesTypes()
     {
-        return List.of(BIGINT, BIGINT, BIGINT, BIGINT);
+        return List.of(BIGINT, BIGINT, BIGINT);
     }
 
     private List<Type> query94OutputTypes()
@@ -8641,7 +8686,7 @@ public final class TrinoTpcdsParquetSupport
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id"));
         List<Type> demographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status"));
         List<Type> promotionTypes = tableColumnTypes(tables, "promotion", List.of("p_promo_sk", "p_channel_email", "p_channel_event"));
-        List<Type> projectedTypes = List.of(itemTypes.get(1), BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Type> projectedTypes = List.of(itemTypes.get(1), BIGINT, factTypes.get(5), factTypes.get(6), factTypes.get(7));
 
         PipelinePlan dates = relationPlan(
                 tables,
@@ -8692,32 +8737,18 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(
                                         field(10, itemTypes.get(1)),
                                         cast(field(4, factTypes.get(4)), factTypes.get(4), BIGINT),
-                                        cast(round(multiply(cast(field(5, factTypes.get(5)), factTypes.get(5), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                        cast(round(multiply(cast(field(6, factTypes.get(6)), factTypes.get(6), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                        cast(round(multiply(cast(field(7, factTypes.get(7)), factTypes.get(7), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT)),
+                                        field(5, factTypes.get(5)),
+                                        field(6, factTypes.get(6)),
+                                        field(7, factTypes.get(7))),
                                 projectedTypes)),
                         namedFactoryStep("q07.group.item", hashAggregationFactory(
                                 7_5,
                                 List.of(projectedTypes.get(0)),
                                 List.of(0),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                        namedFactoryStep("q07.project.averages", filterAndProjectFactory(
-                                7_6,
-                                Optional.empty(),
-                                List.of(
-                                        field(0, itemTypes.get(1)),
-                                        divideRounded(field(1, BIGINT), field(2, BIGINT)),
-                                        divideRounded(field(3, BIGINT), field(4, BIGINT)),
-                                        divideRounded(field(5, BIGINT), field(6, BIGINT)),
-                                        divideRounded(field(7, BIGINT), field(8, BIGINT))),
-                                query07OutputTypes(tables))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(1))).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(2))).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(3))).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(4))).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()))),
                         namedFactoryStep("q07.topn", topNFactory(
                                 7_7,
                                 query07OutputTypes(tables),
@@ -8729,7 +8760,13 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Type> query07OutputTypes(TpcdsParquetTables tables)
     {
-        return List.of(tableColumnTypes(tables, "item", List.of("i_item_id")).getFirst(), BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Type> measures = tableColumnTypes(tables, "store_sales", List.of("ss_list_price", "ss_coupon_amt", "ss_sales_price"));
+        return List.of(
+                tableColumnTypes(tables, "item", List.of("i_item_id")).getFirst(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(measures.get(0))).getFinalType(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(measures.get(1))).getFinalType(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(measures.get(2))).getFinalType());
     }
 
     private List<Type> query26OutputTypes(TpcdsParquetTables tables)
@@ -9140,26 +9177,18 @@ public final class TrinoTpcdsParquetSupport
 
     private PipelinePlan query09BucketPlan(TpcdsParquetTables tables, int minimumQuantityInclusive, int maximumQuantityInclusive, long threshold)
     {
-        List<String> factColumns = List.of("ss_quantity", "ss_ext_discount_amt", "ss_net_paid");
+        // The scalar COUNT(*) subquery in q09 reads only the quantity predicate column.  The two AVG
+        // subqueries below are independent scans, matching the SQL rather than widening this scan with
+        // columns whose values COUNT(*) never consumes.
+        List<String> factColumns = List.of("ss_quantity");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
         PipelinePlan filteredSales = relationPlan(
                 tables,
                 "store_sales",
                 factColumns,
                 Optional.of(query09QuantityPredicate(factTypes.get(0), minimumQuantityInclusive, maximumQuantityInclusive)),
-                List.of(
-                        cast(field(0, factTypes.get(0)), factTypes.get(0), BIGINT),
-                        ifExpression(
-                                isNull(field(1, factTypes.get(1))),
-                                constant(0L, BIGINT),
-                                cast(round(multiply(cast(field(1, factTypes.get(1)), factTypes.get(1), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                BIGINT),
-                        ifExpression(
-                                isNull(field(2, factTypes.get(2))),
-                                constant(0L, BIGINT),
-                                cast(round(multiply(cast(field(2, factTypes.get(2)), factTypes.get(2), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                BIGINT)),
-                List.of(BIGINT, BIGINT, BIGINT),
+                List.of(cast(field(0, factTypes.get(0)), factTypes.get(0), BIGINT)),
+                List.of(BIGINT),
                 "q09.bucket.scan.store_sales." + minimumQuantityInclusive + "_" + maximumQuantityInclusive,
                 "q09.bucket.sink.store_sales." + minimumQuantityInclusive + "_" + maximumQuantityInclusive);
         return appendPlan(
@@ -9202,11 +9231,10 @@ public final class TrinoTpcdsParquetSupport
                         "store_sales",
                         factColumns,
                         Optional.of(query09QuantityPredicate(factTypes.get(0), minimumQuantityInclusive, maximumQuantityInclusive)),
-                        List.of(ifExpression(
-                                isNull(field(1, factTypes.get(1))),
-                                constant(0L, BIGINT),
-                                cast(round(multiply(cast(field(1, factTypes.get(1)), factTypes.get(1), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
-                                BIGINT)),
+                        // Casts and arithmetic preserve NULL.  AVG(value) is represented as SUM(value) /
+                        // COUNT(value), so replacing NULL with zero here would incorrectly implement
+                        // SUM(coalesce(value, 0)) / COUNT(*).
+                        List.of(cast(round(multiply(cast(field(1, factTypes.get(1)), factTypes.get(1), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT)),
                         List.of(BIGINT),
                         "q09.avg.scan." + valueColumn + "." + minimumQuantityInclusive + "_" + maximumQuantityInclusive,
                         "q09.avg.sink." + valueColumn + "." + minimumQuantityInclusive + "_" + maximumQuantityInclusive),
@@ -9216,7 +9244,7 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(),
                                 List.of(),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))),
                         namedFactoryStep("q09.avg.project." + valueColumn, filterAndProjectFactory(
                                 9_500 + minimumQuantityInclusive + valueChannel,
                                 Optional.empty(),
@@ -10427,7 +10455,11 @@ public final class TrinoTpcdsParquetSupport
                         namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(10_1000 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(1), dates, List.of(dateTypes.get(0)), List.of(0))),
                         namedFactoryStep(queryName + ".project.customer", filterAndProjectFactory(
                                 10_1100 + Math.abs(queryName.hashCode() % 100),
-                                Optional.empty(),
+                                // A semi join has IN semantics: a null in the build set turns a
+                                // non-match into null.  These plans model correlated EXISTS, where
+                                // a null correlation key cannot satisfy equality and must not poison
+                                // an anti-semi join after the marker is negated.
+                                Optional.of(not(isNull(field(0, factTypes.get(0))))),
                                 List.of(field(0, factTypes.get(0))),
                                 List.of(factTypes.get(0))))),
                 queryName + ".sink.customer");
@@ -10655,7 +10687,9 @@ public final class TrinoTpcdsParquetSupport
                         namedHashJoinStep("q16.join.call_center", new HashJoinSpec(16_2, concatTypes(concatTypes(factTypes, List.of(dateTypes.get(0))), List.of(addressTypes.get(0))), List.of(2), callCenters, List.of(callCenterTypes.get(0)), List.of(0))),
                         namedFactoryStep("q16.project.filtered_sales", filterAndProjectFactory(
                                 16_3,
-                                Optional.empty(),
+                                // The order-level multi-warehouse set implements the correlated EXISTS only
+                                // for a non-null outer warehouse key. SQL '<>' is UNKNOWN when cs1 is null.
+                                Optional.of(not(isNull(field(3, factTypes.get(3))))),
                                 List.of(
                                         field(4, factTypes.get(4)),
                                         cast(round(multiply(cast(field(5, factTypes.get(5)), factTypes.get(5), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
@@ -11749,19 +11783,19 @@ public final class TrinoTpcdsParquetSupport
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year"));
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id"));
         List<Type> demographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_education_status", "cd_dep_count"));
-        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year"));
+        List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year", "c_current_cdemo_sk"));
         List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_country", "ca_state", "ca_county"));
 
         List<Type> itemJoinTypes = itemTypes;
         List<Type> demographicsJoinTypes = List.of(demographicsTypes.get(0), demographicsTypes.get(3));
-        List<Type> customerJoinTypes = List.of(customerTypes.get(0), customerTypes.get(1), customerTypes.get(3));
+        List<Type> customerJoinTypes = List.of(customerTypes.get(0), customerTypes.get(1), customerTypes.get(3), customerTypes.get(4));
         List<Type> addressJoinTypes = addressTypes;
 
         List<Type> projectedTypes = List.of(
+                itemTypes.get(1),
                 addressTypes.get(1),
                 addressTypes.get(2),
                 addressTypes.get(3),
-                itemTypes.get(1),
                 BIGINT,
                 BIGINT,
                 BIGINT,
@@ -11804,12 +11838,21 @@ public final class TrinoTpcdsParquetSupport
         PipelinePlan customers = relationPlan(
                 tables,
                 "customer",
-                List.of("c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year"),
+                List.of("c_customer_sk", "c_current_addr_sk", "c_birth_month", "c_birth_year", "c_current_cdemo_sk"),
                 Optional.of(query18BirthMonthPredicate(customerTypes.get(2))),
-                List.of(field(0, customerTypes.get(0)), field(1, customerTypes.get(1)), field(3, customerTypes.get(3))),
+                List.of(field(0, customerTypes.get(0)), field(1, customerTypes.get(1)), field(3, customerTypes.get(3)), field(4, customerTypes.get(4))),
                 customerJoinTypes,
                 "q18.scan.customer",
                 "q18.sink.customer");
+        PipelinePlan currentDemographics = relationPlan(
+                tables,
+                "customer_demographics",
+                List.of("cd_demo_sk"),
+                Optional.empty(),
+                List.of(field(0, demographicsTypes.get(0))),
+                List.of(demographicsTypes.get(0)),
+                "q18.scan.customer_demographics_2",
+                "q18.sink.customer_demographics_2");
         PipelinePlan addresses = relationPlan(
                 tables,
                 "customer_address",
@@ -11824,22 +11867,32 @@ public final class TrinoTpcdsParquetSupport
         List<Type> afterItemTypes = concatTypes(afterDateTypes, itemJoinTypes);
         List<Type> afterDemographicsTypes = concatTypes(afterItemTypes, demographicsJoinTypes);
         List<Type> afterCustomerTypes = concatTypes(afterDemographicsTypes, customerJoinTypes);
-        List<Type> afterAddressTypes = concatTypes(afterCustomerTypes, addressJoinTypes);
+        List<Type> afterCurrentDemographicsTypes = concatTypes(afterCustomerTypes, List.of(demographicsTypes.get(0)));
+        // The cd2 join is a referential-integrity no-op in the result but remains a real SQL branch. Drop both its
+        // build key and c_current_cdemo_sk before the address join, matching Nitro's live-column boundary.
+        List<Type> afterCurrentDemographicsProjectionTypes = afterCustomerTypes.subList(0, 17);
+        List<Type> afterAddressTypes = concatTypes(afterCurrentDemographicsProjectionTypes, addressJoinTypes);
 
         List<PipelineStep> steps = List.of(
                 namedHashJoinStep("q18.join.date_dim", new HashJoinSpec(18_0, factTypes, List.of(0), dates, List.of(dateTypes.get(0)), List.of(0))),
                 namedHashJoinStep("q18.join.item", new HashJoinSpec(18_1, afterDateTypes, List.of(1), items, itemJoinTypes, List.of(0))),
                 namedHashJoinStep("q18.join.customer_demographics", new HashJoinSpec(18_2, afterItemTypes, List.of(3), demographics, demographicsJoinTypes, List.of(0))),
                 namedHashJoinStep("q18.join.customer", new HashJoinSpec(18_3, afterDemographicsTypes, List.of(2), customers, customerJoinTypes, List.of(0))),
-                namedHashJoinStep("q18.join.customer_address", new HashJoinSpec(18_4, afterCustomerTypes, List.of(15), addresses, addressJoinTypes, List.of(0))),
-                namedFactoryStep("q18.project.inputs", filterAndProjectFactory(
+                namedHashJoinStep("q18.join.customer_demographics_2", new HashJoinSpec(18_4, afterCustomerTypes, List.of(17), currentDemographics, List.of(demographicsTypes.get(0)), List.of(0))),
+                namedFactoryStep("q18.project.after_customer_demographics_2", filterAndProjectFactory(
                         18_5,
                         Optional.empty(),
+                        identityProjections(afterCurrentDemographicsProjectionTypes),
+                        afterCurrentDemographicsProjectionTypes)),
+                namedHashJoinStep("q18.join.customer_address", new HashJoinSpec(18_6, afterCurrentDemographicsProjectionTypes, List.of(15), addresses, addressJoinTypes, List.of(0))),
+                namedFactoryStep("q18.project.inputs", filterAndProjectFactory(
+                        18_7,
+                        Optional.empty(),
                         List.of(
+                                field(11, itemTypes.get(1)),
                                 field(18, addressTypes.get(1)),
                                 field(19, addressTypes.get(2)),
                                 field(20, addressTypes.get(3)),
-                                field(11, itemTypes.get(1)),
                                 multiply(cast(field(4, factTypes.get(4)), factTypes.get(4), BIGINT), constant(100L, BIGINT), BIGINT),
                                 cast(round(multiply(cast(field(5, factTypes.get(5)), factTypes.get(5), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
                                 cast(round(multiply(cast(field(6, factTypes.get(6)), factTypes.get(6), DOUBLE), constant(100.0, DOUBLE), DOUBLE)), DOUBLE, BIGINT),
@@ -11849,7 +11902,7 @@ public final class TrinoTpcdsParquetSupport
                                 multiply(cast(field(13, demographicsJoinTypes.get(1)), demographicsJoinTypes.get(1), BIGINT), constant(100L, BIGINT), BIGINT)),
                         projectedTypes)),
                 namedGroupIdStep("q18.group_id", new GroupIdSpec(
-                        18_6,
+                        18_8,
                         groupIdTypes,
                         List.of(
                                 java.util.Map.of(4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10),
@@ -11879,7 +11932,7 @@ public final class TrinoTpcdsParquetSupport
                                         java.util.Map.entry(9, 9),
                                         java.util.Map.entry(10, 10))))),
                 namedFactoryStep("q18.group.rollup", hashAggregationFactory(
-                        18_7,
+                        18_9,
                         groupedTypes,
                         List.of(0, 1, 2, 3, 11),
                         FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
@@ -11897,13 +11950,13 @@ public final class TrinoTpcdsParquetSupport
                         FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(10), OptionalInt.empty()),
                         FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(10), OptionalInt.empty()))),
                 namedFactoryStep("q18.topn", topNFactory(
-                        18_8,
+                        18_10,
                         groupedTypes,
                         100,
                         List.of(1, 2, 3, 0),
                         List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST))),
                 namedFactoryStep("q18.project.output", filterAndProjectFactory(
-                        18_9,
+                        18_11,
                         Optional.empty(),
                         List.of(
                                 field(0, projectedTypes.get(0)),
@@ -11928,7 +11981,7 @@ public final class TrinoTpcdsParquetSupport
     {
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id"));
         List<Type> addressTypes = tableColumnTypes(tables, "customer_address", List.of("ca_address_sk", "ca_country", "ca_state", "ca_county"));
-        return List.of(addressTypes.get(1), addressTypes.get(2), addressTypes.get(3), itemTypes.get(1), BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+        return List.of(itemTypes.get(1), addressTypes.get(1), addressTypes.get(2), addressTypes.get(3), BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
     }
 
     private PipelinePlan query19Plan(TpcdsParquetTables tables)
@@ -12308,7 +12361,13 @@ public final class TrinoTpcdsParquetSupport
         List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_state"));
         List<Type> customerDemographicsTypes = tableColumnTypes(tables, "customer_demographics", List.of("cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status"));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year"));
-        List<Type> projectedTypes = List.of(itemTypes.get(1), storeTypes.get(1), BIGINT, BIGINT, BIGINT, BIGINT);
+        List<Type> projectedTypes = List.of(
+                itemTypes.get(1),
+                storeTypes.get(1),
+                BIGINT,
+                factTypes.get(5),
+                factTypes.get(6),
+                factTypes.get(7));
         List<Type> groupedInputTypes = concatTypes(projectedTypes, List.of(BIGINT));
         List<Type> aggregateTypes = query27AggregateTypes(tables);
         List<Type> outputTypes = query27OutputTypes(tables);
@@ -12368,9 +12427,9 @@ public final class TrinoTpcdsParquetSupport
                                         field(10, itemTypes.get(1)),
                                         field(12, storeTypes.get(1)),
                                         cast(field(4, factTypes.get(4)), factTypes.get(4), BIGINT),
-                                        cast(field(5, factTypes.get(5)), factTypes.get(5), BIGINT),
-                                        cast(field(6, factTypes.get(6)), factTypes.get(6), BIGINT),
-                                        cast(field(7, factTypes.get(7)), factTypes.get(7), BIGINT)),
+                                        field(5, factTypes.get(5)),
+                                        field(6, factTypes.get(6)),
+                                        field(7, factTypes.get(7))),
                                 projectedTypes)),
                         namedGroupIdStep("q27.group_id", new GroupIdSpec(
                                 27_5,
@@ -12382,10 +12441,10 @@ public final class TrinoTpcdsParquetSupport
                                 27_6,
                                 List.of(groupedInputTypes.get(0), groupedInputTypes.get(1), groupedInputTypes.get(6)),
                                 List.of(0, 1, 6),
-                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(2))).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(3))).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(4))).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(projectedTypes.get(5))).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
                         namedFactoryStep("q27.project.output", filterAndProjectFactory(
                                 27_7,
                                 Optional.empty(),
@@ -12411,14 +12470,15 @@ public final class TrinoTpcdsParquetSupport
     {
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_id"));
         List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_state"));
+        List<Type> factTypes = tableColumnTypes(tables, "store_sales", List.of("ss_quantity", "ss_list_price", "ss_coupon_amt", "ss_sales_price"));
         return List.of(
                 itemTypes.get(1),
                 storeTypes.get(1),
                 BIGINT,
                 FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType(),
-                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType(),
-                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType(),
-                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(BIGINT)).getFinalType());
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(factTypes.get(1))).getFinalType(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(factTypes.get(2))).getFinalType(),
+                FUNCTION_RESOLUTION.getAggregateFunction("avg", fromTypes(factTypes.get(3))).getFinalType());
     }
 
     private List<Type> query27OutputTypes(TpcdsParquetTables tables)
@@ -12906,32 +12966,40 @@ public final class TrinoTpcdsParquetSupport
                 "q29.scan.catalog_date_dim",
                 "q29.sink.catalog_date_dim");
 
-        List<Type> afterSoldDates = concatTypes(factTypes, List.of(soldDateTypes.get(0)));
-        List<Type> afterItems = concatTypes(afterSoldDates, itemTypes);
-        List<Type> afterStores = concatTypes(afterItems, storeTypes);
-        List<Type> afterReturns = concatTypes(afterStores, returnTypes);
-        List<Type> afterReturnedDates = concatTypes(afterReturns, List.of(soldDateTypes.get(0)));
-        List<Type> afterCatalogSales = concatTypes(afterReturnedDates, catalogSalesTypes);
+        List<Type> afterSoldDates = selectedTypes(factTypes, List.of(1, 2, 3, 4, 5));
+        List<Type> afterItems = joinOutputTypes(afterSoldDates, List.of(0, 1, 2, 3, 4), itemTypes, List.of(1, 2));
+        List<Type> afterStores = joinOutputTypes(afterItems, List.of(0, 2, 3, 4, 5, 6), storeTypes, List.of(1, 2));
+        List<Type> afterReturns = joinOutputTypes(afterStores, List.of(3, 4, 5, 6, 7), returnTypes, List.of(0, 1, 3, 4));
+        List<Type> afterReturnedDates = selectedTypes(afterReturns, List.of(0, 1, 2, 3, 4, 5, 6, 8));
+        List<Type> afterCatalogSales = joinOutputTypes(afterReturnedDates, List.of(0, 1, 2, 3, 4, 7), catalogSalesTypes, List.of(2, 3));
+        List<Type> afterCatalogDates = selectedTypes(afterCatalogSales, List.of(0, 1, 2, 3, 4, 5, 7));
 
         List<PipelineStep> steps = List.of(
-                namedHashJoinStep("q29.join.sold_dates", new HashJoinSpec(29_0, factTypes, List.of(0), soldDates, List.of(soldDateTypes.get(0)), List.of(0))),
-                namedHashJoinStep("q29.join.item", new HashJoinSpec(29_1, afterSoldDates, List.of(1), items, itemTypes, List.of(0))),
-                namedHashJoinStep("q29.join.store", new HashJoinSpec(29_2, afterItems, List.of(2), stores, storeTypes, List.of(0))),
-                namedHashJoinStep("q29.join.store_returns", new HashJoinSpec(29_3, afterStores, List.of(3, 1, 4), returns, returnTypes, List.of(0, 1, 2))),
-                namedHashJoinStep("q29.join.return_dates", new HashJoinSpec(29_4, afterReturns, List.of(16), returnedDates, List.of(soldDateTypes.get(0)), List.of(0))),
-                namedHashJoinStep("q29.join.catalog_sales", new HashJoinSpec(29_5, afterReturnedDates, List.of(13, 14), catalogSales, catalogSalesTypes, List.of(0, 1))),
-                namedHashJoinStep("q29.join.catalog_dates", new HashJoinSpec(29_6, afterCatalogSales, List.of(21), catalogDates, List.of(dateKeyType), List.of(0))),
+                namedHashJoinStep("q29.join.sold_dates", new HashJoinSpec(29_0, factTypes, List.of(0), soldDates, List.of(soldDateTypes.get(0)), List.of(0))
+                        .withOutputs(List.of(1, 2, 3, 4, 5), List.of())),
+                namedHashJoinStep("q29.join.item", new HashJoinSpec(29_1, afterSoldDates, List.of(0), items, itemTypes, List.of(0))
+                        .withOutputs(List.of(0, 1, 2, 3, 4), List.of(1, 2))),
+                namedHashJoinStep("q29.join.store", new HashJoinSpec(29_2, afterItems, List.of(1), stores, storeTypes, List.of(0))
+                        .withOutputs(List.of(0, 2, 3, 4, 5, 6), List.of(1, 2))),
+                namedHashJoinStep("q29.join.store_returns", new HashJoinSpec(29_3, afterStores, List.of(1, 0, 2), returns, returnTypes, List.of(0, 1, 2))
+                        .withOutputs(List.of(3, 4, 5, 6, 7), List.of(0, 1, 3, 4))),
+                namedHashJoinStep("q29.join.return_dates", new HashJoinSpec(29_4, afterReturns, List.of(7), returnedDates, List.of(soldDateTypes.get(0)), List.of(0))
+                        .withOutputs(List.of(0, 1, 2, 3, 4, 5, 6, 8), List.of())),
+                namedHashJoinStep("q29.join.catalog_sales", new HashJoinSpec(29_5, afterReturnedDates, List.of(5, 6), catalogSales, catalogSalesTypes, List.of(0, 1))
+                        .withOutputs(List.of(0, 1, 2, 3, 4, 7), List.of(2, 3))),
+                namedHashJoinStep("q29.join.catalog_dates", new HashJoinSpec(29_6, afterCatalogSales, List.of(6), catalogDates, List.of(dateKeyType), List.of(0))
+                        .withOutputs(List.of(0, 1, 2, 3, 4, 5, 7), List.of())),
                 namedFactoryStep("q29.project.group_inputs", filterAndProjectFactory(
                         29_7,
                         Optional.empty(),
                         List.of(
-                                field(8, itemTypes.get(1)),
-                                field(9, itemTypes.get(2)),
-                                field(11, storeTypes.get(1)),
-                                field(12, storeTypes.get(2)),
-                                cast(field(5, factTypes.get(5)), factTypes.get(5), BIGINT),
-                                cast(field(17, returnTypes.get(4)), returnTypes.get(4), BIGINT),
-                                cast(field(22, catalogSalesTypes.get(3)), catalogSalesTypes.get(3), BIGINT)),
+                                field(1, afterCatalogDates.get(1)),
+                                field(2, afterCatalogDates.get(2)),
+                                field(3, afterCatalogDates.get(3)),
+                                field(4, afterCatalogDates.get(4)),
+                                cast(field(0, afterCatalogDates.get(0)), afterCatalogDates.get(0), BIGINT),
+                                cast(field(5, afterCatalogDates.get(5)), afterCatalogDates.get(5), BIGINT),
+                                cast(field(6, afterCatalogDates.get(6)), afterCatalogDates.get(6), BIGINT)),
                         outputTypes)),
                 namedFactoryStep("q29.group.values", hashAggregationFactory(
                         29_8,
@@ -14030,13 +14098,25 @@ public final class TrinoTpcdsParquetSupport
         List<Page> outputPages = new ArrayList<>();
         io.trino.operator.TaskContext taskContext = taskContext();
         DriverContext driverContext = newDriverContext(taskContext);
-        List<Operator> operators = createOperators(taskContext, driverContext, plan, outputPages::add);
+        PipelineOperators pipeline = createPipelineOperators(taskContext, driverContext, plan, outputPages::add);
 
-        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+        try (Driver driver = Driver.createDriver(driverContext, pipeline.mainOperators())) {
             processDriver(driver);
         }
         catch (Exception exception) {
             throw new RuntimeException("Unable to execute Trino TPC-DS parquet pipeline plan", exception);
+        }
+
+        // RIGHT/FULL lookup joins emit unmatched build rows from a separate source driver.
+        // This mirrors LocalExecutionPlanner.addLookupOuterDrivers: the outer source is
+        // followed by duplicates of every operator downstream of the join.
+        for (DriverOperators outerDriver : pipeline.outerDrivers()) {
+            try (Driver driver = Driver.createDriver(outerDriver.driverContext(), outerDriver.operators())) {
+                processDriver(driver);
+            }
+            catch (Exception exception) {
+                throw new RuntimeException("Unable to execute Trino lookup-outer driver", exception);
+            }
         }
 
         return outputPages;
@@ -14045,8 +14125,8 @@ public final class TrinoTpcdsParquetSupport
     private io.trino.operator.TaskContext taskContext()
     {
         return TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
-                .setQueryMaxMemory(DataSize.of(16, GIGABYTE))
-                .setMemoryPoolSize(DataSize.of(16, GIGABYTE))
+                .setQueryMaxMemory(DataSize.of(12, GIGABYTE))
+                .setMemoryPoolSize(DataSize.of(12, GIGABYTE))
                 .build();
     }
 
@@ -14068,11 +14148,40 @@ public final class TrinoTpcdsParquetSupport
 
     private List<Operator> createOperators(io.trino.operator.TaskContext taskContext, DriverContext driverContext, PipelinePlan plan, java.util.function.Consumer<Page> pageConsumer)
     {
+        PipelineOperators pipeline = createPipelineOperators(taskContext, driverContext, plan, pageConsumer);
+        if (!pipeline.outerDrivers().isEmpty()) {
+            throw new IllegalArgumentException("Lookup-outer joins are only supported in a directly executed pipeline plan");
+        }
+        return pipeline.mainOperators();
+    }
+
+    private PipelineOperators createPipelineOperators(io.trino.operator.TaskContext taskContext, DriverContext driverContext, PipelinePlan plan, java.util.function.Consumer<Page> pageConsumer)
+    {
         List<Operator> operators = new ArrayList<>();
+        List<PendingOuterDriver> pendingOuterDrivers = new ArrayList<>();
         operators.add(createSourceOperator(taskContext, driverContext, plan.source()));
 
         for (PipelineStep step : plan.steps()) {
             OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+
+            // An outer driver created by an earlier join must run through the same
+            // downstream operator graph as the main probe driver.
+            for (PendingOuterDriver outerDriver : pendingOuterDrivers) {
+                OperatorFactory duplicate = factory.duplicate();
+                outerDriver.operators().add(profiled(step.profileName(), duplicate.createOperator(outerDriver.driverContext())));
+                duplicate.noMoreOperators();
+            }
+
+            if (factory instanceof JoinOperatorFactory joinFactory) {
+                joinFactory.createOuterOperatorFactory().ifPresent(outerFactory -> {
+                    DriverContext outerDriverContext = newDriverContext(taskContext);
+                    List<Operator> outerOperators = new ArrayList<>();
+                    outerOperators.add(profiled(step.profileName() + ".outer", outerFactory.createOperator(outerDriverContext)));
+                    outerFactory.noMoreOperators();
+                    pendingOuterDrivers.add(new PendingOuterDriver(outerDriverContext, outerOperators));
+                });
+            }
+
             operators.add(profiled(step.profileName(), factory.createOperator(driverContext)));
             factory.noMoreOperators();
         }
@@ -14081,7 +14190,17 @@ public final class TrinoTpcdsParquetSupport
                 driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
                 pageConsumer,
                 java.util.function.Function.identity())));
-        return operators;
+        for (PendingOuterDriver outerDriver : pendingOuterDrivers) {
+            outerDriver.operators().add(profiled(plan.sinkName(), new PageConsumerOperator(
+                    outerDriver.driverContext().addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                    pageConsumer,
+                    java.util.function.Function.identity())));
+        }
+        return new PipelineOperators(
+                List.copyOf(operators),
+                pendingOuterDrivers.stream()
+                        .map(outer -> new DriverOperators(outer.driverContext(), List.copyOf(outer.operators())))
+                        .toList());
     }
 
     private Operator createSourceOperator(io.trino.operator.TaskContext taskContext, DriverContext driverContext, PipelineSource source)
@@ -14241,6 +14360,7 @@ public final class TrinoTpcdsParquetSupport
         List<Type> buildOutputTypes = hashJoinSpec.buildOutputChannels().stream()
                 .map(buildTypes::get)
                 .toList();
+        boolean buildOuter = hashJoinSpec.joinType() == JoinType.RIGHT || hashJoinSpec.joinType() == JoinType.FULL;
         io.trino.operator.join.unspilled.PartitionedLookupSourceFactory lookupSourceFactory = new io.trino.operator.join.unspilled.PartitionedLookupSourceFactory(
                 buildTypes,
                 buildOutputTypes,
@@ -14248,10 +14368,10 @@ public final class TrinoTpcdsParquetSupport
                         .map(buildTypes::get)
                         .toList(),
                 1,
-                false,
+                buildOuter,
                 new TypeOperators());
         JoinBridgeManager<io.trino.operator.join.unspilled.PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
-                false,
+                buildOuter,
                 lookupSourceFactory,
                 lookupSourceFactory.getOutputTypes());
         OperatorFactory joinFactory = io.trino.operator.OperatorFactories.join(
@@ -14718,9 +14838,12 @@ public final class TrinoTpcdsParquetSupport
                 equalUtf8(2, "VA", stateType));
     }
 
-    private static RowExpression query23HalfMaxPredicate()
+    private static RowExpression query23BestCustomerPredicate()
     {
-        return greaterThan(multiply(field(1, BIGINT), constant(2L, BIGINT), BIGINT), field(2, BIGINT), BIGINT);
+        return greaterThan(
+                multiply(field(1, BIGINT), constant(20L, BIGINT), BIGINT),
+                multiply(field(2, BIGINT), constant(19L, BIGINT), BIGINT),
+                BIGINT);
     }
 
     private static RowExpression query46DatePredicate(Type dayOfWeekType, Type yearType)
@@ -14984,6 +15107,11 @@ public final class TrinoTpcdsParquetSupport
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.SUBTRACT, List.of(type, type)), List.of(left, right));
     }
 
+    private static RowExpression absolute(RowExpression expression, Type type)
+    {
+        return new CallExpression(FUNCTION_RESOLUTION.resolveFunction("abs", fromTypes(type)), List.of(expression));
+    }
+
     private static RowExpression divide(RowExpression left, RowExpression right, Type type)
     {
         return new CallExpression(FUNCTION_RESOLUTION.resolveOperator(OperatorType.DIVIDE, List.of(type, type)), List.of(left, right));
@@ -14991,10 +15119,15 @@ public final class TrinoTpcdsParquetSupport
 
     private static RowExpression divideRounded(RowExpression numerator, RowExpression denominator)
     {
+        RowExpression halfDenominatorMagnitude = divide(
+                absolute(denominator, BIGINT),
+                constant(2L, BIGINT),
+                BIGINT);
         return divide(
-                add(
-                        numerator,
-                        divide(denominator, constant(2L, BIGINT), BIGINT),
+                ifExpression(
+                        lessThan(numerator, constant(0L, BIGINT), BIGINT),
+                        subtract(numerator, halfDenominatorMagnitude, BIGINT),
+                        add(numerator, halfDenominatorMagnitude, BIGINT),
                         BIGINT),
                 denominator,
                 BIGINT);
@@ -15236,6 +15369,12 @@ public final class TrinoTpcdsParquetSupport
         }
     }
 
+    private record PipelineOperators(List<Operator> mainOperators, List<DriverOperators> outerDrivers) {}
+
+    private record DriverOperators(DriverContext driverContext, List<Operator> operators) {}
+
+    private record PendingOuterDriver(DriverContext driverContext, List<Operator> operators) {}
+
     private static final class ParquetPageSourceOperator
             implements Operator
     {
@@ -15304,6 +15443,7 @@ public final class TrinoTpcdsParquetSupport
         private final OperatorContext operatorContext;
         private final List<PipelinePlan> plans;
         private final Deque<Page> outputBuffer = new ArrayDeque<>();
+        private final Deque<Driver> pendingDrivers = new ArrayDeque<>();
 
         private int currentPlanIndex;
         private Driver currentDriver;
@@ -15327,7 +15467,7 @@ public final class TrinoTpcdsParquetSupport
         public void finish()
         {
             finished = true;
-            closeCurrentDriver();
+            closeAllDrivers();
         }
 
         @Override
@@ -15357,13 +15497,16 @@ public final class TrinoTpcdsParquetSupport
 
             while (outputBuffer.isEmpty()) {
                 if (currentDriver == null) {
-                    if (currentPlanIndex >= plans.size()) {
-                        finished = true;
-                        return null;
+                    if (pendingDrivers.isEmpty()) {
+                        if (currentPlanIndex >= plans.size()) {
+                            finished = true;
+                            return null;
+                        }
+                        PipelinePlan currentPlan = plans.get(currentPlanIndex++);
+                        currentPlanName = currentPlan.sinkName();
+                        createDriversForPlan(currentPlan);
                     }
-                    PipelinePlan currentPlan = plans.get(currentPlanIndex++);
-                    currentPlanName = currentPlan.sinkName();
-                    currentDriver = createDriverForPlan(currentPlan);
+                    currentDriver = pendingDrivers.removeFirst();
                 }
 
                 if (currentDriver.isFinished()) {
@@ -15395,14 +15538,17 @@ public final class TrinoTpcdsParquetSupport
         public void close()
         {
             finished = true;
-            closeCurrentDriver();
+            closeAllDrivers();
         }
 
-        private Driver createDriverForPlan(PipelinePlan plan)
+        private void createDriversForPlan(PipelinePlan plan)
         {
             DriverContext childDriverContext = newDriverContext(taskContext);
-            List<Operator> operators = createOperators(taskContext, childDriverContext, plan, outputBuffer::add);
-            return Driver.createDriver(childDriverContext, operators);
+            PipelineOperators pipeline = createPipelineOperators(taskContext, childDriverContext, plan, outputBuffer::add);
+            pendingDrivers.addLast(Driver.createDriver(childDriverContext, pipeline.mainOperators()));
+            for (DriverOperators outerDriver : pipeline.outerDrivers()) {
+                pendingDrivers.addLast(Driver.createDriver(outerDriver.driverContext(), outerDriver.operators()));
+            }
         }
 
         private void closeCurrentDriver()
@@ -15410,8 +15556,19 @@ public final class TrinoTpcdsParquetSupport
             if (currentDriver != null) {
                 currentDriver.close();
                 currentDriver = null;
-                currentPlanName = null;
+                if (pendingDrivers.isEmpty()) {
+                    currentPlanName = null;
+                }
             }
+        }
+
+        private void closeAllDrivers()
+        {
+            closeCurrentDriver();
+            while (!pendingDrivers.isEmpty()) {
+                pendingDrivers.removeFirst().close();
+            }
+            currentPlanName = null;
         }
     }
 

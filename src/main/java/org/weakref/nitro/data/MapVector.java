@@ -253,6 +253,19 @@ public final class MapVector
     }
 
     @Override
+    public int childVectorCount()
+    {
+        return keys.vectorCount() + values.vectorCount();
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        int keyCount = keys.vectorCount();
+        return index < keyCount ? keys.vectorAt(index) : values.vectorAt(index - keyCount);
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         keys.asMap().values().forEach(consumer);

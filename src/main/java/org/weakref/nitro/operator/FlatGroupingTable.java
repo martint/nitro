@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
@@ -32,6 +33,8 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 final class FlatGroupingTable
 {
     private static final boolean DEBUG_NORMALIZED_INT_KEY = Boolean.getBoolean("nitro.debug.normalizedIntKey");
+    private static final boolean DEBUG_SPARSE_COMPOSITE_GROUP_CACHE =
+            Boolean.getBoolean("nitro.debug.sparseCompositeGroupCache");
     private static final Object FIXED_RECORD_CHUNK_FAMILY = new Object();
     private static final Object VARIABLE_WIDTH_CHUNK_FAMILY = new Object();
     private static final int VECTOR_LENGTH = Long.BYTES;
@@ -42,6 +45,20 @@ final class FlatGroupingTable
     private static final int MAX_NORMALIZED_SCRATCH_AMPLIFICATION = 4;
     private static final boolean POOL_SIZED_RECORD_CHUNKS =
             Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.poolSizedRecordChunks", "true"));
+    private static final boolean SINGLE_DICTIONARY_GROUP_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.singleDictionaryGroupCache", "true"));
+    private static final boolean SPARSE_COMPOSITE_GROUP_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.sparseCompositeGroupCache", "true"));
+    private static final boolean GENERATED_DICTIONARY_HASH_PROBE_BATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.group.generatedDictionaryHashProbeBatch", "true"));
+    private static final int SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE = 128;
+    private static final int SPARSE_COMPOSITE_ADMISSION_MAX_DISTINCT = 124;
+    private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS = 6;
+    private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT = 64;
+    private static final int SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY_AMPLIFICATION =
+            Integer.getInteger("nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinalityAmplification", 2);
+    private static final int SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY =
+            Integer.getInteger("nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality", 1 << 16);
     private static final double DEFAULT_LOAD_FACTOR = 15.0 / 16;
 
     private final FlatKeyLayout layout;
@@ -52,11 +69,13 @@ final class FlatGroupingTable
     private final int recordsPerChunkMask;
     private final int fixedRecordChunkSize;
     private final boolean identityGroupIds;
+    private final boolean packedHashRecordSlots;
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
 
     private byte[] control;
     private int[] groupIdsByHash;
     private int[] recordIndexesByHash;
+    private long[] hashRecordsByHash;
     private byte[][] fixedRecordChunks;
     private int[] recordIndexByGroupId;
     private int nextRecordIndex;
@@ -70,6 +89,14 @@ final class FlatGroupingTable
     // -cardinality or nullable key) simply fall through to it. Group ordinals are stable (rehash preserves them),
     // and composites are stable across batches, so the cache persists for the whole grouping.
     private int[] compositeCache;
+    private long[] sparseCompositeKeys;
+    private int[] sparseCompositeGroups;
+    private int sparseCompositeMask;
+    private int sparseCompositeSize;
+    private int sparseCompositeMaxFill;
+    private boolean sparseCompositeAdmissionDecided;
+    private boolean sparseCompositeAdmitted;
+    private boolean debugSparseCompositePrinted;
 
     // Reusable per-batch hash buffer for the decoupled hash-then-probe driver (see prepareBatchHashes). Sized to
     // the largest batch seen and held across batches so the path allocates nothing in steady state. When
@@ -86,6 +113,12 @@ final class FlatGroupingTable
     private long[] normalizedValidByRecord;
     private long normalizedInputCount;
     private int normalizedRecordCount;
+    private long[] singleDictionaryGroups;
+    private Vector singleDictionaryIdentity;
+    private long singleDictionaryContentGeneration = -1;
+    private int singleDictionaryEpoch;
+    private boolean singleDictionaryGroupCacheActive;
+    private int[] singleDictionaryIds;
 
     public FlatGroupingTable(FlatKeyLayout layout, int expectedSize)
     {
@@ -94,11 +127,20 @@ final class FlatGroupingTable
 
     public FlatGroupingTable(FlatKeyLayout layout, int expectedSize, boolean identityGroupIds)
     {
+        this(layout, expectedSize, identityGroupIds, false);
+    }
+
+    FlatGroupingTable(FlatKeyLayout layout, int expectedSize, boolean identityGroupIds, boolean packedHashRecordSlots)
+    {
         this.layout = layout;
         this.identityGroupIds = identityGroupIds &&
                 Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.identityGroupIds", "true"));
+        // Packing removes the record-index-to-record-hash dependent load, but widens each hash slot. Record-identity
+        // tables already prove that physical record order is the logical group id, so they avoid paying for a second
+        // group-id map and are the structurally compact cohort where the wider self-contained slot can win.
+        this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds;
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena() : null;
-        this.fixedRecordSize = Long.BYTES + layout.fixedRecordSize();
+        this.fixedRecordSize = (packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
         if (POOL_SIZED_RECORD_CHUNKS) {
             long minimumBytes = arrayPool.minRetainedBytes();
@@ -118,11 +160,17 @@ final class FlatGroupingTable
         this.control = arrayPool.borrowBytes(capacity + VECTOR_LENGTH);
         Arrays.fill(control, (byte) 0);
         this.groupIdsByHash = this.identityGroupIds ? null : arrayPool.borrowInts(capacity);
-        this.recordIndexesByHash = arrayPool.borrowInts(capacity);
+        this.recordIndexesByHash = packedHashRecordSlots ? null : arrayPool.borrowInts(capacity);
+        this.hashRecordsByHash = packedHashRecordSlots ? arrayPool.borrowLongs(capacity) : null;
         if (groupIdsByHash != null) {
             Arrays.fill(groupIdsByHash, -1);
         }
-        Arrays.fill(recordIndexesByHash, -1);
+        if (recordIndexesByHash != null) {
+            Arrays.fill(recordIndexesByHash, -1);
+        }
+        if (hashRecordsByHash != null) {
+            Arrays.fill(hashRecordsByHash, 0);
+        }
         this.fixedRecordChunks = new byte[recordGroupsRequiredForCapacity(capacity)][];
         this.recordIndexByGroupId = this.identityGroupIds ? null : arrayPool.borrowInts(max(16, expectedSize));
         if (recordIndexByGroupId != null) {
@@ -140,6 +188,8 @@ final class FlatGroupingTable
         layout.beginBatch(values, nulls);
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
+        singleDictionaryGroupCacheActive = false;
+        singleDictionaryIds = null;
     }
 
     public void endBatch()
@@ -147,18 +197,62 @@ final class FlatGroupingTable
         layout.endBatch();
         batchHashesValid = false;
         batchNormalizedHashesValid = false;
+        singleDictionaryGroupCacheActive = false;
+        singleDictionaryIds = null;
+    }
+
+    private void prepareSingleDictionaryGroupCache(int selectedRows, boolean completePhysicalBatch)
+    {
+        singleDictionaryGroupCacheActive = false;
+        singleDictionaryIds = null;
+        if (!SINGLE_DICTIONARY_GROUP_CACHE || !identityGroupIds || !completePhysicalBatch || selectedRows == 0) {
+            return;
+        }
+        boolean eligible = layout.batchSupportsSingleDictionaryGroupCache();
+        int cardinality = eligible
+                ? layout.batchSingleDictionaryGroupCardinality()
+                : 0;
+        singleDictionaryGroupCacheActive = eligible &&
+                cardinality <= SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY &&
+                cardinality <= (long) selectedRows * SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY_AMPLIFICATION;
+        if (!singleDictionaryGroupCacheActive) {
+            return;
+        }
+        singleDictionaryIds = layout.batchSingleDictionaryGroupIds();
+
+        Vector identity = layout.batchSingleDictionaryGroupIdentity();
+        long generation = layout.batchSingleDictionaryGroupGeneration();
+        if (identity != singleDictionaryIdentity || generation != singleDictionaryContentGeneration) {
+            singleDictionaryIdentity = identity;
+            singleDictionaryContentGeneration = generation;
+            if (singleDictionaryEpoch == Integer.MAX_VALUE) {
+                Arrays.fill(singleDictionaryGroups, 0);
+                singleDictionaryEpoch = 0;
+            }
+            singleDictionaryEpoch++;
+        }
+
+        if (singleDictionaryGroups == null || singleDictionaryGroups.length < cardinality) {
+            long[] previous = singleDictionaryGroups;
+            singleDictionaryGroups = arrayPool.borrowLongs(cardinality);
+            Arrays.fill(singleDictionaryGroups, 0);
+            arrayPool.release(previous);
+        }
     }
 
     /**
      * Phase one of the decoupled driver: precompute this batch's key hashes for the masked positions into a
      * reusable buffer, so the subsequent per-position {@link #assignGroup} calls probe with an already-resolved
      * hash. Separating the hash pass from the probe pass lets the independent probe loads overlap their cache
-     * misses (memory-level parallelism), the structure Trino's {@code FlatGroupByHash} uses. No-op when the batch
-     * is array-mode eligible, since that path resolves groups by composite id without hashing at all.
+     * misses (memory-level parallelism), the structure Trino's {@code FlatGroupByHash} uses. No-op when an enabled
+     * composite cache will resolve repeated keys without hashing; direct caches never hash, while sparse caches
+     * hash only a composite's first occurrence.
      */
     public void prepareBatchHashes(Vector[] values, Vector[] nulls, Mask mask)
     {
-        if (layout.batchArrayModeEligible() || mask.none()) {
+        prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
+        considerSparseCompositeAdmission(mask);
+        if (skipBatchHashPrecompute() || mask.none()) {
             batchHashesValid = false;
             return;
         }
@@ -167,6 +261,13 @@ final class FlatGroupingTable
             long[] previous = batchHashes;
             batchHashes = arrayPool.borrowLongs(size);
             arrayPool.release(previous);
+        }
+        if (mask.all() &&
+                !layout.batchSupportsNormalizedIntKey() &&
+                layout.prepareGeneratedDictionaryBatchHashes(size, batchHashes)) {
+            batchNormalizedHashesValid = false;
+            batchHashesValid = true;
+            return;
         }
         batchNormalizedHashesValid = layout.batchSupportsNormalizedIntKey() &&
                 shouldPrepareNormalizedScratch(size, mask.selectedCount());
@@ -180,10 +281,43 @@ final class FlatGroupingTable
         batchHashesValid = true;
     }
 
+    /**
+     * Dense counterpart to {@link #prepareBatchHashes}: an admitted generated physical-key kernel computes the
+     * exact logical hash and immediately probes the authoritative table. This avoids writing and rereading the
+     * batch hash scratch for shapes where dictionary-entry hashes and resolved integer accessors already make the
+     * hash calculation a compact straight-line loop. All other shapes retain the decoupled hash/probe driver.
+     */
+    long assignGeneratedDictionaryBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
+        considerSparseCompositeAdmission(mask);
+        if (!GENERATED_DICTIONARY_HASH_PROBE_BATCH ||
+                !mask.all() ||
+                mask.none() ||
+                skipBatchHashPrecompute() ||
+                layout.batchSupportsNormalizedIntKey()) {
+            return -1;
+        }
+        return layout.assignGeneratedDictionaryBatch(
+                mask.maxPosition() + 1,
+                this,
+                values,
+                nulls,
+                nextGroupId,
+                result.values());
+    }
+
     /** Position-list counterpart used when a caller has already removed rows that will not probe the table. */
     public void prepareBatchHashes(Vector[] values, Vector[] nulls, int[] positions, int positionCount)
     {
-        if (layout.batchArrayModeEligible() || positionCount == 0) {
+        prepareSingleDictionaryGroupCache(positionCount, false);
+        considerSparseCompositeAdmission(positions, positionCount);
+        if (skipBatchHashPrecompute() || positionCount == 0) {
             batchHashesValid = false;
             return;
         }
@@ -218,8 +352,11 @@ final class FlatGroupingTable
             batchNormalizedFirst[position] = layout.preparedNormalizedFirst();
             batchNormalizedSecond[position] = layout.preparedNormalizedSecond();
             batchNormalizedValid[position] = 1;
-            return FlatKeyLayout.normalizedIntKeyHash(batchNormalizedFirst[position], batchNormalizedSecond[position]);
         }
+        // The hash table is persistent across batches, while normalized-key eligibility is a physical batch
+        // property (nested dictionaries can make one batch eligible and a flat/out-of-domain batch ineligible).
+        // Always place records in the encoding-independent logical hash domain. Normalized lanes remain an exact
+        // equality accelerator, but may never select a different bucket for the same SQL key.
         return layout.hash(values, nulls, position);
     }
 
@@ -260,6 +397,18 @@ final class FlatGroupingTable
     {
         long composite = layout.compositeValueId(position);
         if (composite >= 0) {
+            if (!layout.batchDirectCompositeEligible()) {
+                if (SPARSE_COMPOSITE_GROUP_CACHE && sparseCompositeAdmitted) {
+                    int cached = sparseCompositeGroup(composite);
+                    if (cached >= 0) {
+                        return cached;
+                    }
+                    long group = assignGroupHashed(values, nulls, position, newGroupId);
+                    cacheSparseComposite(composite, toIntExact(group));
+                    return group;
+                }
+                return assignGroupHashed(values, nulls, position, newGroupId);
+            }
             int slot = (int) composite;
             if (compositeCache != null && slot < compositeCache.length && compositeCache[slot] >= 0) {
                 return compositeCache[slot];
@@ -271,14 +420,196 @@ final class FlatGroupingTable
         return assignGroupHashed(values, nulls, position, newGroupId);
     }
 
+    private int sparseCompositeGroup(long composite)
+    {
+        if (sparseCompositeGroups == null) {
+            return -1;
+        }
+        int slot = sparseCompositeHash(composite) & sparseCompositeMask;
+        while (true) {
+            int group = sparseCompositeGroups[slot];
+            if (group < 0) {
+                return -1;
+            }
+            if (sparseCompositeKeys[slot] == composite) {
+                return group;
+            }
+            slot = (slot + 1) & sparseCompositeMask;
+        }
+    }
+
+    private void cacheSparseComposite(long composite, int group)
+    {
+        if (DEBUG_SPARSE_COMPOSITE_GROUP_CACHE && !debugSparseCompositePrinted) {
+            debugSparseCompositePrinted = true;
+            System.err.printf("[sparse-composite-group-cache] fields=%d%n", layout.fieldCount());
+        }
+        if (sparseCompositeGroups == null) {
+            initializeSparseCompositeCache(16);
+        }
+        else if (sparseCompositeSize >= sparseCompositeMaxFill) {
+            rehashSparseCompositeCache(sparseCompositeGroups.length << 1);
+        }
+        int slot = sparseCompositeHash(composite) & sparseCompositeMask;
+        while (sparseCompositeGroups[slot] >= 0) {
+            if (sparseCompositeKeys[slot] == composite) {
+                sparseCompositeGroups[slot] = group;
+                return;
+            }
+            slot = (slot + 1) & sparseCompositeMask;
+        }
+        sparseCompositeKeys[slot] = composite;
+        sparseCompositeGroups[slot] = group;
+        sparseCompositeSize++;
+    }
+
+    private void initializeSparseCompositeCache(int capacity)
+    {
+        sparseCompositeKeys = arrayPool.borrowLongs(capacity);
+        sparseCompositeGroups = arrayPool.borrowInts(capacity);
+        Arrays.fill(sparseCompositeGroups, -1);
+        sparseCompositeMask = capacity - 1;
+        sparseCompositeMaxFill = capacity * 3 / 4;
+    }
+
+    private void rehashSparseCompositeCache(int capacity)
+    {
+        long[] previousKeys = sparseCompositeKeys;
+        int[] previousGroups = sparseCompositeGroups;
+        initializeSparseCompositeCache(capacity);
+        sparseCompositeSize = 0;
+        for (int index = 0; index < previousGroups.length; index++) {
+            if (previousGroups[index] >= 0) {
+                cacheSparseComposite(previousKeys[index], previousGroups[index]);
+            }
+        }
+        arrayPool.release(previousKeys);
+        arrayPool.release(previousGroups);
+    }
+
+    private static int sparseCompositeHash(long composite)
+    {
+        long hash = composite;
+        hash ^= hash >>> 33;
+        hash *= 0xff51afd7ed558ccdL;
+        hash ^= hash >>> 33;
+        return (int) hash;
+    }
+
     boolean batchArrayModeEligible()
     {
-        return layout.batchArrayModeEligible();
+        // A direct composite cache never hashes. A sparse composite cache hashes only the first occurrence of a
+        // key, so eagerly hashing every row would throw away most of its benefit. When the sparse cache is
+        // explicitly disabled, preserve the established decoupled hash-precompute path for non-direct layouts;
+        // this makes the opt-out a causal cache control instead of silently selecting an inferior inline-hash
+        // driver.
+        return layout.batchDirectCompositeEligible() ||
+                (SPARSE_COMPOSITE_GROUP_CACHE && sparseCompositeAdmitted && layout.batchArrayModeEligible());
+    }
+
+    private boolean skipBatchHashPrecompute()
+    {
+        return layout.batchDirectCompositeEligible() ||
+                (SPARSE_COMPOSITE_GROUP_CACHE &&
+                        sparseCompositeAdmitted &&
+                        sparseCompositeGroups != null &&
+                        layout.batchArrayModeEligible());
+    }
+
+    private void considerSparseCompositeAdmission(Mask mask)
+    {
+        if (!sparseCompositeAdmissionCandidate(mask.selectedCount())) {
+            return;
+        }
+        long[] samples = arrayPool.borrowLongs(SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE);
+        int count = 0;
+        for (int position : mask) {
+            samples[count++] = layout.compositeValueId(position);
+            if (count == SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE) {
+                break;
+            }
+        }
+        finishSparseCompositeAdmission(samples);
+        arrayPool.release(samples);
+    }
+
+    private void considerSparseCompositeAdmission(int[] positions, int positionCount)
+    {
+        if (!sparseCompositeAdmissionCandidate(positionCount)) {
+            return;
+        }
+        long[] samples = arrayPool.borrowLongs(SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE);
+        for (int index = 0; index < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE; index++) {
+            samples[index] = layout.compositeValueId(positions[index]);
+        }
+        finishSparseCompositeAdmission(samples);
+        arrayPool.release(samples);
+    }
+
+    private boolean sparseCompositeAdmissionCandidate(int positionCount)
+    {
+        if (!SPARSE_COMPOSITE_GROUP_CACHE ||
+                sparseCompositeAdmissionDecided ||
+                positionCount < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE ||
+                layout.batchDirectCompositeEligible() ||
+                !layout.batchArrayModeEligible()) {
+            return false;
+        }
+        int fields = layout.fieldCount();
+        if (fields > 3 && fields < SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS) {
+            sparseCompositeAdmissionDecided = true;
+            return false;
+        }
+        return true;
+    }
+
+    private void finishSparseCompositeAdmission(long[] samples)
+    {
+        int distinct = 0;
+        for (int index = 0; index < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE; index++) {
+            long composite = samples[index];
+            if (composite < 0) {
+                distinct = SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE;
+                break;
+            }
+            boolean seen = false;
+            for (int previous = 0; previous < distinct; previous++) {
+                if (samples[previous] == composite) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                samples[distinct++] = composite;
+            }
+        }
+        // Narrow composites need visible repetition before an auxiliary cache can repay its probe. Expensive wide
+        // composites have a different break-even point: a locally near-constant prefix is already cheap for the
+        // authoritative hash table and can later expand into a large cache, while a broad but bounded first window
+        // can amortize its costly full-key hash when the same stable composite ids recur in later batches.
+        sparseCompositeAdmitted = distinct <= SPARSE_COMPOSITE_ADMISSION_MAX_DISTINCT &&
+                (layout.fieldCount() < SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS ||
+                        distinct >= SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT);
+        sparseCompositeAdmissionDecided = true;
+        if (DEBUG_SPARSE_COMPOSITE_GROUP_CACHE) {
+            System.err.printf("[sparse-composite-admission] fields=%d samples=%d distinct=%d admitted=%s%n",
+                    layout.fieldCount(), SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE, distinct, sparseCompositeAdmitted);
+        }
     }
 
     int recordCount()
     {
         return nextRecordIndex;
+    }
+
+    int sparseCompositeSize()
+    {
+        return sparseCompositeSize;
+    }
+
+    boolean usesPackedHashRecordSlots()
+    {
+        return packedHashRecordSlots;
     }
 
     void ensureCapacity(long expectedGroups)
@@ -295,6 +626,23 @@ final class FlatGroupingTable
     long assignGroupHashed(Vector[] values, Vector[] nulls, int position, long newGroupId)
     {
         return assignGroupHashedInternal(values, nulls, position, newGroupId);
+    }
+
+    boolean singleDictionaryGroupCacheActive()
+    {
+        return singleDictionaryGroupCacheActive;
+    }
+
+    long assignGroupCached(Vector[] values, Vector[] nulls, int position, long newGroupId)
+    {
+        int dictionaryId = singleDictionaryIds[position];
+        long entry = singleDictionaryGroups[dictionaryId];
+        if ((int) (entry >>> Integer.SIZE) == singleDictionaryEpoch) {
+            return entry & 0xFFFF_FFFFL;
+        }
+        long groupId = assignGroup(values, nulls, position, newGroupId);
+        cacheSingleDictionaryGroup(dictionaryId, groupId);
+        return groupId;
     }
 
     private long assignGroupHashedInternal(Vector[] values, Vector[] nulls, int position, long newGroupId)
@@ -319,7 +667,7 @@ final class FlatGroupingTable
                 }
                 normalizedFirst = layout.preparedNormalizedFirst();
                 normalizedSecond = layout.preparedNormalizedSecond();
-                hash = FlatKeyLayout.normalizedIntKeyHash(normalizedFirst, normalizedSecond);
+                hash = layout.hash(values, nulls, position);
             }
             else {
                 hash = layout.hash(values, nulls, position);
@@ -327,7 +675,7 @@ final class FlatGroupingTable
         }
         int index = getIndex(values, nulls, position, hash, normalized, normalizedFirst, normalizedSecond);
         if (index >= 0) {
-            return identityGroupIds ? recordIndexesByHash[index] : groupIdsByHash[index];
+            return identityGroupIds ? recordIndexByHash(index) : groupIdsByHash[index];
         }
 
         addNewGroup(-index - 1, values, nulls, position, hash, newGroupId, normalized, normalizedFirst, normalizedSecond);
@@ -337,7 +685,60 @@ final class FlatGroupingTable
         return newGroupId;
     }
 
-    private void cacheComposite(int composite, int group)
+    long assignGroupWithHash(
+            Vector[] values,
+            Vector[] nulls,
+            int position,
+            long newGroupId,
+            long hash)
+    {
+        int index = getIndex(values, nulls, position, hash, false, 0, 0);
+        if (index >= 0) {
+            return identityGroupIds ? recordIndexByHash(index) : groupIdsByHash[index];
+        }
+
+        addNewGroup(-index - 1, values, nulls, position, hash, newGroupId, false, 0, 0);
+        if (nextRecordIndex >= maxFill) {
+            rehash();
+        }
+        return newGroupId;
+    }
+
+    private void cacheSingleDictionaryGroup(int dictionaryId, long groupId)
+    {
+        if (dictionaryId >= 0 && (groupId & ~0xFFFF_FFFFL) == 0) {
+            singleDictionaryGroups[dictionaryId] = ((long) singleDictionaryEpoch << Integer.SIZE) | groupId;
+        }
+    }
+
+    int cachedCompositeGroup(int composite)
+    {
+        return compositeCache != null && composite < compositeCache.length ? compositeCache[composite] : -1;
+    }
+
+    int[] prepareCompositeCache(int requiredSize)
+    {
+        if (compositeCache == null) {
+            int initial = Integer.highestOneBit(Math.max(16, requiredSize - 1)) << 1;
+            compositeCache = arrayPool.borrowInts(initial);
+            java.util.Arrays.fill(compositeCache, -1);
+        }
+        else if (requiredSize > compositeCache.length) {
+            int oldLength = compositeCache.length;
+            int newLength = oldLength;
+            while (newLength < requiredSize) {
+                newLength <<= 1;
+            }
+            int[] previous = compositeCache;
+            compositeCache = arrayPool.borrowInts(newLength);
+            System.arraycopy(previous, 0, compositeCache, 0, oldLength);
+            java.util.Arrays.fill(compositeCache, oldLength, newLength, -1);
+            arrayPool.release(previous);
+        }
+        return compositeCache;
+    }
+
+    void cacheComposite(int composite, int group)
     {
         if (compositeCache == null) {
             int initial = Integer.highestOneBit(Math.max(16, composite)) << 1;
@@ -359,6 +760,16 @@ final class FlatGroupingTable
         compositeCache[composite] = group;
     }
 
+    long assignMixedComposite3Batch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        return layout.assignMixedComposite3Batch(this, values, nulls, mask, result, nextGroupId);
+    }
+
     public long assignGroup(Vector[] values, int position, long newGroupId)
     {
         return assignGroup(values, null, position, newGroupId);
@@ -374,7 +785,7 @@ final class FlatGroupingTable
         if (index < 0) {
             return -1;
         }
-        return identityGroupIds ? recordIndexesByHash[index] : groupIdsByHash[index];
+        return identityGroupIds ? recordIndexByHash(index) : groupIdsByHash[index];
     }
 
     public long findGroup(Vector[] values, int position)
@@ -400,8 +811,9 @@ final class FlatGroupingTable
 
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
-        byte hashPrefix = (byte) (hash & 0x7F | 0x80);
-        int bucket = bucket((int) (hash >> 7));
+        int packedHash = packedHashRecordSlots ? packedTableHash(hash) : 0;
+        byte hashPrefix = (byte) ((packedHashRecordSlots ? packedHash : hash) & 0x7F | 0x80);
+        int bucket = bucket(packedHashRecordSlots ? Integer.rotateRight(packedHash, 7) : (int) (hash >> 7));
         int step = 1;
         long repeated = repeat(hashPrefix);
 
@@ -410,9 +822,21 @@ final class FlatGroupingTable
             long controlMatches = match(controlVector, repeated);
             while (controlMatches != 0) {
                 int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));
-                int recordIndex = recordIndexesByHash[index];
-                if (recordIndex >= 0 && identical(recordIndex, hash, values, nulls, position, normalized, normalizedFirst, normalizedSecond)) {
-                    return index;
+                if (packedHashRecordSlots) {
+                    long hashRecord = hashRecordsByHash[index];
+                    int recordIndex = (int) hashRecord - 1;
+                    boolean sameHash = (int) (hashRecord >>> Integer.SIZE) == packedHash;
+                    boolean sameKey = recordIndex >= 0 && sameHash &&
+                            identicalKey(recordIndex, values, nulls, position, normalized, normalizedFirst, normalizedSecond);
+                    if (sameKey) {
+                        return index;
+                    }
+                }
+                else {
+                    int recordIndex = recordIndexesByHash[index];
+                    if (recordIndex >= 0 && identical(recordIndex, hash, values, nulls, position, normalized, normalizedFirst, normalizedSecond)) {
+                        return index;
+                    }
                 }
                 controlMatches &= controlMatches - 1;
             }
@@ -427,6 +851,14 @@ final class FlatGroupingTable
         }
     }
 
+    private int recordIndexByHash(int index)
+    {
+        if (!packedHashRecordSlots) {
+            return recordIndexesByHash[index];
+        }
+        return (int) hashRecordsByHash[index] - 1;
+    }
+
     private boolean identical(int recordIndex, long hash, Vector[] values, Vector[] nulls, int position, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
         byte[] fixedChunk = fixedChunk(recordIndex);
@@ -434,17 +866,25 @@ final class FlatGroupingTable
         if ((long) LONG_HANDLE.get(fixedChunk, fixedOffset) != hash) {
             return false;
         }
+        return identicalKey(recordIndex, values, nulls, position, normalized, normalizedFirst, normalizedSecond);
+    }
+
+    private boolean identicalKey(int recordIndex, Vector[] values, Vector[] nulls, int position, boolean normalized, long normalizedFirst, long normalizedSecond)
+    {
         if (normalized && normalizedRecordValid(recordIndex)) {
             return normalizedFirstByRecord[recordIndex] == normalizedFirst &&
                     normalizedSecondByRecord[recordIndex] == normalizedSecond;
         }
+        byte[] fixedChunk = fixedChunk(recordIndex);
+        int fixedOffset = fixedOffset(recordIndex);
         return layout.identicalRecordToInput(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
     }
 
     private void addNewGroup(int index, Vector[] values, Vector[] nulls, int position, long hash, long groupId, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
-        setControl(index, (byte) (hash & 0x7F | 0x80));
-        int recordIndex = nextRecordIndex++;
+        int recordIndex = nextRecordIndex;
+        setControl(index, (byte) ((packedHashRecordSlots ? packedTableHash(hash) : hash) & 0x7F | 0x80));
+        nextRecordIndex++;
         if (identityGroupIds) {
             if (groupId != recordIndex) {
                 throw new IllegalArgumentException("Identity group id does not match record index");
@@ -453,7 +893,14 @@ final class FlatGroupingTable
         else {
             groupIdsByHash[index] = toIntExact(groupId);
         }
-        recordIndexesByHash[index] = recordIndex;
+        if (packedHashRecordSlots) {
+            int packedHash = packedTableHash(hash);
+            hashRecordsByHash[index] = ((long) packedHash << Integer.SIZE) |
+                    ((recordIndex + 1L) & 0xFFFF_FFFFL);
+        }
+        else {
+            recordIndexesByHash[index] = recordIndex;
+        }
         if (!identityGroupIds) {
             ensureGroupIdCapacity(toIntExact(groupId));
             recordIndexByGroupId[toIntExact(groupId)] = recordIndex;
@@ -461,7 +908,9 @@ final class FlatGroupingTable
 
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
-        LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
+        if (!packedHashRecordSlots) {
+            LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
+        }
         layout.writeRecord(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
         if (normalized) {
             ensureNormalizedRecordCapacity(recordIndex + 1);
@@ -528,6 +977,7 @@ final class FlatGroupingTable
 
     private void rehash()
     {
+        int previousCapacity = capacity;
         capacity *= 2;
         maxFill = calculateMaxFill(capacity);
         mask = capacity - 1;
@@ -536,14 +986,39 @@ final class FlatGroupingTable
         byte[] previousControl = control;
         int[] previousGroupIds = groupIdsByHash;
         int[] previousRecordIndexes = recordIndexesByHash;
+        long[] previousHashRecords = hashRecordsByHash;
         control = arrayPool.borrowBytes(capacity + VECTOR_LENGTH);
         Arrays.fill(control, (byte) 0);
         groupIdsByHash = identityGroupIds ? null : arrayPool.borrowInts(capacity);
-        recordIndexesByHash = arrayPool.borrowInts(capacity);
+        recordIndexesByHash = packedHashRecordSlots ? null : arrayPool.borrowInts(capacity);
+        hashRecordsByHash = packedHashRecordSlots ? arrayPool.borrowLongs(capacity) : null;
         if (groupIdsByHash != null) {
             Arrays.fill(groupIdsByHash, -1);
         }
-        Arrays.fill(recordIndexesByHash, -1);
+        if (recordIndexesByHash != null) {
+            Arrays.fill(recordIndexesByHash, -1);
+        }
+        if (hashRecordsByHash != null) {
+            Arrays.fill(hashRecordsByHash, 0);
+        }
+
+        if (packedHashRecordSlots) {
+            for (int previousIndex = 0; previousIndex < previousCapacity; previousIndex++) {
+                long hashRecord = previousHashRecords[previousIndex];
+                if (hashRecord == 0) {
+                    continue;
+                }
+                int packedHash = (int) (hashRecord >>> Integer.SIZE);
+                int recordIndex = (int) hashRecord - 1;
+                int groupId = identityGroupIds ? recordIndex : previousGroupIds[previousIndex];
+                insertPackedHashRecord(packedHash, recordIndex, groupId);
+            }
+            arrayPool.release(previousControl);
+            arrayPool.release(previousGroupIds);
+            arrayPool.release(previousRecordIndexes);
+            arrayPool.release(previousHashRecords);
+            return;
+        }
 
         int groupCount = identityGroupIds ? nextRecordIndex : recordIndexByGroupId.length;
         for (int groupId = 0; groupId < groupCount; groupId++) {
@@ -565,7 +1040,13 @@ final class FlatGroupingTable
                     if (!identityGroupIds) {
                         groupIdsByHash[index] = groupId;
                     }
-                    recordIndexesByHash[index] = recordIndex;
+                    if (packedHashRecordSlots) {
+                        hashRecordsByHash[index] = ((long) (int) (hash >>> Integer.SIZE) << Integer.SIZE) |
+                                ((recordIndex + 1L) & 0xFFFF_FFFFL);
+                    }
+                    else {
+                        recordIndexesByHash[index] = recordIndex;
+                    }
                     break;
                 }
                 bucket = bucket(bucket + step);
@@ -575,6 +1056,30 @@ final class FlatGroupingTable
         arrayPool.release(previousControl);
         arrayPool.release(previousGroupIds);
         arrayPool.release(previousRecordIndexes);
+        arrayPool.release(previousHashRecords);
+    }
+
+    private void insertPackedHashRecord(int packedHash, int recordIndex, int groupId)
+    {
+        byte hashPrefix = (byte) (packedHash & 0x7F | 0x80);
+        int bucket = bucket(Integer.rotateRight(packedHash, 7));
+        int step = 1;
+        while (true) {
+            long controlVector = (long) LONG_HANDLE.get(control, bucket);
+            long emptyMatches = match(controlVector, 0L);
+            if (emptyMatches != 0) {
+                int index = bucket(bucket + (Long.numberOfTrailingZeros(emptyMatches) >>> 3));
+                setControl(index, hashPrefix);
+                if (!identityGroupIds) {
+                    groupIdsByHash[index] = groupId;
+                }
+                hashRecordsByHash[index] = ((long) packedHash << Integer.SIZE) |
+                        ((recordIndex + 1L) & 0xFFFF_FFFFL);
+                return;
+            }
+            bucket = bucket(bucket + step);
+            step += VECTOR_LENGTH;
+        }
     }
 
     public boolean fieldNull(int recordIndex, int fieldIndex)
@@ -614,7 +1119,7 @@ final class FlatGroupingTable
 
     int keyOffset(int fixedOffset)
     {
-        return fixedOffset + Long.BYTES;
+        return fixedOffset + (packedHashRecordSlots ? 0 : Long.BYTES);
     }
 
     private byte[] borrowChunk(Object family, int size)
@@ -652,10 +1157,16 @@ final class FlatGroupingTable
         groupIdsByHash = null;
         arrayPool.release(recordIndexesByHash);
         recordIndexesByHash = null;
+        arrayPool.release(hashRecordsByHash);
+        hashRecordsByHash = null;
         arrayPool.release(recordIndexByGroupId);
         recordIndexByGroupId = null;
         arrayPool.release(compositeCache);
         compositeCache = null;
+        arrayPool.release(sparseCompositeKeys);
+        sparseCompositeKeys = null;
+        arrayPool.release(sparseCompositeGroups);
+        sparseCompositeGroups = null;
         arrayPool.release(batchHashes);
         batchHashes = null;
         arrayPool.release(batchNormalizedFirst);
@@ -670,6 +1181,9 @@ final class FlatGroupingTable
         normalizedSecondByRecord = null;
         arrayPool.release(normalizedValidByRecord);
         normalizedValidByRecord = null;
+        arrayPool.release(singleDictionaryGroups);
+        singleDictionaryGroups = null;
+        singleDictionaryIdentity = null;
         if (fixedRecordChunks != null) {
             for (byte[] chunk : fixedRecordChunks) {
                 releaseChunk(FIXED_RECORD_CHUNK_FAMILY, chunk);
@@ -708,6 +1222,11 @@ final class FlatGroupingTable
     private static long repeat(byte value)
     {
         return ((value & 0xFFL) * 0x01_01_01_01_01_01_01_01L);
+    }
+
+    private static int packedTableHash(long hash)
+    {
+        return (int) hash;
     }
 
     private static long match(long vector, long repeatedValue)

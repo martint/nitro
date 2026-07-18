@@ -186,8 +186,9 @@ public final class TrinoTpchParquetSupport
     }
 
     /**
-     * Q10: orders(quarter) probes the customer build, the R-flagged lineitem probes that result, nation
-     * joins last; revenue grouped over the seven customer output columns; TopN 20 by revenue.
+     * Q10: customer probes the quarter-filtered orders build, that result probes the R-flagged lineitem build,
+     * and nation joins last; revenue is grouped over the seven customer output columns and TopN selects 20.
+     * This build/probe order mirrors Trino's optimized SQL plan.
      */
     public MaterializedResult query10(TpchParquetTables tables)
     {
@@ -710,9 +711,7 @@ public final class TrinoTpchParquetSupport
         List<Type> ordersScanTypes = tableColumnTypes(tables, "orders", ordersColumns);
         Type orderDateType = ordersScanTypes.get(2);
         List<Type> ordersTypes = List.of(ordersScanTypes.get(0), ordersScanTypes.get(1));
-        // [o_orderkey, o_custkey, c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey]
-        List<Type> ordersWithCustomerTypes = concatTypes(ordersTypes, customerTypes);
-        PipelinePlan ordersWithCustomer = new PipelinePlan(
+        PipelinePlan orders = new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("orders"), ordersColumns, "q10.scan.orders"),
                 List.of(
                         namedFactoryStep("q10.filter.orders", filterAndProjectFactory(
@@ -721,10 +720,16 @@ public final class TrinoTpchParquetSupport
                                         greaterThanOrEqual(field(2, orderDateType), constant(LocalDate.of(1993, 10, 1).toEpochDay(), orderDateType), orderDateType),
                                         lessThan(field(2, orderDateType), constant(LocalDate.of(1994, 1, 1).toEpochDay(), orderDateType), orderDateType))),
                                 List.of(field(0, ordersScanTypes.get(0)), field(1, ordersScanTypes.get(1))),
-                                ordersTypes)),
-                        namedHashJoinStep("q10.join.customer", new HashJoinSpec(10_1, ordersTypes, List.of(1), customer, customerTypes, List.of(0)))),
+                                ordersTypes))),
                 "q10.sink.orders",
-                ordersWithCustomerTypes);
+                ordersTypes);
+        // [c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey, o_orderkey, o_custkey]
+        List<Type> customerWithOrdersTypes = concatTypes(customerTypes, ordersTypes);
+        PipelinePlan customerWithOrders = appendPlan(
+                customer,
+                List.of(namedHashJoinStep("q10.join.orders", new HashJoinSpec(10_1, customerTypes, List.of(0), orders, ordersTypes, List.of(1)))),
+                "q10.sink.customer_orders",
+                customerWithOrdersTypes);
 
         List<String> nationColumns = List.of("n_nationkey", "n_name");
         List<Type> nationTypes = tableColumnTypes(tables, "nation", nationColumns);
@@ -741,6 +746,21 @@ public final class TrinoTpchParquetSupport
         List<String> lineitemColumns = List.of("l_orderkey", "l_extendedprice", "l_discount", "l_returnflag");
         List<Type> lineitemScanTypes = tableColumnTypes(tables, "lineitem", lineitemColumns);
         List<Type> lineitemTypes = List.of(lineitemScanTypes.get(0), DOUBLE, DOUBLE);
+        PipelinePlan lineitem = new PipelinePlan(
+                new FilesPipelineSource(tables.tableFiles("lineitem"), lineitemColumns, "q10.scan.lineitem"),
+                List.of(namedFactoryStep("q10.filter.lineitem", filterAndProjectFactory(
+                        10_2,
+                        Optional.of(equalUtf8(3, "R", lineitemScanTypes.get(3))),
+                        List.of(field(0, lineitemScanTypes.get(0)), field(1, DOUBLE), field(2, DOUBLE)),
+                        lineitemTypes))),
+                "q10.sink.lineitem",
+                lineitemTypes);
+        List<Type> customerOrdersLineitemTypes = concatTypes(customerWithOrdersTypes, lineitemTypes);
+        PipelinePlan customerOrdersLineitem = appendPlan(
+                customerWithOrders,
+                List.of(namedHashJoinStep("q10.join.lineitem", new HashJoinSpec(10_3, customerWithOrdersTypes, List.of(7), lineitem, lineitemTypes, List.of(0)))),
+                "q10.sink.customer_orders_lineitem",
+                customerOrdersLineitemTypes);
         // [c_custkey, c_name, c_acctbal, c_phone, n_name, c_address, c_comment, discPrice]
         List<Type> groupedTypes = List.of(
                 customerTypes.get(0),
@@ -752,30 +772,23 @@ public final class TrinoTpchParquetSupport
                 customerTypes.get(5),
                 DOUBLE);
         List<Type> outputTypes = query10OutputTypes(tables);
-        return new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles("lineitem"), lineitemColumns, "q10.scan.lineitem"),
+        return appendPlan(
+                customerOrdersLineitem,
                 List.of(
-                        namedFactoryStep("q10.filter.lineitem", filterAndProjectFactory(
-                                10_2,
-                                Optional.of(equalUtf8(3, "R", lineitemScanTypes.get(3))),
-                                List.of(field(0, lineitemScanTypes.get(0)), field(1, DOUBLE), field(2, DOUBLE)),
-                                lineitemTypes)),
-                        // [l_orderkey, l_extendedprice, l_discount, o_orderkey, o_custkey, c_custkey, c_name, c_acctbal, c_phone, c_address, c_comment, c_nationkey]
-                        namedHashJoinStep("q10.join.orders", new HashJoinSpec(10_3, lineitemTypes, List.of(0), ordersWithCustomer, ordersWithCustomerTypes, List.of(0))),
                         // + [n_nationkey, n_name]
-                        namedHashJoinStep("q10.join.nation", new HashJoinSpec(10_4, concatTypes(lineitemTypes, ordersWithCustomerTypes), List.of(11), nation, nationTypes, List.of(0))),
+                        namedHashJoinStep("q10.join.nation", new HashJoinSpec(10_4, customerOrdersLineitemTypes, List.of(6), nation, nationTypes, List.of(0))),
                         namedFactoryStep("q10.project.disc_price", filterAndProjectFactory(
                                 10_5,
                                 Optional.empty(),
                                 List.of(
-                                        field(5, customerTypes.get(0)),
-                                        field(6, customerTypes.get(1)),
-                                        field(7, customerTypes.get(2)),
-                                        field(8, customerTypes.get(3)),
+                                        field(0, customerTypes.get(0)),
+                                        field(1, customerTypes.get(1)),
+                                        field(2, customerTypes.get(2)),
+                                        field(3, customerTypes.get(3)),
                                         field(13, nationTypes.get(1)),
-                                        field(9, customerTypes.get(4)),
-                                        field(10, customerTypes.get(5)),
-                                        discountedPrice(1, 2)),
+                                        field(4, customerTypes.get(4)),
+                                        field(5, customerTypes.get(5)),
+                                        discountedPrice(10, 11)),
                                 groupedTypes)),
                         namedFactoryStep("q10.group", hashAggregationFactory(
                                 10_6,

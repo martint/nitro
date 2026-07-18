@@ -52,7 +52,7 @@ final class BigintPairFlatKeyLayout
 
     private BigintPairFlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize)
     {
-        super(fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false);
+        super(fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
         this.firstKeyOffset = fixedOffsets[0];
         this.secondKeyOffset = fixedOffsets[1];
         this.nullable = nullByteCount > 0;

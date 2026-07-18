@@ -181,6 +181,18 @@ public class ProjectOperator
     }
 
     @Override
+    public boolean supportsDynamicFilterPushdown(int column)
+    {
+        if (column < 0 || column >= outputReferences.size()) {
+            return false;
+        }
+        Reference reference = outputReferences.get(column);
+        return reference.stream() == Stream.VALUES &&
+                reference.producer() instanceof Input input &&
+                source.supportsDynamicFilterPushdown(input.index());
+    }
+
+    @Override
     public boolean supportsRetainedBatches()
     {
         // Computed project outputs are mask-sensitive and can be recomputed after constrain(). Downstream operators

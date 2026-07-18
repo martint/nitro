@@ -38,6 +38,8 @@ final class RleReader
             Boolean.parseBoolean(System.getProperty("nitro.parquet.swarUleb128", "true"));
     private static final boolean SCAN_ALL_ONE_DEFINITION_RUNS =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.scanAllOneDefinitionRuns", "true"));
+    private static final boolean DIRECT_NULLABLE_DICTIONARY_UNROLL_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "true"));
     private MemorySegment segment;
     private long segmentLimit;
     private long position;
@@ -50,6 +52,270 @@ final class RleReader
     private int bitPackedRemaining;
     private long bitCursor; // absolute bit offset into the segment, within the active bit-packed run
 
+    /**
+     * Co-advance a nullable definition-level cursor and a dictionary-ID cursor while applying an exact
+     * dictionary predicate. Both hybrid-RLE states stay in locals for the complete window, so a sparse-null page
+     * does not need an intermediate per-position definition array followed by a second scan. The operation is a
+     * physical encoded-stream primitive: callers supply the dictionary and its accepted-entry map; it has no
+     * knowledge of a query, column, or logical type.
+     */
+    int filterNullableDictionaryLongs(RleReader ids, boolean[] accepted, long[] dictionary, int count,
+            int positionBase, int[] survivorsOut, long[] valuesOut, int outputOffset)
+    {
+        if (bitWidth != 1) {
+            throw new IllegalStateException("definition-level filter requires bit width 1");
+        }
+
+        MemorySegment definitionData = segment;
+        long definitionLimit = segmentLimit;
+        long definitionPosition = position;
+        int definitionRleValue = rleValue;
+        int definitionRleRemaining = rleRemaining;
+        int definitionPackedRemaining = bitPackedRemaining;
+        long definitionBitCursor = bitCursor;
+
+        MemorySegment idData = ids.segment;
+        long idLimit = ids.segmentLimit;
+        long idPosition = ids.position;
+        int idWidth = ids.bitWidth;
+        int idByteWidth = ids.byteWidth;
+        long idMask = (1L << idWidth) - 1;
+        int idRleValue = ids.rleValue;
+        int idRleRemaining = ids.rleRemaining;
+        int idPackedRemaining = ids.bitPackedRemaining;
+        long idBitCursor = ids.bitCursor;
+
+        int output = outputOffset;
+        int row = 0;
+        while (row < count) {
+            if (definitionRleRemaining == 0 && definitionPackedRemaining == 0) {
+                long decoded = readUnsignedLeb128(definitionData, definitionPosition, definitionLimit);
+                int header = (int) decoded;
+                definitionPosition += decoded >>> 32;
+                if ((header & 1) == 0) {
+                    definitionRleRemaining = header >>> 1;
+                    definitionRleValue = definitionData.get(JAVA_BYTE, definitionPosition) & 0xFF;
+                    definitionPosition++;
+                }
+                else {
+                    definitionPackedRemaining = (header >>> 1) * 8;
+                    definitionBitCursor = definitionPosition << 3;
+                }
+            }
+
+            int definitionSpan;
+            long definitionBits;
+            if (definitionRleRemaining != 0) {
+                definitionSpan = Math.min(definitionRleRemaining, count - row);
+                definitionRleRemaining -= definitionSpan;
+                if (definitionRleValue == 0) {
+                    row += definitionSpan;
+                    continue;
+                }
+                definitionBits = -1L;
+            }
+            else {
+                int shift = (int) definitionBitCursor & 7;
+                definitionSpan = Math.min(Math.min(definitionPackedRemaining, count - row), Long.SIZE - shift);
+                long mask = definitionSpan == Long.SIZE ? -1L : (1L << definitionSpan) - 1;
+                definitionBits = (readWord(definitionData, definitionBitCursor >>> 3, definitionLimit) >>> shift) & mask;
+                definitionBitCursor += definitionSpan;
+                definitionPackedRemaining -= definitionSpan;
+                if (definitionPackedRemaining == 0) {
+                    definitionPosition = definitionBitCursor >>> 3;
+                }
+                if (definitionBits == 0) {
+                    row += definitionSpan;
+                    continue;
+                }
+                if (definitionBits != mask) {
+                    // Rare-null mixed word: only present positions consume dictionary IDs. Most words take the
+                    // all-present bulk path below, so cursor/run checks are hoisted out of their per-row loop.
+                    for (int index = 0; index < definitionSpan; index++) {
+                        if (((definitionBits >>> index) & 1) == 0) {
+                            continue;
+                        }
+                        if (idRleRemaining == 0 && idPackedRemaining == 0) {
+                            long decoded = readUnsignedLeb128(idData, idPosition, idLimit);
+                            int header = (int) decoded;
+                            idPosition += decoded >>> 32;
+                            if ((header & 1) == 0) {
+                                idRleRemaining = header >>> 1;
+                                idRleValue = readLittleEndian(idData, idPosition, idLimit, idByteWidth);
+                                idPosition += idByteWidth;
+                            }
+                            else {
+                                idPackedRemaining = (header >>> 1) * 8;
+                                idBitCursor = idPosition << 3;
+                            }
+                        }
+                        int id;
+                        if (idRleRemaining != 0) {
+                            id = idRleValue;
+                            idRleRemaining--;
+                        }
+                        else {
+                            long word = readWord(idData, idBitCursor >>> 3, idLimit);
+                            id = (int) ((word >>> ((int) idBitCursor & 7)) & idMask);
+                            idBitCursor += idWidth;
+                            idPackedRemaining--;
+                            if (idPackedRemaining == 0) {
+                                idPosition = idBitCursor >>> 3;
+                            }
+                        }
+                        if (accepted[id]) {
+                            valuesOut[output] = dictionary[id];
+                            survivorsOut[output] = positionBase + row + index;
+                            output++;
+                        }
+                    }
+                    row += definitionSpan;
+                    continue;
+                }
+            }
+
+            int processed = 0;
+            while (processed < definitionSpan) {
+                if (idRleRemaining == 0 && idPackedRemaining == 0) {
+                    long decoded = readUnsignedLeb128(idData, idPosition, idLimit);
+                    int header = (int) decoded;
+                    idPosition += decoded >>> 32;
+                    if ((header & 1) == 0) {
+                        idRleRemaining = header >>> 1;
+                        idRleValue = readLittleEndian(idData, idPosition, idLimit, idByteWidth);
+                        idPosition += idByteWidth;
+                    }
+                    else {
+                        idPackedRemaining = (header >>> 1) * 8;
+                        idBitCursor = idPosition << 3;
+                    }
+                }
+                if (idRleRemaining != 0) {
+                    int idsInRun = Math.min(idRleRemaining, definitionSpan - processed);
+                    if (accepted[idRleValue]) {
+                        long value = dictionary[idRleValue];
+                        for (int index = 0; index < idsInRun; index++) {
+                            valuesOut[output] = value;
+                            survivorsOut[output] = positionBase + row + processed + index;
+                            output++;
+                        }
+                    }
+                    idRleRemaining -= idsInRun;
+                    processed += idsInRun;
+                    continue;
+                }
+
+                int idsInRun = Math.min(idPackedRemaining, definitionSpan - processed);
+                int end = processed + idsInRun;
+                if (DIRECT_NULLABLE_DICTIONARY_UNROLL_IDS) {
+                    while (end - processed >= 4) {
+                        int id0 = (int) ((readWord(idData, idBitCursor >>> 3, idLimit) >>> ((int) idBitCursor & 7)) & idMask);
+                        idBitCursor += idWidth;
+                        int id1 = (int) ((readWord(idData, idBitCursor >>> 3, idLimit) >>> ((int) idBitCursor & 7)) & idMask);
+                        idBitCursor += idWidth;
+                        int id2 = (int) ((readWord(idData, idBitCursor >>> 3, idLimit) >>> ((int) idBitCursor & 7)) & idMask);
+                        idBitCursor += idWidth;
+                        int id3 = (int) ((readWord(idData, idBitCursor >>> 3, idLimit) >>> ((int) idBitCursor & 7)) & idMask);
+                        idBitCursor += idWidth;
+                        if (accepted[id0]) {
+                            valuesOut[output] = dictionary[id0];
+                            survivorsOut[output] = positionBase + row + processed;
+                            output++;
+                        }
+                        if (accepted[id1]) {
+                            valuesOut[output] = dictionary[id1];
+                            survivorsOut[output] = positionBase + row + processed + 1;
+                            output++;
+                        }
+                        if (accepted[id2]) {
+                            valuesOut[output] = dictionary[id2];
+                            survivorsOut[output] = positionBase + row + processed + 2;
+                            output++;
+                        }
+                        if (accepted[id3]) {
+                            valuesOut[output] = dictionary[id3];
+                            survivorsOut[output] = positionBase + row + processed + 3;
+                            output++;
+                        }
+                        processed += 4;
+                    }
+                }
+                while (processed < end) {
+                    long word = readWord(idData, idBitCursor >>> 3, idLimit);
+                    int id = (int) ((word >>> ((int) idBitCursor & 7)) & idMask);
+                    idBitCursor += idWidth;
+                    if (accepted[id]) {
+                        valuesOut[output] = dictionary[id];
+                        survivorsOut[output] = positionBase + row + processed;
+                        output++;
+                    }
+                    processed++;
+                }
+                idPackedRemaining -= idsInRun;
+                if (idPackedRemaining == 0) {
+                    idPosition = idBitCursor >>> 3;
+                }
+            }
+            row += definitionSpan;
+        }
+
+        position = definitionPosition;
+        rleValue = definitionRleValue;
+        rleRemaining = definitionRleRemaining;
+        bitPackedRemaining = definitionPackedRemaining;
+        bitCursor = definitionBitCursor;
+        ids.position = idPosition;
+        ids.rleValue = idRleValue;
+        ids.rleRemaining = idRleRemaining;
+        ids.bitPackedRemaining = idPackedRemaining;
+        ids.bitCursor = idBitCursor;
+        return output;
+    }
+
+    private static long readUnsignedLeb128(MemorySegment data, long offset, long limit)
+    {
+        int value = 0;
+        int shift = 0;
+        int bytes = 0;
+        while (true) {
+            int next = data.get(JAVA_BYTE, offset + bytes) & 0xFF;
+            bytes++;
+            value |= (next & 0x7F) << shift;
+            if ((next & 0x80) == 0) {
+                return ((long) bytes << 32) | (value & 0xFFFF_FFFFL);
+            }
+            shift += 7;
+            if (offset + bytes >= limit) {
+                throw new IllegalStateException("unterminated RLE header");
+            }
+        }
+    }
+
+    private static int readLittleEndian(MemorySegment data, long offset, long limit, int bytes)
+    {
+        if (offset + Long.BYTES <= limit) {
+            long word = data.get(LE_LONG, offset);
+            return (int) (word & ((1L << (bytes << 3)) - 1));
+        }
+        int value = 0;
+        for (int index = 0; index < bytes; index++) {
+            value |= (data.get(JAVA_BYTE, offset + index) & 0xFF) << (index * 8);
+        }
+        return value;
+    }
+
+    private static long readWord(MemorySegment data, long offset, long limit)
+    {
+        if (offset + Long.BYTES <= limit) {
+            return data.get(LE_LONG, offset);
+        }
+        long word = 0;
+        for (long index = offset; index < limit; index++) {
+            word |= (data.get(JAVA_BYTE, index) & 0xFFL) << ((index - offset) * 8);
+        }
+        return word;
+    }
+
     void init(MemorySegment segment, long offset, int bitWidth)
     {
         this.segment = segment;
@@ -59,6 +325,11 @@ final class RleReader
         this.byteWidth = (bitWidth + 7) / 8;
         this.rleRemaining = 0;
         this.bitPackedRemaining = 0;
+    }
+
+    int bitWidth()
+    {
+        return bitWidth;
     }
 
     void read(int[] out, int outOffset, int count)

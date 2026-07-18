@@ -195,6 +195,18 @@ public sealed interface Vector
         return 0;
     }
 
+    /** Returns the number of directly owned child vectors without allocating a traversal callback. */
+    default int childVectorCount()
+    {
+        return 0;
+    }
+
+    /** Returns one directly owned child vector in stable structural order. */
+    default Vector childVector(int index)
+    {
+        throw new IndexOutOfBoundsException(index);
+    }
+
     /**
      * Visits directly referenced child vectors, if any.
      * <p>
@@ -202,6 +214,9 @@ public sealed interface Vector
      */
     default void forEachChildVector(Consumer<Vector> consumer)
     {
+        for (int index = 0; index < childVectorCount(); index++) {
+            consumer.accept(childVector(index));
+        }
     }
 
     /**

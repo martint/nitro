@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.operator;
 
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.VectorMask;
+import jdk.incubator.vector.VectorOperators;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
@@ -31,9 +34,22 @@ class AdaptiveLongGroupingTable
     private static final int MAX_COMPACT_GROUP_ID = 0x00FF_FFFF;
     static final long COMPACT_DOMAIN_EXCEEDED = Long.MIN_VALUE;
     private static final float LOAD_FACTOR = 0.75f;
+    // A grouping-owned compact pair can otherwise cross 75% near the end of a very large build and double a
+    // 64 MiB slot plane for only the final few percent of groups. At 2^24 slots, admit a bounded denser terminal
+    // generation; smaller generations retain the established collision profile, and DISTINCT-owned tables retain
+    // their generated grouped-probe policy. The disable switch is retained for adjacent whole-query controls.
+    private static final boolean HIGH_DENSITY_PAIR_CAPACITY =
+            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongHighDensityPair", "true"));
+    private static final float HIGH_DENSITY_PAIR_LOAD_FACTOR = 0.825f;
+    private static final int HIGH_DENSITY_PAIR_MIN_SLOTS = 1 << 24;
+    private static final boolean GROUPED_PROBE =
+            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongGroupedProbe", "true"));
+    private static final int GROUPED_PROBE_LANES = IntVector.SPECIES_256.length();
+    private static final int GROUPED_PROBE_MIN_SLOTS = 1 << 20;
     private static final boolean DEBUG_SHAPES = Boolean.getBoolean("nitro.debug.adaptiveLongGrouping");
 
     final int arity;
+    private final boolean groupedProbeEligible;
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
 
     int[] slots;
@@ -58,15 +74,18 @@ class AdaptiveLongGroupingTable
     private VectorAccess.BooleanValues[] promotionNullAccessors;
     private int debugNullFreeBatches;
     private int debugNullableBatches;
+    private boolean debugHighDensityCapacityUsed;
     private boolean containsNullableGroups;
     private int[] densePositions = new int[0];
+    private long[] promotedAssignedGroups = new long[0];
 
-    AdaptiveLongGroupingTable(int arity, int expectedSize)
+    AdaptiveLongGroupingTable(int arity, int expectedSize, boolean groupedProbeEligible)
     {
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         this.arity = arity;
+        this.groupedProbeEligible = groupedProbeEligible;
         if (DEBUG_SHAPES) {
             System.err.printf("[adaptive-long-grouping] create arity=%d expected=%d%n", arity, expectedSize);
         }
@@ -90,7 +109,12 @@ class AdaptiveLongGroupingTable
 
     static AdaptiveLongGroupingTable create(int arity, int expectedSize)
     {
-        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize);
+        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, false);
+    }
+
+    static AdaptiveLongGroupingTable createDistinct(int arity, int expectedSize)
+    {
+        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, true);
     }
 
     @Override
@@ -158,6 +182,97 @@ class AdaptiveLongGroupingTable
         long compactGroupCount = size;
         promote(compactGroupCount);
         return promoted.assignBatch(keyAccessors, nullableAccessors(nullAccessors), explicitPositions(positions, positionCount), positionCount, result, compactGroupCount);
+    }
+
+    /**
+     * Assigns a proven-non-null batch and emits only the first physical position for each newly inserted key.
+     * Generated compact tables write those positions in the insertion loop; a promoted table uses the ordinary
+     * group-id result contract and collects new sequential ids during the rare fallback.
+     */
+    long assignDistinctBatch(
+            VectorAccess.LongValues[] keyAccessors,
+            int[] positions,
+            int positionCount,
+            int resultLength,
+            int[] distinctPositions,
+            long startGroupId)
+    {
+        if (promoted != null) {
+            return assignPromotedDistinctBatch(
+                    keyAccessors, positions, positionCount, resultLength, distinctPositions, 0, startGroupId);
+        }
+
+        long nextGroupId = positions == null
+                ? assignCompactDenseDistinctNullFreeBatch(keyAccessors, null, null, positionCount, distinctPositions, startGroupId)
+                : assignCompactDistinctNullFreeBatch(keyAccessors, null, positions, positionCount, distinctPositions, startGroupId);
+        if (nextGroupId != COMPACT_DOMAIN_EXCEEDED) {
+            return nextGroupId;
+        }
+
+        long compactGroupCount = size;
+        int prefixCount = toIntExact(compactGroupCount - startGroupId);
+        promote(compactGroupCount);
+        return assignPromotedDistinctBatch(
+                keyAccessors, positions, positionCount, resultLength, distinctPositions, prefixCount, compactGroupCount);
+    }
+
+    long assignCompactDistinctNullFreeBatch(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] ignoredNullAccessors,
+            int[] positions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId)
+    {
+        throw new UnsupportedOperationException("Generated compact distinct kernel is unavailable");
+    }
+
+    long assignCompactDenseDistinctNullFreeBatch(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] ignoredNullAccessors,
+            int[] ignoredPositions,
+            int positionCount,
+            int[] distinctPositions,
+            long startGroupId)
+    {
+        throw new UnsupportedOperationException("Generated compact dense distinct kernel is unavailable");
+    }
+
+    private long assignPromotedDistinctBatch(
+            VectorAccess.LongValues[] keyAccessors,
+            int[] positions,
+            int positionCount,
+            int resultLength,
+            int[] distinctPositions,
+            int outputOffset,
+            long startGroupId)
+    {
+        ensurePromotedAssignedCapacity(resultLength);
+        int[] explicitPositions = explicitPositions(positions, positionCount);
+        long nextGroupId = promoted.assignBatch(
+                keyAccessors, nullableAccessors(null), explicitPositions, positionCount, promotedAssignedGroups, startGroupId);
+        long expectedGroupId = startGroupId;
+        int outputIndex = outputOffset;
+        for (int row = 0; row < positionCount; row++) {
+            int position = explicitPositions[row];
+            if (promotedAssignedGroups[position] == expectedGroupId) {
+                distinctPositions[outputIndex++] = position;
+                expectedGroupId++;
+            }
+        }
+        if (expectedGroupId != nextGroupId) {
+            throw new IllegalStateException("Promoted distinct table returned non-sequential group ids");
+        }
+        return nextGroupId;
+    }
+
+    private void ensurePromotedAssignedCapacity(int size)
+    {
+        if (promotedAssignedGroups.length >= size) {
+            return;
+        }
+        arrayPool.release(promotedAssignedGroups);
+        promotedAssignedGroups = arrayPool.borrowLongs(size);
     }
 
     /** Generated subclasses omit all null accessors and branches for an all-false-null batch. */
@@ -430,7 +545,7 @@ class AdaptiveLongGroupingTable
         // The caller supplies an upper bound (active rows), not a distinct-key estimate. Pre-sizing the cheap slot
         // index avoids repeated full-table rehashes, but reverse key payload grows only on realized insertions.
         int capacity = slots.length;
-        while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
+        while (expectedSize >= (long) (capacity * loadFactor(capacity))) {
             capacity <<= 1;
         }
         if (capacity != slots.length) {
@@ -548,7 +663,16 @@ class AdaptiveLongGroupingTable
         slots = arrayPool.borrowInts(capacity);
         Arrays.fill(slots, 0);
         slotMask = capacity - 1;
-        maxFill = (int) (capacity * LOAD_FACTOR);
+        maxFill = (int) (capacity * loadFactor(capacity));
+        debugHighDensityCapacityUsed |= loadFactor(capacity) != LOAD_FACTOR;
+    }
+
+    private float loadFactor(int capacity)
+    {
+        return HIGH_DENSITY_PAIR_CAPACITY && arity == 2 && !groupedProbeEligible &&
+                capacity >= HIGH_DENSITY_PAIR_MIN_SLOTS
+                ? HIGH_DENSITY_PAIR_LOAD_FACTOR
+                : LOAD_FACTOR;
     }
 
     final void rehash(int capacity)
@@ -588,14 +712,45 @@ class AdaptiveLongGroupingTable
         return (int) hash;
     }
 
+    /**
+     * Finds the next empty slot or matching hash fragment without changing linear-probe order. Exact key equality
+     * remains in the generated arity-specific loop; this only skips runs that cannot possibly match.
+     */
+    final int nextProbeCandidate(int[] slots, int slot, int slotMask, int fragment)
+    {
+        if (!GROUPED_PROBE || !groupedProbeEligible || arity != 2 || slots.length < GROUPED_PROBE_MIN_SLOTS) {
+            return slot;
+        }
+        int fragmentBits = fragment << 24;
+        while (true) {
+            while (slot > slots.length - GROUPED_PROBE_LANES) {
+                int encoded = slots[slot];
+                if (encoded == 0 || (encoded & 0xFF00_0000) == fragmentBits) {
+                    return slot;
+                }
+                slot = (slot + 1) & slotMask;
+            }
+            IntVector entries = IntVector.fromArray(IntVector.SPECIES_256, slots, slot);
+            VectorMask<Integer> candidates = entries.compare(VectorOperators.EQ, 0)
+                    .or(entries.lanewise(VectorOperators.AND, 0xFF00_0000).compare(VectorOperators.EQ, fragmentBits));
+            if (candidates.anyTrue()) {
+                return slot + candidates.firstTrue();
+            }
+            slot = (slot + GROUPED_PROBE_LANES) & slotMask;
+        }
+    }
+
     @Override
     public void releaseBuffers()
     {
         if (DEBUG_SHAPES) {
             System.err.printf(
-                    "[adaptive-long-grouping] release arity=%d groups=%d promoted=%s nullFreeBatches=%d nullableBatches=%d%n",
+                    "[adaptive-long-grouping] release arity=%d groups=%d slots=%d groupedProbeEligible=%s highDensityCapacity=%s promoted=%s nullFreeBatches=%d nullableBatches=%d%n",
                     arity,
                     size,
+                    slots == null ? 0 : slots.length,
+                    groupedProbeEligible,
+                    debugHighDensityCapacityUsed,
                     promoted != null,
                     debugNullFreeBatches,
                     debugNullableBatches);
@@ -613,6 +768,8 @@ class AdaptiveLongGroupingTable
         batchHashes = new int[0];
         arrayPool.release(densePositions);
         densePositions = new int[0];
+        arrayPool.release(promotedAssignedGroups);
+        promotedAssignedGroups = new long[0];
     }
 
     private void releaseCompactState()

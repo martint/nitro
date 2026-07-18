@@ -27,7 +27,61 @@ import org.weakref.nitro.data.Vector;
 
 public final class VectorAccess
 {
+    private static final boolean DIRECT_DENSE_BOOLEAN_COPY =
+            Boolean.parseBoolean(System.getProperty("nitro.scalar.directDenseIsNullBooleanCopy", "true"));
+    private static final boolean DEBUG_DIRECT_DENSE_BOOLEAN_COPY =
+            Boolean.getBoolean("nitro.debug.directDenseIsNullBooleanCopy");
+    private static boolean debugDirectDenseDictionaryCopyPrinted;
+
     private VectorAccess() {}
+
+    /**
+     * Copies a physical boolean stream at the selected positions. Dense flat and one-level dictionary streams avoid
+     * the boxed mask iterator and polymorphic accessor used by the compatibility path. This is shared by typed
+     * IS NULL functions because their output values are exactly the input's physical null stream.
+     */
+    public static void copyBooleanValues(Vector input, Mask mask, boolean[] output)
+    {
+        if (input == null) {
+            if (DIRECT_DENSE_BOOLEAN_COPY && mask.all()) {
+                java.util.Arrays.fill(output, 0, mask.size(), false);
+            }
+            else {
+                for (int position : mask) {
+                    output[position] = false;
+                }
+            }
+            return;
+        }
+        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all() && input instanceof BooleanVector flat) {
+            System.arraycopy(flat.values(), 0, output, 0, mask.size());
+            return;
+        }
+        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all() && input instanceof DictionaryVector dictionary &&
+                dictionary.values() instanceof BooleanVector dictionaryValues) {
+            int[] ids = dictionary.ids();
+            boolean[] dictionaryFlags = dictionaryValues.values();
+            for (int position = 0; position < mask.size(); position++) {
+                output[position] = dictionaryFlags[ids[position]];
+            }
+            if (DEBUG_DIRECT_DENSE_BOOLEAN_COPY && !debugDirectDenseDictionaryCopyPrinted) {
+                debugDirectDenseDictionaryCopyPrinted = true;
+                System.err.printf("[direct-dense-boolean-copy] rows=%d dictionary=%d%n", mask.size(), dictionaryValues.length());
+            }
+            return;
+        }
+        BooleanValues values = booleanValues(input);
+        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all()) {
+            for (int position = 0; position < mask.size(); position++) {
+                output[position] = values.value(position);
+            }
+        }
+        else {
+            for (int position : mask) {
+                output[position] = values.value(position);
+            }
+        }
+    }
 
     public static LongValues longValues(Vector vector)
     {
@@ -148,6 +202,29 @@ public final class VectorAccess
                 }
             }
             return true;
+        }
+        return false;
+    }
+
+    /** Returns true when every position in a null stream is known to be null. */
+    public static boolean isAllTrueNulls(Vector nulls)
+    {
+        if (nulls instanceof RleVector rle && rle.values() instanceof BooleanVector runValues && runValues.length() == 1) {
+            return runValues.values()[0];
+        }
+        if (nulls instanceof BooleanVector flat) {
+            return flat.isAllTrue();
+        }
+        if (nulls instanceof DictionaryVector dictionary) {
+            return isAllTrueNulls(dictionary.values());
+        }
+        if (nulls instanceof ConcatenatedBooleanVector concatenated) {
+            for (int index = 0; index < concatenated.segmentCount(); index++) {
+                if (!isAllTrueNulls(concatenated.segment(index))) {
+                    return false;
+                }
+            }
+            return concatenated.segmentCount() > 0;
         }
         return false;
     }

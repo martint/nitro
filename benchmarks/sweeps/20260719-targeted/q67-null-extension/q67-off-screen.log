@@ -1,0 +1,127 @@
+# JMH version: 1.37
+# VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+# VM invoker: /opt/java/openjdk/bin/java
+# VM options: --enable-preview --add-modules=jdk.incubator.vector -Xmx12g -XX:+UseTransparentHugePages -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10 -Dnitro.tpcds.parquet.schema=sf10 -Dnitro.groupId.compactNullExtendedValues=false
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 2 iterations, 1 s each
+# Measurement: 3 iterations, 1 s each
+# Timeout: 30 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Average time, time/op
+# Benchmark: org.weakref.nitro.tpcds.BenchmarkQueries.query67
+
+# Run progress: 0.00% complete, ETA 00:00:05
+# Fork: 1 of 1
+# Preparing profilers: LinuxPerfNormProfiler 
+# Profilers consume stderr from target VM, use -v EXTRA to copy to console
+# Warmup Iteration   1: 7272.487 ms/op
+# Warmup Iteration   2: 6269.108 ms/op
+Iteration   1: 6687.374 ms/op
+                 gc.alloc.rate:      903.648 MB/sec
+                 gc.alloc.rate.norm: 6336702384.000 B/op
+                 gc.count:           10.000 counts
+                 gc.time:            306.000 ms
+
+Iteration   2: 6562.730 ms/op
+                 gc.alloc.rate:      920.779 MB/sec
+                 gc.alloc.rate.norm: 6336540944.000 B/op
+                 gc.count:           6.000 counts
+                 gc.time:            276.000 ms
+
+Iteration   3: 8347.557 ms/op
+                 gc.alloc.rate:      723.548 MB/sec
+                 gc.alloc.rate.norm: 6333356720.000 B/op
+                 gc.count:           7.000 counts
+                 gc.time:            500.000 ms
+
+# Processing profiler results: LinuxPerfNormProfiler 
+
+
+Result "org.weakref.nitro.tpcds.BenchmarkQueries.query67":
+  7199.220 ±(99.9%) 18178.776 ms/op [Average]
+  (min, avg, max) = (6562.730, 7199.220, 8347.557), stdev = 996.440
+  CI (99.9%): [≈ 0, 25377.997] (assumes normal distribution)
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:CPI":
+  0.310 clks/insn
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:IPC":
+  3.223 insns/clk
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:L1-dcache-load-misses":
+  1769399074.188 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:L1-dcache-loads":
+  65494550645.273 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:branch-misses":
+  54579081.603 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:branches":
+  25951504147.220 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:cycles":
+  45350057505.203 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:dTLB-load-misses":
+  6799289.173 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:dTLB-loads":
+  327645977.310 #/op
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:gc.alloc.rate":
+  849.325 ±(99.9%) 1993.357 MB/sec [Average]
+  (min, avg, max) = (723.548, 849.325, 920.779), stdev = 109.263
+  CI (99.9%): [≈ 0, 2842.682] (assumes normal distribution)
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:gc.alloc.rate.norm":
+  6335533349.333 ±(99.9%) 34421230.593 B/op [Average]
+  (min, avg, max) = (6333356720.000, 6335533349.333, 6336702384.000), stdev = 1886743.798
+  CI (99.9%): [6301112118.740, 6369954579.926] (assumes normal distribution)
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:gc.count":
+  23.000 ±(99.9%) 0.001 counts [Sum]
+  (min, avg, max) = (6.000, 7.667, 10.000), stdev = 2.082
+  CI (99.9%): [23.000, 23.000] (assumes normal distribution)
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:gc.time":
+  1082.000 ±(99.9%) 0.001 ms [Sum]
+  (min, avg, max) = (276.000, 360.667, 500.000), stdev = 121.595
+  CI (99.9%): [1082.000, 1082.000] (assumes normal distribution)
+
+Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:instructions":
+  146159237677.980 #/op
+
+
+# Run complete. Total time: 00:00:35
+
+REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+experiments, perform baseline and negative tests that provide experimental control, make sure
+the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+Do not assume the numbers tell you what you want them to tell.
+
+NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+extra caution when trusting the results, look into the generated code to check the benchmark still
+works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+different JVMs are already problematic, the performance difference caused by different Blackhole
+modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+
+Benchmark                                       Mode  Cnt             Score          Error      Units
+BenchmarkQueries.query67                        avgt    3          7199.220 ±    18178.776      ms/op
+BenchmarkQueries.query67:CPI                    avgt                  0.310                 clks/insn
+BenchmarkQueries.query67:IPC                    avgt                  3.223                 insns/clk
+BenchmarkQueries.query67:L1-dcache-load-misses  avgt         1769399074.188                      #/op
+BenchmarkQueries.query67:L1-dcache-loads        avgt        65494550645.273                      #/op
+BenchmarkQueries.query67:branch-misses          avgt           54579081.603                      #/op
+BenchmarkQueries.query67:branches               avgt        25951504147.220                      #/op
+BenchmarkQueries.query67:cycles                 avgt        45350057505.203                      #/op
+BenchmarkQueries.query67:dTLB-load-misses       avgt            6799289.173                      #/op
+BenchmarkQueries.query67:dTLB-loads             avgt          327645977.310                      #/op
+BenchmarkQueries.query67:gc.alloc.rate          avgt    3           849.325 ±     1993.357     MB/sec
+BenchmarkQueries.query67:gc.alloc.rate.norm     avgt    3    6335533349.333 ± 34421230.593       B/op
+BenchmarkQueries.query67:gc.count               avgt    3            23.000                    counts
+BenchmarkQueries.query67:gc.time                avgt    3          1082.000                        ms
+BenchmarkQueries.query67:instructions           avgt       146159237677.980                      #/op
+
+Benchmark result is saved to benchmarks/sweeps/20260719-targeted/q67-null-extension/q67-off-screen.json

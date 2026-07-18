@@ -57,6 +57,12 @@ public final class DynamicFilter
             min = Math.min(min, value);
             max = Math.max(max, value);
         }
+        return fromValues(column, values, min, max);
+    }
+
+    /** Build from a collector that already maintained exact bounds while inserting the same values. */
+    static DynamicFilter fromValues(int column, LongSet values, long min, long max)
+    {
         boolean[] present = null;
         if (!values.isEmpty()) {
             long span = max - min + 1;
@@ -68,6 +74,36 @@ public final class DynamicFilter
             }
         }
         return new DynamicFilter(column, values, values.size(), min, max, present, null);
+    }
+
+    /**
+     * Build from a bounded row-value collector. Duplicate removal is deferred until publication so the build loop
+     * can append sequentially instead of probing a hash table for every row. The resulting filter uses the same
+     * dense-domain representation and exact sparse fallback as {@link #fromValues(int, LongSet, long, long)}.
+     */
+    static DynamicFilter fromCollectedValues(int column, long[] collectedValues, int valueCount, long min, long max)
+    {
+        if (valueCount == 0) {
+            return new DynamicFilter(column, LongSet.of(), 0, Long.MAX_VALUE, Long.MIN_VALUE, null, null);
+        }
+        long span = max - min + 1;
+        if (span > 0 && span <= MAX_BITSET_SPAN) {
+            boolean[] present = new boolean[(int) span];
+            int distinctSize = 0;
+            for (int index = 0; index < valueCount; index++) {
+                int ordinal = (int) (collectedValues[index] - min);
+                if (!present[ordinal]) {
+                    present[ordinal] = true;
+                    distinctSize++;
+                }
+            }
+            return new DynamicFilter(column, null, distinctSize, min, max, present, null);
+        }
+        LongSet values = new LongOpenHashSet(valueCount);
+        for (int index = 0; index < valueCount; index++) {
+            values.add(collectedValues[index]);
+        }
+        return new DynamicFilter(column, values, values.size(), min, max, null, null);
     }
 
     /**

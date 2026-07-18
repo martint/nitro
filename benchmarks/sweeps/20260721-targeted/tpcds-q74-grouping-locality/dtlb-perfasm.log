@@ -1,0 +1,659 @@
+[INFO] Processing build on daemon bf242c92
+[INFO] Scanning for projects...
+[INFO] Njord 0.9.4 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] -------------------------< org.weakref:nitro >--------------------------
+[INFO] Building nitro 1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] 2 problems were encountered while building the effective model for org.apache.yetus:audience-annotations:jar:0.5.0 during dependency collection step for project (use -X to see details)
+[INFO] 
+[INFO] --- exec:3.6.1:exec (benchmark) @ nitro ---
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/root/.m2/repository/org/openjdk/jmh/jmh-core/1.37/jmh-core-1.37.jar)
+[WARNING] [stderr] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] [stdout] # JMH version: 1.37
+[INFO] [stdout] # VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+[INFO] [stdout] # VM invoker: /opt/java/openjdk/bin/java
+[INFO] [stdout] # VM options: --enable-preview --add-modules=jdk.incubator.vector -Dnitro.clickbench.hits.path= -Xmx12g -XX:+UseTransparentHugePages -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10
+[INFO] [stdout] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[INFO] [stdout] # Warmup: 10 iterations, 1 s each
+[INFO] [stdout] # Measurement: 3 iterations, 1 s each
+[INFO] [stdout] # Timeout: 30 min per iteration
+[INFO] [stdout] # Threads: 1 thread, will synchronize iterations
+[INFO] [stdout] # Benchmark mode: Average time, time/op
+[INFO] [stdout] # Benchmark: org.weakref.nitro.tpcds.BenchmarkQueries.query74
+[INFO] [stdout] 
+[INFO] [stdout] # Run progress: 0.00% complete, ETA 00:00:13
+[INFO] [stdout] # Fork: 1 of 1
+[INFO] [stdout] # Preparing profilers: LinuxPerfAsmProfiler 
+[INFO] [stdout] # Profilers consume stdout and stderr from target VM, use -v EXTRA to copy to console
+[INFO] [stdout] # Warmup Iteration   1: 6088.589 ms/op
+[INFO] [stdout] # Warmup Iteration   2: 1707.103 ms/op
+[INFO] [stdout] # Warmup Iteration   3: 2047.667 ms/op
+[INFO] [stdout] # Warmup Iteration   4: 1474.811 ms/op
+[INFO] [stdout] # Warmup Iteration   5: 1364.603 ms/op
+[INFO] [stdout] # Warmup Iteration   6: 1206.300 ms/op
+[INFO] [stdout] # Warmup Iteration   7: 1155.909 ms/op
+[INFO] [stdout] # Warmup Iteration   8: 1149.334 ms/op
+[INFO] [stdout] # Warmup Iteration   9: 1099.576 ms/op
+[INFO] [stdout] # Warmup Iteration  10: 1167.597 ms/op
+[INFO] [stdout] Iteration   1: 1348.364 ms/op
+[INFO] [stdout] Iteration   2: 1083.512 ms/op
+[INFO] [stdout] Iteration   3: 1120.768 ms/op
+[INFO] [stdout] # Processing profiler results: LinuxPerfAsmProfiler 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] Result "org.weakref.nitro.tpcds.BenchmarkQueries.query74":
+[INFO] [stdout]   1184.215 ±(99.9%) 2615.653 ms/op [Average]
+[INFO] [stdout]   (min, avg, max) = (1083.512, 1184.215, 1348.364), stdev = 143.373
+[INFO] [stdout]   CI (99.9%): [≈ 0, 3799.868] (assumes normal distribution)
+[INFO] [stdout] 
+[INFO] [stdout] Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query74:asm":
+[INFO] [stdout] PrintAssembly processed: 516016 total address lines.
+[INFO] [stdout] Perf output processed (skipped 19.815 seconds):
+[INFO] [stdout]  Column 1: dTLB-load-misses (2601 events)
+[INFO] [stdout] 
+[INFO] [stdout] Hottest code regions (>1.00% "dTLB-load-misses" events):
+[INFO] [stdout]  Event counts are percents of total event count.
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 1]..............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   13.92%  <total for region 1>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 2]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ee80: 2bc2 418d | 6af9 85ed | 0f8c 4e03 | 0000 4183 
+[INFO] [stdout]             0x00007653c7b0ee90: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@9 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@95 (line 245)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ee90: c2f9 413b | d20f 8319 | 0300 0041 | c1e0 03c4 | 62b9 f7d8 | 49ff cb4c | 235c 1710 | 49ba 25df 
+[INFO] [stdout]             0x00007653c7b0eeb0: 981e 651c | b29f 4d0f 
+[INFO] [stdout]             0x00007653c7b0eeb8: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::mix64@4 (line 312)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@154 (line 256)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0eeb8: afda 4d8b | c349 c1e8 | 214d 33c3 | 49ba 4feb | d427 3dae | b2c2 4d0f 
+[INFO] [stdout]             0x00007653c7b0eed0: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::mix64@17 (line 314)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@154 (line 256)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0eed0: afc2 4d8b | d049 c1ea | 1d4d 33d0 
+[INFO] [stdout]             0x00007653c7b0eedc: ;*lxor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@157 (line 256)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0eedc: 4d33 d6e9 | b4fe ffff | 4d8b d3e9 | 1efb ffff | 0f1f 4000 | 488b d84c | 0fb6 4417 | 104c 63ea 
+[INFO] [stdout]             0x00007653c7b0eefc: 448d 1cd5 | 0000 0000 
+[INFO] [stdout]             0x00007653c7b0ef04: ;*lload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@125 (line 251)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ef04: 442b dec4 | c2a1 f7c0 | 480b c34a | 0fb6 5c2f | 1345 8d43 
+[INFO] [stdout]             0x00007653c7b0ef18: ;   {other}
+[INFO] [stdout]             0x00007653c7b0ef18: 0841 8d4b | 1045 8d4b | 18c4 62b1 | f7cb 4a0f | b65c 2f12 | c4e2 f1f7 | cb4a 0fb6 | 5c2f 11c4 
+[INFO] [stdout]             0x00007653c7b0ef38: 62b9 f7c3 | 490b c048 | 0bc1 490b 
+[INFO] [stdout]             0x00007653c7b0ef44: ;*lor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@139 (line 251)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    4.58%  <total for region 2>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 3]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007653c7b0ebf4: ;*checkcast {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@74 (line 105)
+[INFO] [stdout]             0x00007653c7b0ebf4: 0000 448b 
+[INFO] [stdout]             0x00007653c7b0ebf8: ;*getfield ids {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::ids@1 (line 129)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@86 (line 105)
+[INFO] [stdout]             0x00007653c7b0ebf8: 5610 478b | 44d4 0c44 
+[INFO] [stdout]             0x00007653c7b0ec00: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::values@1 (line 134)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@81 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec00: 8b5e 1841 | 3bd0 0f83 | e404 0000 | 49c1 e203 | 458b 5492 
+[INFO] [stdout]             0x00007653c7b0ec14: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@90 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec14: 1047 8b4c 
+[INFO] [stdout]             0x00007653c7b0ec18: ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport$$TypeSwitch/0x000000004e13a7c8::typeSwitch@50
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@11 (line 103)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec18: dc08 4f8d 
+[INFO] [stdout]             0x00007653c7b0ec1c: ;   {metadata(&apos;org/weakref/nitro/data/BinaryVector&apos;)}
+[INFO] [stdout]             0x00007653c7b0ec1c: 04dc 4181 | f9d8 2b12 | 010f 8560 
+[INFO] [stdout]             0x00007653c7b0ec28: ;*checkcast {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@45 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec28: 0300 0041 
+[INFO] [stdout]             0x00007653c7b0ec2c: ;*getfield offsets {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::startOffset@1 (line 252)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@58 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec2c: 8b48 1845 
+[INFO] [stdout]             0x00007653c7b0ec30: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::startOffset@5 (line 252)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@58 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec30: 8b5c cc0c 
+[INFO] [stdout]             0x00007653c7b0ec34: ;*getfield data {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::data@1 (line 117)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@52 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec34: 458b 481c | c4c1 796e | c145 3bd3 | 0f83 ca04 | 0000 498d | 34cc 428b 
+[INFO] [stdout]             0x00007653c7b0ec4c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::startOffset@5 (line 252)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@58 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec4c: 5496 1041 | 8d6a 0141 | 3beb 0f83 | d804 0000 | 448d 5a08 | 4d63 d246 | 8b44 9614 | 458b d044 
+[INFO] [stdout]             0x00007653c7b0ec6c: ;*isub {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::length@10 (line 262)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@64 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec6c: 2bd2 4d63 
+[INFO] [stdout]             0x00007653c7b0ec70: ;*lxor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@5 (line 226)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec70: c24c 33c7 | 4d8b f045 | 8d04 1245 | 8bd0 453b | d80f 8fa4 
+[INFO] [stdout]             0x00007653c7b0ec84: ;*if_icmpgt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@22 (line 230)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec84: 0000 00c4 | c179 7ec1 
+[INFO] [stdout]    0.46%    0x00007653c7b0ec8c: ; implicit exception: dispatches to 0x00007653c7b0f18c
+[INFO] [stdout]    0.46%    0x00007653c7b0ec8c: 478b 44cc 
+[INFO] [stdout]             0x00007653c7b0ec90: ;*arraylength {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@2 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@32 (line 231)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ec90: 0c45 8d48 | f945 85c9 | 0f8c ee04 | 0000 458b | d8c4 c179 | 7ec1 4b8d 
+[INFO] [stdout]             0x00007653c7b0eca8: ;*getfield data {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BinaryVector::data@1 (line 117)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@52 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0eca8: 0ccc 4183 
+[INFO] [stdout]             0x00007653c7b0ecac: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@9 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@32 (line 231)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.46%  <total for region 3>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 4]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupingState::groupForKeys, version 2, compile id 2353 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@29 (line 363)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18a28: 14dc 4c89 | 5424 504d | 8bda 448b | 5424 3447 
+[INFO] [stdout]             0x00007653c7b18a38: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@49 (line 366)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18a38: 8b5c 9310 | 4585 db75 
+[INFO] [stdout]             0x00007653c7b18a40: ;*ifnonnull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@52 (line 366)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18a40: 094c 8b5a 
+[INFO] [stdout]             0x00007653c7b18a44: ;*getfield defRetValue {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@56 (line 366)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18a44: 10e9 5e05 | 0000 478b 
+[INFO] [stdout]             0x00007653c7b18a4c: ;   {metadata(&apos;org/weakref/nitro/operator/OperatorKeySemantics$CompositeKey&apos;)}
+[INFO] [stdout]             0x00007653c7b18a4c: 54dc 0841 | 81fa 20b2 | 1301 0f85 
+[INFO] [stdout]             0x00007653c7b18a58: ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey$$TypeSwitch/0x000000004e13e210::typeSwitch@37
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey::equals@17 (line 387)
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@62 (line 367)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18a58: 4819 0000 | 458b 54cc 
+[INFO] [stdout]             0x00007653c7b18a60: ;*getfield keys {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey::equals@55 (line 388)
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@62 (line 367)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.00%  <total for region 4>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 5]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals, version 2, compile id 2366 
+[INFO] [stdout] 
+[INFO] [stdout]           Loading hsdis library failed, undisassembled code is shown in MachCode section
+[INFO] [stdout]           [MachCode]
+[INFO] [stdout]           [Instructions begin]
+[INFO] [stdout]             0x00007653c7b1ae80: 6690 448b | 5608 443b 
+[INFO] [stdout]             0x00007653c7b1ae88: ;   {runtime_call Shared Runtime ic_miss_blob}
+[INFO] [stdout]             0x00007653c7b1ae88: 5008 0f85 | 503a 93ff 
+[INFO] [stdout]           [Verified Entry Point]
+[INFO] [stdout]             0x00007653c7b1ae90: 8984 2400 | c0fe ff55 | 4883 ec30 | 4181 7f20 | 0b00 0000 | 0f85 b800 
+[INFO] [stdout]             0x00007653c7b1aea8: ;*synchronization entry
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@-1 (line 307)
+[INFO] [stdout]             0x00007653c7b1aea8: 0000 448b 
+[INFO] [stdout]             0x00007653c7b1aeac: ;   {metadata(&apos;org/weakref/nitro/operator/OperatorKeySemantics$BinaryKey&apos;)}
+[INFO] [stdout]             0x00007653c7b1aeac: 5a08 4181 | fb08 b013 
+[INFO] [stdout]             0x00007653c7b1aeb4: ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey$$TypeSwitch/0x000000004e13e420::typeSwitch@37
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@17 (line 310)
+[INFO] [stdout]             0x00007653c7b1aeb4: 0175 3d44 
+[INFO] [stdout]             0x00007653c7b1aeb8: ;*getfield bytes {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryKey::bytes@1 (line 252)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@64 (line 311)
+[INFO] [stdout]             0x00007653c7b1aeb8: 8b5a 1047 
+[INFO] [stdout]             0x00007653c7b1aebc: ;*arraylength {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryEquals@5 (line 184)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@67 (line 311)
+[INFO] [stdout]             0x00007653c7b1aebc: 8b4c dc0c | 448b 4614 
+[INFO] [stdout]             0x00007653c7b1aec4: ;*getfield position {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@59 (line 311)
+[INFO] [stdout]             0x00007653c7b1aec4: 8b56 0c4b 
+[INFO] [stdout]             0x00007653c7b1aec8: ;*getfield bytes {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryKey::bytes@1 (line 252)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@64 (line 311)
+[INFO] [stdout]             0x00007653c7b1aec8: 8d0c dc49 | 8bf0 48c1 
+[INFO] [stdout]             0x00007653c7b1aed0: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@55 (line 311)
+[INFO] [stdout]             0x00007653c7b1aed0: e603 4533 
+[INFO] [stdout]             0x00007653c7b1aed4: ;   {static_call}
+[INFO] [stdout]             0x00007653c7b1aed4: c066 90e8 
+[INFO] [stdout]             0x00007653c7b1aed8: ; ImmutableOopMap {}
+[INFO] [stdout]                                 ;*invokestatic binaryEquals {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryEquals@6 (line 184)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@67 (line 311)
+[INFO] [stdout]             0x00007653c7b1aed8: 0449 93ff 
+[INFO] [stdout]    0.04%    0x00007653c7b1aedc: ;   {post_call_nop}
+[INFO] [stdout]    0.04%    0x00007653c7b1aedc: 0f1f 8400 
+[INFO] [stdout]             0x00007653c7b1aee0: ;*invokestatic binaryEquals {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryEquals@6 (line 184)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@67 (line 311)
+[INFO] [stdout]             0x00007653c7b1aee0: 5401 0000 | 4883 c430 
+[INFO] [stdout]             0x00007653c7b1aee8: ;   {poll_return}
+[INFO] [stdout]             0x00007653c7b1aee8: 5d49 3b67 | 280f 8759 | 0000 00c3 | 488b ee48 | 8954 2408 | 4889 5424 | 10be 5eff 
+[INFO] [stdout]             0x00007653c7b1af04: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007653c7b1af04: ffff 90e8 
+[INFO] [stdout]             0x00007653c7b1af08: ; ImmutableOopMap {rbp=Oop [8]=Oop [16]=Oop }
+[INFO] [stdout]                                 ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey$$TypeSwitch/0x000000004e13e420::typeSwitch@37
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals@17 (line 310)
+[INFO] [stdout]             0x00007653c7b1af08: d4e4 a1ff 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.42%  <total for region 5>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 6]..............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.42%  <total for region 6>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 7]..............................................................................
+[INFO] [stdout] runtime stub, StubRoutines::Stub Generator jbyte_disjoint_arraycopy_stub 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007653c7431d60: 0066 6666 | 0f1f 8400 | 0000 0000 | 6666 0f1f | 8400 0000 | 0000 6666 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007653c7431d80: c5fe 6f0c | 0fc5 fe7f | 0c0e c5fe | 6f4c 0f20 | c5fe 7f4c | 0e20 c5fe | 6f4c 0f40 | c5fe 7f4c 
+[INFO] [stdout]             0x00007653c7431da0: 0e40 c5fe | 6f4c 0f60 | c5fe 7f4c | 0e60 c5fe | 6f8c 0f80 | 0000 00c5 | fe7f 8c0e | 8000 0000 
+[INFO] [stdout]             0x00007653c7431dc0: c5fe 6f8c | 0fa0 0000 | 00c5 fe7f | 8c0e a000 | 0000 4881 | c1c0 0000 | 0049 81e8 | c000 0000 
+[INFO] [stdout]             0x00007653c7431de0: 7f9e 4981 | c0c0 0000 | 00e9 03fd | ffff 4d8b | d848 8bc6 | 488b f748 | 8bf8 4c8b | c648 8bc7 
+[INFO] [stdout]             0x00007653c7431e00: 49c1 eb03 | 498b cbf3 | 48a5 49c1 | e303 488b | f049 8bf8 | 498b cb4c | 8bc2 4d2b | c3e9 cffc 
+[INFO] [stdout]             0x00007653c7431e20: ffff 4c8b | de49 83e3 | 3f0f 8442 | 0000 0049 | f7db 4983 | c340 498b | c349 b8ff | ffff ffff 
+[INFO] [stdout]             0x00007653c7431e40: ffff ffc4 | 42f8 f5c0 | c4c1 fb92 | d062 f17f | ca6f 0c0f | 62f1 7f4a | 7f0c 0e49 | 8bcb 4c8b 
+[INFO] [stdout]             0x00007653c7431e60: c24d 2bc3 | 4981 f8c0 | 0000 000f | 8c5a 0000 | 0049 81e8 | c000 0000 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007653c7431e80: 62f1 fe48 | 6f0c 0f62 | f1fe 487f | 0c0e 62f1 | fe48 6f4c | 0f01 62f1 | fe48 7f4c | 0e01 62f1 
+[INFO] [stdout]             0x00007653c7431ea0: fe48 6f4c | 0f02 62f1 | fe48 7f4c | 0e02 4881 | c1c0 0000 | 0049 81e8 | c000 0000 | 7fc2 4981 
+[INFO] [stdout]             0x00007653c7431ec0: c0c0 0000 | 000f 8eaf | 0100 0049 | 83f8 207f | 2748 b8ff | ffff ffff | ffff ffc4 | e2b8 f5c0 
+[INFO] [stdout]             0x00007653c7431ee0: c4e1 fb92 | d062 f17f | aa6f 0c0f | 62f1 7f2a | 7f0c 0ee9 | 8201 0000 | 4983 f840 | 7f27 48b8 
+[INFO] [stdout]             0x00007653c7431f00: ffff ffff | ffff ffff | c4e2 b8f5 | c0c4 e1fb | 92d0 62f1 | 7fca 6f0c | 0f62 f17f | 4a7f 0c0e 
+[INFO] [stdout]             0x00007653c7431f20: e955 0100 | 0049 83f8 | 607f 3b62 | f1fe 486f | 0c0f 62f1 | fe48 7f0c | 0e49 83e8 | 4048 b8ff 
+[INFO] [stdout]             0x00007653c7431f40: ffff ffff | ffff ffc4 | e2b8 f5c0 | c4e1 fb92 | d062 f17f | aa6f 4c0f | 0262 f17f | 2a7f 4c0e 
+[INFO] [stdout]             0x00007653c7431f60: 02e9 1401 | 0000 4981 | f880 0000 | 007f 4762 | f1fe 486f | 0c0f 62f1 | fe48 7f0c | 0ec5 fe6f 
+[INFO] [stdout]             0x00007653c7431f80: 4c0f 40c5 | fe7f 4c0e | 4049 83e8 | 6048 b8ff | ffff ffff | ffff ffc4 | e2b8 f5c0 | c4e1 fb92 
+[INFO] [stdout]             0x00007653c7431fa0: d062 f17f | aa6f 4c0f | 0362 f17f | 2a7f 4c0e | 03e9 c400 | 0000 4981 | f8a0 0000 | 007f 4e62 
+[INFO] [stdout]             0x00007653c7431fc0: f1fe 486f | 0c0f 62f1 | fe48 7f0c | 0e62 f1fe | 486f 4c0f | 0162 f1fe | 487f 4c0e | 0149 81e8 
+[INFO] [stdout]             0x00007653c7431fe0: 8000 0000 | 48b8 ffff | ffff ffff | ffff c4e2 | b8f5 c0c4 | e1fb 92d0 | 62f1 7faa | 6f4c 0f04 
+[INFO] [stdout]             0x00007653c7432000: 62f1 7f2a | 7f4c 0e04 | e96d 0000 | 0049 81f8 | c000 0000 | 0f8f d0fc | ffff 62f1 | fe48 6f0c 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.31%  <total for region 7>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 8]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupingState::groupForKeys, version 2, compile id 2353 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007653c7b18b74: c1e3 0345 
+[INFO] [stdout]             0x00007653c7b18b78: ;   {metadata(&apos;org/weakref/nitro/operator/OperatorKeySemantics$CompositeKey&apos;)}
+[INFO] [stdout]             0x00007653c7b18b78: 8b53 0841 | 81fa 20b2 | 1301 0f85 
+[INFO] [stdout]             0x00007653c7b18b84: ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey$$TypeSwitch/0x000000004e13e210::typeSwitch@37
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey::equals@17 (line 387)
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@102 (line 371)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::groupForKeys@160 (line 2104)
+[INFO] [stdout]             0x00007653c7b18b84: 9418 0000 | 448b 5424 | 1847 8b44 
+[INFO] [stdout]             0x00007653c7b18b90: ;*getfield keys {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$CompositeProbeKey::equals@55 (line 388)
+[INFO] [stdout]                                 ; - it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::getLong@102 (line 371)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.19%  <total for region 8>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 9]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups, version 6, compile id 2470 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@205 (line 650)
+[INFO] [stdout]             0x00007653c7b2bc80: 448b 590c 
+[INFO] [stdout]             0x00007653c7b2bc84: ; implicit exception: dispatches to 0x00007653c7b2d32c
+[INFO] [stdout]             0x00007653c7b2bc84: 478b 4cdc | 0c8b 8c24 | 8000 0000 | 413b c90f | 8353 0900 | 004f 8d04 | dc41 0fb6 
+[INFO] [stdout]             0x00007653c7b2bca0: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::booleanValue@60 (line 73)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::booleanValue@97 (line 75)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::isNull@6 (line 47)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics::probeKey@2 (line 38)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@205 (line 650)
+[INFO] [stdout]             0x00007653c7b2bca0: 4408 1044 | 8994 2484 | 0000 00e9 | 3cfd ffff 
+[INFO] [stdout]             0x00007653c7b2bcb0: ;   {metadata(&apos;org/weakref/nitro/data/BinaryVector&apos;)}
+[INFO] [stdout]             0x00007653c7b2bcb0: 4181 fad8 | 2b12 010f | 8503 1300 
+[INFO] [stdout]             0x00007653c7b2bcbc: ;*instanceof {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport$$TypeSwitch/0x000000004e128530::typeSwitch@46
+[INFO] [stdout]                                 ; - java.lang.invoke.DirectMethodHandle$Holder::invokeStatic@11
+[INFO] [stdout]                                 ; - java.lang.invoke.Invokers$Holder::linkToTargetMethod@6
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::flatten@11 (line 52)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatTypeHandlers::forVector@1 (line 596)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics::requireHandler@1 (line 81)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics::probeKey@11 (line 41)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@205 (line 650)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.15%  <total for region 9>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 10].............................................................................
+[INFO] [stdout] snappy17677436904078170030.tmp, [unknown] 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.11%  <total for region 10>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 11].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups, version 6, compile id 2470 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007653c7b2b880: 0600 004c | 8b2c 2448 | 8b54 2470 | 448b 4424 | 088b 5c24 | 7844 8b4c | 2418 4c8b | 5c24 488b 
+[INFO] [stdout]             0x00007653c7b2b8a0: 4c24 288b | 7424 0c48 | 8b44 2450 | 488b 6c24 | 588b 7c24 
+[INFO] [stdout]             0x00007653c7b2b8b4: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@133 (line 645)
+[INFO] [stdout]             0x00007653c7b2b8b4: 6c41 3bfa | 0f8d 4c08 
+[INFO] [stdout]             0x00007653c7b2b8bc: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::hasNext@11 (line 1183)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1189)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@135 (line 645)
+[INFO] [stdout]             0x00007653c7b2b8bc: 0000 440f 
+[INFO] [stdout]             0x00007653c7b2b8c0: ;*getfield allSelected {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@19 (line 1192)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@135 (line 645)
+[INFO] [stdout]             0x00007653c7b2b8c0: b652 1945 | 85d2 0f84 
+[INFO] [stdout]             0x00007653c7b2b8c8: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@4 (line 1189)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Mask$1::next@1 (line 1175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@135 (line 645)
+[INFO] [stdout]             0x00007653c7b2b8c8: 3009 0000 | 448d 5701 | 3bfe 0f83 | 6808 0000 | 4489 5424 | 6c48 896c | 2458 4889 | 4424 5089 
+[INFO] [stdout]             0x00007653c7b2b8e8: 7424 0c89 | 4c24 284c | 895c 2448 | 4489 4c24 | 1889 5c24 | 7844 8944 | 2408 4889 | 5424 704c 
+[INFO] [stdout]             0x00007653c7b2b908: 892c 244c | 8b54 2430 | 458b 5cba 
+[INFO] [stdout]             0x00007653c7b2b914: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@152 (line 646)
+[INFO] [stdout]             0x00007653c7b2b914: 1044 895c | 2464 897c | 2460 458b | 9dac 0000 
+[INFO] [stdout]             0x00007653c7b2b924: ;*getfield sharedDictionaryEntriesById {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@156 (line 647)
+[INFO] [stdout]             0x00007653c7b2b924: 0047 8b54 | dc0c 448b | 4424 6445 | 3bc2 0f83 | 4c08 0000 | 49c1 e303 | 4f8b 44c3 
+[INFO] [stdout]             0x00007653c7b2b940: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@161 (line 647)
+[INFO] [stdout]             0x00007653c7b2b940: 104d 8bd0 | 49c1 ea20 | 458b da45 | 3bd9 0f84 
+[INFO] [stdout]             0x00007653c7b2b950: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@171 (line 648)
+[INFO] [stdout]             0x00007653c7b2b950: ecfe ffff 
+[INFO] [stdout]             0x00007653c7b2b954: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@184 (line 650)
+[INFO] [stdout]             0x00007653c7b2b954: 4533 d244 | 3b54 2408 | 0f83 5a09 | 0000 4c8b | 5c24 3847 
+[INFO] [stdout]             0x00007653c7b2b968: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@191 (line 650)
+[INFO] [stdout]             0x00007653c7b2b968: 8b5c 9310 | 4489 5c24 
+[INFO] [stdout]             0x00007653c7b2b970: ;   {other}
+[INFO] [stdout]             0x00007653c7b2b970: 6844 3b54 | 2420 0f83 | 8c09 0000 | 4c8b 1c24 | 458b 9b80 
+[INFO] [stdout]             0x00007653c7b2b984: ;*getfield reusableProbeKeys {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@199 (line 650)
+[INFO] [stdout]             0x00007653c7b2b984: 0000 0047 | 8b4c dc0c | 4c8b 4424 | 4043 8b4c 
+[INFO] [stdout]             0x00007653c7b2b994: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups@195 (line 650)
+[INFO] [stdout]             0x00007653c7b2b994: 9010 453b | d10f 83b5 | 0900 0049 | c1e3 0347 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.85%  <total for region 11>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 12].............................................................................
+[INFO] [stdout] libjvm.so, G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.69%  <total for region 12>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 13].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::mix64@4 (line 312)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@35 (line 231)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ecd4: 1110 488b | d748 c1ea | 2148 33d7 | 48bf 4feb | d427 3dae | b2c2 480f 
+[INFO] [stdout]             0x00007653c7b0ecec: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::mix64@17 (line 314)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@35 (line 231)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@91 (line 105)
+[INFO] [stdout]             0x00007653c7b0ecec: afd7 488b | fa48 c1ef | 1d48 33fa | 4933 fec4 | e3fb f0ff | 2548 8bd7 | 48bf 25df | 981e 651c 
+[INFO] [stdout]             0x00007653c7b0ed0c: b29f 480f | afd7 488d | ba29 e7dc 
+[INFO] [stdout]             0x00007653c7b0ed18: ; ImmutableOopMap {rcx=Oop xmm0=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@58 (line 233)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@67 (line 104)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.54%  <total for region 13>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 14].............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.42%  <total for region 14>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 15].............................................................................
+[INFO] [stdout] snappy17677436904078170030.tmp, [unknown] 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.35%  <total for region 15>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 16].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.OperatorKeySemantics::ownedKey, version 2, compile id 2339 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatTypeHandlers$4::ownedKey@33 (line 550)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics::ownedKey@212 (line 63)
+[INFO] [stdout]             0x00007653c7b13f9c: 1044 8d4f | 0883 c710 | 488b c248 | c1e8 2148 | 33c2 48ba | 4feb d427 | 3dae b2c2 
+[INFO] [stdout]             0x00007653c7b13fb8: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::mix64@17 (line 314)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@35 (line 231)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorVectorSupport::binaryHash@4 (line 138)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics$BinaryKey::&lt;init&gt;@11 (line 247)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatTypeHandlers$4::ownedKey@33 (line 550)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.OperatorKeySemantics::ownedKey@212 (line 63)
+[INFO] [stdout]             0x00007653c7b13fb8: 480f afc2 | 488b d048 | c1ea 1d48 | 33d0 4933 | d2c4 63fb | f0d2 2548 | ba25 df98 | 1e65 1cb2 
+[INFO] [stdout]             0x00007653c7b13fd8: 9f4c 0faf | d249 81c2 
+[INFO] [stdout]             0x00007653c7b13fe0: ; ImmutableOopMap {rbx=Oop r13=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.27%  <total for region 16>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 17].............................................................................
+[INFO] [stdout] c2, level 4, jdk.internal.foreign.SegmentFactories::initNativeMemory, version 2, compile id 1544 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@7 (line 244)
+[INFO] [stdout]             0x00007653c7a9e918: 7d05 418b | f3eb eb41 | 8bd8 8dbb | 08fc ffff | 443b df0f | 8d73 0100 | 0083 c608 | 41ba 00a0 
+[INFO] [stdout]             0x00007653c7a9e938: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@30 (line 244)
+[INFO] [stdout]             0x00007653c7a9e938: 0f00 c5f9 | efc0 e9af | 0000 000f | 1f80 0000 | 0000 660f | 1f44 0000 
+[INFO] [stdout]             0x00007653c7a9e950: ;*getstatic UNSAFE {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@10 (line 245)
+[INFO] [stdout]             0x00007653c7a9e950: 418b f048 | 63ee 4c8b 
+[INFO] [stdout]             0x00007653c7a9e958: ;*invokevirtual putLongUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@19 (line 245)
+[INFO] [stdout]             0x00007653c7a9e958: c04c 03c5 | 62d1 7e48 | 7f00 62d1 | 7e48 7f40 | 0162 d17e | 487f 4002 | 62d1 7e48 | 7f40 0362 
+[INFO] [stdout]             0x00007653c7a9e978: d17e 487f 
+[INFO] [stdout]             0x00007653c7a9e97c: ;   {other}
+[INFO] [stdout]             0x00007653c7a9e97c: 4004 62d1 | 7e48 7f40 | 0562 d17e | 487f 4006 | 62d1 7e48 | 7f40 0762 | d17e 487f | 4008 62d1 
+[INFO] [stdout]             0x00007653c7a9e99c: 7e48 7f40 | 0962 d17e | 487f 400a | 62d1 7e48 | 7f40 0b62 | d17e 487f | 400c 62d1 | 7e48 7f40 
+[INFO] [stdout]             0x00007653c7a9e9bc: 0d62 d17e 
+[INFO] [stdout]             0x00007653c7a9e9c0: ;*getstatic UNSAFE {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@10 (line 245)
+[INFO] [stdout]             0x00007653c7a9e9c0: 487f 400e | 62d1 7e48 | 7f40 0f44 | 8d86 0004 | 0000 453b | c30f 8c75 
+[INFO] [stdout]             0x00007653c7a9e9d8: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@30 (line 244)
+[INFO] [stdout]             0x00007653c7a9e9d8: ffff ff4d | 8b6f 3048 | 81c5 0004 
+[INFO] [stdout]             0x00007653c7a9e9e4: ; ImmutableOopMap {}
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) jdk.internal.foreign.SegmentFactories::initNativeMemory@30 (line 244)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007653c7a9e9e4: 0000 4185 
+[INFO] [stdout]             0x00007653c7a9e9e8: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.foreign.SegmentFactories::initNativeMemory@30 (line 244)
+[INFO] [stdout]             0x00007653c7a9e9e8: 4500 443b | c77d 4341 | 8bf0 448b | db44 2bde | 4181 c308 | fcff ff3b | fe44 0f4c | d941 81fb 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.23%  <total for region 17>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 18].............................................................................
+[INFO] [stdout] libjvm.so, G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.23%  <total for region 18>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 19].............................................................................
+[INFO] [stdout] libjvm.so, ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.08%  <total for region 19>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Regions]...............................................................................
+[INFO] [stdout]   13.92%                                  <unknown> 
+[INFO] [stdout]    4.58%                     c2, level 4  org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout]    3.46%                     c2, level 4  org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout]    3.00%                     c2, level 4  org.weakref.nitro.operator.GroupingState::groupForKeys, version 2, compile id 2353 
+[INFO] [stdout]    2.42%                     c2, level 4  org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals, version 2, compile id 2366 
+[INFO] [stdout]    2.42%                                  <unknown> 
+[INFO] [stdout]    2.31%                    runtime stub  StubRoutines::Stub Generator jbyte_disjoint_arraycopy_stub 
+[INFO] [stdout]    2.19%                     c2, level 4  org.weakref.nitro.operator.GroupingState::groupForKeys, version 2, compile id 2353 
+[INFO] [stdout]    2.15%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups, version 6, compile id 2470 
+[INFO] [stdout]    2.11%  snappy17677436904078170030.tmp  [unknown] 
+[INFO] [stdout]    1.85%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups, version 6, compile id 2470 
+[INFO] [stdout]    1.69%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    1.54%                     c2, level 4  org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout]    1.42%                                  <unknown> 
+[INFO] [stdout]    1.35%  snappy17677436904078170030.tmp  [unknown] 
+[INFO] [stdout]    1.27%                     c2, level 4  org.weakref.nitro.operator.OperatorKeySemantics::ownedKey, version 2, compile id 2339 
+[INFO] [stdout]    1.23%                     c2, level 4  jdk.internal.foreign.SegmentFactories::initNativeMemory, version 2, compile id 1544 
+[INFO] [stdout]    1.23%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    1.08%                       libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    0.92%                    runtime stub  StubRoutines::Stub Generator jbyte_disjoint_arraycopy_stub 
+[INFO] [stdout]   47.79%  <...other 574 warm regions...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.92%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Methods (after inlining)]..............................................................
+[INFO] [stdout]   21.38%                                  <unknown> 
+[INFO] [stdout]   10.38%                     c2, level 4  org.weakref.nitro.operator.OperatorVectorSupport::binaryHash, version 2, compile id 2318 
+[INFO] [stdout]    7.34%                     c2, level 4  org.weakref.nitro.operator.GroupingState::groupForKeys, version 2, compile id 2353 
+[INFO] [stdout]    5.23%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignSharedDictionaryGroups, version 6, compile id 2470 
+[INFO] [stdout]    5.19%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    4.58%  snappy17677436904078170030.tmp  [unknown] 
+[INFO] [stdout]    3.38%                    runtime stub  StubRoutines::Stub Generator jbyte_disjoint_arraycopy_stub 
+[INFO] [stdout]    3.00%                     c2, level 4  org.weakref.nitro.operator.OperatorKeySemantics::ownedKey, version 2, compile id 2339 
+[INFO] [stdout]    2.46%                     c2, level 4  it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap::rehash, version 2, compile id 2507 
+[INFO] [stdout]    2.42%                     c2, level 4  org.weakref.nitro.operator.OperatorKeySemantics$BinaryProbeKey::equals, version 2, compile id 2366 
+[INFO] [stdout]    2.35%               [kernel.kallsyms]  mas_walk 
+[INFO] [stdout]    1.73%                     c2, level 4  org.weakref.nitro.operator.FlatTypeHandlers$4::materializeFallbackValues, version 5, compile id 3161 
+[INFO] [stdout]    1.58%                     c2, level 4  org.weakref.nitro.operator.OperatorVectorSupport::binaryEquals, version 2, compile id 2315 
+[INFO] [stdout]    1.27%                     c2, level 4  jdk.internal.foreign.SegmentFactories::initNativeMemory, version 2, compile id 1544 
+[INFO] [stdout]    1.11%                     c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 2, compile id 2420 
+[INFO] [stdout]    1.08%                       libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    0.88%                    runtime stub  StubRoutines::Stub Generator vectorizedMismatch_stub 
+[INFO] [stdout]    0.85%                       libjvm.so  void G1ScanCardClosure::do_oop_work<narrowOop>(narrowOop*) 
+[INFO] [stdout]    0.73%               [kernel.kallsyms]  clear_page_erms 
+[INFO] [stdout]    0.69%                     c2, level 4  org.weakref.nitro.parquet.ColumnReader::readSelectedLongs, version 11, compile id 3114 
+[INFO] [stdout]   22.30%  <...other 310 warm methods...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.92%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Distribution by Source]........................................................................
+[INFO] [stdout]   42.56%                     c2, level 4
+[INFO] [stdout]   21.38%                                
+[INFO] [stdout]   11.61%                       libjvm.so
+[INFO] [stdout]    9.07%               [kernel.kallsyms]
+[INFO] [stdout]    5.23%                    runtime stub
+[INFO] [stdout]    4.58%  snappy17677436904078170030.tmp
+[INFO] [stdout]    2.42%                     interpreter
+[INFO] [stdout]    1.04%                       libc.so.6
+[INFO] [stdout]    0.92%                     c1, level 3
+[INFO] [stdout]    0.58%                perf-3903524.map
+[INFO] [stdout]    0.35%                     c1, level 1
+[INFO] [stdout]    0.08%                Unknown, level 0
+[INFO] [stdout]    0.08%                        [nvidia]
+[INFO] [stdout]    0.04%                        [rfcomm]
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   99.92%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] # Run complete. Total time: 00:00:25
+[INFO] [stdout] 
+[INFO] [stdout] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[INFO] [stdout] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[INFO] [stdout] experiments, perform baseline and negative tests that provide experimental control, make sure
+[INFO] [stdout] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[INFO] [stdout] Do not assume the numbers tell you what you want them to tell.
+[INFO] [stdout] 
+[INFO] [stdout] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[INFO] [stdout] extra caution when trusting the results, look into the generated code to check the benchmark still
+[INFO] [stdout] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[INFO] [stdout] different JVMs are already problematic, the performance difference caused by different Blackhole
+[INFO] [stdout] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[INFO] [stdout] 
+[INFO] [stdout] Benchmark                     Mode  Cnt     Score      Error  Units
+[INFO] [stdout] BenchmarkQueries.query74      avgt    3  1184.215 ± 2615.653  ms/op
+[INFO] [stdout] BenchmarkQueries.query74:asm  avgt            NaN               ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  26.724 s (Wall Clock)
+[INFO] Finished at: 2026-07-21T07:45:48Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed

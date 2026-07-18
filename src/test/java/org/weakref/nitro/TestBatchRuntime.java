@@ -27,6 +27,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -49,6 +50,25 @@ import static org.weakref.nitro.data.Row.row;
 
 public class TestBatchRuntime
 {
+    @Test
+    void testBooleanVectorConstantMetadata()
+    {
+        BooleanVector values = new BooleanVector(4);
+        values.markAllTrue();
+        assertThat(values.values()).containsExactly(true, true, true, true);
+        assertThat(values.isAllTrue()).isTrue();
+        assertThat(values.isAllFalse()).isFalse();
+        assertThat(VectorAccess.isAllTrueNulls(values)).isTrue();
+
+        values.clearForReuse();
+        assertThat(values.isAllTrue()).isFalse();
+        assertThat(values.isAllFalse()).isTrue();
+
+        values.markAllFalse();
+        assertThat(values.isAllTrue()).isFalse();
+        assertThat(values.isAllFalse()).isTrue();
+    }
+
     @Test
     void testStreamsReuseTransportTupleWhenBackingVectorsAreUnchanged()
     {

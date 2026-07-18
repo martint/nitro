@@ -762,6 +762,65 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testSpecializedHostExtractionMatchesJoniOnRegexEdgeCases()
+    {
+        String patternText = "^https?://(?:www\\.)?([^/]+)/.*$";
+        String replacementText = "\\1";
+        Variable pattern = new Variable(0);
+        Variable replacement = new Variable(1);
+        Variable host = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(pattern, new Literal(patternText), AllMask.ALL),
+                        new Assignment(replacement, new Literal(replacementText), AllMask.ALL),
+                        new Assignment(
+                                host,
+                                new Call("regexp_replace_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(pattern, Stream.VALUES),
+                                        new Reference(replacement, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(host, Stream.VALUES)));
+
+        String[] inputs = {
+                "https://www.example.com/path",
+                "http:///path",
+                "http://svpressa.ru/path\nmore",
+                "http://svpressa.ru/path\n",
+                "http://svpressa.ru/path\n\n",
+                "http://svpressa.ru/pa\rth",
+                "http://svpressa.ru/path\r\n",
+                "http://svpressa.ru\n/path",
+                "http://www./path",
+        };
+        BinaryVector dictionaryValues = new BinaryVector(inputs.length, 512);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        for (int position = 0; position < inputs.length; position++) {
+            dictionaryValues.setBytes(position, inputs[position].getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        DictionaryVector input = DictionaryVector.wrap(java.util.stream.IntStream.range(0, inputs.length).toArray(), dictionaryValues);
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
+                new Allocator());
+
+        DictionaryVector actual = (DictionaryVector) evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(inputs.length)).values();
+        BinaryVector actualValues = (BinaryVector) actual.values();
+        io.airlift.joni.Regex patternRegex = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.compile(
+                io.airlift.slice.Slices.utf8Slice(patternText));
+        io.airlift.slice.Slice replacementSlice = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
+                io.airlift.slice.Slices.utf8Slice(replacementText));
+        for (int position = 0; position < inputs.length; position++) {
+            String expected = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
+                    io.airlift.slice.Slices.utf8Slice(inputs[position]), patternRegex, replacementSlice).toStringUtf8();
+            assertThat(utf8(actualValues, actual.ids()[position]))
+                    .as("input at position %d", position)
+                    .isEqualTo(expected);
+        }
+    }
+
+    @Test
     void testUpperUtf8ProjectsUppercaseBytes()
     {
         Variable upper = new Variable(0);
@@ -2340,6 +2399,56 @@ public class TestPlanEvaluator
         Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, true, false);
         assertThat(requestedValues).isFalse();
+    }
+
+    @Test
+    void testIsNullI64ReadsDenseDictionaryNullStream()
+    {
+        Variable isNull = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        isNull,
+                        new Call("is_null_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(isNull, Stream.VALUES)));
+        DictionaryVector nulls = DictionaryVector.wrap(
+                new int[] {1, 0, 1, 1, 0},
+                new BooleanVector(new boolean[] {false, true}));
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(5));
+
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values())
+                .containsExactly(true, false, true, true, false);
+    }
+
+    @Test
+    void testIsNullI32ReadsDenseDictionaryNullStream()
+    {
+        Variable isNull = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        isNull,
+                        new Call("is_null_i32", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(isNull, Stream.VALUES)));
+        DictionaryVector nulls = DictionaryVector.wrap(
+                new int[] {0, 1, 1, 0},
+                new BooleanVector(new boolean[] {false, true}));
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
+                new Allocator());
+
+        Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(4));
+
+        assertThat(((BooleanVector) result.get(Stream.VALUES)).values())
+                .containsExactly(false, true, true, false);
     }
 
     @Test

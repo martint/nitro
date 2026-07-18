@@ -1,0 +1,35 @@
+query21: 3 iters, 312.1 ms/iter, rows-sink=4000
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q21.topn                           TopNOperator                920.190   12.07%      111.061      37908.690      37908.690        3          300
+  hasNext=  0.030 next=900.605  borrow=  0.632  take=  0.000  constrain=  0.000  close= 18.922  alloc[hasNext=   0.000 next= 110.629 borrow=   0.189 take=   0.000 constrain=   0.000 close=   0.243] MB
+q21.filter.ratio                   FilterOperator              914.468   11.99%      109.494       9343.496       9343.496       12        50778
+  hasNext=  0.017 next=863.479  borrow= 29.930  take=  0.000  constrain=  0.000  close= 18.685  alloc[hasNext=   0.000 next= 103.029 borrow=   6.332 take=   0.000 constrain=   0.000 close=   0.093] MB
+q21.join.before_after              HashJoinOperator            909.186   11.92%      106.091       9053.062       9053.062       12        87102
+  hasNext=  0.005 next=858.827  borrow= 30.809  take=  0.000  constrain=  0.021  close= 18.669  alloc[hasNext=   0.000 next=  98.187 borrow=   7.814 take=   0.000 constrain=   0.000 close=   0.090] MB
+q21.after.group.inventory          GroupedAggregationOperator    577.208    7.57%       49.547      16911.924      16911.924        3        96780
+  hasNext=  0.003 next=567.603  borrow=  0.884  take=  0.000  constrain=  0.000  close=  8.719  alloc[hasNext=   0.000 next=  47.570 borrow=   1.942 take=   0.000 constrain=   0.000 close=   0.035] MB
+q21.after.project.inventory        ProjectOperator             555.086    7.28%       41.593        507.037        507.037       84       387120
+  hasNext=  0.074 next=544.712  borrow=  1.317  take=  0.000  constrain=  0.000  close=  8.967  alloc[hasNext=   0.001 next=  40.002 borrow=   1.528 take=   0.000 constrain=   0.000 close=   0.062] MB
+q21.after.join.date_dim            HashJoinOperator            554.331    7.27%       41.442        505.193        505.193       84       387120
+  hasNext=  0.024 next=544.414  borrow=  1.071  take=  0.000  constrain=  0.000  close=  8.805  alloc[hasNext=   0.000 next=  39.887 borrow=   1.516 take=   0.000 constrain=   0.000 close=   0.038] MB
+q21.after.join.warehouse           HashJoinOperator            544.965    7.15%       32.997        402.252        402.252       84       387120
+  hasNext=  0.038 next=535.205  borrow=  1.050  take=  0.000  constrain=  0.000  close=  8.656  alloc[hasNext=   0.000 next=  31.374 borrow=   1.591 take=   0.000 constrain=   0.000 close=   0.033] MB
+q21.after.join.item                HashJoinOperator            542.998    7.12%       22.837        278.395        278.395       84       387120
+  hasNext=  0.019 next=533.073  borrow=  1.250  take=  0.000  constrain=  0.000  close=  8.638  alloc[hasNext=   0.000 next=  21.565 borrow=   1.220 take=   0.000 constrain=   0.000 close=   0.052] MB
+q21.after.scan.inventory           NitroParquetScanOperator    525.200    6.89%        5.364         67.808         67.808       81       387120
+  hasNext=515.795 next=  0.631  borrow=  0.168  take=  0.000  constrain=  0.000  close=  8.579  alloc[hasNext=   4.996 next=   0.308 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.060] MB
+q21.before.group.inventory         GroupedAggregationOperator    301.950    3.96%       48.224      16460.490      16460.490        3        96780
+  hasNext=  0.003 next=279.494  borrow=  0.857  take=  0.000  constrain=  0.001  close=  9.895  alloc[hasNext=   0.000 next=  46.243 borrow=   1.942 take=   0.000 constrain=   0.000 close=   0.039] MB
+q21.before.project.inventory       ProjectOperator             266.674    3.50%       39.460        396.150        396.150      102       483900
+  hasNext=  0.070 next=255.125  borrow=  1.381  take=  0.000  constrain=  0.000  close= 10.083  alloc[hasNext=   0.002 next=  37.422 borrow=   1.964 take=   0.000 constrain=   0.000 close=   0.072] MB
+q21.before.join.date_dim           HashJoinOperator            266.002    3.49%       39.282        394.356        394.356      102       483900
+  hasNext=  0.024 next=254.846  borrow=  1.164  take=  0.000  constrain=  0.000  close=  9.952  alloc[hasNext=   0.000 next=  37.283 borrow=   1.955 take=   0.000 constrain=   0.000 close=   0.044] MB
+q21.before.join.warehouse          HashJoinOperator            256.214    3.36%       31.260        313.824        313.824      102       483900
+  hasNext=  0.021 next=245.202  borrow=  1.139  take=  0.000  constrain=  0.000  close=  9.836  alloc[hasNext=   0.000 next=  29.244 borrow=   1.977 take=   0.000 constrain=   0.000 close=   0.039] MB
+q21.before.join.item               HashJoinOperator            254.168    3.33%       20.692        207.735        207.735      102       483900
+  hasNext=  0.020 next=243.030  borrow=  1.292  take=  0.000  constrain=  0.000  close=  9.808  alloc[hasNext=   0.000 next=  19.397 borrow=   1.231 take=   0.000 constrain=   0.000 close=   0.064] MB
+q21.before.scan.inventory          NitroParquetScanOperator    236.683    3.10%        4.631         47.897         47.897       99       483900
+  hasNext=226.134 next=  0.628  borrow=  0.164  take=  0.000  constrain=  0.000  close=  9.733  alloc[hasNext=   4.495 next=   0.061 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.074] MB
+Total attributed cpu_ms: 7625.324
+

@@ -59,7 +59,7 @@ public class GroupOperator
     public Batch next()
     {
         Batch sourceBatch = source.next();
-        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask());
+        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask(), source.hasNext());
         currentBatchState = batchState;
 
         Output[] outputs = new Output[outputCount()];
@@ -133,7 +133,8 @@ public class GroupOperator
                         batchState.sourceBatch.output(groupByColumn).borrow(Stream.VALUES),
                         batchState.sourceBatch.output(groupByColumn).borrowOrNull(Stream.NULLS),
                         batchState.mask,
-                        batchState.result);
+                        batchState.result,
+                        batchState.moreInputExpected);
             }
             else {
                 try {
@@ -142,7 +143,7 @@ public class GroupOperator
                         groupValues[index] = output.borrow(Stream.VALUES);
                         groupNulls[index] = output.borrowOrNull(Stream.NULLS);
                     }
-                    groupingState.assignGroups(groupValues, groupNulls, batchState.mask, batchState.result);
+                    groupingState.assignGroups(groupValues, groupNulls, batchState.mask, batchState.result, batchState.moreInputExpected);
                 }
                 finally {
                     Arrays.fill(groupValues, null);
@@ -191,14 +192,16 @@ public class GroupOperator
     private static final class BatchState
     {
         private final Batch sourceBatch;
+        private final boolean moreInputExpected;
         private Mask mask;
         private boolean filled;
         private I64Vector result;
 
-        private BatchState(Batch sourceBatch, Mask mask)
+        private BatchState(Batch sourceBatch, Mask mask, boolean moreInputExpected)
         {
             this.sourceBatch = sourceBatch;
             this.mask = mask;
+            this.moreInputExpected = moreInputExpected;
         }
 
         private void constrain(Mask mask)

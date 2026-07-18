@@ -118,6 +118,17 @@ public interface Operator
     default void pushDynamicFilter(DynamicFilter filter) {}
 
     /**
+     * Returns whether this operator can forward or consume a dynamic filter before it is read.
+     *
+     * <p>This is a physical capability, not a promise that a particular filter will be selective. It lets generic
+     * joins avoid paying to derive a probe-side membership set when the build pipeline cannot use it.
+     */
+    default boolean supportsDynamicFilterPushdown(int column)
+    {
+        return false;
+    }
+
+    /**
      * Releases any operator-owned resources.
      */
     void close();

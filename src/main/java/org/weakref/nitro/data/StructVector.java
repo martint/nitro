@@ -208,6 +208,32 @@ public final class StructVector
     }
 
     @Override
+    public int childVectorCount()
+    {
+        int count = 0;
+        for (Streams streams : fields.values()) {
+            count += streams.vectorCount();
+        }
+        return count;
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        if (index < 0) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        for (Streams streams : fields.values()) {
+            int count = streams.vectorCount();
+            if (index < count) {
+                return streams.vectorAt(index);
+            }
+            index -= count;
+        }
+        throw new IndexOutOfBoundsException(index);
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         fields.values().forEach(streams -> streams.asMap().values().forEach(consumer));

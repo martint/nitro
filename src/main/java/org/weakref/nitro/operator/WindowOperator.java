@@ -34,6 +34,8 @@ public final class WindowOperator
 {
     private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 4_096);
     private static final boolean RADIX_SORT = Boolean.parseBoolean(System.getProperty("nitro.window.radixSort", "true"));
+    private static final boolean FUSED_WINDOW_FUNCTIONS =
+            Boolean.parseBoolean(System.getProperty("nitro.window.fusedFunctions", "true"));
     private static final boolean BINARY_HASH_PARTITION_SORT =
             Boolean.parseBoolean(System.getProperty("nitro.window.binaryHashPartitionSort", "true"));
 
@@ -198,8 +200,13 @@ public final class WindowOperator
         if (pages.size() == 1) {
             singlePageOrder = selectedPositions(pages.getFirst());
             stableSortSinglePagePositions(singlePageOrder);
-            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-                windowOutputs[functionIndex] = materializeSinglePageWindow(windowFunctions.get(functionIndex));
+            if (FUSED_WINDOW_FUNCTIONS && windowFunctions.size() > 1) {
+                materializeSinglePageWindows();
+            }
+            else {
+                for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                    windowOutputs[functionIndex] = materializeSinglePageWindow(windowFunctions.get(functionIndex));
+                }
             }
         }
         else {
@@ -207,6 +214,64 @@ public final class WindowOperator
             rows.sort(this::compareRows);
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
                 windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
+            }
+        }
+    }
+
+    /**
+     * Evaluate cooperating functions over one shared ordered-row and partition traversal.  Function state and
+     * output vectors remain independent; only order lookup and partition-boundary discovery are shared.
+     */
+    private void materializeSinglePageWindows()
+    {
+        Streams[] columns = pages.getFirst().columns();
+        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+            RunningWindowFunction function = windowFunctions.get(functionIndex);
+            windowOutputs[functionIndex] = function.emptyOutput(
+                    allocator,
+                    allocationContext,
+                    singlePageOrder.length);
+            function.reset();
+        }
+
+        int partitionStart = 0;
+        int previousPosition = -1;
+        for (int outputPosition = 0; outputPosition < singlePageOrder.length; outputPosition++) {
+            int inputPosition = singlePageOrder[outputPosition];
+            if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
+                for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                    RunningWindowFunction function = windowFunctions.get(functionIndex);
+                    windowOutputs[functionIndex] = function.finishPartition(
+                            allocator,
+                            allocationContext,
+                            windowOutputs[functionIndex],
+                            partitionStart,
+                            outputPosition);
+                    function.reset();
+                }
+                partitionStart = outputPosition;
+            }
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                windowOutputs[functionIndex] = windowFunctions.get(functionIndex).append(
+                        allocator,
+                        allocationContext,
+                        windowOutputs[functionIndex],
+                        columns,
+                        inputPosition,
+                        outputPosition,
+                        singlePageOrder.length);
+            }
+            previousPosition = inputPosition;
+        }
+        if (singlePageOrder.length > 0) {
+            for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+                RunningWindowFunction function = windowFunctions.get(functionIndex);
+                windowOutputs[functionIndex] = function.finishPartition(
+                        allocator,
+                        allocationContext,
+                        windowOutputs[functionIndex],
+                        partitionStart,
+                        singlePageOrder.length);
             }
         }
     }

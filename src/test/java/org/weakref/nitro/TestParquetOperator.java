@@ -411,6 +411,85 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroProgressiveDynamicFiltersPreserveAlignedValuesAndNulls()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        int expected = 0;
+        for (int position = 0; position < 4_096; position++) {
+            long x = position & 15;
+            Long maybe = position % 23 == 0 ? null : (long) ((position >>> 4) & 15);
+            rows.add(new ParquetRow(x, true, maybe));
+            if (x == 0 && maybe != null && maybe == 0) {
+                expected++;
+            }
+        }
+        java.nio.file.Path file = writeParquetFile("progressive-dynamic-filters.parquet", true, rows);
+
+        int actual = 0;
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                new Allocator(),
+                List.of(file),
+                List.of("x", "maybe"))) {
+            // Equal-cardinality x/maybe filters retain column order: x leads and nullable maybe narrows its survivors
+            // to about one sixteenth, exercising in-place compaction of both the earlier and current value buffers.
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 0, 0));
+            scan.pushDynamicFilter(DynamicFilter.fromRange(1, 0, 0));
+            while (scan.hasNext()) {
+                try (Batch batch = scan.next()) {
+                    int count = batch.borrowMask().size();
+                    I64Vector x = (I64Vector) batch.output(0).borrow(Stream.VALUES);
+                    I64Vector maybe = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+                    BooleanVector maybeNulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
+                    for (int position = 0; position < count; position++) {
+                        assertThat(x.values()[position]).isZero();
+                        assertThat(maybe.values()[position]).isZero();
+                        assertThat(maybeNulls.values()[position]).isFalse();
+                    }
+                    actual += count;
+                }
+            }
+        }
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void testRejectedDictionaryPageSkipPreservesNullableAndRequiredCursorsAcrossChunks()
+            throws IOException
+    {
+        List<ParquetRow> rejected = new ArrayList<>();
+        List<ParquetRow> accepted = new ArrayList<>();
+        for (int position = 0; position < 2_000; position++) {
+            rejected.add(new ParquetRow(400, true, (position & 1) == 0 ? null : 400L));
+            accepted.add(new ParquetRow((position & 1) == 0 ? 100 : 200, true, (position & 1) == 0 ? 100L : 200L));
+        }
+        java.nio.file.Path first = writeParquetFile("rejected-dictionary-page-first.parquet", true, rejected);
+        java.nio.file.Path second = writeParquetFile("rejected-dictionary-page-second.parquet", true, accepted);
+        assertDictionaryEncoding(first, "x");
+        assertDictionaryEncoding(first, "maybe");
+        assertDictionaryEncoding(second, "x");
+        assertDictionaryEncoding(second, "maybe");
+
+        try (ParquetFile firstFile = ParquetFile.open(first);
+                ParquetFile secondFile = ParquetFile.open(second);
+                ColumnReader required = columnReader(List.of(firstFile, secondFile), "x");
+                ColumnReader nullable = columnReader(List.of(firstFile, secondFile), "maybe")) {
+            int[] survivors = new int[2_000];
+            long[] values = new long[2_000];
+            java.util.function.LongPredicate predicate = value -> value <= 200;
+
+            assertThat(required.filterDictLongs(predicate, 2_000, survivors, values, null)).isZero();
+            assertThat(required.filterDictLongs(predicate, 2_000, survivors, values, null)).isEqualTo(2_000);
+            assertThat(values).containsOnly(100L, 200L);
+
+            Arrays.fill(values, 0);
+            assertThat(nullable.filterDictLongs(predicate, 2_000, survivors, values, null)).isZero();
+            assertThat(nullable.filterDictLongs(predicate, 2_000, survivors, values, null)).isEqualTo(2_000);
+            assertThat(values).containsOnly(100L, 200L);
+        }
+    }
+
+    @Test
     void testVersionedPredicateReusesDictionaryAcceptanceUntilGenerationChanges()
             throws IOException
     {
@@ -600,6 +679,44 @@ public class TestParquetOperator
                 reader.readLongs(values, null, values.length);
                 assertThat(values).containsExactly(11L, 12L, 11L, 21L, 22L, 23L, 21L);
             }
+        }
+    }
+
+    @Test
+    void testFullNumericDictionaryReadRemainsAlignedAcrossPartialBatches()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 257; position++) {
+            rows.add(new ParquetRow(
+                    100 + (position % 17),
+                    true,
+                    position % 7 == 0 ? null : 1_000L + (position % 23)));
+        }
+        java.nio.file.Path file = writeParquetFile("numeric-dictionary-partial-batches.parquet", true, rows);
+        assertDictionaryEncoding(file, "x");
+        assertDictionaryEncoding(file, "maybe");
+
+        try (ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader required = columnReader(List.of(parquetFile), "x");
+                ColumnReader optional = columnReader(List.of(parquetFile), "maybe")) {
+            int consumed = 0;
+            for (int batchSize : new int[] {31, 73, 153}) {
+                long[] requiredValues = new long[batchSize];
+                long[] optionalValues = new long[batchSize];
+                boolean[] optionalNulls = new boolean[batchSize];
+                required.readLongs(requiredValues, null, batchSize);
+                optional.readLongs(optionalValues, optionalNulls, batchSize);
+
+                for (int index = 0; index < batchSize; index++) {
+                    int position = consumed + index;
+                    assertThat(requiredValues[index]).isEqualTo(100L + (position % 17));
+                    assertThat(optionalNulls[index]).isEqualTo(position % 7 == 0);
+                    assertThat(optionalValues[index]).isEqualTo(position % 7 == 0 ? 0 : 1_000L + (position % 23));
+                }
+                consumed += batchSize;
+            }
+            assertThat(consumed).isEqualTo(rows.size());
         }
     }
 

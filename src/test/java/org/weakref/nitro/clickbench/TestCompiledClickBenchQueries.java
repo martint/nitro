@@ -354,7 +354,9 @@ public class TestCompiledClickBenchQueries
     {
         assertThat(actual).hasSameSizeAs(expected);
         for (int i = 0; i < actual.size(); i++) {
-            assertThat(actual.get(i).values()[sortColumn]).as("sort key at row %d", i).isEqualTo(expected.get(i).values()[sortColumn]);
+            assertThat(actual.get(i).values()[sortColumn])
+                    .as("sort key at row %d; compiled row=%s; operator row=%s", i, actual.get(i), expected.get(i))
+                    .isEqualTo(expected.get(i).values()[sortColumn]);
         }
         int start = 0;
         while (start < expected.size()) {

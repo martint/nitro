@@ -37,6 +37,11 @@ public class SumF64
         this.inputColumn = inputColumn;
     }
 
+    int inputColumn()
+    {
+        return inputColumn;
+    }
+
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {

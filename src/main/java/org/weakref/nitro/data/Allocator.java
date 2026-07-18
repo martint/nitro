@@ -47,14 +47,30 @@ public class Allocator
             Boolean.parseBoolean(System.getProperty("nitro.allocator.adaptiveVectorPoolHighWater", "true"));
     private static final long MAX_LOCAL_VECTOR_POOL_BYTES =
             Long.getLong("nitro.allocator.maxLocalVectorPoolBytes", 64L << 20);
+    private static final long MAX_COMPATIBLE_VECTOR_POOL_BYTES =
+            Long.getLong("nitro.allocator.maxCompatibleVectorPoolBytes", MAX_LOCAL_VECTOR_POOL_BYTES);
+    private static final int COMPATIBLE_VECTOR_POOL_RETENTION_MULTIPLIER =
+            Integer.getInteger("nitro.allocator.compatibleVectorPoolRetentionMultiplier", 1);
+    private static final int COMPATIBLE_POOL_LOCAL_RESERVE =
+            Integer.getInteger("nitro.allocator.compatiblePoolLocalReserve", 0);
+    private static final int MIN_COMPATIBILITY_DOMAIN_GROUPS =
+            Integer.getInteger("nitro.allocator.minCompatibilityDomainGroups", 3);
+    private static final int COMPATIBLE_MASK_POOL_LOCAL_RESERVE =
+            Integer.getInteger("nitro.allocator.compatibleMaskPoolLocalReserve", COMPATIBLE_POOL_LOCAL_RESERVE);
     private static final boolean FAST_VECTOR_POOL_ORDER_REMOVE =
             Boolean.parseBoolean(System.getProperty("nitro.allocator.fastVectorPoolOrderRemove", "true"));
     private static final boolean SHARED_ALL_FALSE_BOOLEAN =
             Boolean.parseBoolean(System.getProperty("nitro.allocator.sharedAllFalseBoolean", "true"));
+    private static final boolean DIRECT_VECTOR_FACTORY =
+            Boolean.parseBoolean(System.getProperty("nitro.allocator.directVectorFactory", "true"));
+    private static final boolean INDEXED_VECTOR_TREE_TRAVERSAL =
+            Boolean.parseBoolean(System.getProperty("nitro.allocator.indexedVectorTreeTraversal", "true"));
 
     private final Map<Context, ContextState> states = new HashMap<>();
     private final Map<Object, PoolState> pools = new HashMap<>();
+    private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
+    private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
     private Context lastContext;
     private ContextState lastContextState;
 
@@ -75,6 +91,19 @@ public class Allocator
 
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
+        if (DIRECT_VECTOR_FACTORY) {
+            ContextState state = state(context);
+            T vector = state.borrowVector(vectorType, size, true, vectorType);
+            boolean reused = vector != null;
+            if (!reused) {
+                vector = requireNonNull(allocator.apply(size), "allocator returned null");
+            }
+            else {
+                vector.clearForReuse();
+            }
+            state.trackVector(vector, reused);
+            return vector;
+        }
         return allocatePooled(context, vectorType, size, true, vectorType, () -> allocator.apply(size));
     }
 
@@ -176,12 +205,82 @@ public class Allocator
         return vector;
     }
 
+    /**
+     * Borrows a vector with ceiling-capacity semantics without constructing a capturing factory on the hot path.
+     *
+     * <p>This form is intended for transient scratch whose logical length is carried separately from its backing
+     * capacity. A producer can request the exact logical minimum while geometrically sizing only a pool miss; later
+     * batches reuse the smallest adequate buffer even when their cardinalities differ slightly.
+     */
+    public <T extends Vector> T allocatePooled(
+            Context context,
+            Object poolFamily,
+            int minimumPoolCapacity,
+            boolean exactCapacityMatch,
+            Class<T> vectorType,
+            int allocationSize,
+            IntFunction<T> allocator)
+    {
+        ContextState state = state(context);
+        T vector = state.borrowVector(poolFamily, minimumPoolCapacity, exactCapacityMatch, vectorType);
+        boolean reused = vector != null;
+        if (!reused) {
+            vector = requireNonNull(allocator.apply(allocationSize), "allocator returned null");
+        }
+        else {
+            vector.clearForReuse();
+        }
+        state.trackVector(vector, reused);
+        return vector;
+    }
+
     public static int growthCapacity(int desiredSize)
     {
         if (desiredSize <= 0) {
             return 0;
         }
         return Math.max(desiredSize, computeCapacity(desiredSize));
+    }
+
+    /**
+     * Acquires an allocator-scoped resource shared by independently constructed operators in one query.
+     *
+     * <p>Operators retain ordinary ownership through the returned lease. The resource closes only after the last
+     * lease closes, so a build-side pipeline may publish reusable state that remains valid for a later probe-side
+     * pipeline without introducing a process-global cache or bespoke operator coordination.
+     */
+    public synchronized <T extends AutoCloseable> SharedResource<T> acquireSharedResource(Object key, Supplier<T> factory)
+    {
+        requireNonNull(key, "key is null");
+        requireNonNull(factory, "factory is null");
+        SharedResourceState state = sharedResources.get(key);
+        if (state == null) {
+            state = new SharedResourceState(requireNonNull(factory.get(), "factory returned null"));
+            sharedResources.put(key, state);
+        }
+        state.references++;
+        @SuppressWarnings("unchecked")
+        T value = (T) state.value;
+        return new SharedResource<>(this, key, value);
+    }
+
+    private synchronized void releaseSharedResource(Object key)
+    {
+        SharedResourceState state = sharedResources.get(key);
+        if (state == null || state.references <= 0) {
+            throw new IllegalStateException("Shared resource is not acquired");
+        }
+        state.references--;
+        if (state.references != 0) {
+            return;
+        }
+        sharedResources.remove(key);
+        try {
+            state.value.close();
+        }
+        catch (Exception e) {
+            throw new IllegalStateException("Failed to close shared resource", e);
+        }
     }
 
     public <T extends Vector> T reallocateIfNecessary(Context context, T vector, Class<T> vectorType, int count, IntFunction<T> vectorAllocator)
@@ -704,6 +803,42 @@ public class Allocator
         return current;
     }
 
+    /** Registers a context's pool groups before execution so compatibility admission is independent of pull order. */
+    public void register(Context context)
+    {
+        ContextState state = state(requireNonNull(context, "context is null"));
+        if (state.hasCompatibilityCandidate()) {
+            pendingCompatibilityStates.add(state);
+        }
+    }
+
+    /**
+     * Freezes compatibility admission for the contexts registered by the current execution.
+     *
+     * <p>An allocator may outlive an operator plan, so admission must count current registrations rather than local
+     * groups retained from earlier executions. Compatible released storage remains reusable across executions, but a
+     * later plan cannot inherit an earlier plan's group count.
+     */
+    public void beginExecution()
+    {
+        if (pendingCompatibilityStates.isEmpty()) {
+            return;
+        }
+
+        Map<PoolState, Set<PoolState>> contributors = new IdentityHashMap<>();
+        for (ContextState state : pendingCompatibilityStates) {
+            contributors.computeIfAbsent(
+                            state.compatibilityCandidate(),
+                            _ -> Collections.newSetFromMap(new IdentityHashMap<>()))
+                    .add(state.localPool());
+        }
+        for (ContextState state : pendingCompatibilityStates) {
+            state.configureCompatibility(
+                    contributors.get(state.compatibilityCandidate()).size() >= Math.max(1, MIN_COMPATIBILITY_DOMAIN_GROUPS));
+        }
+        pendingCompatibilityStates.clear();
+    }
+
     public long peakBytes(Context context)
     {
         long peak = 0;
@@ -886,7 +1021,14 @@ public class Allocator
 
     private void transferVector(Vector vector, Context preferredContext)
     {
-        vector.forEachChildVector(child -> transferVector(child, preferredContext));
+        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                transferVector(vector.childVector(index), preferredContext);
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> transferVector(child, preferredContext));
+        }
         ContextState preferredState = states.get(preferredContext);
         if (preferredState != null && preferredState.transferVector(vector)) {
             return;
@@ -904,7 +1046,14 @@ public class Allocator
     private void transferOwnedVector(Context context, Vector vector)
     {
         vector.prepareBufferTransfer(this, context);
-        vector.forEachChildVector(child -> transferOwnedVector(context, child));
+        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                transferOwnedVector(context, vector.childVector(index));
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> transferOwnedVector(context, child));
+        }
         ContextState contextState = states.get(context);
         if (contextState != null) {
             contextState.transferVector(vector);
@@ -941,7 +1090,14 @@ public class Allocator
 
     private void releaseVectorTree(Context context, Vector vector)
     {
-        vector.forEachChildVector(child -> releaseVectorTree(context, child));
+        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                releaseVectorTree(context, vector.childVector(index));
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> releaseVectorTree(context, child));
+        }
         releaseVector(context, vector);
     }
 
@@ -950,7 +1106,14 @@ public class Allocator
         if (retained.contains(vector)) {
             return;
         }
-        vector.forEachChildVector(child -> releaseUnreferencedVectorTree(context, child, retained));
+        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                releaseUnreferencedVectorTree(context, vector.childVector(index), retained);
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> releaseUnreferencedVectorTree(context, child, retained));
+        }
         releaseVector(context, vector);
     }
 
@@ -965,7 +1128,9 @@ public class Allocator
             return lastContextState;
         }
 
-        ContextState state = states.computeIfAbsent(context, key -> new ContextState(pools.computeIfAbsent(key.poolGroup(), _ -> new PoolState())));
+        ContextState state = states.computeIfAbsent(context, key -> new ContextState(
+                pools.computeIfAbsent(key.poolGroup(), _ -> new PoolState()),
+                pools.computeIfAbsent(key.compatibilityGroup(), _ -> new PoolState())));
         lastContext = context;
         lastContextState = state;
         return state;
@@ -1051,14 +1216,18 @@ public class Allocator
     {
         private final Stats stats = new Stats();
         private final PoolState pool;
+        private final PoolState compatibilityCandidate;
+        private PoolState compatibilityPool;
         private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
         private final Map<Object, Integer> inUseVectorCounts = new HashMap<>();
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
         private Mask inUseMasksHead;
 
-        private ContextState(PoolState pool)
+        private ContextState(PoolState pool, PoolState compatibilityPool)
         {
             this.pool = requireNonNull(pool, "pool is null");
+            this.compatibilityCandidate = requireNonNull(compatibilityPool, "compatibilityPool is null");
+            this.compatibilityPool = pool;
         }
 
         public Stats stats()
@@ -1068,35 +1237,44 @@ public class Allocator
 
         public <T extends Vector> T borrowVector(Object family, int minimumCapacity, boolean exactCapacityMatch, Class<T> vectorType)
         {
-            TreeMap<Integer, ArrayDeque<Vector>> vectors = pool.vectorPool.get(family);
+            T vector = borrowVector(pool, family, minimumCapacity, exactCapacityMatch, vectorType);
+            if (vector == null && compatibilityActive()) {
+                vector = borrowVector(compatibilityPool, family, minimumCapacity, exactCapacityMatch, vectorType);
+            }
+            return vector != null ? vector : PrimitiveArrayPool.shared().borrow(family, minimumCapacity, vectorType);
+        }
+
+        private static <T extends Vector> T borrowVector(
+                PoolState source,
+                Object family,
+                int minimumCapacity,
+                boolean exactCapacityMatch,
+                Class<T> vectorType)
+        {
+            TreeMap<Integer, ArrayDeque<Vector>> vectors = source.vectorPool.get(family);
             if (vectors == null) {
-                return PrimitiveArrayPool.shared().borrow(family, minimumCapacity, vectorType);
+                return null;
             }
-
             Map.Entry<Integer, ArrayDeque<Vector>> entry = vectors.ceilingEntry(minimumCapacity);
-            if (entry == null) {
-                return PrimitiveArrayPool.shared().borrow(family, minimumCapacity, vectorType);
+            if (entry == null || (exactCapacityMatch && entry.getKey() != minimumCapacity)) {
+                return null;
             }
-            if (exactCapacityMatch && entry.getKey() != minimumCapacity) {
-                return PrimitiveArrayPool.shared().borrow(family, minimumCapacity, vectorType);
-            }
-
             T vector = vectorType.cast(entry.getValue().removeFirst());
             if (entry.getValue().isEmpty()) {
                 vectors.remove(entry.getKey());
             }
-            ArrayDeque<Vector> order = pool.vectorPoolOrder.get(family);
+            ArrayDeque<Vector> order = source.vectorPoolOrder.get(family);
             if (order != null) {
                 removeFromOrder(order, vector);
                 if (order.isEmpty()) {
-                    pool.vectorPoolOrder.remove(family);
+                    source.vectorPoolOrder.remove(family);
                 }
             }
             if (vectors.isEmpty()) {
-                pool.vectorPool.remove(family);
+                source.vectorPool.remove(family);
             }
-            removeFromOrder(pool.vectorPoolGlobalOrder, vector);
-            pool.vectorPoolBytes -= vector.retainedBytes();
+            removeFromOrder(source.vectorPoolGlobalOrder, vector);
+            source.vectorPoolBytes -= vector.retainedBytes();
             return vector;
         }
 
@@ -1166,14 +1344,23 @@ public class Allocator
 
         public Mask borrowMask(int requiredCapacity)
         {
-            Map.Entry<Integer, ArrayDeque<Mask>> entry = pool.maskPool.ceilingEntry(requiredCapacity);
+            Mask mask = borrowMask(pool, requiredCapacity);
+            if (mask == null && compatibilityActive()) {
+                mask = borrowMask(compatibilityPool, requiredCapacity);
+            }
+            return mask;
+        }
+
+        private static Mask borrowMask(PoolState source, int requiredCapacity)
+        {
+            Map.Entry<Integer, ArrayDeque<Mask>> entry = source.maskPool.ceilingEntry(requiredCapacity);
             if (entry == null) {
                 return null;
             }
 
             Mask mask = entry.getValue().removeFirst();
             if (entry.getValue().isEmpty()) {
-                pool.maskPool.remove(entry.getKey());
+                source.maskPool.remove(entry.getKey());
             }
             return mask;
         }
@@ -1209,12 +1396,7 @@ public class Allocator
             }
             unlinkTrackedMask(mask);
             stats.releaseBytes(maskBytes(mask));
-            ArrayDeque<Mask> bucket = pool.maskPool
-                    .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
-            bucket.addLast(mask);
-            while (bucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
-                bucket.removeFirst();
-            }
+            addMaskToPool(mask);
         }
 
         public void release()
@@ -1235,12 +1417,7 @@ public class Allocator
             Mask mask = inUseMasksHead;
             while (mask != null) {
                 Mask next = mask.trackedNext();
-                ArrayDeque<Mask> bucket = pool.maskPool
-                        .computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
-                bucket.addLast(mask);
-                while (bucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
-                    bucket.removeFirst();
-                }
+                addMaskToPool(mask);
                 mask.clearTrackedInUse();
                 mask = next;
             }
@@ -1305,6 +1482,10 @@ public class Allocator
                 return;
             }
             int retentionLimit = Math.max(maxRetained, vectorHighWater.getOrDefault(family, 0));
+            if (compatibilityActive()) {
+                int reserve = COMPATIBLE_POOL_LOCAL_RESERVE;
+                retentionLimit = Math.min(retentionLimit, Math.max(0, reserve));
+            }
             // Keep the active allocator's reuse pool in front of the process-wide pool. In particular,
             // variable-width vectors are borrowed with ceiling-capacity semantics, while the shared pool is
             // deliberately keyed by exact capacity. Sending a large BinaryVector directly to the shared pool
@@ -1340,12 +1521,81 @@ public class Allocator
             if (removeFromOrder(pool.vectorPoolGlobalOrder, vector)) {
                 pool.vectorPoolBytes -= vector.retainedBytes();
             }
+            if (compatibilityActive()) {
+                addVectorToCompatibilityPool(family, vector);
+            }
+            else {
+                PrimitiveArrayPool.shared().retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+            }
+        }
+
+        private void addVectorToCompatibilityPool(Object family, Vector vector)
+        {
+            compatibilityPool.vectorPool
+                    .computeIfAbsent(family, _ -> new TreeMap<>())
+                    .computeIfAbsent(vector.poolCapacity(), _ -> new ArrayDeque<>())
+                    .addLast(vector);
+            ArrayDeque<Vector> order = compatibilityPool.vectorPoolOrder.computeIfAbsent(family, _ -> new ArrayDeque<>());
+            order.addLast(vector);
+            compatibilityPool.vectorPoolGlobalOrder.addLast(vector);
+            compatibilityPool.vectorPoolBytes += vector.retainedBytes();
+            int compatibilityRetentionLimit = (int) Math.min(
+                    Integer.MAX_VALUE,
+                    (long) vector.poolMaxRetained() * Math.max(1, COMPATIBLE_VECTOR_POOL_RETENTION_MULTIPLIER));
+            while (order.size() > compatibilityRetentionLimit) {
+                evictCompatibilityVector(order.getFirst());
+            }
+            while (compatibilityPool.vectorPoolBytes > MAX_COMPATIBLE_VECTOR_POOL_BYTES && !compatibilityPool.vectorPoolGlobalOrder.isEmpty()) {
+                evictCompatibilityVector(compatibilityPool.vectorPoolGlobalOrder.getFirst());
+            }
+        }
+
+        private void evictCompatibilityVector(Vector vector)
+        {
+            Object family = requireNonNull(vector.poolFamily(), "discarded compatible vector has no pool family");
+            removeVectorFromPool(compatibilityPool, family, vector.poolCapacity(), vector);
+            ArrayDeque<Vector> familyOrder = compatibilityPool.vectorPoolOrder.get(family);
+            if (familyOrder != null) {
+                removeFromOrder(familyOrder, vector);
+                if (familyOrder.isEmpty()) {
+                    compatibilityPool.vectorPoolOrder.remove(family);
+                }
+            }
+            if (removeFromOrder(compatibilityPool.vectorPoolGlobalOrder, vector)) {
+                compatibilityPool.vectorPoolBytes -= vector.retainedBytes();
+            }
             PrimitiveArrayPool.shared().retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+        }
+
+        private void addMaskToPool(Mask mask)
+        {
+            ArrayDeque<Mask> bucket = pool.maskPool.computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
+            bucket.addLast(mask);
+            int localLimit = compatibilityActive() ? Math.max(0, COMPATIBLE_MASK_POOL_LOCAL_RESERVE) : MAX_POOLED_MASKS_PER_BUCKET;
+            while (bucket.size() > localLimit) {
+                Mask excess = bucket.removeFirst();
+                if (compatibilityPool != pool) {
+                    ArrayDeque<Mask> compatibleBucket = compatibilityPool.maskPool
+                            .computeIfAbsent(excess.capacity(), _ -> new ArrayDeque<>());
+                    compatibleBucket.addLast(excess);
+                    while (compatibleBucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
+                        compatibleBucket.removeFirst();
+                    }
+                }
+            }
+            if (bucket.isEmpty()) {
+                pool.maskPool.remove(mask.capacity());
+            }
         }
 
         private void removeVectorFromPool(Object family, int capacity, Vector vector)
         {
-            TreeMap<Integer, ArrayDeque<Vector>> vectors = pool.vectorPool.get(family);
+            removeVectorFromPool(pool, family, capacity, vector);
+        }
+
+        private static void removeVectorFromPool(PoolState source, Object family, int capacity, Vector vector)
+        {
+            TreeMap<Integer, ArrayDeque<Vector>> vectors = source.vectorPool.get(family);
             if (vectors == null) {
                 return;
             }
@@ -1360,7 +1610,7 @@ public class Allocator
                 vectors.remove(capacity);
             }
             if (vectors.isEmpty()) {
-                pool.vectorPool.remove(family);
+                source.vectorPool.remove(family);
             }
         }
 
@@ -1378,6 +1628,31 @@ public class Allocator
                 return true;
             }
             return order.remove(vector);
+        }
+
+        private boolean compatibilityActive()
+        {
+            return compatibilityPool != pool;
+        }
+
+        private boolean hasCompatibilityCandidate()
+        {
+            return compatibilityCandidate != pool;
+        }
+
+        private PoolState localPool()
+        {
+            return pool;
+        }
+
+        private PoolState compatibilityCandidate()
+        {
+            return compatibilityCandidate;
+        }
+
+        private void configureCompatibility(boolean active)
+        {
+            compatibilityPool = active ? compatibilityCandidate : pool;
         }
     }
 
@@ -1437,7 +1712,7 @@ public class Allocator
         void releaseLeased(Vector vector);
     }
 
-    public record Context(String name, long scopeId, Object poolGroup)
+    public record Context(String name, long scopeId, Object poolGroup, Object compatibilityGroup)
     {
         private static final AtomicLong NEXT_SCOPE_ID = new AtomicLong();
 
@@ -1448,12 +1723,71 @@ public class Allocator
 
         public Context(String name, long scopeId)
         {
-            this(name, scopeId, scopeId);
+            this(name, scopeId, scopeId, scopeId);
         }
 
         public Context(String name, Object poolGroup)
         {
-            this(name, NEXT_SCOPE_ID.incrementAndGet(), requireNonNull(poolGroup, "poolGroup is null"));
+            this(name, NEXT_SCOPE_ID.incrementAndGet(), requireNonNull(poolGroup, "poolGroup is null"), poolGroup);
+        }
+
+        public Context(String name, Object poolGroup, Object compatibilityGroup)
+        {
+            this(
+                    name,
+                    NEXT_SCOPE_ID.incrementAndGet(),
+                    requireNonNull(poolGroup, "poolGroup is null"),
+                    requireNonNull(compatibilityGroup, "compatibilityGroup is null"));
+        }
+
+        public Context(String name, long scopeId, Object poolGroup)
+        {
+            this(name, scopeId, requireNonNull(poolGroup, "poolGroup is null"), poolGroup);
+        }
+    }
+
+    public static final class SharedResource<T extends AutoCloseable>
+            implements AutoCloseable
+    {
+        private final Allocator allocator;
+        private final Object key;
+        private final T value;
+        private boolean closed;
+
+        private SharedResource(Allocator allocator, Object key, T value)
+        {
+            this.allocator = allocator;
+            this.key = key;
+            this.value = value;
+        }
+
+        public T value()
+        {
+            if (closed) {
+                throw new IllegalStateException("Shared resource lease is closed");
+            }
+            return value;
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            allocator.releaseSharedResource(key);
+        }
+    }
+
+    private static final class SharedResourceState
+    {
+        private final AutoCloseable value;
+        private int references;
+
+        private SharedResourceState(AutoCloseable value)
+        {
+            this.value = value;
         }
     }
 }

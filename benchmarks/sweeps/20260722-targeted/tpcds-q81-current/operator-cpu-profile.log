@@ -1,0 +1,43 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query81: 10 iters, 189.7 ms/iter, rows-sink=25500
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q81.topn                           TopNOperator               1871.085   10.88%     1597.953     163630.427     163630.427       10         1000
+  hasNext=  0.038 next=1859.257  borrow=  3.548  take=  0.000  constrain=  0.000  close=  8.239  alloc[hasNext=   0.000 next=1584.225 borrow=  11.787 take=   0.000 constrain=   0.000 close=   1.941] MB
+q81.project.output                 ProjectOperator            1832.945   10.66%     1576.118       5764.088       5764.088      280        33690
+  hasNext=  0.262 next=1778.671  borrow=  7.062  take=  0.000  constrain=  0.000  close=  7.518  alloc[hasNext=   0.009 next=1574.569 borrow=   0.703 take=   0.000 constrain=   0.000 close=   0.560] MB
+q81.filter.threshold               FilterOperator             1813.411   10.55%     1574.153       5756.904       5756.904      280        33690
+  hasNext=  0.150 next=1777.396  borrow=  4.925  take=  0.000  constrain=  0.000  close=  7.110  alloc[hasNext=   0.004 next=1572.845 borrow=   0.684 take=   0.000 constrain=   0.000 close=   0.482] MB
+q81.join.address                   HashJoinOperator           1782.697   10.37%     1568.139       5734.907       5734.907      280       130770
+  hasNext=  0.047 next=1752.106  borrow= 14.812  take=  0.000  constrain=  0.294  close=  6.881  alloc[hasNext=   0.000 next=1565.255 borrow=   2.456 take=   0.000 constrain=   0.000 close=   0.428] MB
+q81.join.customer                  HashJoinOperator           1644.406    9.56%     1240.783       4537.721       4537.721      280      2671010
+  hasNext=  0.050 next=1625.951  borrow= 12.526  take=  0.000  constrain=  0.000  close=  5.839  alloc[hasNext=   0.000 next=1238.395 borrow=   1.971 take=   0.000 constrain=   0.000 close=   0.418] MB
+q81.join.state_average             HashJoinOperator           1371.292    7.97%      658.317       2407.560       2407.560      280      2671520
+  hasNext=  0.053 next=1338.870  borrow= 27.601  take=  0.000  constrain=  0.000  close=  4.724  alloc[hasNext=   0.000 next= 603.274 borrow=  54.596 take=   0.000 constrain=   0.000 close=   0.447] MB
+q81.customer_totals.group          GroupedAggregationOperator   1175.414    6.84%      535.045      27394.320      27394.320       20      5510400
+  hasNext=  0.013 next=1068.586  borrow=102.487  take=  0.000  constrain=  0.056  close=  4.267  alloc[hasNext=   0.000 next= 370.660 borrow= 164.210 take=   0.000 constrain=   0.000 close=   0.175] MB
+q81.state_averages                                             725.219    4.22%      383.929      39314.330      39314.330       10          520
+  hasNext=  0.031 next=722.056  borrow=  1.038  take=  0.000  constrain=  0.109  close=  1.982  alloc[hasNext=   0.001 next= 383.730 borrow=   0.073 take=   0.000 constrain=   0.001 close=   0.124] MB
+q81.state_averages.project         ProjectOperator             725.163    4.22%      383.924      39313.784      39313.784       10          520
+  hasNext=  0.022 next=722.041  borrow=  1.021  take=  0.000  constrain=  0.099  close=  1.977  alloc[hasNext=   0.000 next= 383.726 borrow=   0.073 take=   0.000 constrain=   0.001 close=   0.124] MB
+q81.state_averages.group           GroupedAggregationOperator    724.196    4.21%      383.830      39304.213      39304.213       10          520
+  hasNext=  0.008 next=721.930  borrow=  0.290  take=  0.000  constrain=  0.016  close=  1.949  alloc[hasNext=   0.000 next= 383.705 borrow=   0.014 take=   0.000 constrain=   0.000 close=   0.112] MB
+q81.customer_totals.project        ProjectOperator             658.640    3.83%      243.652        402.419        402.419      620      5635640
+  hasNext=  0.385 next=649.149  borrow=  3.768  take=  0.000  constrain=  0.000  close=  5.249  alloc[hasNext=   0.010 next= 242.877 borrow=   0.400 take=   0.000 constrain=   0.000 close=   0.366] MB
+q81.customer_totals.join.address   HashJoinOperator            655.108    3.81%      242.252        400.106        400.106      620      5635640
+  hasNext=  0.128 next=647.755  borrow=  2.629  take=  0.000  constrain=  0.000  close=  4.507  alloc[hasNext=   0.000 next= 241.671 borrow=   0.388 take=   0.000 constrain=   0.000 close=   0.193] MB
+q81.state_averages.filter          FilterOperator              624.142    3.63%      279.071      28576.895      28576.895       10      2740640
+  hasNext=  0.023 next=567.783  borrow= 54.425  take=  0.000  constrain=  0.000  close=  1.909  alloc[hasNext=   0.000 next= 220.564 borrow=  58.425 take=   0.000 constrain=   0.000 close=   0.081] MB
+q81.customer_totals.primary                                    552.971    3.22%      266.580      27297.798      27297.798       10      2755200
+  hasNext=  0.014 next=503.628  borrow= 46.925  take=  0.000  constrain=  0.010  close=  2.391  alloc[hasNext=   0.000 next= 184.348 borrow=  82.134 take=   0.000 constrain=   0.000 close=   0.097] MB
+q81.customer_totals.join.date      HashJoinOperator            531.806    3.09%       34.826         57.519         57.519      620      5750300
+  hasNext=  0.111 next=525.787  borrow=  2.121  take=  0.000  constrain=  0.000  close=  3.696  alloc[hasNext=   0.000 next=  34.423 borrow=   0.249 take=   0.000 constrain=   0.000 close=   0.153] MB
+q81.customer_totals.scan           NitroParquetScanOperator    508.271    2.96%       20.836         35.559         35.559      600      5750300
+  hasNext=498.690 next=  5.058  borrow=  0.889  take=  0.000  constrain=  0.000  close=  3.514  alloc[hasNext=  18.559 next=   1.877 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.400] MB
+Total attributed cpu_ms: 17196.766
+

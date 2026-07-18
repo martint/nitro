@@ -20,6 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestMask
 {
+    private static final int DENSE_DOUBLE_TEST_SIZE = 131;
+
     @Test
     void denseIntegerConstantRangePreservesStrictBounds()
     {
@@ -61,6 +63,27 @@ class TestMask
         Mask lateFailure = Mask.all(values.length);
         lateFailure.retainConstantRange(values, 0, 10, null);
         assertThat(lateFailure).hasSize(values.length - 1).doesNotContain(250);
+    }
+
+    @Test
+    void denseDoubleLessThanPreservesTailAndNanSemantics()
+    {
+        double[] values = new double[DENSE_DOUBLE_TEST_SIZE];
+        for (int position = 0; position < values.length; position++) {
+            values[position] = position - 64.5;
+        }
+        values[3] = Double.NaN;
+        values[17] = Double.NEGATIVE_INFINITY;
+        values[values.length - 1] = Double.POSITIVE_INFINITY;
+
+        Mask mask = Mask.all(values.length);
+        mask.retainConstantComparison(values, 0.0, Mask.ComparisonOperator.LESS_THAN);
+
+        Integer[] expected = java.util.stream.IntStream.range(0, values.length)
+                .filter(position -> values[position] < 0.0)
+                .boxed()
+                .toArray(Integer[]::new);
+        assertThat(mask).containsExactly(expected);
     }
 
     @Test

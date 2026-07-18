@@ -68,6 +68,7 @@ import org.weakref.nitro.function.scalar.builtin.NotBoolean;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
+import org.weakref.nitro.function.scalar.builtin.RoundF64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
@@ -147,6 +148,7 @@ public final class TestPrimitiveFunctions
                 AndBoolean.class,
                 OrBoolean.class,
                 RegexpReplaceUtf8.class,
+                RoundF64.class,
                 StartsWithUtf8.class,
                 SubstringUtf8.class,
                 UpperUtf8.class,

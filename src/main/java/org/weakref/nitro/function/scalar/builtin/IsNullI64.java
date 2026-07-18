@@ -103,17 +103,7 @@ public final class IsNullI64
                 output != null ? output.getOrNull(Stream.VALUES) : null,
                 requiredLength);
         boolean[] outputValues = values.values();
-        if (inputNulls == null) {
-            for (int position : mask) {
-                outputValues[position] = false;
-            }
-        }
-        else {
-            VectorAccess.BooleanValues inputNullValues = VectorAccess.booleanValues(inputNulls);
-            for (int position : mask) {
-                outputValues[position] = inputNullValues.value(position);
-            }
-        }
+        VectorAccess.copyBooleanValues(inputNulls, mask, outputValues);
         return Streams.ofValues(values);
     }
 }

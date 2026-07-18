@@ -223,6 +223,34 @@ public class TestJitPipeline
     }
 
     @Test
+    void compilesRoundDoubleWithSqlHalfAwayFromZeroSemantics()
+    {
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                2,
+                List.of(),
+                List.of(new Plan.Col(0)),
+                List.of(new Plan.Aggregate("avg", new Plan.Col(1))))
+                .withProjections(List.of(new Plan.Col(0), new Plan.Call("round_f64", new Plan.Col(1))));
+
+        long[] keys = {0, 0, 1, 1, 2, 2};
+        long[] values = {2, 3, -2, -3, 0, 0};
+        boolean[] valueNulls = {false, false, false, false, true, true};
+        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, new boolean[][] {{false, true}})
+                .execute(new Column[][] {{new Column.FlatColumn(keys), new Column.FlatColumn(values, valueNulls)}}, new int[] {keys.length});
+
+        assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
+        for (int row = 0; row < result.rowCount(); row++) {
+            if (result.columns()[0][row] == 2) {
+                assertThat(result.nulls()[1][row]).isTrue();
+                continue;
+            }
+            assertThat(result.nulls() == null || result.nulls()[1] == null || !result.nulls()[1][row]).isTrue();
+            double expected = result.columns()[0][row] == 0 ? 3.0 : -3.0;
+            assertThat(Double.longBitsToDouble(result.columns()[1][row])).isEqualTo(expected);
+        }
+    }
+
+    @Test
     void compilesReinterpretDoubleBits()
     {
         // SELECT reinterpret_f64(v) FROM t -- v is a long column holding raw double bits (a double materialized by an

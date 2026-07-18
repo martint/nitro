@@ -47,8 +47,14 @@ public class GroupedAggregationOperator
     // two-pass wins on memory-level parallelism; below it the fused single pass wins. Cardinality-gated.
     private static final int FUSE_GROUP_LIMIT =
             Integer.getInteger("nitro.groupedAggregation.fuseGroupLimit", 1 << 15);
+    // Dictionary-mapped or repeatedly adjacent keys have already proved that fusion avoids a second random
+    // state walk. Let those physically reusable shapes finish instead of switching representation part-way
+    // through and duplicating state growth; random high-cardinality input is still rejected at FUSE_GROUP_LIMIT.
+    // Keep a hard bound so a malformed or unexpectedly large domain cannot grow fused state without limit.
     private static final int FUSE_LOCAL_GROUP_LIMIT =
-            Integer.getInteger("nitro.groupedAggregation.fuseLocalGroupLimit", 1 << 16);
+            Integer.getInteger("nitro.groupedAggregation.fuseLocalGroupLimit", 1 << 25);
+    private static final int FUSE_MAPPED_ONLY_GROUP_LIMIT =
+            Integer.getInteger("nitro.groupedAggregation.fuseMappedOnlyGroupLimit", 1 << 16);
 
     // Forward a downstream join's dynamic filter on a grouped-key column to the source (so a fact scan below
     // the grouping can drop non-joining rows before they are grouped). On by default; opt out for A/B.
@@ -68,6 +74,10 @@ public class GroupedAggregationOperator
             Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedDictionaryInput", "true"));
     private static final boolean FUSED_LONG_RUN_CACHE =
             Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedLongRunCache", "true"));
+    private static final boolean FUSED_CONSTANT_RUNS =
+            Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedConstantRuns", "true"));
+    private static final int FUSED_CONSTANT_RUN_GROUP_MIN =
+            Integer.getInteger("nitro.groupedAggregation.fusedConstantRunGroupMin", 1 << 15);
     private static final boolean FUSED_LONG_DIRECT_GROUPING =
             Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedLongDirectGrouping", "true"));
     private static final boolean FUSED_MAPPED_CONTINUATION_POWER_OF_TWO_STATE_CAPACITY =
@@ -83,6 +93,7 @@ public class GroupedAggregationOperator
     private final int[] groupedKeyIndexes;
     private final Accumulator[] aggregations;
     private final int[] plainAggregationIndexes;
+    private final int[] filteredAggregationIndexes;
     private final DistinctAggregationGroup[] distinctAggregationGroups;
     private final Operator source;
     private final Streams[] groupedResults;
@@ -102,6 +113,7 @@ public class GroupedAggregationOperator
     // batch isn't the flat shape the fused loop handles.
     private boolean fusedEligible;
     private boolean fusedChecked;
+    private boolean fusedPhysicalPathCommitted;
     private FusedGroupingKernel fusedKernel;
     private FusedAccumulatorSpec[] fusedSpecs;
     private int[] fusedAggregationIndexes;
@@ -119,6 +131,8 @@ public class GroupedAggregationOperator
     private boolean fusedKeyMapped;
     private int fusedPhysicalShape = -1;
     private boolean debugFusedLimitPrinted;
+    private boolean debugFusedReuseContinuationPrinted;
+    private boolean debugFusedConstantRunsPrinted;
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
@@ -166,6 +180,7 @@ public class GroupedAggregationOperator
         this.aggregations = (ACCUMULATOR_FUSION ? AccumulatorFusion.fuse(aggregations) : aggregations).toArray(Accumulator[]::new);
         DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(this.aggregations);
         this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();
+        this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
         this.distinctAggregationGroups = distinctAggregationPlan.distinctAggregationGroups();
         this.source = source;
         this.inlineGroupingState = inlineGroupingState;
@@ -239,7 +254,7 @@ public class GroupedAggregationOperator
                 int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
                 var streamAccessor = StreamAccessors.forBatch(batch);
                 prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
-                accumulateGroupedRows(group, mask, streamAccessor, toIntExact(maxObservedGroup + 1));
+                accumulateGroupedRows(batch, group, mask, streamAccessor, toIntExact(maxObservedGroup + 1));
             }
         }
 
@@ -286,14 +301,15 @@ public class GroupedAggregationOperator
                 // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
                 // wins on memory-level parallelism (each pass streams one random-access array the OOO window
                 // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
-                if (fusedEligible
-                        && inlineGroupingState.groupCount() < FUSE_LOCAL_GROUP_LIMIT
-                        && tryFusedSingleLongAggregation(batch, mask)) {
-                    maxObservedGroup = inlineGroupingState.groupCount() - 1;
-                    if (distinctAggregationGroups.length != 0) {
-                        accumulateDistinctGroupedRows(reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
+                if (fusedEligible && inlineGroupingState.groupCount() < FUSE_LOCAL_GROUP_LIMIT) {
+                    if (tryFusedSingleLongAggregation(batch, mask)) {
+                        maxObservedGroup = inlineGroupingState.groupCount() - 1;
+                        if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
+                            accumulateFilteredGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch));
+                            accumulateDistinctGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
+                        }
+                        continue;
                     }
-                    continue;
                 }
 
                 long previousMaxGroup = maxObservedGroup;
@@ -306,7 +322,7 @@ public class GroupedAggregationOperator
                 int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
                 var streamAccessor = StreamAccessors.forBatch(batch);
                 prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
-                accumulateGroupedRows(reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
+                accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
             }
         }
 
@@ -315,15 +331,18 @@ public class GroupedAggregationOperator
     }
 
     /**
-     * Decides once whether the inline grouped aggregation can use the fused single-long-key path: one long
-     * group key, no DISTINCT, single-long grouping mode, and every aggregation a {@link FusedAggregator}.
-     * When eligible, builds (and caches) the bytecode kernel specialized to this accumulator-set shape.
+     * Decides once whether the inline grouped aggregation can use the fused single-long-key path. Plain
+     * fusible accumulators run in the generated grouping pass. Filtered or DISTINCT accumulators may remain
+     * as explicit second stages; in that case the generated kernel writes the group-id vector they consume.
      */
     private void prepareFusedKernel()
     {
         fusedEligible = groupByColumns != null
                 && groupByColumns.length == 1
-                && plainAggregationIndexes.length > 0
+                // A filtered-only aggregation can still use a generated grouping-only pass that writes
+                // group IDs for the explicit masked stage.
+                && (plainAggregationIndexes.length > 0 || filteredAggregationIndexes.length > 0)
+                && (filteredAggregationIndexes.length == 0 || PARTIAL_ACCUMULATOR_FUSION)
                 && (distinctAggregationGroups.length == 0 || PARTIAL_ACCUMULATOR_FUSION)
                 && inlineGroupingState.usesSingleLongGrouping()
                 && allPlainAggregationsFusible();
@@ -366,6 +385,18 @@ public class GroupedAggregationOperator
      */
     private boolean tryFusedSingleLongAggregation(Batch batch, Mask mask)
     {
+        if (inlineGroupingState.usesLongDirectGrouping() && !fusedPhysicalPathCommitted) {
+            // Staged fallback won the representation race. Do not reinterpret its broader direct table as a fused
+            // admission on a later batch; keep one physical policy for the rest of this aggregation.
+            return false;
+        }
+        // A grouping-only generated pass must still write every group ID for the later filtered stage.
+        // On sparse batches the ordinary staged grouper already walks only survivors and has better locality;
+        // the generated output-vector round trip does not earn itself. Plain fused accumulators may still use
+        // sparse generation because they eliminate an additional accumulator pass.
+        if (fusedAggregationIndexes.length == 0 && !mask.all()) {
+            return false;
+        }
         Output keyOutput = batch.output(groupByColumns[0]);
         Vector keyVector = keyOutput.borrow(Stream.VALUES);
         Object keyValues;
@@ -397,7 +428,23 @@ public class GroupedAggregationOperator
         boolean directGrouping = FUSED_LONG_DIRECT_GROUPING
                 && fusedKeyMapped
                 && inlineGroupingState.prepareSingleLongDirectGrouping(mask, keyValues, intKey, fusedKeyIds);
-        boolean runCache = FUSED_LONG_RUN_CACHE && hasFrequentFusedKeyRuns(mask, keyValues, intKey, fusedKeyIds);
+        long runSample = FUSED_LONG_RUN_CACHE ? sampleFusedKeyRuns(mask, keyValues, intKey, fusedKeyIds) : 0;
+        int runComparisons = (int) (runSample >>> 32);
+        int runHits = (int) runSample;
+        boolean runCache = runComparisons >= 4 && runHits * 2 >= runComparisons;
+        boolean inputIndependentAccumulators = canBatchInputIndependentFusedAccumulator();
+        boolean constantRuns = FUSED_CONSTANT_RUNS
+                && runCache
+                && inlineGroupingState.groupCount() >= FUSED_CONSTANT_RUN_GROUP_MIN
+                && inputIndependentAccumulators;
+        boolean idIndexedGrouping = inlineGroupingState.prepareSingleLongIdIndexedGrouping(
+                runCache && inputIndependentAccumulators,
+                inlineGroupingState.groupCount() + mask.count());
+        if (DEBUG_FUSED_GROUPING && constantRuns && !debugFusedConstantRunsPrinted) {
+            debugFusedConstantRunsPrinted = true;
+            System.err.printf("[fused-grouping-constant-runs] groups=%d rows=%d keyMapped=%s runHits=%d/%d%n",
+                    inlineGroupingState.groupCount(), mask.count(), fusedKeyMapped, runHits, runComparisons);
+        }
         if (DEBUG_FUSED_GROUPING && !debugFusedLimitPrinted && inlineGroupingState.groupCount() >= FUSE_GROUP_LIMIT) {
             debugFusedLimitPrinted = true;
             System.err.printf("[fused-grouping] groups=%d rows=%d max=%d all=%s accumulators=%d keyMapped=%s runCache=%s direct=%s%n",
@@ -407,6 +454,18 @@ public class GroupedAggregationOperator
         // only when a mapped key keeps the physical input compact or adjacent keys prove that they reuse a group.
         if (inlineGroupingState.groupCount() >= FUSE_GROUP_LIMIT && !fusedKeyMapped && !runCache) {
             return false;
+        }
+        // Beyond the established local boundary require adjacent reuse plus a second physical reason to keep the
+        // generated pass: compact mapped-key access or an input-independent state update that can be coalesced by
+        // run. Flat value-reading state retains staged locality; mapped-only q64 likewise stays staged.
+        if (inlineGroupingState.groupCount() >= FUSE_MAPPED_ONLY_GROUP_LIMIT
+                && (!runCache || (!fusedKeyMapped && !inputIndependentAccumulators))) {
+            return false;
+        }
+        if (DEBUG_FUSED_GROUPING && !debugFusedReuseContinuationPrinted && inlineGroupingState.groupCount() >= (1 << 16)) {
+            debugFusedReuseContinuationPrinted = true;
+            System.err.printf("[fused-grouping-reuse-continuation] groups=%d rows=%d keyMapped=%s runCache=%s%n",
+                    inlineGroupingState.groupCount(), mask.count(), fusedKeyMapped, runCache);
         }
         for (int index = 0; index < fusedSpecs.length; index++) {
             FusedAccumulatorSpec spec = fusedSpecs[index];
@@ -492,21 +551,32 @@ public class GroupedAggregationOperator
             }
         }
         physicalShape = physicalShape * 31 + (runCache ? 1 : 0);
+        physicalShape = physicalShape * 31 + (constantRuns ? 1 : 0);
         physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
+        physicalShape = physicalShape * 31 + (idIndexedGrouping ? 1 : 0);
         if (fusedPhysicalShape != physicalShape) {
             fusedKernel = FusedGroupingAggregationKernelGenerator.create(
                     List.of(fusedSpecs),
-                    distinctAggregationGroups.length != 0,
+                    filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
                     intKey,
                     fusedKeyMapped,
                     runCache,
+                    constantRuns,
                     directGrouping,
+                    idIndexedGrouping,
                     fusedIntInputs,
                     fusedMappedInputs,
                     fusedMappedInputNulls,
                     fusedInputUsesKeyIds,
                     fusedInputNullUsesKeyIds);
             fusedPhysicalShape = physicalShape;
+        }
+
+        if (!fusedPhysicalPathCommitted) {
+            fusedPhysicalPathCommitted = true;
+            // Only an actually executable fused batch locks the tighter direct-range policy. Merely being
+            // logically eligible is insufficient when encoded/null physical inputs force every batch to stage.
+            inlineGroupingState.disableStagedLongDirectGrouping();
         }
 
         int count = mask.count();
@@ -516,7 +586,7 @@ public class GroupedAggregationOperator
         int additionalGroups = fusedKeyMapped ? Math.min(count, keyVector.length()) : count;
         inlineGroupingState.reserveSingleLongTable(additionalGroups);
         ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount() + additionalGroups));
-        if (distinctAggregationGroups.length != 0) {
+        if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
         }
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
@@ -533,7 +603,7 @@ public class GroupedAggregationOperator
                 inlineGroupingState.longGroupMask,
                 inlineGroupingState.longKeysByGroup,
                 inlineGroupingState.nextGroupId,
-                distinctAggregationGroups.length == 0 ? null : reusableGroups.values(),
+                filteredAggregationIndexes.length == 0 && distinctAggregationGroups.length == 0 ? null : reusableGroups.values(),
                 fusedInputs,
                 fusedInputIds,
                 fusedInputNulls,
@@ -545,7 +615,21 @@ public class GroupedAggregationOperator
         return true;
     }
 
-    private static boolean hasFrequentFusedKeyRuns(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
+    private boolean canBatchInputIndependentFusedAccumulator()
+    {
+        boolean found = false;
+        for (FusedAccumulatorSpec spec : fusedSpecs) {
+            if (!spec.readsInput()) {
+                found = true;
+            }
+            else {
+                return false;
+            }
+        }
+        return found;
+    }
+
+    private static long sampleFusedKeyRuns(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
     {
         int comparisons = 0;
         int hits = 0;
@@ -566,7 +650,7 @@ public class GroupedAggregationOperator
             havePrevious = true;
             previous = key;
         }
-        return comparisons >= 4 && hits * 2 >= comparisons;
+        return ((long) comparisons << 32) | (hits & 0xFFFF_FFFFL);
     }
 
     private void ensureFusedStateCapacity(int needed)
@@ -655,7 +739,7 @@ public class GroupedAggregationOperator
                 inlineGroupValues[index] = output.borrow(Stream.VALUES);
                 inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
             }
-            inlineGroupingState.assignGroups(inlineGroupValues, inlineGroupNulls, mask, groups);
+            inlineGroupingState.assignGroupsForBlockingAggregation(inlineGroupValues, inlineGroupNulls, mask, groups);
         }
         finally {
             Arrays.fill(inlineGroupValues, null);
@@ -702,28 +786,66 @@ public class GroupedAggregationOperator
         }
     }
 
-    private void accumulateGroupedRows(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
+    private void accumulateGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
         for (int aggregationIndex : plainAggregationIndexes) {
             aggregations[aggregationIndex].accumulate(states[aggregationIndex], groups, mask, streamAccessor);
         }
 
-        accumulateDistinctGroupedRows(groups, mask, streamAccessor, groupCount);
+        accumulateFilteredGroupedRows(batch, groups, mask, streamAccessor);
+        accumulateDistinctGroupedRows(batch, groups, mask, streamAccessor, groupCount);
     }
 
-    private void accumulateDistinctGroupedRows(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
+    private void accumulateFilteredGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor)
+    {
+        for (int aggregationIndex : filteredAggregationIndexes) {
+            Mask filteredMask = filterMask(batch, aggregations[aggregationIndex].filterInputColumn(), mask);
+            try {
+                aggregations[aggregationIndex].accumulate(states[aggregationIndex], groups, filteredMask, streamAccessor);
+            }
+            finally {
+                if (filteredMask != mask) {
+                    allocator.release(allocationContext, filteredMask);
+                }
+            }
+        }
+    }
+
+    private void accumulateDistinctGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
         for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
             Mask distinctMask = distinctAggregationGroup.select(groups, mask, streamAccessor, groupCount, allocator, allocationContext);
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
-                    aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, distinctMask, streamAccessor);
+                    int filterColumn = aggregations[aggregationIndex].filterInputColumn();
+                    Mask aggregationMask = filterColumn < 0 ? distinctMask : filterMask(batch, filterColumn, distinctMask);
+                    try {
+                        aggregations[aggregationIndex].accumulateDistinctSelected(states[aggregationIndex], groups, aggregationMask, streamAccessor);
+                    }
+                    finally {
+                        if (aggregationMask != distinctMask) {
+                            allocator.release(allocationContext, aggregationMask);
+                        }
+                    }
                 }
             }
             finally {
                 allocator.release(allocationContext, distinctMask);
             }
         }
+    }
+
+    private Mask filterMask(Batch batch, int filterColumn, Mask mask)
+    {
+        Output output = batch.output(filterColumn);
+        Mask direct = output.tryBorrowMask(Stream.VALUES, mask, true, allocator, allocationContext);
+        if (direct != null) {
+            return direct;
+        }
+        Mask selected = allocator.copyMask(allocationContext, mask);
+        var values = VectorAccess.booleanValues(output.borrow(Stream.VALUES));
+        selected.retainIf(position -> values.value(position));
+        return selected;
     }
 
     private void finishResults(long maxObservedGroup)
@@ -786,7 +908,10 @@ public class GroupedAggregationOperator
                     outputStreams,
                     stream -> groupedKeyOutput(groupedOutput, batchState).get(stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
-                    (stream, vector) -> allocator.release(allocationContext, vector),
+                    // Grouped results are operator-owned, reusable materializations. A downstream filter resolves
+                    // one output before constraining the batch; invalidating that cached borrow must not return its
+                    // backing vector to this context's pool while groupedResults still owns it.
+                    (stream, vector) -> {},
                     (existing, sourcePosition, outputPosition, size) -> groupedKeyCopyPosition(groupedOutput, existing, sourcePosition, outputPosition, size));
         }
 
@@ -795,7 +920,10 @@ public class GroupedAggregationOperator
                 EnumSet.of(Stream.VALUES, Stream.NULLS),
                 stream -> aggregationOutput(output - groupedResults.length, batchState).get(stream),
                 (stream, vector) -> allocator.transfer(allocationContext, vector),
-                (stream, vector) -> allocator.release(allocationContext, vector),
+                // result() may return the accumulator state itself (COUNT, SUM, MIN, ...), and computed result
+                // bundles are also cached for reuse after a narrower constraint. Keep both operator-owned until
+                // take() transfers them or close() releases the context.
+                (stream, vector) -> {},
                 (existing, sourcePosition, outputPosition, size) -> aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size));
     }
 
@@ -954,11 +1082,17 @@ public class GroupedAggregationOperator
     private static DistinctAggregationPlan planDistinctAggregations(Accumulator[] aggregations)
     {
         List<Integer> plainAggregationIndexes = new ArrayList<>();
+        List<Integer> filteredAggregationIndexes = new ArrayList<>();
         Map<DistinctSignature, List<Integer>> aggregationIndexesBySignature = new LinkedHashMap<>();
         for (int aggregationIndex = 0; aggregationIndex < aggregations.length; aggregationIndex++) {
             int[] distinctInputColumns = aggregations[aggregationIndex].distinctInputColumns();
             if (distinctInputColumns == null || distinctInputColumns.length == 0) {
-                plainAggregationIndexes.add(aggregationIndex);
+                if (aggregations[aggregationIndex].filterInputColumn() < 0) {
+                    plainAggregationIndexes.add(aggregationIndex);
+                }
+                else {
+                    filteredAggregationIndexes.add(aggregationIndex);
+                }
                 continue;
             }
             aggregationIndexesBySignature.computeIfAbsent(new DistinctSignature(distinctInputColumns), _ -> new ArrayList<>())
@@ -971,10 +1105,11 @@ public class GroupedAggregationOperator
 
         return new DistinctAggregationPlan(
                 plainAggregationIndexes.stream().mapToInt(Integer::intValue).toArray(),
+                filteredAggregationIndexes.stream().mapToInt(Integer::intValue).toArray(),
                 distinctAggregationGroups);
     }
 
-    private record DistinctAggregationPlan(int[] plainAggregationIndexes, DistinctAggregationGroup[] distinctAggregationGroups) {}
+    private record DistinctAggregationPlan(int[] plainAggregationIndexes, int[] filteredAggregationIndexes, DistinctAggregationGroup[] distinctAggregationGroups) {}
 
     private record DistinctSignature(int[] inputColumns)
     {

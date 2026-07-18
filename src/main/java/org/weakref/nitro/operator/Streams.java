@@ -216,6 +216,36 @@ public final class Streams
         return flags;
     }
 
+    /** Number of present vectors in VALUES, NULLS, ERRORS order. */
+    public int vectorCount()
+    {
+        return Integer.bitCount(flags);
+    }
+
+    /** Returns a present vector by compact structural index, in VALUES, NULLS, ERRORS order. */
+    public Vector vectorAt(int index)
+    {
+        if (index < 0) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        if (values != null) {
+            if (index == 0) {
+                return values;
+            }
+            index--;
+        }
+        if (nulls != null) {
+            if (index == 0) {
+                return nulls;
+            }
+            index--;
+        }
+        if (errors != null && index == 0) {
+            return errors;
+        }
+        throw new IndexOutOfBoundsException(index);
+    }
+
     public Map<Stream, Vector> asMap()
     {
         Map<Stream, Vector> existing = view;

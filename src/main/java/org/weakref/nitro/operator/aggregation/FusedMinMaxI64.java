@@ -48,12 +48,39 @@ final class FusedMinMaxI64
 {
     private static final boolean GROUPED_RUN_REDUCTION =
             Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedMinMaxGroupedRuns", "true"));
+    private static final boolean SHARED_NULL_STATE =
+            Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedMinMaxSharedNullState", "true"));
+    private static final int SHARED_NULL_STATE_MIN_GROUPS =
+            Integer.getInteger("nitro.aggregate.fusedMinMaxSharedNullStateMinGroups", 64);
 
     private FusedMinMaxI64() {}
 
     static final class SharedState
     {
+        private Streams scannerState;
         private Streams peerState;
+        private int nonNullGroups;
+        private boolean sharedNullState;
+
+        private void configureSharedNullState(int initialCapacity)
+        {
+            sharedNullState = SHARED_NULL_STATE && initialCapacity >= SHARED_NULL_STATE_MIN_GROUPS;
+        }
+
+        private boolean sharedNullState()
+        {
+            return sharedNullState;
+        }
+
+        private Streams scannerState()
+        {
+            return scannerState;
+        }
+
+        private void setScannerState(Streams scannerState)
+        {
+            this.scannerState = scannerState;
+        }
 
         private Streams peerState()
         {
@@ -63,6 +90,16 @@ final class FusedMinMaxI64
         private void setPeerState(Streams peerState)
         {
             this.peerState = peerState;
+        }
+
+        private void recordNonNullGroup()
+        {
+            nonNullGroups++;
+        }
+
+        private boolean allGroupsNonNull(int visibleCount)
+        {
+            return nonNullGroups == visibleCount;
         }
     }
 
@@ -146,6 +183,23 @@ final class FusedMinMaxI64
         }
 
         @Override
+        public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
+        {
+            handle.configureSharedNullState(size);
+            Streams state = super.allocate(allocator, allocationContext, size);
+            handle.setScannerState(state);
+            return state;
+        }
+
+        @Override
+        public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
+        {
+            Streams grown = super.grow(allocator, allocationContext, state, size);
+            handle.setScannerState(grown);
+            return grown;
+        }
+
+        @Override
         public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
         {
             Vector inputVector = streams.values(inputColumn);
@@ -160,9 +214,9 @@ final class FusedMinMaxI64
             Streams maxState = kind == Kind.MAX ? state : peer;
 
             I64Vector minValues = (I64Vector) minState.values();
-            BooleanVector minNulls = (BooleanVector) minState.get(Stream.NULLS);
             I64Vector maxValues = (I64Vector) maxState.values();
-            BooleanVector maxNulls = (BooleanVector) maxState.get(Stream.NULLS);
+            boolean[] nulls = ((BooleanVector) (handle.sharedNullState() ? handle.scannerState() : minState).get(Stream.NULLS)).values();
+            boolean[] maxNulls = handle.sharedNullState() ? nulls : ((BooleanVector) maxState.get(Stream.NULLS)).values();
 
             VectorAccess.LongValues inputValues = VectorAccess.longValues(inputVector);
             VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullVector);
@@ -172,11 +226,16 @@ final class FusedMinMaxI64
                     continue;
                 }
                 long value = inputValues.value(position);
-                if (minNulls.values()[group]) {
+                if (nulls[group]) {
                     minValues.values()[group] = value;
-                    minNulls.values()[group] = false;
+                    nulls[group] = false;
+                    if (handle.sharedNullState()) {
+                        handle.recordNonNullGroup();
+                    }
                     maxValues.values()[group] = value;
-                    maxNulls.values()[group] = false;
+                    if (!handle.sharedNullState()) {
+                        maxNulls[group] = false;
+                    }
                 }
                 else {
                     if (value < minValues.values()[group]) {
@@ -205,13 +264,14 @@ final class FusedMinMaxI64
             Streams minState = kind == Kind.MIN ? state : peer;
             Streams maxState = kind == Kind.MAX ? state : peer;
             long[] minValues = ((I64Vector) minState.values()).values();
-            boolean[] minNulls = ((BooleanVector) minState.get(Stream.NULLS)).values();
+            boolean[] minNulls = ((BooleanVector) (handle.sharedNullState() ? handle.scannerState() : minState).get(Stream.NULLS)).values();
             long[] maxValues = ((I64Vector) maxState.values()).values();
-            boolean[] maxNulls = ((BooleanVector) maxState.get(Stream.NULLS)).values();
+            boolean[] maxNulls = handle.sharedNullState() ? minNulls : ((BooleanVector) maxState.get(Stream.NULLS)).values();
 
             long min;
             long max;
-            if (minNulls[group]) {
+            boolean newGroup = minNulls[group];
+            if (newGroup) {
                 min = Long.MAX_VALUE;
                 max = Long.MIN_VALUE;
             }
@@ -266,7 +326,12 @@ final class FusedMinMaxI64
             minValues[group] = min;
             maxValues[group] = max;
             minNulls[group] = false;
-            maxNulls[group] = false;
+            if (handle.sharedNullState() && newGroup) {
+                handle.recordNonNullGroup();
+            }
+            if (!handle.sharedNullState()) {
+                maxNulls[group] = false;
+            }
             return true;
         }
 
@@ -287,9 +352,9 @@ final class FusedMinMaxI64
             }
 
             I64Vector minValues = (I64Vector) minState.values();
-            BooleanVector minNulls = (BooleanVector) minState.get(Stream.NULLS);
             I64Vector maxValues = (I64Vector) maxState.values();
-            BooleanVector maxNulls = (BooleanVector) maxState.get(Stream.NULLS);
+            boolean[] nulls = ((BooleanVector) (handle.sharedNullState() ? handle.scannerState() : minState).get(Stream.NULLS)).values();
+            boolean[] maxNulls = handle.sharedNullState() ? nulls : ((BooleanVector) maxState.get(Stream.NULLS)).values();
             I64Vector groupVector = (I64Vector) groups;
 
             VectorAccess.LongValues inputValues = VectorAccess.longValues(inputVector);
@@ -301,11 +366,16 @@ final class FusedMinMaxI64
                 }
                 int group = toIntExact(groupVector.values()[position]);
                 long value = inputValues.value(position);
-                if (minNulls.values()[group]) {
+                if (nulls[group]) {
                     minValues.values()[group] = value;
-                    minNulls.values()[group] = false;
+                    nulls[group] = false;
+                    if (handle.sharedNullState()) {
+                        handle.recordNonNullGroup();
+                    }
                     maxValues.values()[group] = value;
-                    maxNulls.values()[group] = false;
+                    if (!handle.sharedNullState()) {
+                        maxNulls[group] = false;
+                    }
                 }
                 else {
                     if (value < minValues.values()[group]) {
@@ -324,7 +394,7 @@ final class FusedMinMaxI64
          * exact structural specialization: a group that appears in multiple runs reloads its
          * accumulated state at each run boundary.
          */
-        private static boolean accumulateNullFreeGroupedRuns(
+        private boolean accumulateNullFreeGroupedRuns(
                 Streams minState,
                 Streams maxState,
                 I64Vector groups,
@@ -342,16 +412,17 @@ final class FusedMinMaxI64
             long[] groupIds = groups.values();
             long[] input = inputs.values();
             long[] minValues = ((I64Vector) minState.values()).values();
-            boolean[] minNulls = ((BooleanVector) minState.get(Stream.NULLS)).values();
+            boolean[] minNulls = ((BooleanVector) (handle.sharedNullState() ? handle.scannerState() : minState).get(Stream.NULLS)).values();
             long[] maxValues = ((I64Vector) maxState.values()).values();
-            boolean[] maxNulls = ((BooleanVector) maxState.get(Stream.NULLS)).values();
+            boolean[] maxNulls = handle.sharedNullState() ? minNulls : ((BooleanVector) maxState.get(Stream.NULLS)).values();
 
             int index = 0;
             while (index < count) {
                 int position = index;
                 int group = toIntExact(groupIds[position]);
-                long min = minNulls[group] ? Long.MAX_VALUE : minValues[group];
-                long max = maxNulls[group] ? Long.MIN_VALUE : maxValues[group];
+                boolean newGroup = minNulls[group];
+                long min = newGroup ? Long.MAX_VALUE : minValues[group];
+                long max = newGroup ? Long.MIN_VALUE : maxValues[group];
                 do {
                     long value = input[position];
                     min = Math.min(min, value);
@@ -367,7 +438,12 @@ final class FusedMinMaxI64
                 minValues[group] = min;
                 maxValues[group] = max;
                 minNulls[group] = false;
-                maxNulls[group] = false;
+                if (handle.sharedNullState() && newGroup) {
+                    handle.recordNonNullGroup();
+                }
+                if (!handle.sharedNullState()) {
+                    maxNulls[group] = false;
+                }
             }
             return true;
         }
@@ -399,7 +475,13 @@ final class FusedMinMaxI64
         @Override
         public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
         {
-            Streams state = super.allocate(allocator, allocationContext, size);
+            Streams state;
+            if (handle.sharedNullState()) {
+                state = Streams.ofValues(allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new));
+            }
+            else {
+                state = super.allocate(allocator, allocationContext, size);
+            }
             handle.setPeerState(state);
             return state;
         }
@@ -409,9 +491,49 @@ final class FusedMinMaxI64
         {
             // Reallocating the follower's backing vectors may return a fresh Streams; refresh the
             // handle so the scanner writes into the new target on the next batch.
-            Streams grown = super.grow(allocator, allocationContext, state, size);
+            Streams grown;
+            if (handle.sharedNullState()) {
+                I64Vector values = allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new);
+                grown = Streams.ofValues(values);
+            }
+            else {
+                grown = super.grow(allocator, allocationContext, state, size);
+            }
             handle.setPeerState(grown);
             return grown;
+        }
+
+        @Override
+        public void initialize(Streams state, int offset, int length)
+        {
+            if (!handle.sharedNullState()) {
+                super.initialize(state, offset, length);
+            }
+        }
+
+        @Override
+        public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
+        {
+            if (!handle.sharedNullState()) {
+                return super.result(maxGroup, state, output, allocator, allocationContext);
+            }
+
+            int visibleCount = Math.max(maxGroup + 1, 0);
+            boolean[] scannerNulls = ((BooleanVector) handle.scannerState().get(Stream.NULLS)).values();
+            if (handle.allGroupsNonNull(visibleCount)) {
+                BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+                sentinel.markAllFalse();
+                Vector nulls = allocator.allocateSingleRunRle(allocationContext, visibleCount, sentinel);
+                return Streams.ofValues(state.values()).with(Stream.NULLS, nulls);
+            }
+
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.getOrNull(Stream.NULLS),
+                    visibleCount);
+            System.arraycopy(scannerNulls, 0, nulls.values(), 0, visibleCount);
+            return Streams.reuseValuesAndNulls(output, state.values(), nulls);
         }
 
         @Override

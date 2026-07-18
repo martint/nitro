@@ -159,6 +159,12 @@ public final class CompiledTpcdsQueries
                 .aggregate("avg", "ss_list_price")
                 .aggregate("avg", "ss_coupon_amt")
                 .aggregate("avg", "ss_sales_price")
+                .select(
+                        new Plan.Col(0),
+                        new Plan.Col(1),
+                        roundedPhysicalCentsAverage(new Plan.Col(2)),
+                        roundedPhysicalCentsAverage(new Plan.Col(3)),
+                        roundedPhysicalCentsAverage(new Plan.Col(4)))
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
         return new Ported(query, 0, 2, 1);
     }
@@ -2463,6 +2469,7 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("ws_ship_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_ship_addr_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_web_site_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_warehouse_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_ext_ship_cost", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_net_profit", ColumnEncoding.FLAT, true))
@@ -2484,6 +2491,7 @@ public final class CompiledTpcdsQueries
         qualified.where(
                         new Plan.Predicate(">=", qualified.column("d_date"), new Plan.Lit(start.toEpochDay())),
                         new Plan.Predicate("<=", qualified.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.IsNull(qualified.position("ws_warehouse_sk"), true),
                         new Plan.StringMatch(qualified.position("ca_state"), List.of("IL"), false),
                         new Plan.LikeMatch(qualified.position("web_company_name"), "pri%", false))
                 .groupBy("ws_order_number")
@@ -2536,6 +2544,7 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("ws_ship_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_ship_addr_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_web_site_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("ws_warehouse_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_order_number", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_ext_ship_cost", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("ws_net_profit", ColumnEncoding.FLAT, true))
@@ -2557,6 +2566,7 @@ public final class CompiledTpcdsQueries
         qualified.where(
                         new Plan.Predicate(">=", qualified.column("d_date"), new Plan.Lit(start.toEpochDay())),
                         new Plan.Predicate("<=", qualified.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.IsNull(qualified.position("ws_warehouse_sk"), true),
                         new Plan.StringMatch(qualified.position("ca_state"), List.of("IL"), false),
                         new Plan.LikeMatch(qualified.position("web_company_name"), "pri%", false))
                 .groupBy("ws_order_number")
@@ -2611,6 +2621,7 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("cs_ship_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("cs_ship_addr_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("cs_call_center_sk", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("cs_warehouse_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("cs_order_number", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("cs_ext_ship_cost", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("cs_net_profit", ColumnEncoding.FLAT, true))
@@ -2632,6 +2643,7 @@ public final class CompiledTpcdsQueries
         qualified.where(
                         new Plan.Predicate(">=", qualified.column("d_date"), new Plan.Lit(start.toEpochDay())),
                         new Plan.Predicate("<=", qualified.column("d_date"), new Plan.Lit(start.plusDays(60).toEpochDay())),
+                        new Plan.IsNull(qualified.position("cs_warehouse_sk"), true),
                         new Plan.StringMatch(qualified.position("ca_state"), List.of("GA"), false),
                         new Plan.StringMatch(qualified.position("cc_county"), List.of("Williamson County"), false))
                 .groupBy("cs_order_number")
@@ -2955,7 +2967,7 @@ public final class CompiledTpcdsQueries
     }
 
     /** Q59 weekly per-(week, store) day-of-week sales buckets over a month-sequence window; the grouped pre-aggregate. */
-    private static QueryLowering query59Weekly(int minMonthSeq, int maxMonthSeq)
+    private static QueryLowering query59Weekly()
     {
         QueryLowering weekly = QueryLowering.scan("store_sales",
                         new QueryLowering.Column("ss_sold_date_sk", ColumnEncoding.FLAT, true),
@@ -2964,12 +2976,10 @@ public final class CompiledTpcdsQueries
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
                         new QueryLowering.Column("d_date_sk"),
                         new QueryLowering.Column("d_week_seq", ColumnEncoding.FLAT, false),
-                        new QueryLowering.Column("d_day_name", ColumnEncoding.STRING, false),
-                        new QueryLowering.Column("d_month_seq", ColumnEncoding.FLAT, true));
-        weekly.where(
-                        new Plan.Predicate(">=", weekly.column("d_month_seq"), new Plan.Lit(minMonthSeq)),
-                        new Plan.Predicate("<=", weekly.column("d_month_seq"), new Plan.Lit(maxMonthSeq)))
-                .groupBy("d_week_seq", "ss_store_sk");
+                        new QueryLowering.Column("d_day_name", ColumnEncoding.STRING, false));
+        // Match the operator SQL shape exactly: aggregate complete calendar weeks first. The year/month window is
+        // applied only by the post-aggregate date_dim fanout below; filtering fact rows here truncates boundary weeks.
+        weekly.groupBy("d_week_seq", "ss_store_sk");
         for (String day : List.of("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")) {
             weekly.aggregate("sum", new Plan.Case(
                     List.of(new Plan.Case.Branch(
@@ -3072,22 +3082,22 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("s_store_name", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("s_store_id", ColumnEncoding.STRING, true));
         main.select(main.column("s_store_name"), main.column("s_store_id"), main.column("c_week_seq"),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_sun"), main.column("n_sun"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_mon"), main.column("n_mon"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_tue"), main.column("n_tue"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_wed"), main.column("n_wed"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_thu"), main.column("n_thu"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_fri"), main.column("n_fri"), new Plan.Lit(100L)),
-                        new Plan.Call("divide_scale_round_i64", main.column("c_sat"), main.column("n_sat"), new Plan.Lit(100L)))
+                        new Plan.Call("divide_scale_round_i64", main.column("c_sun"), main.column("n_sun"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_mon"), main.column("n_mon"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_tue"), main.column("n_tue"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_wed"), main.column("n_wed"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_thu"), main.column("n_thu"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_fri"), main.column("n_fri"), new Plan.Lit(1_000_000L)),
+                        new Plan.Call("divide_scale_round_i64", main.column("c_sat"), main.column("n_sat"), new Plan.Lit(1_000_000L)))
                 .orderBy(new Plan.Ordering(List.of(
                         new Plan.SortKey(0, false), new Plan.SortKey(1, false), new Plan.SortKey(2, false)), 100));
 
         return new Composite(
-                List.of(new Stage(query59Weekly(1212, 1223), "q59_current_grouped"),
+                List.of(new Stage(query59Weekly(), "q59_current_grouped"),
                         new Stage(query59DateWeeks(1212, 1223), "q59_current_dates"),
                         new Stage(currentFanout, "q59_current_fanout"),
                         new Stage(current, "q59_current"),
-                        new Stage(query59Weekly(1224, 1235), "q59_next_grouped"),
+                        new Stage(query59Weekly(), "q59_next_grouped"),
                         new Stage(query59DateWeeks(1224, 1235), "q59_next_dates"),
                         new Stage(next, "q59_next")),
                 main,
@@ -3647,15 +3657,18 @@ public final class CompiledTpcdsQueries
     {
         // Q66: per-warehouse monthly shipping revenue and net for the web and catalog channels, on a time-of-day band
         // via carriers DHL/BARIAN in 2001. Each channel rolls sales (price*qty) and net (net_paid*qty) into twelve
-        // per-month buckets grouped by warehouse identity; the two channels are unioned and re-summed, then twelve
-        // sales-per-square-foot ratios are emitted alongside. The constant ship-mode label is a string literal.
+        // per-month buckets grouped by warehouse identity. Each branch computes its twelve rounded
+        // sales-per-square-foot ratios before UNION ALL; the outer grouping then sums sales, ratios, and net values.
+        // Division cannot move after the outer SUM because rounding is not distributive. The constant ship-mode label
+        // is a string literal.
         List<QueryLowering> branches = List.of(
                 query66ChannelRollup("web_sales", "ws_sold_date_sk", "ws_sold_time_sk", "ws_ship_mode_sk", "ws_warehouse_sk",
                         "ws_quantity", "ws_ext_sales_price", "ws_net_paid"),
                 query66ChannelRollup("catalog_sales", "cs_sold_date_sk", "cs_sold_time_sk", "cs_ship_mode_sk", "cs_warehouse_sk",
                         "cs_quantity", "cs_sales_price", "cs_net_paid_inc_tax"));
         // branch result: name(0), sqft(1), city(2), county(3), state(4), country(5), year(6), 12 sales sums(7..18),
-        // 12 net sums(19..30). The five warehouse strings come from the warehouse build (input 1).
+        // 12 rounded ratios(19..30), 12 net sums(31..42). The five warehouse strings come from the warehouse build
+        // (input 1).
         List<DictRef> branchStrings = List.of(
                 new DictRef(0, 1, 1), new DictRef(2, 1, 3), new DictRef(3, 1, 4), new DictRef(4, 1, 5), new DictRef(5, 1, 6));
 
@@ -3671,6 +3684,12 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("s4"), new QueryLowering.Column("s5"), new QueryLowering.Column("s6"),
                         new QueryLowering.Column("s7"), new QueryLowering.Column("s8"), new QueryLowering.Column("s9"),
                         new QueryLowering.Column("s10"), new QueryLowering.Column("s11"), new QueryLowering.Column("s12"),
+                        new QueryLowering.Column("r1", ColumnEncoding.FLAT, true), new QueryLowering.Column("r2", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r3", ColumnEncoding.FLAT, true), new QueryLowering.Column("r4", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r5", ColumnEncoding.FLAT, true), new QueryLowering.Column("r6", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r7", ColumnEncoding.FLAT, true), new QueryLowering.Column("r8", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r9", ColumnEncoding.FLAT, true), new QueryLowering.Column("r10", ColumnEncoding.FLAT, true),
+                        new QueryLowering.Column("r11", ColumnEncoding.FLAT, true), new QueryLowering.Column("r12", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("n1"), new QueryLowering.Column("n2"), new QueryLowering.Column("n3"),
                         new QueryLowering.Column("n4"), new QueryLowering.Column("n5"), new QueryLowering.Column("n6"),
                         new QueryLowering.Column("n7"), new QueryLowering.Column("n8"), new QueryLowering.Column("n9"),
@@ -3679,10 +3698,14 @@ public final class CompiledTpcdsQueries
         for (int s = 1; s <= 12; s++) {
             main.aggregate("sum", "s" + s);
         }
+        for (int r = 1; r <= 12; r++) {
+            main.aggregate("sum", "r" + r);
+        }
         for (int n = 1; n <= 12; n++) {
             main.aggregate("sum", "n" + n);
         }
-        // main result: keys 0..6 (name,sqft,city,county,state,country,year), 12 sales sums 7..18, 12 net sums 19..30.
+        // main result: keys 0..6 (name,sqft,city,county,state,country,year), 12 sales sums 7..18,
+        // 12 ratio sums 19..30, 12 net sums 31..42.
         List<Plan.Expr> outputs = new java.util.ArrayList<>();
         outputs.add(new Plan.Col(0));   // name
         outputs.add(new Plan.Col(1));   // sqft
@@ -3696,10 +3719,10 @@ public final class CompiledTpcdsQueries
             outputs.add(new Plan.Col(7 + m));   // sales sum for month m+1
         }
         for (int m = 0; m < 12; m++) {
-            outputs.add(new Plan.Call("divide_round_i64", new Plan.Col(7 + m), new Plan.Col(1)));   // sales / sqft
+            outputs.add(new Plan.Col(19 + m));  // sum of per-branch rounded sales / sqft
         }
         for (int m = 0; m < 12; m++) {
-            outputs.add(new Plan.Col(19 + m));  // net sum for month m+1
+            outputs.add(new Plan.Col(31 + m));  // net sum for month m+1
         }
         main.select(outputs.toArray(new Plan.Expr[0]))
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false)), 100));
@@ -3757,6 +3780,23 @@ public final class CompiledTpcdsQueries
                             new Plan.Bin("*", channel.column(netPaid), channel.column(quantity)))),
                     new Plan.Lit(0)));
         }
+        List<Plan.Expr> outputs = new ArrayList<>();
+        for (int key = 0; key < 7; key++) {
+            outputs.add(new Plan.Col(key));
+        }
+        for (int month = 0; month < 12; month++) {
+            outputs.add(new Plan.Col(7 + month));
+        }
+        for (int month = 0; month < 12; month++) {
+            outputs.add(new Plan.Call("divide_scale_round_i64",
+                    new Plan.Col(7 + month),
+                    new Plan.Col(1),
+                    new Plan.Lit(10_000L)));
+        }
+        for (int month = 0; month < 12; month++) {
+            outputs.add(new Plan.Col(19 + month));
+        }
+        channel.select(outputs.toArray(new Plan.Expr[0]));
         return channel;
     }
 
@@ -3930,7 +3970,7 @@ public final class CompiledTpcdsQueries
                 .join("q83_web", "sr_item", "wr_item",
                         new QueryLowering.Column("wr_item", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("wr_qty", ColumnEncoding.FLAT, true));
-        channelShareSelect(main);
+        channelShareSelect(main, 1_000_000L);
 
         return new Composite(
                 List.of(new Stage(weeks, "q83_weeks"),
@@ -3965,22 +4005,23 @@ public final class CompiledTpcdsQueries
     /**
      * The shared Q58/Q83 output over a three-channel item join (combined columns: item 0, channel values 1/3/5):
      * each channel's value with its integer-rounded share of the three-channel average, plus that average, top 100
-     * by item then the store value. The harness's arithmetic reads an all-null sum's value slot as zero for both the
-     * total and that channel's share, while retaining NULL in the raw sum output column.
+     * by item then the store value. The operator projection carries each input's null companion through the arithmetic,
+     * so any null channel makes every computed share and the average null while the three raw sum columns retain their
+     * own independent nulls.
      */
-    private static void channelShareSelect(QueryLowering main)
+    private static void channelShareSelect(QueryLowering main, long averageScale)
     {
         Plan.Expr total = new Plan.Bin("+",
                 new Plan.Bin("+",
-                        new Plan.Coalesce(new Plan.Col(1), new Plan.Lit(0)),
-                        new Plan.Coalesce(new Plan.Col(3), new Plan.Lit(0))),
-                new Plan.Coalesce(new Plan.Col(5), new Plan.Lit(0)));
+                        new Plan.Col(1),
+                        new Plan.Col(3)),
+                new Plan.Col(5));
         Plan.Expr denominator = new Plan.Bin("*", total, new Plan.Lit(3));
         main.select(new Plan.Col(0),
                         new Plan.Col(1), channelShare(new Plan.Col(1), denominator),
                         new Plan.Col(3), channelShare(new Plan.Col(3), denominator),
                         new Plan.Col(5), channelShare(new Plan.Col(5), denominator),
-                        new Plan.Call("divide_round_i64", new Plan.Bin("*", total, new Plan.Lit(10_000)), new Plan.Lit(3)))
+                        new Plan.Call("divide_round_i64", new Plan.Bin("*", total, new Plan.Lit(averageScale)), new Plan.Lit(3)))
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
     }
 
@@ -3988,7 +4029,7 @@ public final class CompiledTpcdsQueries
     private static Plan.Expr channelShare(Plan.Expr value, Plan.Expr denominator)
     {
         return new Plan.Call("divide_round_i64",
-                new Plan.Bin("*", new Plan.Coalesce(value, new Plan.Lit(0)), new Plan.Lit(10_000)),
+                new Plan.Bin("*", value, new Plan.Lit(10_000)),
                 denominator);
     }
 
@@ -4033,7 +4074,7 @@ public final class CompiledTpcdsQueries
             similarity.addAll(query58WithinTenPercent(pair[0], pair[1]));
         }
         main.where(similarity.toArray(Plan.Condition[]::new));
-        channelShareSelect(main);
+        channelShareSelect(main, 10_000L);
 
         return new Composite(
                 List.of(new Stage(week, "q58_week"),
@@ -5355,8 +5396,8 @@ public final class CompiledTpcdsQueries
 
     public static LabeledUnion query23()
     {
-        // Q23: February 2000 catalog + web sales restricted to frequently-sold items (sold on more than four
-        // distinct days of 1999-2003) and best customers (store total above half the maximum year-windowed
+        // Q23a: February 2000 catalog + web sales restricted to frequently-sold items (more than four sales
+        // on one date in 2000-2003) and best customers (store total above 95% of the maximum year-windowed
         // customer total), summed across both channels. Each channel assembles its own frequent-item and
         // best-customer subqueries, mirroring the harness; the channels union and the main reduces to one row.
         record Channel(String name, String table, String soldDate, String customer, String item, String quantity, String price) {}
@@ -5463,7 +5504,7 @@ public final class CompiledTpcdsQueries
                 .aggregate("max", "mc_sales");
     }
 
-    /** Q23's best customers: store total above half the broadcast maximum. */
+    /** Q23a's best customers: store total above 95% of the broadcast maximum. */
     private static QueryLowering query23BestCustomers(String customersVirtual, String maxVirtual)
     {
         QueryLowering best = QueryLowering.scan(customersVirtual,
@@ -5474,8 +5515,9 @@ public final class CompiledTpcdsQueries
         best.where(
                         new Plan.IsNull(best.position("bc_sales"), true),
                         new Plan.IsNull(best.position("max_sales"), true),
-                        new Plan.Predicate("<", best.column("max_sales"),
-                                new Plan.Bin("*", best.column("bc_sales"), new Plan.Lit(2))))
+                        new Plan.Predicate("<",
+                                new Plan.Bin("*", best.column("max_sales"), new Plan.Lit(19)),
+                                new Plan.Bin("*", best.column("bc_sales"), new Plan.Lit(20))))
                 .select(new Plan.Col(0));
         return best;
     }
@@ -5512,14 +5554,15 @@ public final class CompiledTpcdsQueries
         // Q24: pale-colored store sales by customer name and store, kept when the customer's per-store-and-item
         // total exceeds twenty times the overall average. The returned-sales base (sales joined to their returns
         // and the customer) assembles twice, mirroring the harness; each side joins the market-8 store and the
-        // address rows on the zip string (zips are zero-padded five-char, so string equality matches
-        // the harness's cast-to-i64 keys) and keeps rows whose birth country equals the uppercased address country.
-        // Combined columns: base(0-5), store(6-10), item(11-16), addresses(17-19). Group keys in the harness's
+        // customer's current address on both address key and store zip, then keeps rows whose birth country differs
+        // from the uppercased address country.
+        // Combined columns: base(0-6), store(7-11), item(12-17), addresses(18-21). Group keys in the harness's
         // output order: (last, first, store_name, ca_state, s_state, color, price, manager, units, size).
         QueryLowering grouped = QueryLowering.scan("q24_base_sales",
                         new QueryLowering.Column("b_last", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("b_first", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("b_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_addr", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_store", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_item", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_paid", ColumnEncoding.FLAT, true))
@@ -5536,7 +5579,8 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("i_color", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("i_units", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("i_manager_id", ColumnEncoding.FLAT, true))
-                .join("q24_addresses_sales", "s_zip", "a_zip",
+                .join("q24_addresses_sales", new String[] {"b_addr", "s_zip"}, new String[] {"a_addr", "a_zip"},
+                        new QueryLowering.Column("a_addr", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("a_zip", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("a_country", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("a_state", ColumnEncoding.STRING, true));
@@ -5544,7 +5588,7 @@ public final class CompiledTpcdsQueries
                         new Plan.Predicate("=", grouped.column("s_market_id"), new Plan.Lit(8)),
                         new Plan.StringMatch(grouped.position("s_zip"), List.of(""), true),
                         new Plan.StringMatch(grouped.position("i_color"), List.of("pale"), false),
-                        new Plan.StringColumnCompare(grouped.position("b_country"), grouped.position("a_country"), false))
+                        new Plan.StringColumnCompare(grouped.position("b_country"), grouped.position("a_country"), true))
                 .groupBy("b_last", "b_first", "s_store_name", "a_state", "s_state", "i_color", "i_current_price", "i_manager_id", "i_units", "i_size")
                 .aggregate("sum", "b_paid");
 
@@ -5564,11 +5608,12 @@ public final class CompiledTpcdsQueries
                 .aggregate("sum", "g_paid");
 
         QueryLowering averageBase = query24ReturnedSales();
-        // Combined columns: base(0-5), store(6-8), addresses(9-11). Group keys in the harness's output order.
+        // Combined columns: base(0-6), store(7-9), addresses(10-13). Group keys in the harness's output order.
         QueryLowering averaged = QueryLowering.scan("q24_base_average",
                         new QueryLowering.Column("b_last", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("b_first", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("b_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("b_addr", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_store", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_item", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("b_paid", ColumnEncoding.FLAT, true))
@@ -5576,14 +5621,15 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("s_store_sk"),
                         new QueryLowering.Column("s_market_id", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("s_zip", ColumnEncoding.STRING, true))
-                .join("q24_addresses_average", "s_zip", "a_zip",
+                .join("q24_addresses_average", new String[] {"b_addr", "s_zip"}, new String[] {"a_addr", "a_zip"},
+                        new QueryLowering.Column("a_addr", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("a_zip", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("a_country", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("a_state", ColumnEncoding.STRING, true));
         averaged.where(
                         new Plan.Predicate("=", averaged.column("s_market_id"), new Plan.Lit(8)),
                         new Plan.StringMatch(averaged.position("s_zip"), List.of(""), true),
-                        new Plan.StringColumnCompare(averaged.position("b_country"), averaged.position("a_country"), false))
+                        new Plan.StringColumnCompare(averaged.position("b_country"), averaged.position("a_country"), true))
                 .groupBy("b_last", "b_first", "a_state", "b_store", "b_item")
                 .aggregate("sum", "b_paid");
 
@@ -5617,14 +5663,14 @@ public final class CompiledTpcdsQueries
 
         return new Composite(
                 List.of(new Stage(query24ReturnedSales(), "q24_base_sales", List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3))),
-                        new Stage(query24Addresses(), "q24_addresses_sales", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 2), new DictRef(2, 0, 1))),
+                        new Stage(query24Addresses(), "q24_addresses_sales", List.of(new DictRef(1, 0, 1), new DictRef(2, 0, 3), new DictRef(3, 0, 2))),
                         new Stage(grouped, "q24_pale_sales", List.of(
-                                new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 1, 2), new DictRef(3, 3, 2),
+                                new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 1, 2), new DictRef(3, 3, 3),
                                 new DictRef(4, 1, 3), new DictRef(5, 2, 3), new DictRef(8, 2, 4), new DictRef(9, 2, 2))),
                         new Stage(regrouped, "q24_grouped", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2))),
                         new Stage(averageBase, "q24_base_average", List.of(new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3))),
-                        new Stage(query24Addresses(), "q24_addresses_average", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 2), new DictRef(2, 0, 1))),
-                        new Stage(averaged, "q24_average_groups", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 2, 2))),
+                        new Stage(query24Addresses(), "q24_addresses_average", List.of(new DictRef(1, 0, 1), new DictRef(2, 0, 3), new DictRef(3, 0, 2))),
+                        new Stage(averaged, "q24_average_groups", List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 2, 3))),
                         new Stage(average, "q24_average")),
                 main,
                 List.of(new DictRef(0, 0, 0), new DictRef(1, 0, 1), new DictRef(2, 0, 2)));
@@ -5632,7 +5678,7 @@ public final class CompiledTpcdsQueries
 
     /**
      * Q24's returned-sales base, assembled once per side like the harness: store sales joined to their returns and
-     * the buying customer, summed per (name, birth country, store, item).
+     * the buying customer, summed per (name, birth country, current address, store, item).
      */
     private static QueryLowering query24ReturnedSales()
     {
@@ -5651,25 +5697,25 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("c_customer_sk"),
                         new QueryLowering.Column("c_last_name", ColumnEncoding.STRING, true),
                         new QueryLowering.Column("c_first_name", ColumnEncoding.STRING, true),
-                        new QueryLowering.Column("c_birth_country", ColumnEncoding.STRING, true));
-        base.groupBy("c_last_name", "c_first_name", "c_birth_country", "ss_store_sk", "ss_item_sk")
+                        new QueryLowering.Column("c_birth_country", ColumnEncoding.STRING, true),
+                        new QueryLowering.Column("c_current_addr_sk", ColumnEncoding.FLAT, true));
+        base.groupBy("c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk", "ss_store_sk", "ss_item_sk")
                 .aggregate("sum", "ss_net_paid");
         return base;
     }
 
     /**
-     * Q24's address rows: (zip, uppercased country, state) over the non-empty-zip addresses. Duplicates are
-     * deliberately retained: the harness joins the raw address lookup, so same-zip rows multiply the downstream
-     * paid sum. The country uppercases at load so the birth-country comparison operates on the derived values.
+     * Q24's address rows: (address key, zip, uppercased country, state) over non-empty-zip addresses.
      */
     private static QueryLowering query24Addresses()
     {
         QueryLowering addresses = QueryLowering.scan("customer_address",
+                new QueryLowering.Column("ca_address_sk", ColumnEncoding.FLAT, true),
                 new QueryLowering.Column("ca_zip", ColumnEncoding.STRING, true),
                 new QueryLowering.Column("ca_state", ColumnEncoding.STRING, true),
                 QueryLowering.Column.upper("ca_country", true));
         addresses.where(new Plan.StringMatch(addresses.position("ca_zip"), List.of(""), true))
-                .select(new Plan.Col(0), new Plan.Col(2), new Plan.Col(1));
+                .select(new Plan.Col(0), new Plan.Col(1), new Plan.Col(3), new Plan.Col(2));
         return addresses;
     }
 
@@ -5965,9 +6011,9 @@ public final class CompiledTpcdsQueries
                             new Plan.Bin("*", new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)), new Plan.Lit(10)),
                             new Plan.Bin("*", new Plan.Call("divide_round_i64", new Plan.Col(3), new Plan.Col(4)), new Plan.Lit(9))))
                     .select(new Plan.Col(0),
-                            // Rank by the exact-average ordering. A 1e9-scaled quotient preserves the rational order
-                            // for this data while keeping the materialized window key in the long-slot domain.
-                            new Plan.Call("divide_scale_round_i64", new Plan.Col(1), new Plan.Col(2), new Plan.Lit(1_000_000_000L)));
+                            // AVG(decimal(7,2)) returns decimal(7,2), so SQL ranks the HALF_UP rounded cents value.
+                            // Preserve those ties instead of imposing an extra exact-rational ordering.
+                            new Plan.Call("divide_round_i64", new Plan.Col(1), new Plan.Col(2)));
             stages.add(new Stage(averages, "q44_averages_" + side));
 
             QueryLowering ranked = QueryLowering.scan("q44_averages_" + side,
@@ -6700,8 +6746,8 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("w_wholesale", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("w_sales", ColumnEncoding.FLAT, true))
                 .leftJoin("q78_catalog",
-                        new String[] {"s_year", "s_customer"},
-                        new String[] {"c_year", "c_customer"},
+                        new String[] {"s_year", "s_item", "s_customer"},
+                        new String[] {"c_year", "c_item", "c_customer"},
                         new QueryLowering.Column("c_year", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("c_item", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("c_customer", ColumnEncoding.FLAT, true),
@@ -6713,9 +6759,9 @@ public final class CompiledTpcdsQueries
         Plan.Expr otherQty = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(9), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(15), new Plan.Lit(0)));
         Plan.Expr otherWholesale = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(10), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(16), new Plan.Lit(0)));
         Plan.Expr otherSales = new Plan.Bin("+", new Plan.Coalesce(new Plan.Col(11), new Plan.Lit(0)), new Plan.Coalesce(new Plan.Col(17), new Plan.Lit(0)));
-        // Preserve the operator harness shape: both web and catalog must independently contribute positive quantity.
-        joined.where(new Plan.Predicate(">", new Plan.Col(9), new Plan.Lit(0)),
-                        new Plan.Predicate(">", new Plan.Col(15), new Plan.Lit(0)))
+        joined.where(new Plan.Or(List.of(
+                        new Plan.Predicate(">", new Plan.Coalesce(new Plan.Col(9), new Plan.Lit(0)), new Plan.Lit(0)),
+                        new Plan.Predicate(">", new Plan.Coalesce(new Plan.Col(15), new Plan.Lit(0)), new Plan.Lit(0)))))
                 .select(new Plan.Col(2), new Plan.Call("divide_scale_round_i64", new Plan.Col(3), otherQty, new Plan.Lit(100)),
                         new Plan.Col(3), new Plan.Col(4), new Plan.Col(5), otherQty, otherWholesale, otherSales,
                         new Plan.Col(0), new Plan.Col(1))
@@ -7382,11 +7428,16 @@ public final class CompiledTpcdsQueries
                         new Plan.Col(1),    // s_state
                         new Plan.Col(6),    // grouping_id = GROUPING(s_state) = g_state
                         new Plan.Col(2),    // avg(ss_quantity)
-                        new Plan.Col(3),    // avg(ss_list_price)
-                        new Plan.Col(4),    // avg(ss_coupon_amt)
-                        new Plan.Col(5))    // avg(ss_sales_price)
+                        roundedPhysicalCentsAverage(new Plan.Col(3)),    // avg(ss_list_price)
+                        roundedPhysicalCentsAverage(new Plan.Col(4)),    // avg(ss_coupon_amt)
+                        roundedPhysicalCentsAverage(new Plan.Col(5)))    // avg(ss_sales_price)
                 .orderBy(new Plan.Ordering(List.of(new Plan.SortKey(0, false), new Plan.SortKey(1, false)), 100));
         return new Ported(query, List.of(new DictRef(0, 2, 1), new DictRef(1, 3, 1)));
+    }
+
+    private static Plan.Expr roundedPhysicalCentsAverage(Plan.Expr average)
+    {
+        return new Plan.Bin("/", new Plan.Call("round_f64", average), new Plan.LitF64(100.0));
     }
 
     public static Composite query22()

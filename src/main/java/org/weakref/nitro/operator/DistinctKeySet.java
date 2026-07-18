@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -29,8 +30,23 @@ import static java.lang.Math.toIntExact;
 
 final class DistinctKeySet
 {
+    private static final boolean DEBUG_DISTINCT_SHAPES = Boolean.getBoolean("nitro.debug.distinctShapes");
+    private static final boolean SHARED_DICTIONARY_POSITION_RESOLVER =
+            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryPositionResolver", "true"));
+    private static final boolean SHARED_DICTIONARY_NULL_RESOLVER =
+            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryNullResolver", "true"));
+    private static final boolean SHARED_DICTIONARY_BASE_POSITION_CACHE =
+            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryBasePositionCache", "true"));
     private static final boolean ADAPTIVE_COMPACT_MULTI_LONG =
             Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveCompactMultiLong", "true"));
+    private static final boolean ADAPTIVE_RETAIN_NULLS_BATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveRetainNullsBatch", "true"));
+    private static final boolean ADAPTIVE_COMPACT_LONG_PAIR =
+            Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveCompactLongPair", "true"));
+    private static final int ADAPTIVE_COMPACT_LONG_PAIR_SAMPLE_SIZE =
+            Integer.getInteger("nitro.distinct.adaptiveCompactLongPairSampleSize", 256);
+    private static final int ADAPTIVE_COMPACT_MULTI_LONG_MIN_ARITY =
+            Integer.getInteger("nitro.distinct.adaptiveCompactMultiLongMinArity", 3);
 
     private final DistinctIndex index;
 
@@ -84,7 +100,15 @@ final class DistinctKeySet
             return new LongDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length == 2 && isIntegerVector(samples[0]) && isIntegerVector(samples[1])) {
-            return new LongPairDistinctIndex(Math.max(16, samples[0].length()));
+            return new LongPairDistinctIndex(
+                    Math.max(16, samples[0].length()),
+                    ADAPTIVE_COMPACT_LONG_PAIR && admitsAdaptiveCompactLongPair(samples));
+        }
+        if (ADAPTIVE_COMPACT_MULTI_LONG &&
+                samples.length >= ADAPTIVE_COMPACT_MULTI_LONG_MIN_ARITY &&
+                samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY &&
+                allIntegerVectors(samples)) {
+            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()));
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
             return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
@@ -93,9 +117,6 @@ final class DistinctKeySet
             return new LongQuadDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
-            if (ADAPTIVE_COMPACT_MULTI_LONG) {
-                return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()));
-            }
             return new MultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()));
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples);
@@ -103,6 +124,37 @@ final class DistinctKeySet
             return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()));
         }
         return new ObjectDistinctIndex(samples.length);
+    }
+
+    /**
+     * The adaptive table earns its compact topology only when the observed physical lanes fit it. A bounded,
+     * evenly spaced first-batch sample avoids admitting a full-width long pair merely because its schema has two
+     * integer columns; any later out-of-domain value still promotes the retained table exactly.
+     */
+    private static boolean admitsAdaptiveCompactLongPair(Vector[] samples)
+    {
+        int length = samples[0].length();
+        int sampleSize = Math.min(length, ADAPTIVE_COMPACT_LONG_PAIR_SAMPLE_SIZE);
+        if (sampleSize == 0) {
+            return false;
+        }
+        VectorAccess.LongValues first = VectorAccess.longValues(samples[0]);
+        VectorAccess.LongValues second = VectorAccess.longValues(samples[1]);
+        for (int sample = 0; sample < sampleSize; sample++) {
+            int position = (int) ((long) sample * length / sampleSize);
+            long firstValue = first.value(position);
+            long secondValue = second.value(position);
+            if (firstValue != (int) firstValue || secondValue != (int) secondValue) {
+                if (DEBUG_DISTINCT_SHAPES) {
+                    System.err.printf("[adaptive-pair-distinct] rows=%d sample=%d compact=false%n", length, sampleSize);
+                }
+                return false;
+            }
+        }
+        if (DEBUG_DISTINCT_SHAPES) {
+            System.err.printf("[adaptive-pair-distinct] rows=%d sample=%d compact=true%n", length, sampleSize);
+        }
+        return true;
     }
 
     public boolean add(Vector[] values, Vector[] nulls, int position)
@@ -179,6 +231,12 @@ final class DistinctKeySet
             return addNonNullBatch(values, nulls, positions, positionCount, distinctPositions);
         }
 
+        /** Returns {@code -1} when this representation cannot retain SQL-null keys without the object fallback. */
+        default int addRetainingNullBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            return -1;
+        }
+
         default void reserveAdditional(int additionalEntries) {}
 
         default void releaseBuffers() {}
@@ -233,6 +291,7 @@ final class DistinctKeySet
                 return addDenseBitmapBatch(keyValues, keyNulls, mask.size(), distinctPositions);
             }
             if (bitmapPages == null && (!ADAPTIVE_PAGED_BITMAP || size >= MIN_BITMAP_KEYS)) {
+                pooledKeys.enableVectorTags();
                 return addFinalHashBatch(keyValues, keyNulls, mask, distinctPositions);
             }
             int count = 0;
@@ -313,13 +372,46 @@ final class DistinctKeySet
                 Mask mask,
                 int[] distinctPositions)
         {
+            if (pooledKeys.vectorTagsEnabled()) {
+                return addFinalTaggedHashBatch(keyValues, keyNulls, mask, distinctPositions);
+            }
+            return addFinalScalarHashBatch(keyValues, keyNulls, mask, distinctPositions);
+        }
+
+        private int addFinalTaggedHashBatch(
+                VectorAccess.LongValues keyValues,
+                VectorAccess.BooleanValues keyNulls,
+                Mask mask,
+                int[] distinctPositions)
+        {
             int count = 0;
             if (mask.all()) {
-                return addFinalDenseHashRange(keyValues, keyNulls, 0, mask.size(), distinctPositions, 0);
+                return addFinalDenseTaggedHashRange(keyValues, keyNulls, 0, mask.size(), distinctPositions, 0);
             }
             int currentSize = size;
             for (int position : mask) {
-                if (!keyNulls.value(position) && addHashKey(keyValues.value(position))) {
+                if (!keyNulls.value(position) && pooledKeys.addTaggedFinal(keyValues.value(position))) {
+                    distinctPositions[count++] = position;
+                    currentSize++;
+                }
+            }
+            size = currentSize;
+            return count;
+        }
+
+        private int addFinalScalarHashBatch(
+                VectorAccess.LongValues keyValues,
+                VectorAccess.BooleanValues keyNulls,
+                Mask mask,
+                int[] distinctPositions)
+        {
+            int count = 0;
+            if (mask.all()) {
+                return addFinalDenseScalarHashRange(keyValues, keyNulls, 0, mask.size(), distinctPositions, 0);
+            }
+            int currentSize = size;
+            for (int position : mask) {
+                if (!keyNulls.value(position) && pooledKeys.addScalarFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -336,9 +428,42 @@ final class DistinctKeySet
                 int[] distinctPositions,
                 int count)
         {
+            if (pooledKeys.vectorTagsEnabled()) {
+                return addFinalDenseTaggedHashRange(keyValues, keyNulls, startPosition, endPosition, distinctPositions, count);
+            }
+            return addFinalDenseScalarHashRange(keyValues, keyNulls, startPosition, endPosition, distinctPositions, count);
+        }
+
+        private int addFinalDenseTaggedHashRange(
+                VectorAccess.LongValues keyValues,
+                VectorAccess.BooleanValues keyNulls,
+                int startPosition,
+                int endPosition,
+                int[] distinctPositions,
+                int count)
+        {
             int currentSize = size;
             for (int position = startPosition; position < endPosition; position++) {
-                if (!keyNulls.value(position) && addHashKey(keyValues.value(position))) {
+                if (!keyNulls.value(position) && pooledKeys.addTaggedFinal(keyValues.value(position))) {
+                    distinctPositions[count++] = position;
+                    currentSize++;
+                }
+            }
+            size = currentSize;
+            return count;
+        }
+
+        private int addFinalDenseScalarHashRange(
+                VectorAccess.LongValues keyValues,
+                VectorAccess.BooleanValues keyNulls,
+                int startPosition,
+                int endPosition,
+                int[] distinctPositions,
+                int count)
+        {
+            int currentSize = size;
+            for (int position = startPosition; position < endPosition; position++) {
+                if (!keyNulls.value(position) && pooledKeys.addScalarFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -433,6 +558,7 @@ final class DistinctKeySet
                 arrayPool.release(page);
             }
             bitmapPages = null;
+            pooledKeys.enableVectorTags();
         }
 
         @Override
@@ -450,7 +576,7 @@ final class DistinctKeySet
 
         private void createHash(int expectedSize)
         {
-            pooledKeys = new PooledLongHashSet(expectedSize);
+            pooledKeys = new PooledLongHashSet(expectedSize, PrimitiveArrayPool.shared(), !ADAPTIVE_PAGED_BITMAP);
         }
 
         private boolean hashPresent()
@@ -750,21 +876,39 @@ final class DistinctKeySet
         private static final VectorAccess.BooleanValues ALWAYS_FALSE = _ -> false;
         private static final int[] EMPTY_POSITIONS = new int[0];
         private static final long[] EMPTY_GROUPS = new long[0];
+        private static final boolean DIRECT_COMPACT_BATCH =
+                Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveDirectBatch", "true"));
 
         private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
         private final LongGroupingTable table;
         private final VectorAccess.LongValues[] keyAccessors;
         private final VectorAccess.BooleanValues[] nullAccessors;
         private final int[] singlePosition = new int[1];
+        private final int[] singleDistinctPosition = new int[1];
         private int[] nonNullPositions = EMPTY_POSITIONS;
         private long[] assignedGroups = EMPTY_GROUPS;
+        private long[] processedBasePositions = EMPTY_GROUPS;
         private long nextGroupId;
+        private SharedDictionaryPositionResolver sharedDictionaryPositionResolver;
+        private Vector[] sharedDictionaryBases;
+        private Vector[] sharedDictionaryNullBases;
+        private Vector[] cachedSharedDictionaryBases;
+        private Vector[] cachedSharedDictionaryNullBases;
+        private long[] cachedSharedDictionaryGenerations;
+        private long[] cachedSharedDictionaryNullGenerations;
+        private final long[] sharedDictionaryGenerationScratch;
+        private final long[] sharedDictionaryNullGenerationScratch;
+        private boolean debugSharedDictionaryResolverPrinted;
+        private boolean debugSharedDictionaryNullResolverPrinted;
+        private boolean debugSharedDictionaryBaseCachePrinted;
 
         private AdaptiveMultiLongDistinctIndex(int arity, int expectedSize)
         {
-            table = AdaptiveLongGroupingTable.create(arity, expectedSize);
+            table = AdaptiveLongGroupingTable.createDistinct(arity, expectedSize);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
+            sharedDictionaryGenerationScratch = new long[arity];
+            sharedDictionaryNullGenerationScratch = new long[arity];
         }
 
         @Override
@@ -780,10 +924,16 @@ final class DistinctKeySet
                 return false;
             }
             prepareAccessors(values);
-            ensureAssignedCapacity(values[0].length());
             singlePosition[0] = position;
             long startGroupId = nextGroupId;
-            nextGroupId = table.assignBatch(keyAccessors, null, singlePosition, 1, assignedGroups, startGroupId);
+            if (DIRECT_COMPACT_BATCH) {
+                nextGroupId = ((AdaptiveLongGroupingTable) table).assignDistinctBatch(
+                        keyAccessors, singlePosition, 1, values[0].length(), singleDistinctPosition, startGroupId);
+            }
+            else {
+                ensureAssignedCapacity(values[0].length());
+                nextGroupId = table.assignBatch(keyAccessors, null, singlePosition, 1, assignedGroups, startGroupId);
+            }
             return nextGroupId != startGroupId;
         }
 
@@ -791,37 +941,101 @@ final class DistinctKeySet
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
             prepareAccessors(values);
-            ensureAssignedCapacity(values[0].length());
             ensurePositionCapacity(mask.selectedCount());
             int positionCount = 0;
-            for (int position : mask) {
-                if (!hasNull(nulls, position)) {
-                    nonNullPositions[positionCount++] = position;
+            if (SHARED_DICTIONARY_NULL_RESOLVER && prepareSharedDictionaryNullAccessors(nulls)) {
+                boolean cacheBasePositions = prepareSharedDictionaryBasePositionCache();
+                for (int position : mask) {
+                    int basePosition = sharedDictionaryPositionResolver.resolve(position);
+                    if (cacheBasePositions && !markBasePositionUnprocessed(basePosition)) {
+                        continue;
+                    }
+                    boolean hasNull = false;
+                    for (VectorAccess.BooleanValues nullAccessor : nullAccessors) {
+                        if (nullAccessor.value(basePosition)) {
+                            hasNull = true;
+                            break;
+                        }
+                    }
+                    if (!hasNull) {
+                        nonNullPositions[positionCount++] = position;
+                    }
+                }
+            }
+            else {
+                for (int position : mask) {
+                    if (!hasNull(nulls, position)) {
+                        nonNullPositions[positionCount++] = position;
+                    }
                 }
             }
             boolean dense = positionCount == mask.size() && mask.all();
-            return assignAndCollect(dense ? null : nonNullPositions, positionCount, distinctPositions);
+            return assignAndCollect(dense ? null : nonNullPositions, positionCount, values[0].length(), distinctPositions);
         }
 
         @Override
         public int addNonNullBatch(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
         {
             prepareAccessors(values);
-            ensureAssignedCapacity(values[0].length());
-            return assignAndCollect(positions, positionCount, distinctPositions);
+            return assignAndCollect(positions, positionCount, values[0].length(), distinctPositions);
         }
 
         @Override
         public int addNonNullDenseBatch(Vector[] values, Vector[] nulls, int positionCount, int[] positions, int[] distinctPositions)
         {
             prepareAccessors(values);
-            ensureAssignedCapacity(values[0].length());
-            return assignAndCollect(null, positionCount, distinctPositions);
+            return assignAndCollect(null, positionCount, values[0].length(), distinctPositions);
         }
 
-        private int assignAndCollect(int[] positions, int positionCount, int[] distinctPositions)
+        @Override
+        public int addRetainingNullBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            prepareNullableAccessors(values, nulls);
+            int positionCount = mask.selectedCount();
+            int[] positions = null;
+            if (!mask.all()) {
+                ensurePositionCapacity(positionCount);
+                int index = 0;
+                for (int position : mask) {
+                    nonNullPositions[index++] = position;
+                }
+                positions = nonNullPositions;
+            }
+
+            ensureAssignedCapacity(values[0].length());
+            long startGroupId = nextGroupId;
+            nextGroupId = table.assignBatch(
+                    keyAccessors,
+                    nullableAccessorsPresent() ? nullAccessors : null,
+                    positions,
+                    positionCount,
+                    assignedGroups,
+                    startGroupId);
+
+            long expectedNewGroup = startGroupId;
+            int distinctCount = 0;
+            for (int row = 0; row < positionCount; row++) {
+                int position = positions == null ? row : positions[row];
+                if (assignedGroups[position] == expectedNewGroup) {
+                    distinctPositions[distinctCount++] = position;
+                    expectedNewGroup++;
+                }
+            }
+            if (expectedNewGroup != nextGroupId) {
+                throw new IllegalStateException("Generated nullable compact distinct table returned non-sequential group ids");
+            }
+            return distinctCount;
+        }
+
+        private int assignAndCollect(int[] positions, int positionCount, int resultLength, int[] distinctPositions)
         {
             long startGroupId = nextGroupId;
+            if (DIRECT_COMPACT_BATCH) {
+                nextGroupId = ((AdaptiveLongGroupingTable) table).assignDistinctBatch(
+                        keyAccessors, positions, positionCount, resultLength, distinctPositions, startGroupId);
+                return toIntExact(nextGroupId - startGroupId);
+            }
+            ensureAssignedCapacity(resultLength);
             nextGroupId = table.assignBatch(keyAccessors, null, positions, positionCount, assignedGroups, startGroupId);
             long expectedNewGroup = startGroupId;
             int distinctCount = 0;
@@ -841,9 +1055,222 @@ final class DistinctKeySet
 
         private void prepareAccessors(Vector[] values)
         {
+            sharedDictionaryPositionResolver = null;
+            sharedDictionaryBases = null;
+            sharedDictionaryNullBases = null;
+            if (SHARED_DICTIONARY_POSITION_RESOLVER && prepareSharedDictionaryAccessors(values)) {
+                Arrays.fill(nullAccessors, ALWAYS_FALSE);
+                return;
+            }
             for (int index = 0; index < keyAccessors.length; index++) {
                 keyAccessors[index] = VectorAccess.longValues(values[index]);
                 nullAccessors[index] = ALWAYS_FALSE;
+            }
+        }
+
+        private void prepareNullableAccessors(Vector[] values, Vector[] nulls)
+        {
+            sharedDictionaryPositionResolver = null;
+            sharedDictionaryBases = null;
+            sharedDictionaryNullBases = null;
+            for (int index = 0; index < keyAccessors.length; index++) {
+                keyAccessors[index] = VectorAccess.longValues(values[index]);
+                nullAccessors[index] = VectorAccess.isAllFalseNulls(nulls[index])
+                        ? ALWAYS_FALSE
+                        : VectorAccess.booleanValues(nulls[index]);
+            }
+        }
+
+        private boolean nullableAccessorsPresent()
+        {
+            for (VectorAccess.BooleanValues nullAccessor : nullAccessors) {
+                if (nullAccessor != ALWAYS_FALSE) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean prepareSharedDictionaryNullAccessors(Vector[] nulls)
+        {
+            if (sharedDictionaryPositionResolver == null || nulls.length != nullAccessors.length) {
+                return false;
+            }
+            int[][] mappings = sharedDictionaryPositionResolver.mappings;
+            Vector[] bases = new Vector[nulls.length];
+            for (int index = 0; index < nulls.length; index++) {
+                Vector current = nulls[index];
+                for (int level = 0; level < mappings.length; level++) {
+                    if (!(current instanceof DictionaryVector dictionary) || dictionary.ids() != mappings[level]) {
+                        return false;
+                    }
+                    current = dictionary.values();
+                }
+                if (current instanceof DictionaryVector) {
+                    return false;
+                }
+                bases[index] = current;
+                nullAccessors[index] = VectorAccess.booleanValues(current);
+            }
+            sharedDictionaryNullBases = bases;
+            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryNullResolverPrinted) {
+                debugSharedDictionaryNullResolverPrinted = true;
+                System.err.printf("[shared-dictionary-distinct-nulls] keys=%d rows=%d depth=%d%n",
+                        nulls.length,
+                        nulls[0].length(),
+                        mappings.length);
+            }
+            return true;
+        }
+
+        private boolean prepareSharedDictionaryAccessors(Vector[] values)
+        {
+            if (values.length < 3 || !(values[0] instanceof DictionaryVector first)) {
+                return false;
+            }
+
+            int depth = first.dictionaryDepth();
+            int[][] mappings = new int[depth][];
+            Vector current = first;
+            for (int level = 0; level < depth; level++) {
+                DictionaryVector dictionary = (DictionaryVector) current;
+                mappings[level] = dictionary.ids();
+                current = dictionary.values();
+            }
+
+            Vector[] bases = new Vector[values.length];
+            bases[0] = current;
+            for (int index = 1; index < values.length; index++) {
+                current = values[index];
+                for (int level = 0; level < depth; level++) {
+                    if (!(current instanceof DictionaryVector dictionary) || dictionary.ids() != mappings[level]) {
+                        return false;
+                    }
+                    current = dictionary.values();
+                }
+                if (current instanceof DictionaryVector) {
+                    return false;
+                }
+                bases[index] = current;
+            }
+
+            SharedDictionaryPositionResolver resolver = new SharedDictionaryPositionResolver(mappings);
+            sharedDictionaryPositionResolver = resolver;
+            sharedDictionaryBases = bases;
+            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryResolverPrinted) {
+                debugSharedDictionaryResolverPrinted = true;
+                System.err.printf("[shared-dictionary-distinct] keys=%d rows=%d depth=%d%n",
+                        values.length,
+                        values[0].length(),
+                        depth);
+            }
+            VectorAccess.LongValues firstBase = VectorAccess.longValues(bases[0]);
+            keyAccessors[0] = position -> firstBase.value(resolver.resolve(position));
+            for (int index = 1; index < keyAccessors.length; index++) {
+                VectorAccess.LongValues base = VectorAccess.longValues(bases[index]);
+                keyAccessors[index] = _ -> base.value(resolver.resolvedPosition());
+            }
+            return true;
+        }
+
+        /**
+         * A shared dictionary position identifies the complete tuple only while every value/null base retains the
+         * same object identity and content generation. Once that is proven, a compact bitmap remembers physical
+         * positions already submitted to the exact table. Later logical aliases can be skipped without changing
+         * first-position output semantics; separate base positions with equal values still meet in the table.
+         */
+        private boolean prepareSharedDictionaryBasePositionCache()
+        {
+            if (!SHARED_DICTIONARY_BASE_POSITION_CACHE || sharedDictionaryBases == null || sharedDictionaryNullBases == null) {
+                return false;
+            }
+            if (!readContentGenerations(sharedDictionaryBases, sharedDictionaryGenerationScratch) ||
+                    !readContentGenerations(sharedDictionaryNullBases, sharedDictionaryNullGenerationScratch)) {
+                return false;
+            }
+
+            int baseLength = sharedDictionaryBases[0].length();
+            int wordCount = (baseLength + Long.SIZE - 1) / Long.SIZE;
+            boolean generationChanged = !sameIdentity(cachedSharedDictionaryBases, sharedDictionaryBases) ||
+                    !sameIdentity(cachedSharedDictionaryNullBases, sharedDictionaryNullBases) ||
+                    !Arrays.equals(cachedSharedDictionaryGenerations, sharedDictionaryGenerationScratch) ||
+                    !Arrays.equals(cachedSharedDictionaryNullGenerations, sharedDictionaryNullGenerationScratch);
+            if (processedBasePositions.length < wordCount) {
+                arrayPool.release(processedBasePositions);
+                processedBasePositions = arrayPool.borrowLongs(wordCount);
+                generationChanged = true;
+            }
+            if (generationChanged) {
+                Arrays.fill(processedBasePositions, 0);
+                cachedSharedDictionaryBases = sharedDictionaryBases.clone();
+                cachedSharedDictionaryNullBases = sharedDictionaryNullBases.clone();
+                cachedSharedDictionaryGenerations = sharedDictionaryGenerationScratch.clone();
+                cachedSharedDictionaryNullGenerations = sharedDictionaryNullGenerationScratch.clone();
+            }
+            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryBaseCachePrinted) {
+                debugSharedDictionaryBaseCachePrinted = true;
+                System.err.printf("[shared-dictionary-distinct-base-cache] keys=%d base=%d words=%d depth=%d%n",
+                        sharedDictionaryBases.length,
+                        baseLength,
+                        wordCount,
+                        sharedDictionaryPositionResolver.mappings.length);
+            }
+            return true;
+        }
+
+        private static boolean readContentGenerations(Vector[] vectors, long[] generations)
+        {
+            for (int index = 0; index < vectors.length; index++) {
+                generations[index] = vectors[index].contentGeneration();
+                if (generations[index] < 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean sameIdentity(Vector[] first, Vector[] second)
+        {
+            if (first == null || first.length != second.length) {
+                return false;
+            }
+            for (int index = 0; index < first.length; index++) {
+                if (first[index] != second[index]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private boolean markBasePositionUnprocessed(int basePosition)
+        {
+            int word = basePosition >>> 6;
+            long bit = 1L << (basePosition & 63);
+            long previous = processedBasePositions[word];
+            processedBasePositions[word] = previous | bit;
+            return (previous & bit) == 0;
+        }
+
+        private void importPairs(LongPairDistinctIndex source)
+        {
+            ensurePositionCapacity(source.size);
+            int positionCount = 0;
+            for (int position = 0; position < source.firstKeys.length; position++) {
+                if (source.isOccupied(position)) {
+                    nonNullPositions[positionCount++] = position;
+                }
+            }
+            keyAccessors[0] = position -> source.firstKeys[position];
+            keyAccessors[1] = position -> source.secondKeys[position];
+            nextGroupId = ((AdaptiveLongGroupingTable) table).assignDistinctBatch(
+                    keyAccessors,
+                    nonNullPositions,
+                    positionCount,
+                    source.firstKeys.length,
+                    nonNullPositions,
+                    0);
+            if (nextGroupId != source.size) {
+                throw new IllegalStateException("Pair distinct migration changed the key count");
             }
         }
 
@@ -871,10 +1298,43 @@ final class DistinctKeySet
             table.releaseBuffers();
             arrayPool.release(nonNullPositions);
             arrayPool.release(assignedGroups);
+            arrayPool.release(processedBasePositions);
             nonNullPositions = EMPTY_POSITIONS;
             assignedGroups = EMPTY_GROUPS;
+            processedBasePositions = EMPTY_GROUPS;
+            sharedDictionaryBases = null;
+            sharedDictionaryNullBases = null;
+            cachedSharedDictionaryBases = null;
+            cachedSharedDictionaryNullBases = null;
+            cachedSharedDictionaryGenerations = null;
+            cachedSharedDictionaryNullGenerations = null;
             Arrays.fill(keyAccessors, null);
             Arrays.fill(nullAccessors, null);
+        }
+    }
+
+    private static final class SharedDictionaryPositionResolver
+    {
+        private final int[][] mappings;
+        private int basePosition;
+
+        private SharedDictionaryPositionResolver(int[][] mappings)
+        {
+            this.mappings = mappings;
+        }
+
+        private int resolve(int position)
+        {
+            for (int[] mapping : mappings) {
+                position = mapping[position];
+            }
+            basePosition = position;
+            return basePosition;
+        }
+
+        private int resolvedPosition()
+        {
+            return basePosition;
         }
     }
 
@@ -886,6 +1346,8 @@ final class DistinctKeySet
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.taggedLongPairHash", "true"));
         private static final boolean NULL_FREE_BATCH =
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.longPairNullFreeBatch", "true"));
+        private static final int ADAPTIVE_COMPACT_START_BATCH =
+                Integer.getInteger("nitro.distinct.adaptiveCompactLongPairStartBatch", 4);
         private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
 
         private long[] firstKeys;
@@ -895,9 +1357,19 @@ final class DistinctKeySet
         private int mask;
         private int maxFill;
         private int size;
+        private final boolean adaptiveCompactCandidate;
+        private int batchCount;
+        private int pendingAdditional;
+        private AdaptiveMultiLongDistinctIndex adaptiveDelegate;
 
         private LongPairDistinctIndex(int expectedSize)
         {
+            this(expectedSize, false);
+        }
+
+        private LongPairDistinctIndex(int expectedSize, boolean adaptiveCompactCandidate)
+        {
+            this.adaptiveCompactCandidate = adaptiveCompactCandidate;
             int capacity = DistinctKeySet.capacity(expectedSize);
             allocate(capacity);
         }
@@ -923,12 +1395,26 @@ final class DistinctKeySet
         @Override
         public void reserveAdditional(int additionalEntries)
         {
+            if (adaptiveDelegate != null) {
+                adaptiveDelegate.reserveAdditional(additionalEntries);
+                return;
+            }
+            pendingAdditional = Math.max(0, additionalEntries);
+            // Once this pair has earned migration, sizing the old table for the next batch would immediately
+            // allocate, rehash, and release a representation that will not process that batch. Scalar adds still
+            // retain their exact grow-on-demand guard in addKey().
+            if (adaptiveCompactCandidate && batchCount + 1 >= ADAPTIVE_COMPACT_START_BATCH) {
+                return;
+            }
             ensureCapacity(size + Math.max(0, additionalEntries));
         }
 
         @Override
         public boolean add(Vector[] values, Vector[] nulls, int position)
         {
+            if (adaptiveDelegate != null) {
+                return adaptiveDelegate.add(values, nulls, position);
+            }
             if (hasNull(nulls, position)) {
                 return false;
             }
@@ -953,6 +1439,9 @@ final class DistinctKeySet
         @Override
         public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
         {
+            if (migrateForNextBatch()) {
+                return adaptiveDelegate.addBatch(values, nulls, mask, distinctPositions);
+            }
             VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
             VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
@@ -999,6 +1488,44 @@ final class DistinctKeySet
                 }
             }
             return count;
+        }
+
+        @Override
+        public int addNonNullBatch(Vector[] values, Vector[] nulls, int[] positions, int positionCount, int[] distinctPositions)
+        {
+            if (migrateForNextBatch()) {
+                return adaptiveDelegate.addNonNullBatch(values, nulls, positions, positionCount, distinctPositions);
+            }
+            return DistinctIndex.super.addNonNullBatch(values, nulls, positions, positionCount, distinctPositions);
+        }
+
+        @Override
+        public int addNonNullDenseBatch(Vector[] values, Vector[] nulls, int positionCount, int[] positions, int[] distinctPositions)
+        {
+            if (migrateForNextBatch()) {
+                return adaptiveDelegate.addNonNullDenseBatch(values, nulls, positionCount, positions, distinctPositions);
+            }
+            return DistinctIndex.super.addNonNullDenseBatch(values, nulls, positionCount, positions, distinctPositions);
+        }
+
+        private boolean migrateForNextBatch()
+        {
+            if (adaptiveDelegate != null) {
+                return true;
+            }
+            batchCount++;
+            if (!adaptiveCompactCandidate || batchCount < ADAPTIVE_COMPACT_START_BATCH) {
+                pendingAdditional = 0;
+                return false;
+            }
+            adaptiveDelegate = new AdaptiveMultiLongDistinctIndex(2, Math.max(16, size + pendingAdditional));
+            adaptiveDelegate.importPairs(this);
+            releaseTableBuffers();
+            pendingAdditional = 0;
+            if (DEBUG_DISTINCT_SHAPES) {
+                System.err.printf("[adaptive-pair-distinct-migrate] batch=%d keys=%d%n", batchCount, size);
+            }
+            return true;
         }
 
         private boolean addKey(long first, long second)
@@ -1095,6 +1622,18 @@ final class DistinctKeySet
         @Override
         public void releaseBuffers()
         {
+            if (DEBUG_DISTINCT_SHAPES) {
+                System.err.printf("[adaptive-pair-distinct-final] batches=%d keys=%d migrated=%s%n", batchCount, size, adaptiveDelegate != null);
+            }
+            if (adaptiveDelegate != null) {
+                adaptiveDelegate.releaseBuffers();
+                adaptiveDelegate = null;
+            }
+            releaseTableBuffers();
+        }
+
+        private void releaseTableBuffers()
+        {
             arrayPool.release(firstKeys);
             arrayPool.release(secondKeys);
             arrayPool.release(occupied);
@@ -1130,14 +1669,23 @@ final class DistinctKeySet
     private static final class GroupedLongDistinctIndex
             implements DistinctIndex
     {
+        private static final boolean INLINE_SMALL_GROUPS =
+                Boolean.parseBoolean(System.getProperty("nitro.distinct.inlineSmallGroupedLong", "true"));
         private static final int MAX_RESERVED_BATCH_GROUPS = 1 << 16;
         private static final float LOAD_FACTOR = 0.75f;
         private static final int INITIAL_TABLE_SIZE = 16;
+        private static final int INLINE_CAPACITY = 4;
+        private static final int INLINE_GROUPS_PER_CHUNK_SHIFT = 15;
+        private static final int INLINE_GROUPS_PER_CHUNK = 1 << INLINE_GROUPS_PER_CHUNK_SHIFT;
+        private static final int INLINE_GROUPS_PER_CHUNK_MASK = INLINE_GROUPS_PER_CHUNK - 1;
+        private static final int INLINE_CHUNK_LONGS = INLINE_GROUPS_PER_CHUNK * INLINE_CAPACITY;
         private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
 
         private long[][] tables = new long[16][];
         private int[] sizes = new int[16];
         private boolean[] containsZero = new boolean[16];
+        private long[][] inlineChunks = new long[16][];
+        private boolean inlineSmallGroups;
 
         @Override
         public boolean add(Vector[] values, Vector[] nulls, int position)
@@ -1176,6 +1724,12 @@ final class DistinctKeySet
         @Override
         public int addGroupedBatch(Vector[] values, Vector[] nulls, Mask mask, int groupCount, int[] distinctPositions)
         {
+            // A dense chunk replaces one small Java array per group. Wait until the observed group domain is
+            // large enough for those object headers and allocation sites to dominate the fixed chunk cost.
+            // Admission is monotonic: representation selection disappears from the steady-state row loop.
+            if (INLINE_SMALL_GROUPS && groupCount > MAX_RESERVED_BATCH_GROUPS) {
+                inlineSmallGroups = true;
+            }
             // With millions of groups, eagerly growing the three group-metadata arrays at every batch boundary
             // loses locality versus the ordinary incremental path. Small/stable group domains amortize the
             // reservation and let the hot row loop omit both conversion and capacity guards.
@@ -1226,6 +1780,9 @@ final class DistinctKeySet
             }
 
             long[] table = tables[group];
+            if (inlineSmallGroups && table == null) {
+                return addInlineKey(group, key);
+            }
             if (table == null) {
                 table = allocateTable(INITIAL_TABLE_SIZE);
                 tables[group] = table;
@@ -1246,6 +1803,69 @@ final class DistinctKeySet
             table[slot] = key;
             sizes[group]++;
             return true;
+        }
+
+        private boolean addInlineKey(int group, long key)
+        {
+            int nonzeroSize = sizes[group] - (containsZero[group] ? 1 : 0);
+            long[] chunk = inlineChunk(group);
+            int offset = (group & INLINE_GROUPS_PER_CHUNK_MASK) * INLINE_CAPACITY;
+            for (int index = 0; index < nonzeroSize; index++) {
+                if (chunk[offset + index] == key) {
+                    return false;
+                }
+            }
+            if (nonzeroSize < INLINE_CAPACITY) {
+                chunk[offset + nonzeroSize] = key;
+                sizes[group]++;
+                return true;
+            }
+
+            long[] table = allocateTable(INITIAL_TABLE_SIZE);
+            tables[group] = table;
+            int mask = table.length - 1;
+            for (int index = 0; index < INLINE_CAPACITY; index++) {
+                long existing = chunk[offset + index];
+                int slot = GroupingState.hashLong(existing) & mask;
+                while (table[slot] != 0) {
+                    slot = (slot + 1) & mask;
+                }
+                table[slot] = existing;
+            }
+            return addTableKey(group, key, table);
+        }
+
+        private boolean addTableKey(int group, long key, long[] table)
+        {
+            if (sizes[group] + 1 >= (int) (table.length * LOAD_FACTOR)) {
+                table = growTable(table);
+                tables[group] = table;
+            }
+            int slot = GroupingState.hashLong(key) & (table.length - 1);
+            while (table[slot] != 0) {
+                if (table[slot] == key) {
+                    return false;
+                }
+                slot = (slot + 1) & (table.length - 1);
+            }
+            table[slot] = key;
+            sizes[group]++;
+            return true;
+        }
+
+        private long[] inlineChunk(int group)
+        {
+            int chunkIndex = group >>> INLINE_GROUPS_PER_CHUNK_SHIFT;
+            if (chunkIndex >= inlineChunks.length) {
+                inlineChunks = Arrays.copyOf(inlineChunks, Integer.highestOneBit(chunkIndex) << 1);
+            }
+            long[] chunk = inlineChunks[chunkIndex];
+            if (chunk == null) {
+                chunk = arrayPool.borrowLongs(INLINE_CHUNK_LONGS);
+                Arrays.fill(chunk, 0);
+                inlineChunks[chunkIndex] = chunk;
+            }
+            return chunk;
         }
 
         private void ensureGroupCapacity(int needed)
@@ -1291,9 +1911,13 @@ final class DistinctKeySet
             for (long[] table : tables) {
                 arrayPool.release(table);
             }
+            for (long[] chunk : inlineChunks) {
+                arrayPool.release(chunk);
+            }
             tables = new long[0][];
             sizes = new int[0];
             containsZero = new boolean[0];
+            inlineChunks = new long[0][];
         }
     }
 
@@ -1691,6 +2315,7 @@ final class DistinctKeySet
         private final VectorAccess.BooleanValues[] nullAccessors;
         private final ObjectOpenHashSet<Object> nullContainingKeys = new ObjectOpenHashSet<>();
         private int[] nonNullDistinctPositions = EMPTY_POSITIONS;
+        private boolean debugAdaptiveRetainNullBatchPrinted;
 
         private RetainNullsDistinctIndex(DistinctIndex delegate, int keyCount)
         {
@@ -1721,6 +2346,17 @@ final class DistinctKeySet
         {
             if (!hasNullStream(nulls)) {
                 return delegate.addBatch(values, nulls, mask, distinctPositions);
+            }
+            if (ADAPTIVE_RETAIN_NULLS_BATCH) {
+                int distinctCount = delegate.addRetainingNullBatch(values, nulls, mask, distinctPositions);
+                if (distinctCount >= 0) {
+                    if (DEBUG_DISTINCT_SHAPES && !debugAdaptiveRetainNullBatchPrinted) {
+                        System.err.printf("[adaptive-retain-null-distinct] keys=%d delegate=%s%n",
+                                keyCount, delegate.getClass().getSimpleName());
+                        debugAdaptiveRetainNullBatchPrinted = true;
+                    }
+                    return distinctCount;
+                }
             }
             prepareNullAccessors(nulls);
             int selectedCount = mask.selectedCount();

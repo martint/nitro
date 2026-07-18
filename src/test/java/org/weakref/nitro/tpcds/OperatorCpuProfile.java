@@ -187,13 +187,15 @@ public final class OperatorCpuProfile
                     metric.batchCount,
                     metric.rowsProduced));
             builder.append(format(
-                    "  next=%7.3f  borrow=%7.3f  take=%7.3f  constrain=%7.3f  close=%7.3f" +
-                            "  alloc[next=%8.3f borrow=%8.3f take=%8.3f constrain=%8.3f close=%8.3f] MB%n",
+                    "  hasNext=%7.3f next=%7.3f  borrow=%7.3f  take=%7.3f  constrain=%7.3f  close=%7.3f" +
+                            "  alloc[hasNext=%8.3f next=%8.3f borrow=%8.3f take=%8.3f constrain=%8.3f close=%8.3f] MB%n",
+                    metric.hasNextNanos[0] / 1_000_000.0,
                     metric.nextNanos[0] / 1_000_000.0,
                     metric.outputBorrowNanos[0] / 1_000_000.0,
                     metric.outputTakeNanos[0] / 1_000_000.0,
                     metric.constrainNanos[0] / 1_000_000.0,
                     (metric.batchCloseNanos[0] + metric.closeNanos[0]) / 1_000_000.0,
+                    metric.hasNextAllocatedBytes[0] / (1024.0 * 1024.0),
                     metric.nextAllocatedBytes[0] / (1024.0 * 1024.0),
                     metric.outputBorrowAllocatedBytes[0] / (1024.0 * 1024.0),
                     metric.outputTakeAllocatedBytes[0] / (1024.0 * 1024.0),

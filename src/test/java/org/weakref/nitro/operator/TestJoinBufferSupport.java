@@ -19,7 +19,10 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 
@@ -29,6 +32,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestJoinBufferSupport
 {
+    @Test
+    void testPrimitivePositionCopiesHonorInputAndOutputOffsets()
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
+        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+
+        int[] positions = {19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+        double[] doubles = new double[20];
+        long[] longs = new long[20];
+        for (int index = 0; index < doubles.length; index++) {
+            doubles[index] = index + 0.25;
+            longs[index] = 1_000 + index;
+        }
+
+        Streams copiedDoubles = buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(new F64Vector(doubles)),
+                positions,
+                2,
+                13,
+                3,
+                20);
+        assertThat(((F64Vector) copiedDoubles.values()).values())
+                .containsExactly(0, 0, 0, 17.25, 16.25, 15.25, 14.25, 13.25, 12.25, 11.25, 10.25, 9.25, 8.25, 7.25, 6.25, 5.25, 0, 0, 0, 0);
+
+        Streams copiedLongs = buffers.copyPositions(
+                null,
+                Streams.ofValues(new I64Vector(longs)),
+                SelectedPositions.positions(positions, 2, 13),
+                3,
+                20);
+        assertThat(((I64Vector) copiedLongs.values()).values())
+                .containsExactly(0, 0, 0, 1_017, 1_016, 1_015, 1_014, 1_013, 1_012, 1_011, 1_010, 1_009, 1_008, 1_007, 1_006, 1_005, 0, 0, 0, 0);
+
+        allocator.release(context);
+    }
+
     @Test
     void testAllFalseCopyStaysCompactUntilTrueValueArrives()
     {

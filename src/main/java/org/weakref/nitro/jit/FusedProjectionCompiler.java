@@ -51,6 +51,10 @@ public final class FusedProjectionCompiler
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
     private static final boolean COMPILE_UTF8_IN =
             Boolean.parseBoolean(System.getProperty("nitro.project.compileUtf8In", "true"));
+    private static final boolean POOLED_DICTIONARY_SCRATCH =
+            Boolean.parseBoolean(System.getProperty("nitro.project.pooledDictionaryScratch", "true"));
+    private static final boolean MAPPED_DICTIONARY_DOUBLE_INPUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.project.mappedDictionaryDoubleInputs", "true"));
     private static final AtomicInteger COUNTER = new AtomicInteger();
     // Kernels are stateless, so identical projection shapes share one compiled class (amortizing javac cost across
     // operators / benchmark iterations). Keyed by the fully-rendered source with a stable placeholder class name.
@@ -434,6 +438,25 @@ public final class FusedProjectionCompiler
         out.append("  @Override public Streams[] apply(java.util.List<Streams> inputs, org.weakref.nitro.data.Mask mask, "
                 + "java.util.Set<Stream> requestedStreams, PrimitiveExecutionContext context) {\n");
 
+        if (POOLED_DICTIONARY_SCRATCH) {
+            out.append("    var scratchContext = context.allocationContext(\"FusedProjectionScratch\");\n");
+            for (int slot = 0; slot < slice.columns().size(); slot++) {
+                if (slice.columnTypes().get(slot) == ValueType.DOUBLE) {
+                    if (MAPPED_DICTIONARY_DOUBLE_INPUTS) {
+                        out.append("    I32Vector scratchIds").append(slot).append(" = null;\n");
+                    }
+                    else {
+                        out.append("    F64Vector scratchValues").append(slot).append(" = null;\n");
+                    }
+                }
+                else if (slice.columnTypes().get(slot) != ValueType.UTF8) {
+                    out.append("    I64Vector scratchValues").append(slot).append(" = null;\n");
+                }
+                out.append("    BooleanVector scratchNulls").append(slot).append(" = null;\n");
+            }
+            out.append("    try {\n");
+        }
+
         // Hoist each source column to a monomorphic long[]/double[] view once plus a nulls[]. If any input is an
         // unsupported flat layout, bail to null so the caller runs the interpreter for this batch.
         for (int slot = 0; slot < slice.columns().size(); slot++) {
@@ -458,10 +481,16 @@ public final class FusedProjectionCompiler
             out.append("    else if (nv").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector ndv").append(slot)
                     .append(" && ndv").append(slot).append(".values() instanceof BooleanVector nbase").append(slot)
                     .append(") { int[] nids = ndv").append(slot).append(".ids(); int nlen = ndv").append(slot).append(".length(); boolean[] nb = nbase").append(slot).append(".values();")
-                    .append(" nul").append(slot).append(" = new boolean[nlen]; for (int j = 0; j < nlen; j++) { nul").append(slot)
+                    .append(POOLED_DICTIONARY_SCRATCH
+                            ? " scratchNulls" + slot + " = context.allocator().allocatePooled(scratchContext, BooleanVector.class, nlen, false, BooleanVector.class, org.weakref.nitro.data.Allocator.growthCapacity(nlen), BooleanVector::new); nul" + slot + " = scratchNulls" + slot + ".values();"
+                            : " nul" + slot + " = new boolean[nlen];")
+                    .append(" for (int j = 0; j < nlen; j++) { nul").append(slot)
                     .append("[j] = nb[nids[j]]; } }\n");
             out.append("    else { int nlen = nv").append(slot).append(".length(); nul").append(slot)
-                    .append(" = new boolean[nlen]; var na = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nv")
+                    .append(POOLED_DICTIONARY_SCRATCH
+                            ? " = (scratchNulls" + slot + " = context.allocator().allocatePooled(scratchContext, BooleanVector.class, nlen, false, BooleanVector.class, org.weakref.nitro.data.Allocator.growthCapacity(nlen), BooleanVector::new)).values();"
+                            : " = new boolean[nlen];")
+                    .append(" var na = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nv")
                     .append(slot).append("); for (int j = 0; j < nlen; j++) { nul").append(slot)
                     .append("[j] = na.value(j); } }\n");
         }
@@ -507,6 +536,21 @@ public final class FusedProjectionCompiler
             out.append("      result[").append(output).append("] = b.build(); }\n");
         }
         out.append("    return result;\n");
+        if (POOLED_DICTIONARY_SCRATCH) {
+            out.append("    } finally {\n");
+            for (int slot = 0; slot < slice.columns().size(); slot++) {
+                if (slice.columnTypes().get(slot) != ValueType.UTF8) {
+                    if (slice.columnTypes().get(slot) == ValueType.DOUBLE && MAPPED_DICTIONARY_DOUBLE_INPUTS) {
+                        out.append("      if (scratchIds").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchIds").append(slot).append("); }\n");
+                    }
+                    else {
+                        out.append("      if (scratchValues").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchValues").append(slot).append("); }\n");
+                    }
+                }
+                out.append("      if (scratchNulls").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchNulls").append(slot).append("); }\n");
+            }
+            out.append("    }\n");
+        }
         out.append("  }\n");
         out.append("}\n");
         return out.toString();
@@ -520,12 +564,19 @@ public final class FusedProjectionCompiler
                 .append(") { col").append(slot).append(" = iv").append(slot).append(".values(); }\n");
         out.append("    else if (vals").append(slot).append(" instanceof I32Vector wv").append(slot)
                 .append(") { int[] s = wv").append(slot).append(".values(); col").append(slot)
-                .append(" = new long[s.length]; for (int j = 0; j < s.length; j++) { col").append(slot)
+                .append(POOLED_DICTIONARY_SCRATCH
+                        ? " = (scratchValues" + slot + " = context.allocator().allocatePooled(scratchContext, I64Vector.class, s.length, false, I64Vector.class, org.weakref.nitro.data.Allocator.growthCapacity(s.length), I64Vector::new)).values();"
+                        : " = new long[s.length];")
+                .append(" for (int j = 0; j < s.length; j++) { col").append(slot)
                 .append("[j] = s[j]; } }\n");
         // Join outputs arrive dictionary-wrapped; gather the base values through the ids into a flat long[] once so the
         // per-row loop stays monomorphic (and auto-vectorizable) instead of the interpreter's per-position peel.
         out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector) { int len = vals")
-                .append(slot).append(".length(); col").append(slot).append(" = new long[len]; var a = ")
+                .append(slot).append(".length(); col").append(slot)
+                .append(POOLED_DICTIONARY_SCRATCH
+                        ? " = (scratchValues" + slot + " = context.allocator().allocatePooled(scratchContext, I64Vector.class, len, false, I64Vector.class, org.weakref.nitro.data.Allocator.growthCapacity(len), I64Vector::new)).values();"
+                        : " = new long[len];")
+                .append(" var a = ")
                 .append("org.weakref.nitro.function.scalar.builtin.VectorAccess.longValues(vals").append(slot)
                 .append("); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = a.value(j); } }\n");
         out.append("    else { return null; }\n");
@@ -535,12 +586,33 @@ public final class FusedProjectionCompiler
     {
         out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
         out.append("    double[] col").append(slot).append(";\n");
+        if (MAPPED_DICTIONARY_DOUBLE_INPUTS) {
+            out.append("    int[] map").append(slot).append(";\n");
+            out.append("    if (vals").append(slot).append(" instanceof F64Vector fv").append(slot)
+                    .append(") { col").append(slot).append(" = fv").append(slot).append(".values(); map").append(slot).append(" = null; }\n");
+            out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
+                    .append(") { Vector base = dv").append(slot).append(".values(); if (base instanceof F64Vector bf) { col")
+                    .append(slot).append(" = bf.values(); map").append(slot).append(" = dv").append(slot).append(".ids();")
+                    .append(" }")
+                    .append(" else { int len = dv").append(slot).append(".length(); map").append(slot)
+                    .append(POOLED_DICTIONARY_SCRATCH
+                            ? " = (scratchIds" + slot + " = context.allocator().allocatePooled(scratchContext, I32Vector.class, len, false, I32Vector.class, org.weakref.nitro.data.Allocator.growthCapacity(len), I32Vector::new)).values();"
+                            : " = new int[len];")
+                    .append(" base = dv").append(slot).append(".composeBasePositions(map").append(slot).append(");")
+                    .append(" if (base instanceof F64Vector bf) { col").append(slot).append(" = bf.values();")
+                    .append(" } else { return null; } } }\n");
+            out.append("    else { return null; }\n");
+            return;
+        }
         out.append("    if (vals").append(slot).append(" instanceof F64Vector fv").append(slot)
                 .append(") { col").append(slot).append(" = fv").append(slot).append(".values(); }\n");
         out.append("    else if (vals").append(slot).append(" instanceof org.weakref.nitro.data.DictionaryVector dv").append(slot)
                 .append(") { int[] ids = dv").append(slot).append(".ids(); Vector base = dv").append(slot).append(".values();")
                 .append(" if (base instanceof F64Vector bf) { double[] bv = bf.values(); col").append(slot)
-                .append(" = new double[dv").append(slot).append(".length()]; for (int j = 0; j < col").append(slot).append(".length; j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
+                .append(POOLED_DICTIONARY_SCRATCH
+                        ? " = (scratchValues" + slot + " = context.allocator().allocatePooled(scratchContext, F64Vector.class, dv" + slot + ".length(), false, F64Vector.class, org.weakref.nitro.data.Allocator.growthCapacity(dv" + slot + ".length()), F64Vector::new)).values();"
+                        : " = new double[dv" + slot + ".length()];")
+                .append(" for (int j = 0; j < dv").append(slot).append(".length(); j++) { col").append(slot).append("[j] = bv[ids[j]]; } }")
                 .append(" else { return null; } }\n");
         out.append("    else { return null; }\n");
     }
@@ -646,7 +718,9 @@ public final class FusedProjectionCompiler
     private static String value(Operand operand)
     {
         return switch (operand) {
-            case ColumnOperand column -> "col" + column.slot() + "[i]";
+            case ColumnOperand column -> MAPPED_DICTIONARY_DOUBLE_INPUTS && column.type() == ValueType.DOUBLE
+                    ? "col" + column.slot() + "[map" + column.slot() + " == null ? i : map" + column.slot() + "[i]]"
+                    : "col" + column.slot() + "[i]";
             case StepOperand step -> "sv" + step.stepId();
             case LongConstant constant -> constant.value() + "L";
             case DoubleConstant constant -> Double.toString(constant.value()) + "d";

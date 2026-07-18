@@ -1,0 +1,37 @@
+query81: 5 iters, 210.5 ms/iter, rows-sink=22100
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q81.topn                           TopNOperator               1042.371   11.03%      802.360     164323.373          0.000        5          500
+  next=1034.932  borrow=  2.135  take=  0.000  constrain=  0.000  close=  5.270  alloc[next= 795.509 borrow=   5.894 take=   0.000 constrain=   0.000 close=   0.958] MB
+q81.project.output                 ProjectOperator            1020.487   10.80%      791.130       5786.554       4886.332      140        16845
+  next=991.601  borrow=  3.600  take=  0.000  constrain=  0.000  close=  4.843  alloc[next= 790.236 borrow=   0.373 take=   0.000 constrain=   0.000 close=   0.267] MB
+q81.filter.threshold               FilterOperator             1010.312   10.69%      790.082       5778.889       4879.624      140        16845
+  next=990.842  borrow=  2.512  take=  0.000  constrain=  0.000  close=  4.657  alloc[next= 789.374 borrow=   0.354 take=   0.000 constrain=   0.000 close=   0.228] MB
+q81.join.address                   HashJoinOperator            994.581   10.52%      787.079       5756.920       4858.864      140        65385
+  next=977.931  borrow=  7.572  take=  0.000  constrain=  0.140  close=  4.533  alloc[next= 785.645 borrow=   1.233 take=   0.000 constrain=   0.000 close=   0.201] MB
+q81.join.customer                  HashJoinOperator            907.454    9.60%      623.594       4561.144       3844.490      140      1335505
+  next=897.106  borrow=  6.402  take=  0.000  constrain=  0.000  close=  3.895  alloc[next= 622.411 borrow=   0.987 take=   0.000 constrain=   0.000 close=   0.196] MB
+q81.join.state_average             HashJoinOperator            755.123    7.99%      332.353       2430.924       2036.294      140      1335760
+  next=735.278  borrow= 16.683  take=  0.000  constrain=  0.000  close=  3.107  alloc[next= 304.841 borrow=  27.301 take=   0.000 constrain=   0.000 close=   0.210] MB
+q81.customer_totals.group          GroupedAggregationOperator    643.286    6.81%      266.434      27282.832      27244.141       10      2755200
+  next=580.665  borrow= 59.692  take=  0.000  constrain=  0.035  close=  2.884  alloc[next= 185.553 borrow=  80.791 take=   0.000 constrain=   0.003 close=   0.087] MB
+q81.state_averages                                             401.521    4.25%      195.135      39963.722          0.000        5          260
+  next=399.505  borrow=  0.559  take=  0.000  constrain=  0.058  close=  1.376  alloc[next= 195.042 borrow=   0.034 take=   0.000 constrain=   0.005 close=   0.053] MB
+q81.state_averages.project         ProjectOperator             401.488    4.25%      195.133      39963.152          0.000        5          260
+  next=399.497  borrow=  0.550  take=  0.000  constrain=  0.051  close=  1.374  alloc[next= 195.040 borrow=   0.034 take=   0.000 constrain=   0.005 close=   0.053] MB
+q81.state_averages.group           GroupedAggregationOperator    400.974    4.24%      195.087      39953.858          0.000        5          260
+  next=399.449  borrow=  0.148  take=  0.000  constrain=  0.014  close=  1.358  alloc[next= 195.030 borrow=   0.006 take=   0.000 constrain=   0.005 close=   0.047] MB
+q81.customer_totals.project        ProjectOperator             348.959    3.69%      122.027        403.082        373.364      310      2817820
+  next=343.284  borrow=  2.021  take=  0.000  constrain=  0.000  close=  3.390  alloc[next= 121.628 borrow=   0.211 take=   0.000 constrain=   0.000 close=   0.183] MB
+q81.customer_totals.join.address   HashJoinOperator            346.955    3.67%      121.320        400.747        371.034      310      2817820
+  next=342.409  borrow=  1.421  take=  0.000  constrain=  0.000  close=  3.005  alloc[next= 121.024 borrow=   0.199 take=   0.000 constrain=   0.000 close=   0.097] MB
+q81.state_averages.filter          FilterOperator              342.896    3.63%      138.461      28356.744          0.000        5      1370320
+  next=312.138  borrow= 29.403  take=  0.000  constrain=  0.000  close=  1.342  alloc[next= 110.522 borrow=  27.899 take=   0.000 constrain=   0.000 close=   0.040] MB
+q81.customer_totals.primary                                    301.972    3.19%      133.307      27301.370          0.000        5      1377600
+  next=272.003  borrow= 28.393  take=  0.000  constrain=  0.005  close=  1.560  alloc[next=  92.191 borrow=  41.067 take=   0.000 constrain=   0.000 close=   0.049] MB
+q81.customer_totals.join.date      HashJoinOperator            273.785    2.90%       17.589         58.099         54.250      310      2875150
+  next=269.966  borrow=  1.135  take=  0.000  constrain=  0.000  close=  2.569  alloc[next=  17.382 borrow=   0.130 take=   0.000 constrain=   0.000 close=   0.077] MB
+q81.customer_totals.scan           NitroParquetScanOperator    260.291    2.75%       10.415         35.549         34.371      300      2875150
+  next=  2.546  borrow=  0.481  take=  0.000  constrain=  0.000  close=  2.492  alloc[next=   0.936 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.200] MB
+Total attributed cpu_ms: 9452.456
+

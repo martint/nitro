@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
 
+import static java.lang.Math.toIntExact;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -34,7 +35,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 /**
  * The Nitro TPC-H harness against the checked-in reference results (independent engine over the same sf10
  * parquet; see TpchQueryCatalog). Longs and strings compare exactly; doubles within relative tolerance --
- * cross-engine floating-point sums are accumulation-order dependent. DATE columns surface as epoch-day longs
+ * cross-engine floating-point sums are accumulation-order dependent. DATE columns surface as epoch-day integers
  * and compare against the reference's ISO dates.
  */
 public class TestTpchQueries
@@ -266,6 +267,17 @@ public class TestTpchQueries
                 }
                 else {
                     assertThat(actualLong).as(context).isEqualTo(Long.parseLong(expected));
+                }
+            }
+            case Integer actualInteger -> {
+                // Generic operators preserve the Parquet physical width. DATE can therefore remain
+                // an I32 epoch day when it is carried through joins/TopN rather than becoming an I64
+                // grouping key.
+                if (expected.length() == 10 && expected.charAt(4) == '-' && expected.charAt(7) == '-') {
+                    assertThat(actualInteger).as(context).isEqualTo(toIntExact(LocalDate.parse(expected).toEpochDay()));
+                }
+                else {
+                    assertThat(actualInteger).as(context).isEqualTo(Integer.parseInt(expected));
                 }
             }
             case String actualString -> assertThat(actualString).as(context).isEqualTo(expected);

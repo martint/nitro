@@ -234,6 +234,21 @@ public final class ConcatenatedBooleanVector
     }
 
     @Override
+    public int childVectorCount()
+    {
+        return segments.length;
+    }
+
+    @Override
+    public Vector childVector(int index)
+    {
+        if (index < 0 || index >= segments.length) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        return segments[index];
+    }
+
+    @Override
     public void forEachChildVector(Consumer<Vector> consumer)
     {
         for (Vector segment : segments) {

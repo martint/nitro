@@ -55,6 +55,8 @@ final class JoinBufferSupport
             Boolean.parseBoolean(System.getProperty("nitro.join.preserveDictionaryBinaryPositionCopies", "true"));
     private static final boolean COMPACT_ALL_FALSE_POSITION_COPIES =
             Boolean.parseBoolean(System.getProperty("nitro.join.compactAllFalsePositionCopies", "true"));
+    private static final boolean INDEXED_VECTOR_TREE_TRAVERSAL =
+            Boolean.parseBoolean(System.getProperty("nitro.allocator.indexedVectorTreeTraversal", "true"));
 
     JoinBufferSupport(Allocator allocator, Allocator.Context allocationContext)
     {
@@ -117,7 +119,14 @@ final class JoinBufferSupport
         if (!identities.add(vector)) {
             return;
         }
-        vector.forEachChildVector(child -> collectIdentities(child, identities));
+        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                collectIdentities(vector.childVector(index), identities);
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> collectIdentities(child, identities));
+        }
     }
 
     public Streams replicate(Streams existing, Streams input, int size, int start, int length, int position)
