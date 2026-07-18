@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
@@ -28,7 +29,10 @@ public class Mask
         implements Iterable<Integer>
 {
     private static final int[] EMPTY_POSITIONS = new int[0];
+    private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Long> LONG_SPECIES = LongVector.SPECIES_PREFERRED;
+    private static final boolean VECTORIZED_DENSE_INT_CONSTANT_RANGE =
+            Boolean.parseBoolean(System.getProperty("nitro.mask.vectorizedDenseIntConstantRange", "true"));
 
     private Mask trackedPrevious;
     private Mask trackedNext;
@@ -594,11 +598,74 @@ public class Mask
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
         int count = 0;
-        for (int index = 0; index < iterations; index++) {
-            int position = dense ? index : buffer[index];
-            int value = values[position];
-            if ((nulls == null || !nulls[position]) && value > lowerExclusive && value < upperExclusive) {
-                buffer[count++] = position;
+        boolean vectorized = VECTORIZED_DENSE_INT_CONSTANT_RANGE && dense && nulls == null &&
+                lowerExclusive >= Integer.MIN_VALUE && lowerExclusive <= Integer.MAX_VALUE &&
+                upperExclusive >= Integer.MIN_VALUE && upperExclusive <= Integer.MAX_VALUE;
+        if (vectorized) {
+            int position = 0;
+            int vectorLimit = INT_SPECIES.loopBound(size);
+            int lower = (int) lowerExclusive;
+            int upper = (int) upperExclusive;
+            long allLanes = -1L >>> (Long.SIZE - INT_SPECIES.length());
+            boolean materialized = false;
+            for (; position < vectorLimit; position += INT_SPECIES.length()) {
+                IntVector vector = IntVector.fromArray(INT_SPECIES, values, position);
+                long matches = vector.compare(VectorOperators.GT, lower)
+                        .and(vector.compare(VectorOperators.LT, upper))
+                        .toLong();
+                if (!materialized && matches == allLanes) {
+                    continue;
+                }
+                if (!materialized) {
+                    for (int prior = 0; prior < position; prior++) {
+                        buffer[prior] = prior;
+                    }
+                    count = position;
+                    materialized = true;
+                }
+                while (matches != 0) {
+                    int lane = Long.numberOfTrailingZeros(matches);
+                    buffer[count++] = position + lane;
+                    matches &= matches - 1;
+                }
+            }
+            if (!materialized) {
+                int firstFailure = position;
+                while (firstFailure < size && values[firstFailure] > lower && values[firstFailure] < upper) {
+                    firstFailure++;
+                }
+                if (firstFailure == size) {
+                    count = size;
+                }
+                else {
+                    for (int prior = 0; prior < position; prior++) {
+                        buffer[prior] = prior;
+                    }
+                    count = position;
+                    for (; position < size; position++) {
+                        int value = values[position];
+                        if (value > lower && value < upper) {
+                            buffer[count++] = position;
+                        }
+                    }
+                }
+            }
+            else {
+                for (; position < size; position++) {
+                    int value = values[position];
+                    if (value > lower && value < upper) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+        }
+        else {
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                int value = values[position];
+                if ((nulls == null || !nulls[position]) && value > lowerExclusive && value < upperExclusive) {
+                    buffer[count++] = position;
+                }
             }
         }
         setSelection(size, count, count == size);

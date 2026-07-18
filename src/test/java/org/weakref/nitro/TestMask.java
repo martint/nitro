@@ -21,6 +21,49 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestMask
 {
     @Test
+    void denseIntegerConstantRangePreservesStrictBounds()
+    {
+        int[] values = new int[257];
+        for (int position = 0; position < values.length; position++) {
+            values[position] = position - 128;
+        }
+
+        Mask mask = Mask.all(values.length);
+        mask.retainConstantRange(values, -17, 43, null);
+
+        assertThat(mask).containsExactly(java.util.stream.IntStream.rangeClosed(112, 170).boxed().toArray(Integer[]::new));
+    }
+
+    @Test
+    void integerConstantRangePreservesSparseNullAndWideBoundSemantics()
+    {
+        int[] values = {Integer.MIN_VALUE, -10, 0, 10, Integer.MAX_VALUE};
+        boolean[] nulls = {false, false, true, false, false};
+
+        Mask sparse = Mask.sparse(new int[] {0, 1, 2, 4}, values.length);
+        sparse.retainConstantRange(values, (long) Integer.MIN_VALUE - 1, (long) Integer.MAX_VALUE + 1, nulls);
+
+        assertThat(sparse).containsExactly(0, 1, 4);
+    }
+
+    @Test
+    void denseIntegerConstantRangeKeepsAllSelectedAndHandlesLateFailure()
+    {
+        int[] values = new int[257];
+        java.util.Arrays.fill(values, 7);
+
+        Mask all = Mask.all(values.length);
+        all.retainConstantRange(values, 0, 10, null);
+        assertThat(all.all()).isTrue();
+        assertThat(all).hasSize(values.length);
+
+        values[250] = 10;
+        Mask lateFailure = Mask.all(values.length);
+        lateFailure.retainConstantRange(values, 0, 10, null);
+        assertThat(lateFailure).hasSize(values.length - 1).doesNotContain(250);
+    }
+
+    @Test
     void directDictionaryIdComparisonPreservesMatchComplementAndNullSemantics()
     {
         int[] ids = {2, 1, 2, 0, 2, 1};
