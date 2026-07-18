@@ -33,6 +33,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.LongPredicate;
 
 import static org.weakref.nitro.parquet.ParquetFile.BE_LONG;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
@@ -2380,6 +2381,56 @@ public final class ColumnReader
         }
         cachedDictionarySize = max;
         return cachedDictionarySize;
+    }
+
+    /**
+     * Returns whether every physical dictionary entry in every chunk is accepted by {@code predicate}. This is an
+     * exact, one-time admission check for dropping a dynamic filter that cannot prune the scan. Comparing only the
+     * filter and dictionary cardinalities is insufficient because dictionaries are row-group-local: an oversized
+     * filter may cover the full column domain, while a same-sized filter may contain different values.
+     *
+     * <p>Only dictionary pages are decompressed; data-page ids are not read. A plain-encoded chunk returns false.
+     */
+    public boolean dictionaryValuesCovered(LongPredicate predicate)
+    {
+        // DynamicFilter is a long-key membership contract. Binary dictionaries and DOUBLE's raw IEEE-754 bits do
+        // not share that value domain, so they must retain the ordinary exact join/filter path.
+        if (kind == Kind.BINARY || physicalType == Type.DOUBLE) {
+            return false;
+        }
+        for (Chunk chunk : chunks) {
+            ColumnMetaData metadata = chunk.metadata();
+            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long limit = start + metadata.total_compressed_size;
+            long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+            if (parsedPageType != PageType.DICTIONARY_PAGE.getValue()) {
+                return false;
+            }
+            MemorySegment body = decompress(
+                    chunk.segment(),
+                    bodyPosition,
+                    parsedCompressedSize,
+                    parsedUncompressedSize,
+                    metadata.codec);
+            for (int index = 0; index < parsedValueCount; index++) {
+                long value;
+                if (kind == Kind.INT) {
+                    value = body.get(LE_INT, (long) index * Integer.BYTES);
+                }
+                else if (kind == Kind.LONG) {
+                    value = flbaDecimal
+                            ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
+                            : body.get(LE_LONG, (long) index * Long.BYTES);
+                }
+                else {
+                    throw new AssertionError("Unsupported dictionary coverage kind: " + kind);
+                }
+                if (!predicate.test(value)) {
+                    return false;
+                }
+            }
+        }
+        return !chunks.isEmpty();
     }
 
     private boolean decodeNextDataPage()

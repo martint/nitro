@@ -151,6 +151,8 @@ public final class NitroParquetScanOperator
     // and defeat late materialization (a downstream operator's own predicate, e.g. an IS NULL, then drives the real
     // narrowing). The join still enforces the condition, so dropping it is always semantically safe. Opt-out.
     private static final boolean DROP_NON_SELECTIVE_FILTERS = Boolean.parseBoolean(System.getProperty("nitro.parquet.dropNonSelectiveFilters", "true"));
+    private static final boolean EXACT_DYNAMIC_FILTER_DICTIONARY_COVERAGE =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.exactDynamicFilterDictionaryCoverage", "true"));
     private static final boolean DIRECT_NULL_MASK_READER =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullMaskReader", "true"));
     // Densely-packed surviving values for the current window, per column (grown to high-water mark); sliced out.
@@ -353,21 +355,22 @@ public final class NitroParquetScanOperator
         return hasFilters;
     }
 
-    /**
-     * Whether every pushed filter has the same distinct cardinality as its column's largest row-group dictionary —
-     * the useful cheap signal that a small-domain dimension filter admits the whole probe domain. Do not use
-     * {@code filter.size() >= cardinality}: Parquet dictionaries are row-group-local, so a date-clustered fact table
-     * can have a 58-value dictionary per row group while a genuinely selective one-year filter contains 366 values.
-     * A plain-encoded column (cardinality unknown) counts as selective.
-     */
+    /** Whether every pushed filter provably accepts every physical dictionary value in its column. */
     private boolean allFiltersNonSelective()
     {
         for (int c = 0; c < filtersByColumn.length; c++) {
-            if (filtersByColumn[c] == null) {
+            DynamicFilter filter = filtersByColumn[c];
+            if (filter == null) {
+                continue;
+            }
+            if (EXACT_DYNAMIC_FILTER_DICTIONARY_COVERAGE) {
+                if (!readers[c].dictionaryValuesCovered(filter::accepts)) {
+                    return false;
+                }
                 continue;
             }
             int cardinality = readers[c].peekDictionarySize();
-            if (cardinality <= 0 || filtersByColumn[c].size() != cardinality) {
+            if (cardinality <= 0 || filter.size() != cardinality) {
                 return false;
             }
         }

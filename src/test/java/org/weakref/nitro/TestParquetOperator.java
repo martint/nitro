@@ -69,6 +69,8 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.parquet.ColumnReader;
+import org.weakref.nitro.parquet.ParquetFile;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -344,6 +346,39 @@ public class TestParquetOperator
             assertThat(nulls.values()[0]).isFalse();
             assertThat(nulls.values()[2]).isTrue();
             assertThat(nulls.values()[3]).isFalse();
+        }
+    }
+
+    @Test
+    void testExactDictionaryCoverageAcrossChunksDoesNotConsumeReader()
+            throws IOException
+    {
+        List<ParquetRow> firstRows = new ArrayList<>();
+        List<ParquetRow> secondRows = new ArrayList<>();
+        for (int position = 0; position < 2_000; position++) {
+            firstRows.add(new ParquetRow((position & 1) == 0 ? 10 : 20, true, null));
+            secondRows.add(new ParquetRow((position & 1) == 0 ? 30 : 40, true, null));
+        }
+        java.nio.file.Path first = writeParquetFile("dictionary-coverage-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeParquetFile("dictionary-coverage-second.parquet", true, secondRows);
+        assertDictionaryEncoding(first, "x");
+        assertDictionaryEncoding(second, "x");
+
+        try (ParquetFile firstFile = ParquetFile.open(first);
+                ParquetFile secondFile = ParquetFile.open(second);
+                ColumnReader reader = columnReader(List.of(firstFile, secondFile), "x")) {
+            // Cardinality alone cannot decide this: the accepted range is much larger than either local dictionary,
+            // but it covers every physical value and therefore cannot prune the scan.
+            assertThat(reader.dictionaryValuesCovered(value -> value >= 10 && value <= 40)).isTrue();
+
+            // Conversely, matching a local dictionary's cardinality says nothing about value equality.
+            assertThat(reader.dictionaryValuesCovered(value -> value == 10 || value == 30)).isFalse();
+
+            // Admission reads dictionary pages only and must leave the ordinary data cursor untouched.
+            long[] values = new long[4_000];
+            reader.readLongs(values, null, values.length);
+            assertThat(Arrays.copyOfRange(values, 0, 4)).containsExactly(10, 20, 10, 20);
+            assertThat(Arrays.copyOfRange(values, 2_000, 2_004)).containsExactly(30, 40, 30, 40);
         }
     }
 
@@ -2357,6 +2392,19 @@ public class TestParquetOperator
             }
         }
         return file;
+    }
+
+    private static ColumnReader columnReader(List<ParquetFile> files, String columnName)
+    {
+        ParquetFile.Column first = files.getFirst().column(columnName);
+        ColumnReader reader = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal());
+        for (ParquetFile file : files) {
+            ParquetFile.Column column = file.column(columnName);
+            for (org.apache.parquet.format.RowGroup rowGroup : file.rowGroups()) {
+                reader.addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
+            }
+        }
+        return reader;
     }
 
     private java.nio.file.Path writeWideNumericParquetFile(String name, List<WideNumericRow> rows)
