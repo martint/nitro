@@ -70,6 +70,16 @@ public final class QueryDriver
             return;
         }
 
+        if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
+            long start = System.nanoTime();
+            for (int iteration = 0; iteration < measured; iteration++) {
+                sink += consume(query(query, new Allocator(), registry, tables));
+            }
+            long nanos = System.nanoTime() - start;
+            System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
+            return;
+        }
+
         OperatorCpuProfile profile = new OperatorCpuProfile();
         long start = System.nanoTime();
         for (int iteration = 0; iteration < measured; iteration++) {
