@@ -132,7 +132,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q93 | 343.0 | 877.1 | 399.0 | 2.557x | 1.163x | — | — | — | 6.869B / 1.845B / 27.536M / 3.089B / 98.976K / 724.416K / 12.252M / 1.312B | 18.824B / 6.874B / 348.871M / 8.385B / 292.567K / 10.630M / 47.801M / 3.567B | 6.357B / 2.123B / 35.694M / — / 213.975K / 4.909M / 13.284M / — |
 | q94 | 1400.5 | 3201.8 | 2420.0 | 2.286x | 1.728x | 126.034M | — | — | 45.377B / 7.787B / 134.833M / 17.850B / 111.203K / 3.157M / 29.397M / 9.109B | 88.612B / 21.868B / 470.490M / 39.124B / 599.950K / 24.081M / 97.469M / 17.754B | 46.961B / 12.539B / 205.516M / — / 147.761K / 32.992M / 53.808M / — |
 | q95 | 1318.1 | 2892.9 | 2410.0 | 2.195x | 1.828x | 135.592M | — | — | 41.676B / 7.449B / 138.825M / 16.886B / 119.502K / 3.649M / 30.490M / 8.684B | 78.975B / 20.591B / 478.786M / 35.030B / 751.264K / 24.758M / 93.568M / 15.585B | 46.973B / 12.517B / 203.712M / — / 145.123K / 32.627M / 53.928M / — |
-| q96 | 122.8 | 573.2 | 136.0 | 4.669x | 1.108x | — | — | — | 2.834B / 677.924M / 12.687M / 985.588M / 17.438K / 261.664K / 5.834M / 519.091M | 15.359B / 4.812B / 195.415M / 6.913B / 228.721K / 8.479M / 32.032M / 2.568B | 2.370B / 731.224M / 9.313M / — / 25.446K / 936.230K / 5.938M / — |
+| q96 | 109.3 | 573.2 | 136.0 | 5.246x | 1.245x | 6.603M | — | — | 2.485B / 607.904M / 5.032M / 966.537M / 18.766K / 282.979K / 5.128M / 497.818M | 15.359B / 4.812B / 195.415M / 6.913B / 228.721K / 8.479M / 32.032M / 2.568B | 2.370B / 731.224M / 9.313M / — / 25.446K / 936.230K / 5.938M / — |
 | q97 | 1220.3 | 2417.3 | 1440.0 | 1.981x | 1.180x | 2.114B | — | — | 17.474B / 6.965B / 235.313M / 8.539B / 461.206K / 4.132M / 44.738M / 3.224B | 51.734B / 17.026B / 621.335M / 23.614B / 487.997K / 20.439M / 67.171M / 9.189B | 26.954B / 7.719B / 323.885M / — / 903.219K / 16.123M / 13.805M / — |
 | q98 | 139.0 | 1561.8 | 180.0 | 11.235x | 1.295x | 85.181M | — | — | 2.940B / 777.747M / 15.779M / 1.307B / 85.108K / 540.613K / 6.039M / 616.026M | 27.289B / 10.393B / 551.429M / 12.825B / 345.351K / 11.568M / 78.966M / 5.225B | 2.795B / 985.218M / 26.675M / — / 154.759K / 2.964M / 6.858M / — |
 | q99 | 239.2 | 1291.7 | 598.0 | 5.401x | 2.500x | 192.595M | — | — | 6.644B / 1.436B / 61.982M / 2.560B / 43.045K / 1.056M / 8.126M / 1.333B | 40.214B / 11.367B / 338.411M / 17.702B / 461.130K / 22.033M / 84.863M / 7.947B | 9.856B / 3.146B / 81.243M / — / 48.825K / 6.813M / 19.494M / — |
@@ -192,8 +192,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 |---|---:|---:|---:|---:|---:|---:|
 | TPC-H N/T | 22 | 22 | 1.597x | 36395.7 ms | 57257.8 ms | 1.573x |
 | TPC-H N/V | 22 | 22 | 1.292x | 36395.7 ms | 48057.0 ms | 1.320x |
-| TPC-DS N/T | 99 | 99 | 4.599x | 85982.3 ms | 332196.8 ms | 3.864x |
-| TPC-DS N/V | 99 | 99 | 1.418x | 85982.3 ms | 124008.0 ms | 1.442x |
+| TPC-DS N/T | 99 | 99 | 4.604x | 85968.8 ms | 332196.8 ms | 3.864x |
+| TPC-DS N/V | 99 | 99 | 1.420x | 85968.8 ms | 124008.0 ms | 1.442x |
 | ClickBench N/T | 44 | 44 | 2.506x | 157753.5 ms | 455944.4 ms | 2.890x |
 | ClickBench N/V | 44 | 44 | 1.884x | 157753.5 ms | 323935.0 ms | 2.053x |
 
@@ -201,8 +201,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| Overall N/T | 165 | 165 | 3.397x | 280131.6 ms | 845399.0 ms | 3.018x |
-| Overall N/V | 165 | 165 | 1.511x | 280131.6 ms | 496000.0 ms | 1.771x |
+| Overall N/T | 165 | 165 | 3.399x | 280118.1 ms | 845399.0 ms | 3.018x |
+| Overall N/V | 165 | 165 | 1.512x | 280118.1 ms | 496000.0 ms | 1.771x |
 
 ## Sources and qualifications
 
@@ -242,5 +242,6 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 - The current TPC-DS q34/q73 rows retain the JVM harness repair that follows Trino SQL's live-column shape after each date, store, and household-demographics join. All five real-SF10 checks pass with no skips: Nitro q34/q73 versus the Trino operator harness, direct Nitro q73 versus SQL, and both Trino operator harnesses versus SQL. A later general Parquet admission repair now decodes page-wide selected numeric dictionary IDs only when another output window can reuse them; a full-page output window stays on the streaming selected decoder. The reverse control reproduces the superseded q34/q73 rows at 369.3/337.6 ms and 8.440B/7.574B instructions. Current unpinned 12 GiB three-fork Nitro is 271.5/223.1 ms with complete counters and allocation; fresh pinned Velox captures are 332/314 ms with the complete eight-counter and managed-allocation bundle. Nitro therefore wins all 99 TPC-DS durations.
 - The final 2026-07-18 TPC-DS q79 row invalidates the prior all-non-null aggregate harness. Trino SQL uses bare `sum(ss_coupon_amt)` and `sum(ss_net_profit)`, so an all-null group must remain NULL; Nitro and Trino had inserted zero and Velox had explicit `coalesce`. All three operator harnesses now preserve nullable aggregate inputs, and the corrected Nitro and Velox canonical 100-row multisets are byte-identical, including the three NULL-bearing rows; Nitro and Trino independently match Trino SQL. The replacement uses unpinned 12 GiB three-fork JMH captures for Nitro/Trino and a pinned one-driver, one-I/O-thread, ten-repeat, 12 GiB managed-cache Velox capture. Every engine row contains duration, the complete eight-counter bundle, and allocation telemetry from the same invocation.
 - The final 2026-07-18 ClickBench q17 row gives every accumulator result-copy implementation the same backing-vector-identity reuse contract. Immutable `Streams` transport tuples survive repeated TopN comparisons until a vector actually grows; no accumulator, data type, column, or query receives a bespoke path. Allocation sampling drops the hot `Streams` site from 2,946 samples (43.0% of events) to zero. The adjacent three-fork control is CPU-neutral within noise and reduces measured allocation by 1.10 MB/op; the board uses the enabled unpinned 12 GiB capture with the complete counter/allocation bundle. The full 1,201-test gate passes.
+- The final 2026-07-18 TPC-DS q96 row is a current-source recapture, not a harness change. Its Trino-SQL-derived fact scan still applies the three filtered dimension joins before `count(*)`. Unpinned 12 GiB three-fork Nitro is 109.268 ms and 6.603 MB/op, 1.245x faster than Velox with fewer cycles, L1D misses, dTLB misses, and branch misses; only instructions remain 4.9% higher. The existing Rust/FFM skip-decoder reference reaches 99.720 ms and removes that instruction gap, proving bounds/session checks in the portable Java selected decoder are the residual, but it remains diagnostic rather than becoming an environment-dependent default.
 - This sweep has complete 165-query coverage for all three engines (22 TPC-H, 99 TPC-DS, and 44 ClickBench queries). Any future missing/failed row is shown as a dash and excluded pairwise rather than silently imputed.
 - This is a reconstructable current board, not a claim that focused overlays and base rows were measured in one thermal sequence. Use adjacent isolated A/B captures for optimization decisions; use this board for cross-engine prioritization.
