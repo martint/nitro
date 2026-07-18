@@ -117,6 +117,7 @@ public final class BinaryVector
         return data;
     }
 
+    @Override
     public long contentGeneration()
     {
         return contentGeneration;

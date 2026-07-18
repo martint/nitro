@@ -33,40 +33,45 @@ class TestFlatGroupingTable
         Allocator allocator = new Allocator();
         Allocator.Context context = new Allocator.Context("pooled-dictionary-generation");
         GroupingState state = new GroupingState();
-        int[] dictionaryIds = {0, 1};
+        int[] firstId = {0};
+        int[] secondId = {1};
 
         BinaryVector first = binary(allocator, context, "alpha", "beta");
-        I64Vector firstGroups = new I64Vector(2);
+        I64Vector firstGroups = new I64Vector(1);
         state.assignGroups(
-                new Vector[] {DictionaryVector.wrap(dictionaryIds, 2, first)},
+                new Vector[] {DictionaryVector.wrap(firstId, 1, first)},
                 new Vector[] {null},
-                Mask.all(2),
+                Mask.all(1),
                 firstGroups);
-        assertThat(firstGroups.values()).containsExactly(0, 1);
+        assertThat(firstGroups.values()).containsExactly(0);
+        I64Vector repeatedGenerationGroups = new I64Vector(1);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(secondId, 1, first)},
+                new Vector[] {null},
+                Mask.all(1),
+                repeatedGenerationGroups);
+        assertThat(repeatedGenerationGroups.values()).containsExactly(1);
         allocator.release(context, first);
 
         BinaryVector second = binary(allocator, context, "gamma", "zeta");
         assertThat(second).isSameAs(first);
-        I64Vector secondGroups = new I64Vector(2);
+        I64Vector secondGroups = new I64Vector(1);
         state.assignGroups(
-                new Vector[] {DictionaryVector.wrap(dictionaryIds, 2, second)},
+                new Vector[] {DictionaryVector.wrap(firstId, 1, second)},
                 new Vector[] {null},
-                Mask.all(2),
+                Mask.all(1),
                 secondGroups);
-        assertThat(secondGroups.values()).containsExactly(2, 3);
-        allocator.release(context, second);
-
-        BinaryVector third = binary(allocator, context, "gamma", "zeta");
-        assertThat(third).isSameAs(first);
-        I64Vector thirdGroups = new I64Vector(2);
+        assertThat(secondGroups.values()).containsExactly(2);
+        I64Vector secondRepeatedGenerationGroups = new I64Vector(1);
         state.assignGroups(
-                new Vector[] {DictionaryVector.wrap(dictionaryIds, 2, third)},
+                new Vector[] {DictionaryVector.wrap(secondId, 1, second)},
                 new Vector[] {null},
-                Mask.all(2),
-                thirdGroups);
-        assertThat(thirdGroups.values()).containsExactly(2, 3);
+                Mask.all(1),
+                secondRepeatedGenerationGroups);
+        assertThat(secondRepeatedGenerationGroups.values()).containsExactly(3);
         assertThat(state.groupCount()).isEqualTo(4);
 
+        allocator.release(context, second);
         state.releaseBuffers();
         allocator.release(context);
     }

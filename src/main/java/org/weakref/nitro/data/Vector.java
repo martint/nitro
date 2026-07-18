@@ -47,6 +47,18 @@ public sealed interface Vector
     long retainedBytes();
 
     /**
+     * Identifies the current logical contents of a reusable vector instance.
+     *
+     * <p>Derived-state caches may reuse work across batches only when both object identity and this generation
+     * match. The default declines that capability; pooled concrete vectors can opt in by advancing the generation
+     * whenever a new logical lifetime begins.
+     */
+    default long contentGeneration()
+    {
+        return -1;
+    }
+
+    /**
      * Whether copying this vector's logical values includes variable-size payload storage in addition to its
      * position metadata. Buffering frameworks use this representation property to decide when eliminating a full
      * intermediate copy can amortize a different output layout; operators need not recognize concrete data types.

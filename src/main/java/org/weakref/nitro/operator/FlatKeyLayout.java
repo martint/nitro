@@ -34,6 +34,8 @@ class FlatKeyLayout
     private static final boolean POOL_SCRATCH = Boolean.parseBoolean(System.getProperty("nitro.flatKeyLayout.poolScratch", "true"));
     private static final boolean STABLE_DICTIONARY_VALUE_HASH =
             Boolean.parseBoolean(System.getProperty("nitro.group.stableDictionaryValueHash", "true"));
+    private static final boolean REUSE_DICTIONARY_ENTRY_HASHES =
+            Boolean.parseBoolean(System.getProperty("nitro.group.reuseDictionaryEntryHashes", "true"));
     private static final boolean MIXED_COMPOSITE_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.group.mixedCompositeIds", "true"));
     private static final boolean FAST_MIXED_COMPOSITE_3 =
@@ -98,6 +100,7 @@ class FlatKeyLayout
     private int[][] dictionaryHashedIds;
     private long[][] dictionaryEntryHashes;
     private Vector[] dictionaryHashedValues;
+    private long[] dictionaryHashedGenerations;
 
     // Id-based equality for dictionary-encoded key columns. Each field binds to the first dictionary
     // identity it sees; while a batch presents that same dictionary instance for the field, the record
@@ -410,6 +413,8 @@ class FlatKeyLayout
             dictionaryHashedIds = new int[handlers.length][];
             dictionaryEntryHashes = new long[handlers.length][];
             dictionaryHashedValues = new Vector[handlers.length];
+            dictionaryHashedGenerations = new long[handlers.length];
+            Arrays.fill(dictionaryHashedGenerations, -1);
             boundDictionary = new Vector[handlers.length];
             batchDictionaryIds = new int[handlers.length][];
             fieldIdComparable = new boolean[handlers.length];
@@ -460,6 +465,7 @@ class FlatKeyLayout
                 release(dictionaryEntryHashes[index]);
                 dictionaryEntryHashes[index] = null;
                 dictionaryHashedValues[index] = null;
+                dictionaryHashedGenerations[index] = -1;
                 continue;
             }
             Vector dictionaryValues = dictionary.values();
@@ -505,37 +511,50 @@ class FlatKeyLayout
                 }
             }
             int distinctCount = dictionaryValues.length();
+            long contentGeneration = dictionaryValues.contentGeneration();
+            boolean reusableEntryHashes = REUSE_DICTIONARY_ENTRY_HASHES &&
+                    contentGeneration >= 0 &&
+                    dictionaryHashedValues[index] == dictionaryValues &&
+                    dictionaryHashedGenerations[index] == contentGeneration;
+            boolean cachedEntryHashes = reusableEntryHashes &&
+                    dictionaryEntryHashes[index] != null &&
+                    dictionaryEntryHashes[index].length >= distinctCount;
             // Pre-hashing every distinct dictionary entry pays off only when the dictionary is smaller than the batch
             // it describes (low-card key, values repeat across rows): each entry is hashed once and reused by id. A
             // join-output key instead wraps the whole build column in a dictionary -- far more entries than a probe
             // batch references -- so pre-hashing all of them every batch is mostly wasted. When the dictionary has
-            // more entries than the batch has positions, skip the pre-hash and let fieldHash() hash the referenced
-            // entries per row (the same path a non-dictionary field uses). This also sidesteps the per-batch stale
-            // cache problem below, since the per-row path always reads the current batch's bytes.
-            if (distinctCount > dictionary.length()) {
+            // more entries than the batch has positions, skip the first pre-hash and let fieldHash() hash the
+            // referenced entries per row. If a later batch presents the same vector generation, the repeated use
+            // proves that one complete entry-hash pass can be amortized; vectors without a generation retain the
+            // conservative per-batch policy.
+            if (distinctCount > dictionary.length() && !reusableEntryHashes) {
                 dictionaryHashedIds[index] = null;
                 release(dictionaryEntryHashes[index]);
                 dictionaryEntryHashes[index] = null;
-                dictionaryHashedValues[index] = null;
+                dictionaryHashedValues[index] = contentGeneration >= 0 ? dictionaryValues : null;
+                dictionaryHashedGenerations[index] = contentGeneration;
             }
             else {
                 dictionaryHashedIds[index] = dictionaryIds;
                 // Compute the per-entry hash for every distinct dictionary value once and index it by dictionary id at
-                // hash() time, instead of re-hashing the (variable-width) value per row. This is recomputed every batch:
-                // the value vector cannot be cached by identity across batches because the allocator pools vector
-                // instances, so the same instance can carry different content in a later batch (e.g. a hash-join probe
-                // passthrough wrapped in a dictionary) -- a stale cache would hash equal keys differently and split groups.
+                // hash() time, instead of re-hashing the (variable-width) value per row. A concrete value vector may
+                // let the cache survive across batches by exposing a stable content generation. Object identity alone
+                // is never sufficient because the allocator pools vector instances; a generation change recomputes the
+                // complete cache before it can influence hash placement.
                 if (dictionaryEntryHashes[index] == null || dictionaryEntryHashes[index].length < distinctCount) {
                     long[] previous = dictionaryEntryHashes[index];
                     dictionaryEntryHashes[index] = borrowLongs(distinctCount);
                     release(previous);
                 }
-                FlatTypeHandler.Kind kind = fieldKinds[index];
-                long[] entryHashes = dictionaryEntryHashes[index];
-                for (int id = 0; id < distinctCount; id++) {
-                    entryHashes[id] = hashByKind(kind, dictionaryValues, id);
+                if (!cachedEntryHashes) {
+                    FlatTypeHandler.Kind kind = fieldKinds[index];
+                    long[] entryHashes = dictionaryEntryHashes[index];
+                    for (int id = 0; id < distinctCount; id++) {
+                        entryHashes[id] = hashByKind(kind, dictionaryValues, id);
+                    }
                 }
                 dictionaryHashedValues[index] = dictionaryValues;
+                dictionaryHashedGenerations[index] = contentGeneration;
             }
 
             // Intern this dictionary's entries to GLOBAL value ids (stable across batches and dictionary
@@ -1646,6 +1665,7 @@ class FlatKeyLayout
         if (dictionaryHashedIds != null) {
             Arrays.fill(dictionaryHashedIds, null);
             Arrays.fill(dictionaryHashedValues, null);
+            Arrays.fill(dictionaryHashedGenerations, -1);
             Arrays.fill(boundDictionary, null);
             Arrays.fill(batchDictionaryIds, null);
             Arrays.fill(batchEntryGlobalIdDict, null);
