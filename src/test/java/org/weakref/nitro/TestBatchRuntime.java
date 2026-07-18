@@ -50,6 +50,22 @@ import static org.weakref.nitro.data.Row.row;
 public class TestBatchRuntime
 {
     @Test
+    void testStreamsReuseTransportTupleWhenBackingVectorsAreUnchanged()
+    {
+        I64Vector values = new I64Vector(8);
+        BooleanVector nulls = new BooleanVector(8);
+        Streams existing = Streams.ofValuesAndNulls(values, nulls);
+
+        assertThat(Streams.reuseValuesAndNulls(existing, values, nulls)).isSameAs(existing);
+
+        I64Vector grownValues = new I64Vector(16);
+        Streams grown = Streams.reuseValuesAndNulls(existing, grownValues, nulls);
+        assertThat(grown).isNotSameAs(existing);
+        assertThat(grown.values()).isSameAs(grownValues);
+        assertThat(grown.get(Stream.NULLS)).isSameAs(nulls);
+    }
+
+    @Test
     void testSimpleOutputAllowsRepeatedBorrowButInvalidatesAfterTake()
     {
         I64Vector values = new I64Vector(new long[] {11, 12, 13});

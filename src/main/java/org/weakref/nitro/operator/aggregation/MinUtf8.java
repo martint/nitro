@@ -129,7 +129,7 @@ public class MinUtf8
             outputValues.setBytes(outputPosition, value);
             outputNulls.values()[outputPosition] = false;
         }
-        return Streams.ofValuesAndNulls(outputValues, outputNulls);
+        return Streams.reuseValuesAndNulls(output, outputValues, outputNulls);
     }
 
     @Override
@@ -200,7 +200,7 @@ public class MinUtf8
                 outputValues.setNull(previousGroup++);
             }
         }
-        return Streams.ofValuesAndNulls(outputValues, outputNulls);
+        return Streams.reuseValuesAndNulls(output, outputValues, outputNulls);
     }
 
     private static void update(MinUtf8StateVector state, int group, Vector inputValues, int position)

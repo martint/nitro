@@ -126,7 +126,7 @@ public class Avg
             values.values()[index] = isNull ? 0 : ((double) stateVector.sum(index) / stateVector.count(index));
         }
 
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     @Override
@@ -148,7 +148,7 @@ public class Avg
         boolean isNull = stateVector.count(group) == 0;
         nulls.values()[outputPosition] = isNull;
         values.values()[outputPosition] = isNull ? 0 : ((double) stateVector.sum(group) / stateVector.count(group));
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     private static void accumulate(AvgStateVector stateVector, int group, VectorAccess.LongValues inputValues, VectorAccess.BooleanValues inputNulls, int position)

@@ -110,7 +110,7 @@ public class CountAll
                 output == null ? null : output.getOrNull(Stream.NULLS),
                 values.length());
         Arrays.fill(nulls.values(), 0, values.length(), false);
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     @Override
@@ -130,6 +130,6 @@ public class CountAll
                 size);
         values.values()[outputPosition] = stateVector.value(group);
         nulls.values()[outputPosition] = false;
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 }

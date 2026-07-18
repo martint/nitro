@@ -121,7 +121,7 @@ public class StddevSamp
             values.values()[index] = isNull ? 0 : sqrt(stateVector.m2(index) / (count - 1));
         }
 
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     @Override
@@ -144,7 +144,7 @@ public class StddevSamp
         boolean isNull = count < 2;
         nulls.values()[outputPosition] = isNull;
         values.values()[outputPosition] = isNull ? 0 : sqrt(stateVector.m2(group) / (count - 1));
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     private static void accumulate(StddevSampStateVector stateVector, int group, VectorAccess.LongValues inputValues, VectorAccess.BooleanValues inputNulls, int position)

@@ -33,6 +33,8 @@ import static java.util.Objects.requireNonNull;
  */
 public final class Streams
 {
+    private static final boolean REUSE_TRANSPORT_TUPLES = !Boolean.getBoolean("nitro.streams.disableTransportTupleReuse");
+
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
@@ -97,6 +99,32 @@ public final class Streams
     public static Streams ofValuesAndNulls(Vector values, BooleanVector nulls)
     {
         return new Streams(values, nulls, null);
+    }
+
+    /**
+     * Returns {@code existing} when it already contains exactly the supplied backing vectors,
+     * otherwise creates a new stream tuple.
+     *
+     * This is intended for hot copy paths whose vectors are caller-owned and grow only
+     * occasionally. It preserves the immutable {@link Streams} contract while avoiding a new
+     * transport object for every copied position once the backing storage has reached its
+     * steady-state capacity.
+     */
+    public static Streams reuseOrCreate(Streams existing, Vector values, Vector nulls, Vector errors)
+    {
+        if (REUSE_TRANSPORT_TUPLES &&
+                existing != null &&
+                existing.values == values &&
+                existing.nulls == nulls &&
+                existing.errors == errors) {
+            return existing;
+        }
+        return of(values, nulls, errors);
+    }
+
+    public static Streams reuseValuesAndNulls(Streams existing, Vector values, BooleanVector nulls)
+    {
+        return reuseOrCreate(existing, values, nulls, null);
     }
 
     public static Streams of(Vector values, Vector nulls, Vector errors)

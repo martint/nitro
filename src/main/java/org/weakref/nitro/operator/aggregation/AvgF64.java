@@ -153,7 +153,7 @@ public class AvgF64
             values.values()[index] = isNull ? 0 : (stateVector.doubleSum(index) / stateVector.count(index));
         }
 
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     @Override
@@ -175,7 +175,7 @@ public class AvgF64
         boolean isNull = stateVector.count(group) == 0;
         nulls.values()[outputPosition] = isNull;
         values.values()[outputPosition] = isNull ? 0 : (stateVector.doubleSum(group) / stateVector.count(group));
-        return Streams.ofValuesAndNulls(values, nulls);
+        return Streams.reuseValuesAndNulls(output, values, nulls);
     }
 
     private static void accumulate(AvgStateVector stateVector, int group, VectorAccess.DoubleValues inputValues, VectorAccess.BooleanValues inputNulls, int position)
