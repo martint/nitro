@@ -21,6 +21,10 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ConcatenatedBooleanVector
         implements Vector
 {
+    private static final boolean MONOTONIC_POSITION_COPY =
+            Boolean.parseBoolean(System.getProperty("nitro.concatenatedBoolean.monotonicPositionCopy", "true"));
+    private static final boolean DIRECT_POSITION_COPY =
+            Boolean.parseBoolean(System.getProperty("nitro.concatenatedBoolean.directPositionCopy", "true"));
     private final Vector[] segments;
     private final int[] offsets;
     private final int length;
@@ -102,13 +106,27 @@ public final class ConcatenatedBooleanVector
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         BooleanVector target = ensureBooleanCapacity(allocator, allocationContext, existing, size);
+        boolean orderedPositions = MONOTONIC_POSITION_COPY && isMostlyNonDecreasing(sourcePositions, sourceCount);
+        if (DIRECT_POSITION_COPY && orderedPositions) {
+            copyPositionsDirect(sourcePositions, sourceCount, target.values(), outputStart);
+            return target;
+        }
         int index = 0;
+        int segmentHint = 0;
         while (index < sourceCount) {
             int sourcePosition = sourcePositions[index];
-            int segmentIndex = segmentIndex(sourcePosition);
+            int segmentIndex = orderedPositions ? segmentIndexFromHint(sourcePosition, segmentHint) : segmentIndex(sourcePosition);
+            segmentHint = segmentIndex;
             int segmentOffset = offsets[segmentIndex];
             int groupStart = index;
-            while (index < sourceCount && segmentIndex(sourcePositions[index]) == segmentIndex) {
+            while (index < sourceCount) {
+                int currentSegment = orderedPositions ?
+                        segmentIndexFromHint(sourcePositions[index], segmentHint) :
+                        segmentIndex(sourcePositions[index]);
+                if (currentSegment != segmentIndex) {
+                    segmentHint = currentSegment;
+                    break;
+                }
                 index++;
             }
             int groupCount = index - groupStart;
@@ -123,6 +141,35 @@ public final class ConcatenatedBooleanVector
             segments[segmentIndex].copyPositionsInto(allocator, allocationContext, target, localPositions, groupCount, outputStart + groupStart, size);
         }
         return target;
+    }
+
+    private void copyPositionsDirect(int[] sourcePositions, int sourceCount, boolean[] output, int outputStart)
+    {
+        int segmentHint = 0;
+        int runHint = 0;
+        int previousSegment = -1;
+        for (int index = 0; index < sourceCount; index++) {
+            int sourcePosition = sourcePositions[index];
+            int segmentIndex = segmentIndexFromHint(sourcePosition, segmentHint);
+            if (segmentIndex != previousSegment) {
+                runHint = 0;
+                previousSegment = segmentIndex;
+            }
+            segmentHint = segmentIndex;
+            int localPosition = sourcePosition - offsets[segmentIndex];
+            Vector segment = segments[segmentIndex];
+            if (segment instanceof BooleanVector values) {
+                output[outputStart + index] = values.values()[localPosition];
+            }
+            else if (segment instanceof RleVector values) {
+                int runIndex = values.runIndexFromHint(localPosition, runHint);
+                output[outputStart + index] = booleanValue(values.values(), runIndex);
+                runHint = runIndex;
+            }
+            else {
+                output[outputStart + index] = booleanValue(segment, localPosition);
+            }
+        }
     }
 
     @Override
@@ -208,6 +255,34 @@ public final class ConcatenatedBooleanVector
             return Math.min(index, segments.length - 1);
         }
         return -index - 2;
+    }
+
+    private int segmentIndexFromHint(int position, int hint)
+    {
+        checkArgument(position >= 0 && position < length, "position is out of bounds: %s", position);
+        if (hint >= 0 && hint < segments.length && position >= offsets[hint]) {
+            int index = hint;
+            while (index + 1 < offsets.length && position >= offsets[index + 1]) {
+                index++;
+            }
+            return Math.min(index, segments.length - 1);
+        }
+        return segmentIndex(position);
+    }
+
+    private static boolean isMostlyNonDecreasing(int[] positions, int count)
+    {
+        int maximumBackwardTransitions = Math.max(1, count >>> 4);
+        int backwardTransitions = 0;
+        for (int index = 1; index < count; index++) {
+            if (positions[index] < positions[index - 1]) {
+                backwardTransitions++;
+                if (backwardTransitions > maximumBackwardTransitions) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static boolean isBooleanBacked(Vector vector)

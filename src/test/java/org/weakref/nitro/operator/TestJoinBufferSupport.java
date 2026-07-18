@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Utf8Traits;
@@ -117,6 +118,42 @@ public class TestJoinBufferSupport
         assertThat(utf8(copied.values(), 0)).isEqualTo("alpha");
         assertThat(utf8(copied.values(), 1)).isEqualTo("beta");
 
+        allocator.release(context);
+    }
+
+    @Test
+    void testConcatenatedRleBooleanPositionCopySupportsForwardAndBackwardPositions()
+    {
+        RleVector first = new RleVector(
+                new int[] {2, 2},
+                new BooleanVector(new boolean[] {false, true}));
+        RleVector second = new RleVector(
+                new int[] {1, 3},
+                new BooleanVector(new boolean[] {true, false}));
+        ConcatenatedBooleanVector source = new ConcatenatedBooleanVector(new Vector[] {first, second});
+
+        assertCopiedBooleans(source, new int[] {0, 2, 3, 4, 6, 7}, false, true, true, true, false, false);
+        assertCopiedBooleans(source, new int[] {0, 1, 2, 3, 0, 4, 6, 7}, false, false, true, true, false, true, false, false);
+        assertCopiedBooleans(source, new int[] {7, 0, 4, 3, 6, 2}, false, false, true, true, false, true);
+    }
+
+    private static void assertCopiedBooleans(Vector source, int[] positions, boolean... expected)
+    {
+        Allocator allocator = new Allocator();
+        Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
+        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+
+        Streams copied = buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(source),
+                positions,
+                0,
+                positions.length,
+                0,
+                positions.length);
+
+        assertThat(copied.values()).isInstanceOf(BooleanVector.class);
+        assertThat(((BooleanVector) copied.values()).values()).containsExactly(expected);
         allocator.release(context);
     }
 

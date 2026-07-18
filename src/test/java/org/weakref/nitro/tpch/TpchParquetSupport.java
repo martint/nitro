@@ -250,44 +250,44 @@ final class TpchParquetSupport
      */
     public static Operator query05(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
-        Operator region = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "region", "r_regionkey", "r_name"),
-                        equalUtf8(1, "ASIA")),
-                0);
-        Operator nation = scannedTable(allocator, tables, "nation", "n_nationkey", "n_regionkey", "n_name");
+        Operator region = profiled("q05.project.region", projectInputs(allocator, primitiveRegistry,
+                profiled("q05.filter.region", filter(allocator, primitiveRegistry,
+                        profiled("q05.scan.region", scannedTable(allocator, tables, "region", "r_regionkey", "r_name")),
+                        equalUtf8(1, "ASIA"))),
+                0));
+        Operator nation = profiled("q05.scan.nation", scannedTable(allocator, tables, "nation", "n_nationkey", "n_regionkey", "n_name"));
         // [n_nationkey, n_regionkey, n_name, r_regionkey] -> [n_nationkey, n_name]
-        Operator nationInAsia = projectInputs(allocator, primitiveRegistry,
-                new HashJoinOperator(allocator, nation, 1, region, 0),
-                0, 2);
-        Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey");
+        Operator nationInAsia = profiled("q05.project.nation", projectInputs(allocator, primitiveRegistry,
+                profiled("q05.join.region", new HashJoinOperator(allocator, nation, 1, region, 0)),
+                0, 2));
+        Operator supplier = profiled("q05.scan.supplier", scannedTable(allocator, tables, "supplier", "s_suppkey", "s_nationkey"));
         // [s_suppkey, s_nationkey, n_nationkey, n_name] -> [s_suppkey, s_nationkey, n_name]
-        Operator supplierInAsia = projectInputs(allocator, primitiveRegistry,
-                new HashJoinOperator(allocator, supplier, 1, nationInAsia, 0),
-                0, 1, 3);
+        Operator supplierInAsia = profiled("q05.project.supplier", projectInputs(allocator, primitiveRegistry,
+                profiled("q05.join.nation", new HashJoinOperator(allocator, supplier, 1, nationInAsia, 0)),
+                0, 1, 3));
 
-        Operator customer = scannedTable(allocator, tables, "customer", "c_custkey", "c_nationkey");
-        Operator orders = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate"),
+        Operator customer = profiled("q05.scan.customer", scannedTable(allocator, tables, "customer", "c_custkey", "c_nationkey"));
+        Operator orders = profiled("q05.project.orders", projectInputs(allocator, primitiveRegistry,
+                profiled("q05.filter.orders", filter(allocator, primitiveRegistry,
+                        profiled("q05.scan.orders", scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate")),
                         and(
                                 greaterThan(2, LocalDate.of(1994, 1, 1).toEpochDay() - 1),
-                                lessThan(2, LocalDate.of(1995, 1, 1).toEpochDay()))),
-                0, 1);
+                                lessThan(2, LocalDate.of(1995, 1, 1).toEpochDay())))),
+                0, 1));
         // [o_orderkey, o_custkey, c_custkey, c_nationkey] -> [o_orderkey, c_nationkey]
-        Operator ordersWithNation = projectInputs(allocator, primitiveRegistry,
-                new HashJoinOperator(allocator, orders, 1, customer, 0),
-                0, 3);
-        Operator lineitem = scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey", "l_extendedprice", "l_discount");
+        Operator ordersWithNation = profiled("q05.project.customer", projectInputs(allocator, primitiveRegistry,
+                profiled("q05.join.customer", new HashJoinOperator(allocator, orders, 1, customer, 0)),
+                0, 3));
+        Operator lineitem = profiled("q05.scan.lineitem", scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey", "l_extendedprice", "l_discount"));
         // [l_orderkey, l_suppkey, l_extendedprice, l_discount, o_orderkey, c_nationkey]
-        Operator lineitemWithNation = new HashJoinOperator(allocator, lineitem, 0, ordersWithNation, 0);
+        Operator lineitemWithNation = profiled("q05.join.orders", new HashJoinOperator(allocator, lineitem, 0, ordersWithNation, 0));
         // + [s_suppkey, s_nationkey, n_name]
-        Operator joined = new HashJoinOperator(allocator, lineitemWithNation, new int[] {1, 5}, supplierInAsia, new int[] {0, 1});
+        Operator joined = profiled("q05.join.supplier", new HashJoinOperator(allocator, lineitemWithNation, new int[] {1, 5}, supplierInAsia, new int[] {0, 1}));
 
         // [n_name, discPrice]
-        Operator projected = projectWithDiscPrice(allocator, primitiveRegistry, joined, 2, 3, 8);
-        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1)), projected);
-        return new SortOperator(allocator, new int[] {1}, new boolean[] {true}, aggregated);
+        Operator projected = profiled("q05.project.revenue", projectWithDiscPrice(allocator, primitiveRegistry, joined, 2, 3, 8));
+        Operator aggregated = profiled("q05.group.nation", new GroupedAggregationOperator(allocator, List.of(0), List.of(new SumF64(1)), projected));
+        return profiled("q05.sort", new SortOperator(allocator, new int[] {1}, new boolean[] {true}, aggregated));
     }
 
     /** Keep {@code keptInputs} and append extendedprice * (1 - discount) as the last output column. */

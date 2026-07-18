@@ -1,0 +1,47 @@
+query05: 3 iters, 1688.4 ms/iter, sink=75
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q05.sort                           SortOperator               5038.133   15.26%     1094.195     373485.122     373485.122        3           15
+  next=5004.586  borrow=  0.073  take=  0.000  constrain=  0.000  close= 33.457  alloc[next=1094.120 borrow=   0.002 take=   0.000 constrain=   0.000 close=   0.072] MB
+q05.group.nation                   GroupedAggregationOperator   5037.632   15.26%     1094.139     373466.034     373466.034        3           15
+  next=5004.066  borrow=  0.100  take=  0.000  constrain=  0.000  close= 33.463  alloc[next=1094.065 borrow=   0.001 take=   0.000 constrain=   0.000 close=   0.072] MB
+q05.project.revenue                ProjectOperator            5026.698   15.23%     1093.632       1623.013       1623.013      690       218955
+  next=4976.190  borrow= 13.656  take=  0.000  constrain=  0.000  close= 36.394  alloc[next=1084.824 borrow=   6.918 take=   0.000 constrain=   0.000 close=   1.887] MB
+q05.join.supplier                  HashJoinOperator           5012.873   15.19%     1084.578       1609.577       1609.577      690       218955
+  next=4975.257  borrow=  3.361  take=  0.000  constrain=  0.000  close= 34.044  alloc[next=1083.395 borrow=   0.509 take=   0.000 constrain=   0.000 close=   0.674] MB
+q05.join.orders                    HashJoinOperator           4942.754   14.97%     1062.372       1576.622       1576.622      690      5475126
+  next=4892.769  borrow= 15.831  take=  0.000  constrain=  0.000  close= 33.958  alloc[next=1002.099 borrow=  59.355 take=   0.000 constrain=   0.000 close=   0.918] MB
+q05.scan.lineitem                  NitroParquetScanOperator   2794.642    8.47%       47.152         70.281         70.281      687      5475126
+  next=  6.106  borrow=  1.147  take=  0.000  constrain=  0.000  close= 27.586  alloc[next=  32.005 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.625] MB
+q05.project.customer               ProjectOperator            1347.216    4.08%      825.326        187.682        187.682     4503      6827757
+  next=688.006  borrow=587.962  take=  0.000  constrain=  0.000  close= 68.300  alloc[next= 122.805 borrow= 400.450 take=   0.000 constrain=   0.000 close= 302.042] MB
+q05.join.customer                  HashJoinOperator           1332.654    4.04%      818.461        186.121        186.121     4503      6827757
+  next=683.271  borrow=582.808  take=  0.000  constrain=  0.000  close= 65.141  alloc[next= 116.970 borrow= 400.430 take=   0.000 constrain=   0.000 close= 301.062] MB
+q05.project.orders                 ProjectOperator             829.034    2.51%       37.999          8.647          8.647     4500      6827757
+  next= 80.878  borrow=728.625  take=  0.000  constrain=  0.000  close= 15.447  alloc[next=  28.144 borrow=   3.337 take=   0.000 constrain=   0.000 close=   6.461] MB
+q05.filter.orders                  FilterOperator              815.255    2.47%       31.790          7.234          7.234     4500      6827757
+  next= 76.361  borrow=723.681  take=  0.000  constrain=  0.000  close= 12.350  alloc[next=  22.965 borrow=   3.317 take=   0.000 constrain=   0.000 close=   5.481] MB
+q05.scan.orders                    NitroParquetScanOperator    766.108    2.32%       22.650          5.154          5.154     4500     45000000
+  next=  1.762  borrow=750.684  take=  0.000  constrain=  2.307  close=  9.940  alloc[next=   1.466 borrow=  16.514 take=   0.000 constrain=   0.000 close=   4.670] MB
+q05.scan.customer                  NitroParquetScanOperator     39.754    0.12%        4.617         10.507         10.507      450      4500000
+  next=  0.141  borrow= 38.871  take=  0.000  constrain=  0.000  close=  0.583  alloc[next=   0.112 borrow=   4.239 take=   0.000 constrain=   0.000 close=   0.266] MB
+q05.project.supplier               ProjectOperator               6.725    0.02%        9.165        782.059        782.059       12        60111
+  next=  6.292  borrow=  0.180  take=  0.000  constrain=  0.000  close=  0.232  alloc[next=   8.894 borrow=   0.245 take=   0.000 constrain=   0.000 close=   0.025] MB
+q05.join.nation                    HashJoinOperator              6.620    0.02%        9.142        780.104        780.104       12        60111
+  next=  6.244  borrow=  0.152  take=  0.000  constrain=  0.000  close=  0.216  alloc[next=   8.874 borrow=   0.245 take=   0.000 constrain=   0.000 close=   0.022] MB
+q05.scan.supplier                  NitroParquetScanOperator      3.481    0.01%        1.358        154.461        154.461        9        60111
+  next=  0.073  borrow=  0.011  take=  0.000  constrain=  0.000  close=  0.086  alloc[next=   0.521 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.006] MB
+q05.project.nation                 ProjectOperator               2.047    0.01%        2.028        346.143        346.143        6           15
+  next=  1.893  borrow=  0.021  take=  0.000  constrain=  0.000  close=  0.119  alloc[next=   2.018 borrow=   0.001 take=   0.000 constrain=   0.000 close=   0.009] MB
+q05.join.region                    HashJoinOperator              1.985    0.01%        2.017        344.161        344.161        6           15
+  next=  1.858  borrow=  0.014  take=  0.000  constrain=  0.000  close=  0.108  alloc[next=   2.008 borrow=   0.001 take=   0.000 constrain=   0.000 close=   0.008] MB
+q05.project.region                 ProjectOperator               1.368    0.00%        0.439        149.820        149.820        3            3
+  next=  1.214  borrow=  0.050  take=  0.000  constrain=  0.000  close=  0.087  alloc[next=   0.431 borrow=   0.002 take=   0.000 constrain=   0.000 close=   0.006] MB
+q05.filter.region                  FilterOperator                1.305    0.00%        0.433        147.669        147.669        3            3
+  next=  1.173  borrow=  0.046  take=  0.000  constrain=  0.000  close=  0.077  alloc[next=   0.425 borrow=   0.002 take=   0.000 constrain=   0.000 close=   0.005] MB
+q05.scan.region                    NitroParquetScanOperator      0.278    0.00%        0.014          4.781          4.781        3           15
+  next=  0.037  borrow=  0.171  take=  0.000  constrain=  0.008  close=  0.055  alloc[next=   0.004 borrow=   0.005 take=   0.000 constrain=   0.000 close=   0.005] MB
+q05.scan.nation                    NitroParquetScanOperator      0.174    0.00%        0.018          6.211          6.211        3           75
+  next=  0.009  borrow=  0.088  take=  0.000  constrain=  0.000  close=  0.074  alloc[next=   0.003 borrow=   0.012 take=   0.000 constrain=   0.000 close=   0.003] MB
+Total attributed cpu_ms: 33006.736
+
