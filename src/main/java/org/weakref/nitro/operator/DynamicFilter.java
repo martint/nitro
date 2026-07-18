@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import org.weakref.nitro.function.VersionedLongPredicate;
 
 /**
  * A runtime (Velox-style) dynamic filter: the membership of a build side's join key, pushed down a probe operator
@@ -27,6 +28,7 @@ import it.unimi.dsi.fastutil.longs.LongSet;
  * downstream join still produces identical output. {@code min}/{@code max} gate the (cheaper) set membership test.
  */
 public final class DynamicFilter
+        implements VersionedLongPredicate
 {
     // Above this value span a membership bitset would be too large; fall back to the hash set. Surrogate-key
     // domains (stores, time-of-day, demographics) are far smaller than this, so they take the bitset fast path.
@@ -149,6 +151,19 @@ public final class DynamicFilter
             return true;
         }
         return values.contains(value);
+    }
+
+    @Override
+    public boolean test(long value)
+    {
+        return accepts(value);
+    }
+
+    @Override
+    public long contentGeneration()
+    {
+        // DynamicFilter is immutable. Retargeting constructs a distinct object, so every instance has one generation.
+        return 0;
     }
 
     /** The same filter retargeted to {@code newColumn} in a source operator's output space. */

@@ -40,6 +40,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.function.VersionedLongPredicate;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.DynamicFilter;
@@ -406,6 +407,57 @@ public class TestParquetOperator
                 }
             }
             assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testVersionedPredicateReusesDictionaryAcceptanceUntilGenerationChanges()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        long[] dictionary = {100, 200, 300, 400};
+        for (int position = 0; position < 24_000; position++) {
+            rows.add(new ParquetRow(position, true, dictionary[position & 3]));
+        }
+        java.nio.file.Path file = writeParquetFile("versioned-dictionary-predicate.parquet", true, rows);
+        assertDictionaryEncoding(file, "maybe");
+
+        class CountingPredicate
+                implements VersionedLongPredicate
+        {
+            private long generation;
+            private int calls;
+
+            @Override
+            public boolean test(long value)
+            {
+                calls++;
+                return value <= 300;
+            }
+
+            @Override
+            public long contentGeneration()
+            {
+                return generation;
+            }
+        }
+
+        try (ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquetFile), "maybe")) {
+            CountingPredicate predicate = new CountingPredicate();
+            int[] survivors = new int[8_000];
+            long[] values = new long[8_000];
+
+            assertThat(reader.filterDictLongs(predicate, predicate, 8_000, survivors, values, null)).isEqualTo(6_000);
+            int firstGenerationCalls = predicate.calls;
+            assertThat(firstGenerationCalls).isPositive();
+
+            assertThat(reader.filterDictLongs(predicate, predicate, 8_000, survivors, values, null)).isEqualTo(6_000);
+            assertThat(predicate.calls).isEqualTo(firstGenerationCalls);
+
+            predicate.generation++;
+            assertThat(reader.filterDictLongs(predicate, predicate, 8_000, survivors, values, null)).isEqualTo(6_000);
+            assertThat(predicate.calls).isEqualTo(firstGenerationCalls * 2);
         }
     }
 

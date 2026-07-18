@@ -25,6 +25,7 @@ import org.apache.parquet.format.Util;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.function.VersionedLongPredicate;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -108,6 +109,7 @@ public final class ColumnReader
     // 1/9 puts the boundary at ~0.111 with symmetric margin. Below the threshold a query keeps the branchy path, so a
     // misestimate near the boundary only trades ~equal costs.
     private static final int BRANCHLESS_COMPACTION_DENOMINATOR = 9;
+    private static final int VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR = 12;
     private static final boolean STREAM_NULLABLE_DICTIONARY_FILTER =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.streamNullableDictionaryFilter", "true"));
 
@@ -162,6 +164,8 @@ public final class ColumnReader
     private long decompressCapacity;
     private static final boolean DEBUG_DECOMPRESSION =
             Boolean.getBoolean("nitro.debug.decompression") || Boolean.getBoolean("nitro.parquet.decompressionStats");
+    private static final boolean DEBUG_VERSIONED_DICTIONARY_PREDICATES =
+            Boolean.getBoolean("nitro.debug.versionedDictionaryPredicates");
     private long compressedPageCount;
     private long compressedPageBytes;
     private long uncompressedPageBytes;
@@ -249,6 +253,9 @@ public final class ColumnReader
     private boolean pageFilterFused;
     private boolean[] acceptById = EMPTY_BOOLEANS;
     private int acceptByIdChunk = -1;
+    private VersionedLongPredicate acceptByIdPredicate;
+    private long acceptByIdPredicateGeneration = -1;
+    private boolean versionedDictionaryPredicateReuseReported;
     private int acceptedCount;
     private MemorySegment pagePlainBody;
     private long pagePlainOffset;
@@ -654,11 +661,15 @@ public final class ColumnReader
      */
     public int filterDictLongs(java.util.function.LongPredicate predicate, int count, int[] survivorsOut, long[] valuesOut, boolean[] nullsOut)
     {
+        return filterDictLongs(predicate, null, count, survivorsOut, valuesOut, nullsOut);
+    }
+
+    public int filterDictLongs(java.util.function.LongPredicate predicate, VersionedLongPredicate predicateVersion, int count, int[] survivorsOut, long[] valuesOut, boolean[] nullsOut)
+    {
         int sc = 0;
         int windowPos = 0;
         filterScan = true;
-        acceptByIdChunk = -1;
-        filterAcceptIntsChunk = -1;
+        prepareDictionaryPredicate(predicateVersion);
         try {
             while (windowPos < count) {
                 if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
@@ -858,10 +869,15 @@ public final class ColumnReader
     /** Predicate-over-dictionary lead filter (INT); see {@link #filterDictLongs}. */
     public int filterDictInts(java.util.function.LongPredicate predicate, int count, int[] survivorsOut, int[] valuesOut, boolean[] nullsOut)
     {
+        return filterDictInts(predicate, null, count, survivorsOut, valuesOut, nullsOut);
+    }
+
+    public int filterDictInts(java.util.function.LongPredicate predicate, VersionedLongPredicate predicateVersion, int count, int[] survivorsOut, int[] valuesOut, boolean[] nullsOut)
+    {
         int sc = 0;
         int windowPos = 0;
         filterScan = true;
-        acceptByIdChunk = -1;
+        prepareDictionaryPredicate(predicateVersion);
         try {
             while (windowPos < count) {
                 if (pageCursor >= pageValueCount && !decodeNextDataPage()) {
@@ -1064,6 +1080,34 @@ public final class ColumnReader
             acceptByIdChunk = chunkIndex;
         }
         return acceptById;
+    }
+
+    private void prepareDictionaryPredicate(VersionedLongPredicate predicate)
+    {
+        long generation = predicate == null ? -1 : predicate.contentGeneration();
+        boolean sameGeneration = generation >= 0 &&
+                acceptByIdPredicate == predicate &&
+                acceptByIdPredicateGeneration == generation;
+        boolean sameChunk = sameGeneration && acceptByIdChunk == chunkIndex;
+        // Immediately below the branchless-compaction threshold, the branchy row loop is sensitive to a cold
+        // acceptance table. Rebuilding the table is useful warm-up at that shape, so retain versioned reuse only
+        // outside the narrow 1/12..1/9 acceptance band.
+        boolean warmBranchyTable = sameChunk &&
+                (long) acceptedCount * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionarySize &&
+                (long) acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR < dictionarySize;
+        if (DEBUG_VERSIONED_DICTIONARY_PREDICATES &&
+                !versionedDictionaryPredicateReuseReported &&
+                sameChunk &&
+                !warmBranchyTable) {
+            System.err.printf("[versioned-dictionary-predicate] reused chunk=%d entries=%d%n", chunkIndex, dictionarySize);
+            versionedDictionaryPredicateReuseReported = true;
+        }
+        if (!sameGeneration || warmBranchyTable) {
+            acceptByIdChunk = -1;
+            filterAcceptIntsChunk = -1;
+            acceptByIdPredicate = generation >= 0 ? predicate : null;
+            acceptByIdPredicateGeneration = generation;
+        }
     }
 
     /** Refresh (per chunk) and return the int[] mirror of {@code accept} for the SIMD gather in {@link VectorDictFilter}. */

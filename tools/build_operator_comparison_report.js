@@ -157,6 +157,11 @@ for (const [display, suite, first, last] of [["TPC-H", "tpch", 1, 22], ["TPC-DS"
     // A mask-sensitive computed output must be re-resolved after its retained batch is constrained. The old q17
     // row predates that lifecycle repair and is not a valid current-source measurement.
     overlayJvm(nitro, `${targeted18}/nitro-tpch-q17-sensitive-output-final-3fork.json`, new Set(["17"]));
+    // Publish the complete versioned-predicate activation cohort from one final-source capture. Older focused
+    // thermal sequences are intentionally superseded, including rows with lower absolute duration.
+    overlayJvm(nitro, `${targeted18}/nitro-tpch-versioned-predicate-final-3fork.json`, new Set([
+      "05", "08", "11", "21",
+    ]));
   }
   if (suite === "tpcds") {
     overlayJvm(trino, `${targeted}/trino-tpcds-q04-compact-join-layouts.json`, new Set(["04"]));
@@ -330,6 +335,14 @@ for (const [display, suite, first, last] of [["TPC-H", "tpch", 1, 22], ["TPC-DS"
     overlayJvm(nitro, `${targeted18}/nitro-tpcds-q96-current-3fork.json`, new Set(["96"]));
     overlayJvm(nitro, `${targeted18}/nitro-tpcds-q20-q57-q60-current-3fork.json`, new Set(["20", "57", "60"]));
     overlayJvm(nitro, `${targeted18}/nitro-tpcds-q26-q47-q50-q56-exact-coverage-final-3fork.json`, new Set(["26", "47", "50", "56"]));
+    // Predicate-derived dictionary acceptance is reusable only when predicate identity and content generation both
+    // match, the physical dictionary is large enough to amortize the cache, and the survivor density is outside the
+    // measured warm branchy exclusion band. Replace every actual activation from one final-source invocation.
+    overlayJvm(nitro, `${targeted18}/nitro-tpcds-versioned-predicate-final-3fork.json`, new Set([
+      "01", "03", "07", "18", "24", "26", "27", "40", "49", "53", "54", "63", "64", "71",
+      "89", "93",
+    ]));
+    overlayJvm(nitro, `${targeted18}/nitro-tpcds-versioned-predicate-64k-guards-final-3fork.json`, new Set(["88", "96"]));
   }
   if (suite === "clickbench") {
     overlayJvm(nitro, `${targeted}/nitro-clickbench-q10-partitioned-distinct.json`, new Set(["10"]));
@@ -375,6 +388,7 @@ for (const [display, suite, first, last] of [["TPC-H", "tpch", 1, 22], ["TPC-DS"
     overlayJvm(nitro, `${targeted18}/nitro-clickbench-q22-shared-dense-false-on-final-3fork.json`, new Set(["22"]));
     overlayJvm(nitro, `${targeted18}/nitro-clickbench-q17-stream-tuple-reuse-on-3fork.json`, new Set(["17"]));
     overlayJvm(nitro, `${targeted18}/nitro-clickbench-q06-q13-q15-q17-q18-dictionary-hash-reuse-final-3fork.json`, new Set(["06", "13", "15", "17", "18"]));
+    overlayJvm(nitro, `${targeted18}/nitro-clickbench-q20-versioned-predicate-final-3fork.json`, new Set(["20"]));
   }
   suites.push({display, suite, first, last, nitro, trino, velox});
 }
@@ -485,6 +499,7 @@ out += `- The final 2026-07-18 ClickBench q06/q13/q15/q17/q18 cohort reuses dict
 out += `- The final 2026-07-18 TPC-DS q96 row is a current-source recapture, not a harness change. Its Trino-SQL-derived fact scan still applies the three filtered dimension joins before \`count(*)\`. Unpinned 12 GiB three-fork Nitro is 109.268 ms and 6.603 MB/op, 1.245x faster than Velox with fewer cycles, L1D misses, dTLB misses, and branch misses; only instructions remain 4.9% higher. The existing Rust/FFM skip-decoder reference reaches 99.720 ms and removes that instruction gap, proving bounds/session checks in the portable Java selected decoder are the residual, but it remains diagnostic rather than becoming an environment-dependent default.\n`;
 out += `- The final 2026-07-18 TPC-DS q20/q57/q60 current-source cohort comes from one unpinned 12 GiB three-fork invocation with full counters and JVM allocation. Harnesses are unchanged. Q20 is stable; q57 improves from 1784.1 to 1601.4 ms and q60 from 324.8 to 306.4 ms as later generic reader/grouping changes reach these shapes. The complete rows replace their prior bundles rather than mixing favorable counters from separate runs.\n`;
 out += `- The final 2026-07-18 exact dictionary-coverage cohort replaces TPC-DS q26/q47/q50/q56 from one current-source invocation. A dynamic filter is dropped only after every physical numeric dictionary value in every row-group chunk is accepted; filter and row-group-local dictionary cardinalities are never treated as proof of value coverage. This restores q50 from 1419.0 to 1029.2 ms in the publication capture while q22 remains neutral in the adjacent control. The repair is reader/scan-wide, leaves the Trino-SQL-derived operator graphs unchanged, and passes the multi-chunk cursor regression, four SF10 Nitro/operator/SQL parity checks, and the full 1,202-test gate. The board rows are unpinned 12 GiB three-fork captures with complete counters and JVM allocation.\n`;
+out += `- The final 2026-07-18 versioned dictionary-predicate cohort replaces all 21 retained activations from one current-source publication sequence: TPC-H q05/q08/q11/q21; TPC-DS q01/q03/q07/q18/q24/q26/q27/q40/q49/q53/q54/q63/q64/q71/q89/q93; and ClickBench q20. A pushed predicate exposes a version token only when its identity and content generation make derived acceptance stable; the reader uses that token as cache identity while retaining the established evaluator call shape. Admission requires at least 64K physical dictionary entries and rejects the measured 1/12-through-1/9 warm branchy survivor band. The broad 89-query policy was rejected after aggregate counters and sum duration regressed; q16/q75 are explicit density nonactivations. Three-fork controls subsequently rejected the only two 45.5K-entry shapes, q88 and q96, so the general amortization floor moved from 32K to 64K; their board rows come from one rebuilt-default guard capture and contain the full duration/counter/allocation bundle. Bidirectional q26, q05, and ClickBench q20 controls establish causal wall improvement; q26 branch misses and dTLB loads remain explicit residuals. Real-SF10 q26 Nitro/operator/Trino-SQL parity passes with zero skips, and the full JDK 26 gate passes 1,203 tests with zero failures/errors. Every replacement row uses an unpinned 12 GiB three-fork invocation; slower absolute recaptures are retained rather than cherry-picked away.\n`;
 out += `- This sweep has complete 165-query coverage for all three engines (22 TPC-H, 99 TPC-DS, and 44 ClickBench queries). Any future missing/failed row is shown as a dash and excluded pairwise rather than silently imputed.\n`;
 out += `- This is a reconstructable current board, not a claim that focused overlays and base rows were measured in one thermal sequence. Use adjacent isolated A/B captures for optimization decisions; use this board for cross-engine prioritization.\n`;
 

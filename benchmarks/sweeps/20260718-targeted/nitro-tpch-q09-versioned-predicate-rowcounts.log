@@ -1,0 +1,45 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+[rowcounts] [o_orderkey, o_orderdate] raw=15000000 survivors=2930317
+[rowcounts] filter-stages o_orderkey=15000000->2930317[values=2930317,rangeDensity=0.0488,dict=-1]
+[rowcounts] [l_partkey, l_orderkey, l_suppkey, l_quantity, l_extendedprice, l_discount] raw=59986052 survivors=3261613
+[rowcounts] filter-stages l_partkey=59986052->3261613[values=108782,rangeDensity=0.0544,dict=-1]
+query09: 1 iters, 4541.8 ms/iter, sink=700
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q09.sort                           SortOperator               3958.855   14.48%     1581.499    1619455.000    1619455.000        1          175
+  next=3944.390  borrow=  0.516  take=  0.000  constrain=  0.000  close= 13.932  alloc[next=1581.336 borrow=   0.002 take=   0.000 constrain=   0.000 close=   0.161] MB
+q09.group                          GroupedAggregationOperator   3954.506   14.47%     1580.932    1618874.094    1618874.094        1          175
+  next=3940.234  borrow=  0.335  take=  0.000  constrain=  0.000  close= 13.935  alloc[next=1580.709 borrow=   0.061 take=   0.000 constrain=   0.000 close=   0.162] MB
+q09.project                        ProjectOperator            3844.603   14.07%     1558.288       2713.753       2713.753      588      3261613
+  next=3626.873  borrow=197.920  take=  0.000  constrain=  0.000  close= 19.376  alloc[next=1512.844 borrow=  42.362 take=   0.000 constrain=   0.000 close=   3.073] MB
+q09.join.nation                    HashJoinOperator           3647.089   13.34%     1513.770       2636.225       2636.225      588      3261613
+  next=3625.074  borrow=  7.032  take=  0.000  constrain=  0.000  close= 14.780  alloc[next=1511.509 borrow=   1.340 take=   0.000 constrain=   0.000 close=   0.920] MB
+q09.join.orders                    ProjectOperator            3596.723   13.16%     1506.594       2623.729       2623.729      588      3261613
+  next=3576.167  borrow=  5.554  take=  0.000  constrain=  0.000  close= 14.806  alloc[next=1504.704 borrow=   0.955 take=   0.000 constrain=   0.000 close=   0.935] MB
+q09.join.partsupp                  ProjectOperator            2581.217    9.44%      877.370       1121.632       1121.632      801      3261613
+  next=2540.017  borrow= 26.959  take=  0.000  constrain=  0.000  close= 13.887  alloc[next= 851.076 borrow=  25.223 take=   0.000 constrain=   0.000 close=   1.071] MB
+q09.join.supplier                  ProjectOperator            1849.228    6.77%      248.716        738.219        738.219      345      3261613
+  next=1826.813  borrow=  9.646  take=  0.000  constrain=  0.000  close= 12.605  alloc[next= 247.573 borrow=   0.678 take=   0.000 constrain=   0.000 close=   0.465] MB
+q09.join.part                      ProjectOperator            1691.873    6.19%      188.905        560.691        560.691      345      3261613
+  next=1677.193  borrow=  2.893  take=  0.000  constrain=  0.000  close= 11.652  alloc[next= 188.287 borrow=   0.275 take=   0.000 constrain=   0.000 close=   0.343] MB
+q09.scan.lineitem                  NitroParquetScanOperator   1426.073    5.22%       43.081        128.242        128.242      344      3261613
+  next= 12.366  borrow=  0.854  take=  0.000  constrain=  0.000  close= 12.048  alloc[next=  22.899 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.373] MB
+q09.scan.orders                    NitroParquetScanOperator    313.528    1.15%      204.762        713.184        713.184      294      2930317
+  next=  2.063  borrow=  0.249  take=  0.000  constrain=  0.000  close=  2.410  alloc[next=   0.203 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.334] MB
+q09.filter.part                    ProjectOperator             173.604    0.64%      116.104        594.453        594.453      200       108782
+  next=150.812  borrow= 18.867  take=  0.000  constrain=  0.000  close=  3.641  alloc[next= 113.641 borrow=   2.169 take=   0.000 constrain=   0.000 close=   0.291] MB
+q09.scan.partsupp                  NitroParquetScanOperator    121.120    0.44%       74.942         95.926         95.926      800      8000000
+  next=  0.842  borrow=118.317  take=  0.000  constrain=  0.000  close=  1.639  alloc[next=   0.324 borrow=  74.305 take=   0.000 constrain=   0.000 close=   0.313] MB
+q09.scan.part                      NitroParquetScanOperator     96.518    0.35%        7.451         38.149         38.149      200      2000000
+  next=  0.898  borrow= 92.973  take=  0.000  constrain=  0.375  close=  2.127  alloc[next=   0.061 borrow=   7.221 take=   0.000 constrain=   0.000 close=   0.170] MB
+q09.scan.supplier                  NitroParquetScanOperator     72.541    0.27%       27.582       2824.355       2824.355       10       100000
+  next=  0.106  borrow= 72.192  take=  0.000  constrain=  0.000  close=  0.225  alloc[next=   0.004 borrow=  27.572 take=   0.000 constrain=   0.000 close=   0.006] MB
+q09.scan.nation                    NitroParquetScanOperator      4.382    0.02%        0.838        857.766        857.766        1           25
+  next=  1.464  borrow=  2.425  take=  0.000  constrain=  0.000  close=  0.487  alloc[next=   0.209 borrow=   0.478 take=   0.000 constrain=   0.000 close=   0.151] MB
+Total attributed cpu_ms: 27331.859
+

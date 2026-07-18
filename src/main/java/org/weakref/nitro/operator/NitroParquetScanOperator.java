@@ -106,6 +106,7 @@ public final class NitroParquetScanOperator
     private int filterWindow;
     private boolean filterWindowBounded;
     private final DynamicFilter[] filtersByColumn;
+    private final org.weakref.nitro.function.VersionedLongPredicate[] filterVersionsByColumn;
     private boolean hasFilters;
     private boolean filtersPruned;
     // Per-column decode scratch (grows to high-water mark; reused across batches). A column is decoded into
@@ -266,6 +267,7 @@ public final class NitroParquetScanOperator
                 ? Math.max(FILTER_WINDOW, NARROW_FILTER_WINDOW)
                 : FILTER_WINDOW;
         this.filtersByColumn = new DynamicFilter[columnCount];
+        this.filterVersionsByColumn = new org.weakref.nitro.function.VersionedLongPredicate[columnCount];
         this.colLong = new long[columnCount][];
         this.colInt = new int[columnCount][];
         this.colNull = new boolean[columnCount][];
@@ -299,6 +301,14 @@ public final class NitroParquetScanOperator
             return;
         }
         filtersByColumn[column] = filter;
+        int dictionaryEntries = readers[column].peekDictionarySize();
+        boolean warmBranchyTable = (long) filter.size() * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionaryEntries &&
+                (long) filter.size() * DICTIONARY_BRANCHLESS_COMPACTION_DENOMINATOR < dictionaryEntries;
+        filterVersionsByColumn[column] = REUSE_VERSIONED_DICTIONARY_PREDICATES &&
+                dictionaryEntries >= MIN_VERSIONED_DICTIONARY_PREDICATE_ENTRIES &&
+                !warmBranchyTable
+                ? filter
+                : null;
         hasFilters = true;
     }
 
@@ -348,6 +358,7 @@ public final class NitroParquetScanOperator
             if (DROP_NON_SELECTIVE_FILTERS && allFiltersNonSelective()) {
                 for (int c = 0; c < filtersByColumn.length; c++) {
                     filtersByColumn[c] = null;
+                    filterVersionsByColumn[c] = null;
                 }
                 hasFilters = false;
             }
@@ -378,6 +389,14 @@ public final class NitroParquetScanOperator
     }
 
     private static final boolean DEBUG_ROW_COUNTS = Boolean.getBoolean("nitro.debug.rowcounts");
+    private static final boolean REUSE_VERSIONED_DICTIONARY_PREDICATES =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseVersionedDictionaryPredicates", "true"));
+    // A complete acceptance pass needs enough later row-id probes to amortize its table and code-shape cost. The
+    // only 45.5K-entry activation shapes lost their three-fork counter controls; every retained activation is >=100K.
+    private static final int MIN_VERSIONED_DICTIONARY_PREDICATE_ENTRIES =
+            Integer.getInteger("nitro.parquet.minVersionedDictionaryPredicateEntries", 64 * 1024);
+    private static final int VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR = 12;
+    private static final int DICTIONARY_BRANCHLESS_COMPACTION_DENOMINATOR = 9;
     private static final boolean DEBUG_DECOMPRESSION = Boolean.getBoolean("nitro.debug.decompression");
     private long debugRawRows;
     private long debugSurvivors;
@@ -841,11 +860,13 @@ public final class NitroParquetScanOperator
                 // materializing the column; only survivors get a value. Output is dense, aligned to the survivors
                 // (readPositions records that), so the later gather two-pointers it to the final survivor set.
                 boolean[] cn = nullable[column] ? colNull[column] : null;
+                java.util.function.LongPredicate predicate = filter::accepts;
+                org.weakref.nitro.function.VersionedLongPredicate predicateVersion = filterVersionsByColumn[column];
                 if (readers[column].kind() == ColumnReader.Kind.LONG) {
-                    kept = readers[column].filterDictLongs(filter::accepts, count, nextSurvivors, colLong[column], cn);
+                    kept = readers[column].filterDictLongs(predicate, predicateVersion, count, nextSurvivors, colLong[column], cn);
                 }
                 else {
-                    kept = readers[column].filterDictInts(filter::accepts, count, nextSurvivors, colInt[column], cn);
+                    kept = readers[column].filterDictInts(predicate, predicateVersion, count, nextSurvivors, colInt[column], cn);
                 }
                 survivors = applied + 1 < order.length
                         ? snapshotFilterSurvivors(column, nextSurvivors, kept)
