@@ -1133,3 +1133,9 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
   0.89% dTLB-miss reduction was only 3.8K misses because both legs shared the same low-miss placement mode. The
   implementation and tests were removed. Evidence is under
   `benchmarks/sweeps/20260723-targeted/tpcds-q23-next/`; board rows and aggregate summaries are unchanged.
+- The 2026-07-23 ClickBench q34 count-state chunk experiment is diagnostic only. Moving the general
+  `CountStateVector` from 4K-long to 16K-long chunks reduced its random directory from roughly 36 KiB to 9 KiB but
+  lost the unpinned fixed/pre-touched-12-GiB reverse control: 11915.5/11868.3 ms. Candidate instructions rose 1.57%,
+  cycles 0.49%, L1D loads 2.79%, dTLB misses/loads 21.35%/3.71%, and branches 1.34%; a 1.33% L1D-miss reduction and
+  0.06% allocation reduction did not compensate. The property was removed and the 4K-long layout restored. Evidence
+  is under `benchmarks/sweeps/20260723-targeted/clickbench-q34-q35-chunks/`; board rows and summaries are unchanged.
