@@ -1139,3 +1139,10 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
   cycles 0.49%, L1D loads 2.79%, dTLB misses/loads 21.35%/3.71%, and branches 1.34%; a 1.33% L1D-miss reduction and
   0.06% allocation reduction did not compensate. The property was removed and the 4K-long layout restored. Evidence
   is under `benchmarks/sweeps/20260723-targeted/clickbench-q34-q35-chunks/`; board rows and summaries are unchanged.
+- The 2026-07-23 TPC-DS q75 dense evaluator-metadata experiment is rejected and does not replace the board row.
+  General bounded arrays replaced assignment and requested-stream maps only for plans with dense variable IDs; sparse
+  plans retained the existing maps, and 308 focused tests passed. After invalidating an initial enum-`values()` clone
+  artifact, the corrected unpinned `-Xmx12g`/THP candidate/reverse pair was 1874.1/1881.7 ms. The 0.40% wall and
+  0.16% allocation reductions came with +1.98% instructions, +1.96% cycles, +2.72% L1D misses, +33.60% dTLB loads,
+  +3.42% branch misses, and +2.67% branches. The implementation/property were removed. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q75-dense-evaluator/`; board rows and summaries are unchanged.
