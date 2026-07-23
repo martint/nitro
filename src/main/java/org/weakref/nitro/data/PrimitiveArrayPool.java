@@ -95,6 +95,16 @@ public final class PrimitiveArrayPool
         return array != null ? array : new int[length];
     }
 
+    /**
+     * Acquires an exactly sized retained array when one is already available, without allocating on a miss.
+     * Capacity planners can use this to choose a wider reusable generation only when it does not increase the
+     * execution's primitive working set.
+     */
+    public synchronized int[] tryBorrowInts(int length)
+    {
+        return borrow(int[].class, length, int[].class);
+    }
+
     public synchronized byte[] borrowBytes(int length)
     {
         byte[] array = borrow(byte[].class, length, byte[].class);

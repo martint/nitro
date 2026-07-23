@@ -1,6 +1,6 @@
 # Operator-harness engine comparison — JDK 26
 
-Generated 2026-07-22 from the completed full-counter sweep plus the explicitly named focused overlays below. Nitro and Trino are unpinned with one JMH worker, fresh forks, JDK 26, THP, and 12 GiB heaps. Velox is pinned to CPU 0 with one driver/I/O thread and a 12 GiB managed cache. Compiler benchmarks are excluded.
+Generated 2026-07-23 from the completed full-counter sweep plus the explicitly named focused overlays below. Nitro and Trino are unpinned with one JMH worker, fresh forks, JDK 26, THP, and 12 GiB heaps. Velox is pinned to CPU 0 with one driver/I/O thread and a 12 GiB managed cache. Compiler benchmarks are excluded.
 
 Speedup is comparison duration divided by Nitro duration; values above 1.0 favor Nitro. Every counter bundle is **instructions / cycles / L1D misses / L1D loads / dTLB misses / dTLB loads / branch misses / branches**, normalized per operation. A dash means the engine/query did not produce a valid capture; no counter is estimated or represented as zero.
 
@@ -59,7 +59,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q20 | 43.8 | 786.4 | 55.0 | 17.972x | 1.257x | 59.900M | — | — | 846.824M / 251.200M / 7.761M / 371.561M / 17.865K / 197.984K / 1.668M / 170.923M | 16.242B / 6.323B / 310.970M / 7.927B / 312.060K / 10.837M / 52.454M / 3.128B | 838.256M / 306.358M / 9.825M / — / 39.766K / 521.572K / 1.823M / — |
 | q21 | 291.6 | 7020.5 | 451.0 | 24.072x | 1.546x | 33.463M | 28.356B | 63.963M | 6.403B / 1.621B / 23.661M / 2.667B / 104.672K / 885.851K / 2.480M / 1.342B | 139.546B / 42.154B / 1.889B / 63.440B / 1.031M / 29.186M / 216.749M / 26.834B | 5.585B / 2.391B / 88.022M / 2.772B / 95.001K / 3.315M / 1.929M / 1.007B |
 | q22 | 744.0 | 3085.2 | 899.0 | 4.147x | 1.208x | 101.659M | — | — | 16.927B / 4.025B / 113.830M / 6.949B / 155.358K / 1.372M / 6.871M / 3.647B | 73.552B / 18.382B / 727.901M / 30.480B / 555.179K / 12.882M / 42.026M / 14.330B | 17.725B / 4.782B / 178.653M / — / 327.896K / 6.828M / 6.383M / — |
-| q23 | 4918.8 | 14231.2 | 6930.0 | 2.893x | 1.409x | 1.504B | 31.414B | 5.914B | 94.041B / 25.972B / 996.272M / 44.679B / 12.922M / 76.299M / 147.115M / 18.578B | 314.951B / 82.039B / 2.319B / 134.986B / 28.566M / 270.451M / 230.120M / 60.003B | 116.508B / 36.332B / 1.491B / 52.762B / 1.152M / 150.008M / 130.632M / 20.569B |
+| q23 | 4979.4 | 14231.2 | 6930.0 | 2.858x | 1.392x | 1.402B | 31.414B | 5.914B | 103.798B / 26.093B / 957.883M / 47.259B / 5.792M / 66.662M / 125.160M / 19.896B | 314.951B / 82.039B / 2.319B / 134.986B / 28.566M / 270.451M / 230.120M / 60.003B | 116.508B / 36.332B / 1.491B / 52.762B / 1.152M / 150.008M / 130.632M / 20.569B |
 | q24 | 750.1 | 5498.0 | 1030.0 | 7.330x | 1.373x | 146.834M | 11.012B | 1.309B | 14.253B / 4.090B / 107.500M / 6.098B / 176.912K / 1.494M / 20.919M / 2.736B | 96.336B / 36.237B / 1.514B / 48.008B / 13.741M / 168.650M / 196.763M / 18.228B | 18.926B / 5.439B / 160.199M / 8.998B / 602.229K / 16.164M / 24.617M / 3.149B |
 | q25 | 443.7 | 1576.0 | 1390.0 | 3.552x | 3.133x | 164.155M | 7.031B | 1.566B | 8.606B / 2.389B / 59.965M / 3.638B / 176.394K / 1.114M / 12.248M / 1.746B | 29.572B / 11.747B / 484.566M / 13.224B / 3.318M / 37.950M / 55.486M / 5.469B | 31.615B / 7.308B / 222.998M / 14.305B / 303.228K / 17.808M / 16.125M / 5.415B |
 | q26 | 158.3 | 572.0 | 184.0 | 3.614x | 1.163x | 39.260M | 3.194B | 126.878M | 2.910B / 871.488M / 21.634M / 1.213B / 70.006K / 514.528K / 4.577M / 601.469M | 13.456B / 4.644B / 214.798M / 5.796B / 773.614K / 10.000M / 28.871M / 2.520B | 2.931B / 1.010B / 25.474M / 1.378B / 172.529K / 2.301M / 4.511M / 502.860M |
@@ -192,8 +192,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 |---|---:|---:|---:|---:|---:|---:|
 | TPC-H N/T | 22 | 22 | 1.753x | 31968.2 ms | 57162.5 ms | 1.788x |
 | TPC-H N/V | 22 | 22 | 1.427x | 31968.2 ms | 48207.0 ms | 1.508x |
-| TPC-DS N/T | 99 | 99 | 5.201x | 78230.1 ms | 336095.1 ms | 4.296x |
-| TPC-DS N/V | 99 | 99 | 1.610x | 78230.1 ms | 127411.0 ms | 1.629x |
+| TPC-DS N/T | 99 | 99 | 5.200x | 78290.7 ms | 336095.1 ms | 4.293x |
+| TPC-DS N/V | 99 | 99 | 1.610x | 78290.7 ms | 127411.0 ms | 1.627x |
 | ClickBench N/T | 44 | 44 | 2.575x | 154161.5 ms | 455811.5 ms | 2.957x |
 | ClickBench N/V | 44 | 44 | 2.066x | 154161.5 ms | 330233.0 ms | 2.142x |
 
@@ -201,11 +201,28 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| Overall N/T | 165 | 165 | 3.730x | 264359.8 ms | 849069.1 ms | 3.212x |
-| Overall N/V | 165 | 165 | 1.693x | 264359.8 ms | 505851.0 ms | 1.913x |
+| Overall N/T | 165 | 165 | 3.730x | 264420.4 ms | 849069.1 ms | 3.211x |
+| Overall N/V | 165 | 165 | 1.693x | 264420.4 ms | 505851.0 ms | 1.913x |
 
 ## Sources and qualifications
 
+- The final 2026-07-23 TPC-DS q23 overlay lets a generic compact grouping table skip a short-lived intermediate
+  slot generation only when the exact wider `int[]` is already idle in the shared primitive-array pool. The pool's
+  new exact-size try-borrow API never allocates on a miss: the first repeated q23 grouping grows normally to
+  16,777,216 slots, then the second compatible grouping reuses that released plane at the 4,194,304-slot boundary
+  instead of rehashing through 8,388,608 slots. Hashing, equality, group IDs, load factors, and the SQL-derived
+  operator graph are unchanged. The initial speculative policy also activated TPC-DS q51 and ClickBench q31; q31
+  rejected it with +0.90% duration, +2.28% cycles, and regressions in nearly every memory counter. A complete
+  eligibility inventory plus focused reuse-only replay proves q51 and q31 now remain at their ordinary 8,388,608
+  slots and only q23's second repeated grouping activates. Against the exact disabled ten-warmup/five-measurement/
+  three-fork control, the bracketing candidate mean improves duration 3.31%, allocation 4.59%, cycles 3.17%, L1D
+  misses/loads 4.50%/1.57%, dTLB misses/loads 22.87%/5.26%, and branch misses/branches 7.91%/1.68%, with instructions
+  neutral at -0.006%. The published single-bundle candidate row is 4979.436 ms, 1.402 GB/op, 103.798B instructions,
+  26.093B cycles, 957.883M L1D misses, 5.792M dTLB misses, and 125.160M branch misses. Fifteen focused pool/grouping
+  tests pass; compiled q23 and all three real-SF10 Nitro/operator/Trino-SQL parity legs pass; the complete gate passes
+  1,286 tests with zero failures/errors and 566 expected external-data skips. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q23-next/`, especially `reuse-terminal-jump-q23-on-final-3fork.json`,
+  `reuse-terminal-jump-q23-off-final-3fork.json`, and `reuse-terminal-jump-q23-on-final-reverse-3fork.json`.
 - The final 2026-07-22 TPC-DS q75/q78 overlay omits materialized COALESCE null buffers when either input's general
   vector metadata proves it is null-free. COALESCE values and precedence are unchanged; evaluator completion supplies
   the shared all-false null stream if a downstream consumer explicitly requests it. The implementation recognizes no

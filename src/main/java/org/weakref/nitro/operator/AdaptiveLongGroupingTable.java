@@ -42,6 +42,14 @@ class AdaptiveLongGroupingTable
             Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongHighDensityPair", "true"));
     private static final float HIGH_DENSITY_PAIR_LOAD_FACTOR = 0.825f;
     private static final int HIGH_DENSITY_PAIR_MIN_SLOTS = 1 << 24;
+    // Once a grouping-owned compact pair reaches one quarter of the established high-density terminal capacity,
+    // skip the otherwise short-lived half-capacity generation only when an exact terminal slot plane is already idle
+    // in the shared primitive pool. This avoids a full rehash in repeated compatible pipelines without speculatively
+    // doubling the working set of streams that stop in the half-capacity generation. A disable switch provides an
+    // adjacent whole-query control and allows broad activation audits before retention.
+    private static final boolean HIGH_DENSITY_PAIR_TERMINAL_JUMP =
+            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongHighDensityPairTerminalJump", "true"));
+    private static final int HIGH_DENSITY_PAIR_TERMINAL_JUMP_SLOTS = HIGH_DENSITY_PAIR_MIN_SLOTS >>> 2;
     private static final boolean GROUPED_PROBE =
             Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongGroupedProbe", "true"));
     private static final int GROUPED_PROBE_LANES = IntVector.SPECIES_256.length();
@@ -75,9 +83,11 @@ class AdaptiveLongGroupingTable
     private int debugNullFreeBatches;
     private int debugNullableBatches;
     private boolean debugHighDensityCapacityUsed;
+    private boolean debugTerminalJumpUsed;
     private boolean containsNullableGroups;
     private int[] densePositions = new int[0];
     private long[] promotedAssignedGroups = new long[0];
+    private int[] reusedTerminalSlots;
 
     AdaptiveLongGroupingTable(int arity, int expectedSize, boolean groupedProbeEligible)
     {
@@ -546,11 +556,41 @@ class AdaptiveLongGroupingTable
         // index avoids repeated full-table rehashes, but reverse key payload grows only on realized insertions.
         int capacity = slots.length;
         while (expectedSize >= (long) (capacity * loadFactor(capacity))) {
-            capacity <<= 1;
+            capacity = nextGrowthCapacity(capacity);
         }
         if (capacity != slots.length) {
             rehash(capacity);
         }
+    }
+
+    int nextGrowthCapacity(int capacity)
+    {
+        if (terminalReuseEligible(capacity)) {
+            reusedTerminalSlots = arrayPool.tryBorrowInts(HIGH_DENSITY_PAIR_MIN_SLOTS);
+            if (reusedTerminalSlots != null) {
+                if (DEBUG_SHAPES) {
+                    debugTerminalJumpUsed = true;
+                }
+                return HIGH_DENSITY_PAIR_MIN_SLOTS;
+            }
+        }
+        // A single unusually large reservation can cross the reused terminal generation and its load threshold in
+        // one ensureCapacity call. Return the exact lease before continuing to the next generation; never repeat a
+        // capacity or carry a mismatched lease into rehash().
+        if (reusedTerminalSlots != null) {
+            arrayPool.release(reusedTerminalSlots);
+            reusedTerminalSlots = null;
+        }
+        return capacity << 1;
+    }
+
+    boolean terminalReuseEligible(int capacity)
+    {
+        return HIGH_DENSITY_PAIR_TERMINAL_JUMP &&
+                HIGH_DENSITY_PAIR_CAPACITY &&
+                arity == 2 &&
+                !groupedProbeEligible &&
+                capacity == HIGH_DENSITY_PAIR_TERMINAL_JUMP_SLOTS;
     }
 
     @Override
@@ -678,7 +718,20 @@ class AdaptiveLongGroupingTable
     final void rehash(int capacity)
     {
         int[] previousSlots = slots;
-        allocateSlots(capacity);
+        if (reusedTerminalSlots != null) {
+            if (reusedTerminalSlots.length != capacity) {
+                throw new IllegalStateException("Reused terminal slots do not match requested capacity");
+            }
+            slots = reusedTerminalSlots;
+            reusedTerminalSlots = null;
+            Arrays.fill(slots, 0);
+            slotMask = capacity - 1;
+            maxFill = (int) (capacity * loadFactor(capacity));
+            debugHighDensityCapacityUsed |= loadFactor(capacity) != LOAD_FACTOR;
+        }
+        else {
+            allocateSlots(capacity);
+        }
         for (int groupId = 0; groupId < size; groupId++) {
             int nullMask = groupNullMask(groupId) & 0xFF;
             long hash = nullMask;
@@ -745,12 +798,13 @@ class AdaptiveLongGroupingTable
     {
         if (DEBUG_SHAPES) {
             System.err.printf(
-                    "[adaptive-long-grouping] release arity=%d groups=%d slots=%d groupedProbeEligible=%s highDensityCapacity=%s promoted=%s nullFreeBatches=%d nullableBatches=%d%n",
+                    "[adaptive-long-grouping] release arity=%d groups=%d slots=%d groupedProbeEligible=%s highDensityCapacity=%s terminalJump=%s promoted=%s nullFreeBatches=%d nullableBatches=%d%n",
                     arity,
                     size,
                     slots == null ? 0 : slots.length,
                     groupedProbeEligible,
                     debugHighDensityCapacityUsed,
+                    debugTerminalJumpUsed,
                     promoted != null,
                     debugNullFreeBatches,
                     debugNullableBatches);
@@ -766,6 +820,8 @@ class AdaptiveLongGroupingTable
         batchNullMasks = new byte[0];
         arrayPool.release(batchHashes);
         batchHashes = new int[0];
+        arrayPool.release(reusedTerminalSlots);
+        reusedTerminalSlots = null;
         arrayPool.release(densePositions);
         densePositions = new int[0];
         arrayPool.release(promotedAssignedGroups);

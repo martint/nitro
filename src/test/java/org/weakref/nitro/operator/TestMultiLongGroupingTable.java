@@ -118,6 +118,23 @@ class TestMultiLongGroupingTable
     }
 
     @Test
+    void testAdaptiveGroupingPairSkipsShortLivedPreTerminalGeneration()
+    {
+        AdaptiveLongGroupingTable groupingPair = AdaptiveLongGroupingTable.create(2, 16);
+        AdaptiveLongGroupingTable distinctPair = AdaptiveLongGroupingTable.createDistinct(2, 16);
+        AdaptiveLongGroupingTable groupingTriple = AdaptiveLongGroupingTable.create(3, 16);
+        int quarterTerminalCapacity = 1 << 22;
+
+        assertThat(groupingPair.terminalReuseEligible(quarterTerminalCapacity)).isTrue();
+        assertThat(distinctPair.terminalReuseEligible(quarterTerminalCapacity)).isFalse();
+        assertThat(groupingTriple.terminalReuseEligible(quarterTerminalCapacity)).isFalse();
+
+        groupingPair.releaseBuffers();
+        distinctPair.releaseBuffers();
+        groupingTriple.releaseBuffers();
+    }
+
+    @Test
     void testAdaptiveNullFreeGeneratedKernelAndWidePromotion()
     {
         for (int arity = 2; arity <= AbstractMultiLongGroupingTable.MAX_ARITY; arity++) {

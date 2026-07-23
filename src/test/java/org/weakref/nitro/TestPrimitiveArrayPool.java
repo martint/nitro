@@ -21,6 +21,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TestPrimitiveArrayPool
 {
     @Test
+    void testTryBorrowIntsDoesNotAllocateOnMiss()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+
+        assertThat(pool.tryBorrowInts(32)).isNull();
+        int[] retained = new int[32];
+        pool.release(retained);
+        assertThat(pool.tryBorrowInts(32)).isSameAs(retained);
+        assertThat(pool.tryBorrowInts(32)).isNull();
+    }
+
+    @Test
     public void testExactCapacityAndTypeReuse()
     {
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
