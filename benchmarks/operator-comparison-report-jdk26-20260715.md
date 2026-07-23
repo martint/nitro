@@ -1124,3 +1124,12 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
   was removed; restored operator tests and real-SF10 Nitro/SQL/Trino q51 parity pass. The first parity launch used a
   stale Trino path; the required `/root/notes/trino` rerun passed. Evidence is under
   `benchmarks/sweeps/20260723-targeted/tpcds-q51-next/`; board rows and aggregate summaries are unchanged.
+- The 2026-07-23 TPC-DS q23 packed SUM null-state experiment is a rejected diagnostic and does not replace the
+  published row. A general `SumStateVector` representation compressed per-group initialization from one byte to one
+  bit, cleared ranges word-wise, preserved exact null semantics, and kept allocation-pool admission independent of
+  representation size. The focused 276-test gate passed. In an unpinned JDK 26, one-thread, `-Xmx12g`, THP reverse
+  screen with allocation and all eight counters, packed/unpacked were 5108.8/5034.6 ms. Packing raised allocation
+  0.33%, instructions 2.02%, cycles 1.71%, L1D misses/loads 1.31%/4.54%, dTLB loads 19.09%, and branches 1.19%; its
+  0.89% dTLB-miss reduction was only 3.8K misses because both legs shared the same low-miss placement mode. The
+  implementation and tests were removed. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q23-next/`; board rows and aggregate summaries are unchanged.
