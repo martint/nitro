@@ -1146,3 +1146,12 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
   0.16% allocation reductions came with +1.98% instructions, +1.96% cycles, +2.72% L1D misses, +33.60% dTLB loads,
   +3.42% branch misses, and +2.67% branches. The implementation/property were removed. Evidence is under
   `benchmarks/sweeps/20260723-targeted/tpcds-q75-dense-evaluator/`; board rows and summaries are unchanged.
+- The 2026-07-23 TPC-DS q75 combined definition-span experiment is rejected and does not replace the board row. A
+  generic nullable dictionary-LONG selected decoder consumed each survivor gap and endpoint definition bit in one
+  pass, avoiding the separate endpoint read while preserving exact null/value semantics. All 70 Parquet tests and
+  the real-SF10 compiled/operator/Trino-SQL q75 parity triangle passed. In an unpinned JDK 26, one-thread, 12 GiB,
+  THP A/B/A screen with allocation and all eight counters, the mean candidate/control were 1881.0/1869.5 ms.
+  Candidate cycles rose 1.47%, L1D loads 1.70%, dTLB loads 3.65%, and branch misses 2.48%; reductions in allocation
+  (0.23%), instructions (0.17%), L1D misses (0.82%), dTLB misses (11.88%), and branches (0.64%) did not compensate.
+  Both candidate legs independently lost wall and cycles, so the implementation/property were removed. Evidence is
+  under `benchmarks/sweeps/20260723-targeted/tpcds-q75-selected-decode/`; board rows and summaries are unchanged.
