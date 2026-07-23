@@ -61,6 +61,14 @@ public class HashJoinOperator
     // count(column) need only this side stream; copying the value as well defeats Output's stream-level laziness.
     private static final boolean DIRECT_OUTER_JOIN_NULL_STREAM =
             Boolean.parseBoolean(System.getProperty("nitro.join.directOuterJoinNullStream", "true"));
+    // A probe-outer batch with no build matches has one logical build-side value: NULL. Preserve that
+    // shape as single-run vectors instead of allocating and clearing one dense values/nulls buffer per
+    // projected build column. The representation is type-generic and remains readable through the
+    // ordinary Vector/Streams APIs.
+    private static final boolean RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT =
+            Boolean.parseBoolean(System.getProperty("nitro.join.rleAllUnmatchedOuterJoinOutput", "true"));
+    private static final boolean DEBUG_RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT =
+            Boolean.getBoolean("nitro.join.debugRleAllUnmatchedOuterJoinOutput");
     private static final boolean CAP_DUPLICATE_PAIR_HASH =
             Boolean.parseBoolean(System.getProperty("nitro.join.capDuplicatePairHash", "true"));
     private static final boolean DIRECT_COMPACTED_RANGE_OUTPUT =
@@ -402,6 +410,8 @@ public class HashJoinOperator
     private boolean currentOuterJoinHasNulls;
     private int currentMatchIndex;
     private int currentOutputCount;
+    // 0 = not inspected for this output batch, 1 = contains a match, 2 = entirely unmatched.
+    private byte allRowsNoMatchState;
     // 0 = uninitialized, 1 = ordinary producer, 2 = compacted-range producer, 3 = empty inner join.
     private int probeOutputMode;
     private Mask currentOutputMask;
@@ -602,6 +612,7 @@ public class HashJoinOperator
         currentInnerLogicalDictionaryIds = null;
         currentInnerSourceDictionaryIds = null;
         innerPositionMappingCache = buffers.newPositionMappingCache();
+        allRowsNoMatchState = 0;
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputChannels.length];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
@@ -2147,9 +2158,17 @@ public class HashJoinOperator
         return bufferedInner.outputStreams(outputIndex - outerOutputCount) != null;
     }
 
-    private BooleanVector materializeInnerNullStreamDirectly(int innerOutputIndex)
+    private Vector materializeInnerNullStreamDirectly(int innerOutputIndex)
     {
         long start = System.nanoTime();
+        if (RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT && allRowsHaveNoMatch()) {
+            Vector nulls = allTrueBooleanStream(currentOutputCount);
+            MaterializationProfile profile = CURRENT_MATERIALIZATION_PROFILE.get();
+            if (profile != null) {
+                profile.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
+            }
+            return nulls;
+        }
         BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, currentOutputCount, BooleanVector::new);
         boolean[] values = nulls.values();
         // Allocator storage is recycled. Clear the visible range before marking the unmatched probe rows.
@@ -2629,6 +2648,14 @@ public class HashJoinOperator
 
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
+        if (RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT && allRowsHaveNoMatch()) {
+            Streams schema = outputSchema(innerOutputIndex + outerOutputCount);
+            if (schema == null) {
+                throw new IllegalStateException("Unable to determine inner output schema for left join");
+            }
+            return allNullInnerOutput(schema, currentOutputCount);
+        }
+
         if (!hasNoMatchRows()) {
             // The dictionary-wrap shortcuts produce a full-length, position-indexed vector, so they are
             // correct whether or not the output mask is sparse (a downstream constraint). They also drop
@@ -2706,6 +2733,58 @@ public class HashJoinOperator
             result = copyInnerSinglePosition(result, innerBatch, innerBatchIndex, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
+    }
+
+    private boolean allRowsHaveNoMatch()
+    {
+        if (!probeOuterJoin || outputInnerLogicalPositionsReady || currentOutputCount == 0) {
+            return false;
+        }
+        if (allRowsNoMatchState != 0) {
+            return allRowsNoMatchState == 2;
+        }
+        // Mixed batches overwhelmingly expose a match at one of their boundaries. Reject those with
+        // two predictable loads; only a plausible all-unmatched batch pays the full verification scan.
+        if (outputInnerRows[0] != NO_MATCH_ROW_REFERENCE ||
+                outputInnerRows[currentOutputCount - 1] != NO_MATCH_ROW_REFERENCE) {
+            allRowsNoMatchState = 1;
+            return false;
+        }
+        for (int position = 1; position < currentOutputCount - 1; position++) {
+            if (outputInnerRows[position] != NO_MATCH_ROW_REFERENCE) {
+                allRowsNoMatchState = 1;
+                return false;
+            }
+        }
+        allRowsNoMatchState = 2;
+        if (DEBUG_RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT) {
+            System.err.printf("[rle-all-unmatched-outer-join] join=%s rows=%d%n",
+                    profileName != null ? profileName : "hash_join",
+                    currentOutputCount);
+        }
+        return true;
+    }
+
+    private Streams allNullInnerOutput(Streams schema, int size)
+    {
+        Streams.Builder result = Streams.builder();
+        Vector value = nullValuesLike(schema.values(), 1);
+        result.put(Stream.VALUES, allocator.allocateSingleRunRle(allocationContext, size, value));
+
+        result.put(Stream.NULLS, allTrueBooleanStream(size));
+
+        if (schema.has(Stream.ERRORS)) {
+            BooleanVector noError = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+            result.put(Stream.ERRORS, allocator.allocateSingleRunRle(allocationContext, size, noError));
+        }
+        return result.build();
+    }
+
+    private Vector allTrueBooleanStream(int size)
+    {
+        BooleanVector value = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
+        value.values()[0] = true;
+        return allocator.allocateSingleRunRle(allocationContext, size, value);
     }
 
     private Streams tryWrapMultiRunInnerBooleanSideStreams(int innerOutputIndex)

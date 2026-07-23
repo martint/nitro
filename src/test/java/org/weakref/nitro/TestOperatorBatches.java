@@ -2117,6 +2117,35 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorEncodesAllUnmatchedBuildOutputAsSingleRuns()
+    {
+        Allocator allocator = new Allocator();
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(2L),
+                        row(3L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 100L))),
+                0,
+                true);
+                Batch batch = operator.next()) {
+            assertThat(batch.borrowMask()).containsExactly(0, 1);
+            assertThat(batch.output(2).borrow(Stream.VALUES))
+                    .isInstanceOfSatisfying(RleVector.class, values -> {
+                        assertThat(values.counts()).containsExactly(2);
+                        assertThat(values.values()).isInstanceOf(I64Vector.class);
+                    });
+            assertThat(batch.output(2).borrow(Stream.NULLS))
+                    .isInstanceOfSatisfying(RleVector.class, nulls -> {
+                        assertThat(nulls.counts()).containsExactly(2);
+                        assertThat(((BooleanVector) nulls.values()).values()).containsExactly(true);
+                    });
+        }
+    }
+
+    @Test
     void testProbeOuterJoinNullStreamPreservesNullableBuildValues()
     {
         Allocator allocator = new Allocator();

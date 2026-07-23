@@ -114,7 +114,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q75 | 1856.7 | 4705.3 | 2190.0 | 2.534x | 1.179x | 571.349M | 17.956B | — | 34.888B / 9.916B / 384.895M / 17.132B / 337.194K / 2.850M / 62.640M / 6.481B | 113.748B / 43.138B / 1.833B / 53.372B / 5.844M / 137.862M / 333.291M / 22.338B | 37.571B / 11.468B / 375.070M / — / 1.316M / 45.929M / 57.763M / — |
 | q76 | 375.4 | 763.6 | 533.0 | 2.034x | 1.420x | 91.094M | 4.642B | 1.214B | 7.864B / 2.005B / 113.634M / 3.399B / 155.433K / 1.545M / 13.629M / 1.493B | 17.622B / 6.378B / 326.612M / 8.227B / 1.339M / 22.165M / 44.758M / 3.360B | 8.254B / 2.834B / 113.586M / 4.004B / 289.841K / 10.744M / 21.551M / 1.340B |
 | q77 | 186.8 | 1416.8 | 252.0 | 7.585x | 1.349x | 21.500M | — | — | 4.310B / 1.057B / 20.339M / 1.801B / 160.398K / 1.076M / 8.017M / 879.178M | 37.449B / 12.364B / 507.697M / 17.923B / 863.727K / 22.637M / 84.243M / 6.457B | 3.909B / 1.374B / 35.949M / — / 200.815K / 3.787M / 9.738M / — |
-| q78 | 2138.4 | 6189.2 | 4090.0 | 2.894x | 1.913x | 1.573B | 21.494B | 10.036B | 38.010B / 11.658B / 331.275M / 18.189B / 7.351M / 27.955M / 62.200M / 7.012B | 131.546B / 46.278B / 2.087B / 61.619B / 11.079M / 176.671M / 245.418M / 24.804B | 72.819B / 21.464B / 1.015B / — / 1.773M / 80.929M / 85.137M / — |
+| q78 | 2184.1 | 6189.2 | 4090.0 | 2.834x | 1.873x | 1.350B | 21.494B | 10.036B | 39.046B / 12.859B / 370.395M / 18.870B / 1.549M / 9.332M / 68.606M / 7.231B | 131.546B / 46.278B / 2.087B / 61.619B / 11.079M / 176.671M / 245.418M / 24.804B | 72.819B / 21.464B / 1.015B / — / 1.773M / 80.929M / 85.137M / — |
 | q79 | 482.7 | 1286.3 | 651.0 | 2.665x | 1.349x | 72.541M | 6.559B | 3.283B | 9.993B / 2.643B / 40.474M / 4.009B / 117.909K / 1.185M / 16.427M / 1.988B | 30.379B / 9.661B / 394.790M / 13.651B / 768.695K / 14.334M / 56.567M / 5.625B | 9.975B / 3.281B / 54.370M / 4.760B / 226.876K / 6.460M / 22.353M / 1.665B |
 | q80 | 443.6 | 5576.7 | 788.0 | 12.571x | 1.776x | 189.568M | — | — | 7.806B / 2.414B / 74.574M / 3.394B / 298.477K / 1.366M / 11.548M / 1.519B | 123.353B / 38.297B / 1.627B / 56.056B / 1.248M / 40.600M / 209.371M / 21.608B | 14.920B / 4.191B / 128.464M / — / 412.570K / 13.977M / 16.643M / — |
 | q81 | 203.2 | 530.7 | 236.0 | 2.612x | 1.162x | 161.292M | 813.886M | — | 4.253B / 1.099B / 33.059M / 1.864B / 83.759K / 684.449K / 3.065M / 844.820M | 18.789B / 7.587B / 222.899M / 9.293B / 536.637K / 19.955M / 68.610M / 3.751B | 4.649B / 1.259B / 49.216M / — / 255.918K / 3.560M / 2.338M / — |
@@ -192,8 +192,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 |---|---:|---:|---:|---:|---:|---:|
 | TPC-H N/T | 22 | 22 | 1.756x | 31854.0 ms | 57162.5 ms | 1.795x |
 | TPC-H N/V | 22 | 22 | 1.429x | 31854.0 ms | 48207.0 ms | 1.513x |
-| TPC-DS N/T | 99 | 99 | 5.240x | 77279.3 ms | 336095.1 ms | 4.349x |
-| TPC-DS N/V | 99 | 99 | 1.622x | 77279.3 ms | 127411.0 ms | 1.649x |
+| TPC-DS N/T | 99 | 99 | 5.239x | 77325.0 ms | 336095.1 ms | 4.347x |
+| TPC-DS N/V | 99 | 99 | 1.622x | 77325.0 ms | 127411.0 ms | 1.648x |
 | ClickBench N/T | 44 | 44 | 2.575x | 154161.5 ms | 455811.5 ms | 2.957x |
 | ClickBench N/V | 44 | 44 | 2.066x | 154161.5 ms | 330233.0 ms | 2.142x |
 
@@ -201,10 +201,30 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| Overall N/T | 165 | 165 | 3.748x | 263294.8 ms | 849069.1 ms | 3.225x |
-| Overall N/V | 165 | 165 | 1.701x | 263294.8 ms | 505851.0 ms | 1.921x |
+| Overall N/T | 165 | 165 | 3.747x | 263340.5 ms | 849069.1 ms | 3.224x |
+| Overall N/V | 165 | 165 | 1.701x | 263340.5 ms | 505851.0 ms | 1.921x |
 
 ## Sources and qualifications
+
+- The final 2026-07-23 TPC-DS q78 overlay represents a probe-outer output batch whose build side is entirely
+  unmatched as one typed VALUES run plus one all-true NULLS run. Admission is decided once per output batch from
+  ordinary join row references and cached across projected columns; mixed batches reject from their boundary row
+  references before a full verification scan. The public `Vector`/`Streams` contract, output length, null/error
+  semantics, operator tree, and SQL shape are unchanged. A construction inventory of every probe-outer hash join
+  covers TPC-DS q16/q40/q75/q77/q78/q80/q95 and TPC-H q13; only q78 activates (501 batches in one measured
+  invocation), while ClickBench contains no hash join. Against the exact disabled reverse three-fork control the
+  candidate improves all ten measured dimensions, including 14.21% allocation, 9.05% instructions, and 84.49%
+  dTLB misses; the disabled form's extra 225 MB/op also makes it materially more exposed to this host's recorded
+  THP compaction stalls. The publication row therefore retains a fresh complete six-fork mean rather than selecting
+  a clean fork: 2184.1 ms, 1.350 GB/op, 39.046B instructions, 12.859B cycles, 370.395M L1D misses, 18.870B L1D
+  loads, 1.549M dTLB misses, 9.332M dTLB loads, 68.606M branch misses, and 7.231B branches. Nitro remains 1.873x
+  faster than Velox and now beats every available Velox counter on q78, including dTLB misses by 12.7%. Real-SF10
+  Nitro operator, compiled Nitro, Nitro-SQL, and Trino-SQL q78 parity pass, as does the complete JDK 26 gate
+  (1,295 tests, zero failures/errors, 566 expected skips). Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q78-next/`, especially
+  `all-unmatched-rle-{activation-inventory,final-q78-parity,full-gate}.log`,
+  `all-unmatched-rle-endpoint-{on-final-3fork,off-reverse-final-3fork}.json`, and
+  `all-unmatched-rle-endpoint-on-publication-6fork.json`.
 
 - The final 2026-07-23 TPC-H q21 overlay extends the existing null-free fixed-width Parquet page-to-batch decoder
   with execution-local repeated-source admission. Physical sources are identified only by normalized file and
