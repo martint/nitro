@@ -38,6 +38,8 @@ public final class WindowOperator
             Boolean.parseBoolean(System.getProperty("nitro.window.fusedFunctions", "true"));
     private static final boolean BINARY_HASH_PARTITION_SORT =
             Boolean.parseBoolean(System.getProperty("nitro.window.binaryHashPartitionSort", "true"));
+    private static final boolean LAZY_OUTPUTS =
+            Boolean.parseBoolean(System.getProperty("nitro.window.lazyOutputs", "true"));
 
     private final Allocator allocator;
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
@@ -47,6 +49,7 @@ public final class WindowOperator
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final List<RunningWindowFunction> windowFunctions;
+    private final boolean lazyOutputs;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -56,6 +59,7 @@ public final class WindowOperator
     // comparator traffic in two compact int arrays rather than pointer-chasing the Java heap.
     private int[] singlePageOrder;
     private int[] batchPositions;
+    private int[] recycledLazyBatchPositions;
     private final int[] radixCounts = new int[256];
     private Streams[] windowOutputs;
     private int currentOutputPosition;
@@ -75,6 +79,10 @@ public final class WindowOperator
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
+        // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
+        // nothing for lazy output to eliminate. Multiple cooperating functions create the wider filter/project
+        // boundary where downstream operators can consume function results without gathering every source lane.
+        this.lazyOutputs = LAZY_OUTPUTS && windowFunctions.size() > 1;
     }
 
     @Override
@@ -99,6 +107,9 @@ public final class WindowOperator
             load();
         }
         int batchSize = Math.min(BATCH_SIZE, rowCount() - currentOutputPosition);
+        if (lazyOutputs) {
+            return lazyBatch(currentOutputPosition, batchSize);
+        }
         if (singlePageOrder != null) {
             ensureBatchPositions(batchSize);
             System.arraycopy(singlePageOrder, currentOutputPosition, batchPositions, 0, batchSize);
@@ -133,6 +144,37 @@ public final class WindowOperator
                 outputs);
     }
 
+    private Batch lazyBatch(int startPosition, int batchSize)
+    {
+        LazyBatchState batchState = new LazyBatchState(startPosition, batchSize);
+        Output[] outputs = new Output[outputCount()];
+        for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
+            int output = outputIndex;
+            outputs[outputIndex] = new Output(
+                    sourceSchema[output].streams(),
+                    stream -> batchState.materializeSourceStream(output, stream),
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
+        }
+        for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
+            int function = functionIndex;
+            outputs[source.outputCount() + functionIndex] = new Output(
+                    windowOutputs[function].streams(),
+                    stream -> batchState.materializeWindowStream(function, stream),
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
+        }
+        currentOutputPosition += batchSize;
+        Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, batchSize);
+        return new Batch(
+                outputMask,
+                _ -> {},
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                batchMask -> allocator.release(allocationContext, batchMask),
+                batchState::close,
+                outputs);
+    }
+
     @Override
     public void constrain(Mask mask)
     {
@@ -161,6 +203,8 @@ public final class WindowOperator
         singlePageOrder = null;
         arrayPool.release(batchPositions);
         batchPositions = null;
+        arrayPool.release(recycledLazyBatchPositions);
+        recycledLazyBatchPositions = null;
     }
 
     private void load()
@@ -851,6 +895,147 @@ public final class WindowOperator
             builder.put(stream, result == null ? source.emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
+    }
+
+    private Vector materializeSourceStreamBatch(int outputIndex, Stream stream, int startPosition, int batchSize, int[] positions)
+    {
+        if (singlePageOrder != null) {
+            Streams sourceStreams = pages.getFirst().columns()[outputIndex];
+            return sourceStreams.get(stream).copyPositionsInto(
+                    allocator,
+                    allocationContext,
+                    null,
+                    positions,
+                    batchSize,
+                    0,
+                    batchSize);
+        }
+
+        Vector result = null;
+        int outputPosition = 0;
+        while (outputPosition < batchSize) {
+            RowReference firstRow = rows.get(startPosition + outputPosition);
+            Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
+            if (!sourceStreams.has(stream)) {
+                outputPosition++;
+                continue;
+            }
+
+            int groupStart = outputPosition;
+            int groupPageIndex = firstRow.pageIndex();
+            while (outputPosition < batchSize && rows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+                outputPosition++;
+            }
+
+            int groupSize = outputPosition - groupStart;
+            int[] groupPositions = new int[groupSize];
+            for (int index = 0; index < groupSize; index++) {
+                groupPositions[index] = rows.get(startPosition + groupStart + index).position();
+            }
+            result = sourceStreams.get(stream).copyPositionsInto(
+                    allocator,
+                    allocationContext,
+                    result,
+                    groupPositions,
+                    groupSize,
+                    groupStart,
+                    batchSize);
+        }
+        return result == null
+                ? sourceSchema[outputIndex].get(stream).emptyLike(allocator, allocationContext)
+                : result;
+    }
+
+    private Vector materializeWindowStreamBatch(int functionIndex, Stream stream, int batchSize, int[] positions)
+    {
+        return windowOutputs[functionIndex].get(stream).copyPositionsInto(
+                allocator,
+                allocationContext,
+                null,
+                positions,
+                batchSize,
+                0,
+                batchSize);
+    }
+
+    private int[] borrowLazyBatchPositions(int batchSize)
+    {
+        if (recycledLazyBatchPositions != null && recycledLazyBatchPositions.length == batchSize) {
+            int[] positions = recycledLazyBatchPositions;
+            recycledLazyBatchPositions = null;
+            return positions;
+        }
+        return arrayPool.borrowInts(batchSize);
+    }
+
+    private void releaseLazyBatchPositions(int[] positions)
+    {
+        if (positions == null) {
+            return;
+        }
+        if (recycledLazyBatchPositions == null && positions.length == BATCH_SIZE) {
+            recycledLazyBatchPositions = positions;
+            return;
+        }
+        arrayPool.release(positions);
+    }
+
+    private final class LazyBatchState
+            implements AutoCloseable
+    {
+        private static final int NO_POSITIONS = 0;
+        private static final int SOURCE_POSITIONS = 1;
+        private static final int WINDOW_POSITIONS = 2;
+
+        private final int startPosition;
+        private final int batchSize;
+        private int[] positions;
+        private int positionMode;
+
+        private LazyBatchState(int startPosition, int batchSize)
+        {
+            this.startPosition = startPosition;
+            this.batchSize = batchSize;
+        }
+
+        private Vector materializeSourceStream(int outputIndex, Stream stream)
+        {
+            int[] sourcePositions = positions();
+            if (singlePageOrder != null && positionMode != SOURCE_POSITIONS) {
+                System.arraycopy(singlePageOrder, startPosition, sourcePositions, 0, batchSize);
+                positionMode = SOURCE_POSITIONS;
+            }
+            return materializeSourceStreamBatch(outputIndex, stream, startPosition, batchSize, sourcePositions);
+        }
+
+        private Vector materializeWindowStream(int functionIndex, Stream stream)
+        {
+            int[] windowPositions = positions();
+            if (positionMode != WINDOW_POSITIONS) {
+                for (int index = 0; index < batchSize; index++) {
+                    windowPositions[index] = startPosition + index;
+                }
+                positionMode = WINDOW_POSITIONS;
+            }
+            return materializeWindowStreamBatch(functionIndex, stream, batchSize, windowPositions);
+        }
+
+        private int[] positions()
+        {
+            if (positions == null) {
+                positions = borrowLazyBatchPositions(batchSize);
+                positionMode = NO_POSITIONS;
+            }
+            return positions;
+        }
+
+        @Override
+        public void close()
+        {
+            releaseLazyBatchPositions(positions);
+            positions = null;
+            positionMode = NO_POSITIONS;
+        }
     }
 
     private void ensureBatchPositions(int size)

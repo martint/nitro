@@ -869,6 +869,37 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorRetainedBatchResolvesAfterAdvance()
+    {
+        Allocator allocator = new Allocator();
+        List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
+        for (int value = 5_000; value >= 1; value--) {
+            rows.add(row(1L, (long) value));
+        }
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, rows),
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(
+                        new RunningSumI64WindowFunction(1),
+                        new RunningMaxI64WindowFunction(1)));
+                Batch first = operator.next();
+                Batch second = operator.next()) {
+            I64Vector secondValues = (I64Vector) second.output(1).borrow(Stream.VALUES);
+            assertThat(secondValues.values()[0]).isEqualTo(4_097L);
+
+            // A retained output may be resolved only after the operator has advanced. Its lazy position mapping
+            // must remain tied to this batch rather than whichever batch was produced most recently.
+            I64Vector firstValues = (I64Vector) first.output(1).borrow(Stream.VALUES);
+            assertThat(firstValues.values()[0]).isEqualTo(1L);
+            assertThat(firstValues.values()[4_095]).isEqualTo(4_096L);
+        }
+    }
+
+    @Test
     void testTopNRankingOperatorEmitsLargeResultsAcrossMultipleBatches()
     {
         Allocator allocator = new Allocator();
