@@ -1,0 +1,469 @@
+[INFO] Processing build on daemon 6be0e82c
+[INFO] Scanning for projects...
+[INFO] Njord 0.9.4 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] -------------------------< org.weakref:nitro >--------------------------
+[INFO] Building nitro 1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] 2 problems were encountered while building the effective model for org.apache.yetus:audience-annotations:jar:0.5.0 during dependency collection step for project (use -X to see details)
+[INFO] 
+[INFO] --- exec:3.6.1:exec (benchmark) @ nitro ---
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/root/.m2/repository/org/openjdk/jmh/jmh-core/1.37/jmh-core-1.37.jar)
+[WARNING] [stderr] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] [stdout] # JMH version: 1.37
+[INFO] [stdout] # VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+[INFO] [stdout] # VM invoker: /opt/java/openjdk/bin/java
+[INFO] [stdout] # VM options: --enable-preview --add-modules=jdk.incubator.vector -Dnitro.clickbench.hits.path= -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10 -Dnitro.tpcds.parquet.schema=sf10 -Xmx12g -XX:+UseTransparentHugePages
+[INFO] [stdout] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[INFO] [stdout] # Warmup: 3 iterations, 1 s each
+[INFO] [stdout] # Measurement: 3 iterations, 1 s each
+[INFO] [stdout] # Timeout: 30 min per iteration
+[INFO] [stdout] # Threads: 1 thread, will synchronize iterations
+[INFO] [stdout] # Benchmark mode: Average time, time/op
+[INFO] [stdout] # Benchmark: org.weakref.nitro.tpcds.BenchmarkQueries.query67
+[INFO] [stdout] 
+[INFO] [stdout] # Run progress: 0.00% complete, ETA 00:00:06
+[INFO] [stdout] # Fork: 1 of 1
+[INFO] [stdout] # Preparing profilers: LinuxPerfAsmProfiler 
+[INFO] [stdout] # Profilers consume stdout and stderr from target VM, use -v EXTRA to copy to console
+[INFO] [stdout] # Warmup Iteration   1: 10738.588 ms/op
+[INFO] [stdout] # Warmup Iteration   2: 6231.259 ms/op
+[INFO] [stdout] # Warmup Iteration   3: 5566.336 ms/op
+[INFO] [stdout] Iteration   1: 5522.055 ms/op
+[INFO] [stdout] Iteration   2: 5435.189 ms/op
+[INFO] [stdout] Iteration   3: 5450.374 ms/op
+[INFO] [stdout] # Processing profiler results: LinuxPerfAsmProfiler 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] Result "org.weakref.nitro.tpcds.BenchmarkQueries.query67":
+[INFO] [stdout]   5469.206 ±(99.9%) 846.397 ms/op [Average]
+[INFO] [stdout]   (min, avg, max) = (5435.189, 5469.206, 5522.055), stdev = 46.394
+[INFO] [stdout]   CI (99.9%): [4622.809, 6315.603] (assumes normal distribution)
+[INFO] [stdout] 
+[INFO] [stdout] Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:asm":
+[INFO] [stdout] PrintAssembly processed: 510879 total address lines.
+[INFO] [stdout] Perf output processed (skipped 23.953 seconds):
+[INFO] [stdout]  Column 1: dTLB-load-misses (9963 events)
+[INFO] [stdout] 
+[INFO] [stdout] Hottest code regions (>10.00% "dTLB-load-misses" events):
+[INFO] [stdout]  Event counts are percents of total event count.
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 1]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@44 (line 2789)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d144: 2401 0000 | c441 796e | c2c4 c1f9 | 7eca 450f 
+[INFO] [stdout]             0x000075a0a3b1d154: ;*getfield embedIdOnlyBinaryIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@42 (line 2512)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d154: b652 5d62 | 417d 086e | c2c4 4179 | 7ec2 49c1 | e203 62c1 | fd08 6efa | c4c1 f97e | ca45 8b92 
+[INFO] [stdout]             0x000075a0a3b1d174: ;*getfield packedDictionaryFieldIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@110 (line 2518)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d174: b400 0000 | 6241 7d08 | 6eca c4c1 | f97e ca45 
+[INFO] [stdout]             0x000075a0a3b1d184: ;*getfield inputChannels {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@446 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d184: 8b52 7c62 
+[INFO] [stdout]             0x000075a0a3b1d188: ;   {other}
+[INFO] [stdout]             0x000075a0a3b1d188: 417d 086e | dac4 c1f9 | 7eca 458b | 5208 6241 | 7d08 6ed2 | 6241 7d08 | 7eda 49c1 | e203 6241 
+[INFO] [stdout]             0x000075a0a3b1d1a8: fd08 6ee2 | 448d 52f9 | 6241 7d08 | 6ef2 448d | 52fd c4c1 | 796e fa4b 
+[INFO] [stdout]             0x000075a0a3b1d1c0: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@468 (line 2446)
+[INFO] [stdout]             0x000075a0a3b1d1c0: 8d3c c445 | 33db 4533 | d244 8954 | 2408 eb17 | c4c1 f97e 
+[INFO] [stdout]             0x000075a0a3b1d1d4: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@424 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d1d4: ca4d 8b47 
+[INFO] [stdout]             0x000075a0a3b1d1d8: ; ImmutableOopMap {r10=Oop rdi=Oop r13=Oop r14=Oop xmm0=Oop xmm1=Oop xmm2=NarrowOop xmm3=NarrowOop xmm4=NarrowOop xmm5=NarrowOop xmm8=NarrowOop xmm11=Oop xmm12=Oop xmm13=Oop xmm14=NarrowOop xmm15=Oop xmm17=NarrowOop xmm18=Oop xmm19=NarrowOop xmm20=Oop xmm21=Oop xmm23=Oop xmm25=NarrowOop xmm27=NarrowOop xmm28=Oop xmm29=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@468 (line 2446)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x000075a0a3b1d1d8: 3041 8500 | 443b 5c24 | 100f 8d67 
+[INFO] [stdout]             0x000075a0a3b1d1e4: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@325 (line 2446)
+[INFO] [stdout]             0x000075a0a3b1d1e4: 0400 008b | 4424 1041 | 2bc3 448b | 5424 1045 | 3bd3 0f4c | 4424 083d | e803 0000 | 41ba e803 
+[INFO] [stdout]             0x000075a0a3b1d204: 0000 410f | 47c2 4103 | c3eb 294d | 8d14 ec4d 
+[INFO] [stdout]             0x000075a0a3b1d214: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d214: 8b54 da10 | 4d3b c20f | 8593 0c00 
+[INFO] [stdout]             0x000075a0a3b1d220: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@100 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d220: 000f 1f84 | 0000 0000 | 000f 1f80 | 0000 0000 
+[INFO] [stdout]    0.11%    0x000075a0a3b1d230: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@465 (line 2446)
+[INFO] [stdout]    0.11%    0x000075a0a3b1d230: 41ff c344 
+[INFO] [stdout]             0x000075a0a3b1d234: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@325 (line 2446)
+[INFO] [stdout]             0x000075a0a3b1d234: 3bd8 7d98 | 468b 549f 
+[INFO] [stdout]             0x000075a0a3b1d23c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@329 (line 2446)
+[INFO] [stdout]             0x000075a0a3b1d23c: 1044 3b94 | 2484 0000 | 000f 8376 | 0400 0047 | 0fb6 4c15 | 1045 85c9 | 0f84 4e03 
+[INFO] [stdout]             0x000075a0a3b1d258: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@13 (line 2782)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d258: 0000 41b9 
+[INFO] [stdout]             0x000075a0a3b1d25c: ;*invokevirtual inputFieldNull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d25c: 0100 0000 | 418b eac1 | fd1f c1ed 
+[INFO] [stdout]             0x000075a0a3b1d268: ;*idiv {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@14 (line 2841)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@349 (line 2448)
+[INFO] [stdout]             0x000075a0a3b1d268: 1d41 03ea | 448b c541 | c1f8 0344 
+[INFO] [stdout]             0x000075a0a3b1d274: ;*iadd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@15 (line 2841)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@349 (line 2448)
+[INFO] [stdout]             0x000075a0a3b1d274: 03c1 443b | c20f 839d | 0400 0062 | 61fd 087e | eb42 0fbe | 5c03 1083 | e5f8 458b | c244 2bc5 
+[INFO] [stdout]             0x000075a0a3b1d294: bd01 0000 | 00c4 e239 | f7f5 4533 | c085 de41 
+[INFO] [stdout]             0x000075a0a3b1d2a4: ;*ireturn {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@32 (line 2841)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@349 (line 2448)
+[INFO] [stdout]             0x000075a0a3b1d2a4: 0f95 c045 | 3bc8 0f85 
+[INFO] [stdout]             0x000075a0a3b1d2ac: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@358 (line 2449)
+[INFO] [stdout]             0x000075a0a3b1d2ac: c804 0000 | 4585 c90f | 8577 ffff 
+[INFO] [stdout]             0x000075a0a3b1d2b8: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@365 (line 2452)
+[INFO] [stdout]             0x000075a0a3b1d2b8: ff44 3b14 | 240f 83d5 | 0400 00c4 | 41f9 7ee0 | 438b 5c90 
+[INFO] [stdout]             0x000075a0a3b1d2cc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@378 (line 2455)
+[INFO] [stdout]             0x000075a0a3b1d2cc: 1044 8d04 | 0b44 3b54 | 2404 0f83 
+[INFO] [stdout]             0x000075a0a3b1d2d8: ;   {other}
+[INFO] [stdout]             0x000075a0a3b1d2d8: 1005 0000 | c441 f97e | e943 8b74 
+[INFO] [stdout]             0x000075a0a3b1d2e4: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@12 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2507)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]                                 ;   {oop(a &apos;org/weakref/nitro/operator/FlatTypeHandler$Kind&apos;{0x00000007fc7e6ff8})}
+[INFO] [stdout]             0x000075a0a3b1d2e4: 9110 81fe | ffcd 8fff | 0f85 2e01 
+[INFO] [stdout]             0x000075a0a3b1d2f0: ;*if_acmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@16 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2507)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d2f0: 0000 62c1 | 7d08 7ec1 | 4585 c90f | 842b 0e00 
+[INFO] [stdout]             0x000075a0a3b1d300: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@12 (line 2508)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d300: 0062 c17d | 087e c943 | 8b5c cc0c | 443b d30f | 83f3 0800 | 0062 c1fd | 087e e943 | 0fb6 6c11 
+[INFO] [stdout]             0x000075a0a3b1d320: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@20 (line 2508)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d320: 1085 ed0f | 845f 0e00 
+[INFO] [stdout]             0x000075a0a3b1d328: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@21 (line 2508)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d328: 00c4 c179 | 7ef9 4585 | c90f 8c65 | 0a00 008b 
+[INFO] [stdout]             0x000075a0a3b1d338: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::index@8 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2510)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d338: ea83 c5fd | 443b c50f | 831f 0900 | 0045 8bc8 
+[INFO] [stdout]             0x000075a0a3b1d348: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@22 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2510)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d348: 4d63 c962 | 61fd 087e | eb42 8b6c 
+[INFO] [stdout]             0x000075a0a3b1d354: ;*invokevirtual getIntUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getIntUnaligned@5 (line 3617)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2510)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d354: 0b10 85ed | 0f8c 320d 
+[INFO] [stdout]             0x000075a0a3b1d35c: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@32 (line 2510)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@390 (line 2456)
+[INFO] [stdout]             0x000075a0a3b1d35c: 0000 6261 | 7d08 7ed3 
+[INFO] [stdout]             0x000075a0a3b1d364: ;   {metadata(&apos;org/weakref/nitro/operator/FlatKeyLayout$PositionIdFlatKeyLayout&apos;)}
+[INFO] [stdout]             0x000075a0a3b1d364: 81fb 080b | 1801 0f85 | 880a 0000 | c4e1 f97e 
+[INFO] [stdout]             0x000075a0a3b1d374: ;*invokevirtual globalIdAtPosition {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@401 (line 2457)
+[INFO] [stdout]             0x000075a0a3b1d374: cbc4 61f9 | 6ecb 8bab 
+[INFO] [stdout]             0x000075a0a3b1d37c: ;*getfield batchPositionGlobalId {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::preparedGlobalIdAtPosition@1 (line 1666)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout$PositionIdFlatKeyLayout::globalIdAtPosition@3 (line 2872)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@401 (line 2457)
+[INFO] [stdout]             0x000075a0a3b1d37c: d000 0000 
+[INFO] [stdout]    0.43%    0x000075a0a3b1d380: ; implicit exception: dispatches to 0x000075a0a3b1e670
+[INFO] [stdout]    0.43%    0x000075a0a3b1d380: 418b 5cec | 0c44 3bd3 | 0f83 2609 | 0000 498d | 1cec 428b 
+[INFO] [stdout]             0x000075a0a3b1d394: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::preparedGlobalIdAtPosition@5 (line 1666)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout$PositionIdFlatKeyLayout::globalIdAtPosition@3 (line 2872)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@401 (line 2457)
+[INFO] [stdout]             0x000075a0a3b1d394: 6c93 1041 | 8b5c ec0c | 8bb4 2480 | 0000 003b | f30f 8355 | 0900 0049 | 8d1c ec8b 
+[INFO] [stdout]             0x000075a0a3b1d3b0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::preparedGlobalIdAtPosition@7 (line 1666)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout$PositionIdFlatKeyLayout::globalIdAtPosition@3 (line 2872)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@401 (line 2457)
+[INFO] [stdout]             0x000075a0a3b1d3b0: 5cb3 1089 | 5c24 2c85 | db0f 8c1d 
+[INFO] [stdout]             0x000075a0a3b1d3bc: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@408 (line 2458)
+[INFO] [stdout]             0x000075a0a3b1d3bc: 0d00 00c4 | 61f9 7ecb 
+[INFO] [stdout]             0x000075a0a3b1d3c4: ;*getfield compactEmbeddedBinaryRecords {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@1 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2535)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d3c4: 0fb6 6b5e | 85ed 0f84 
+[INFO] [stdout]             0x000075a0a3b1d3cc: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@4 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2535)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d3cc: 040e 0000 | 8bab 0001 
+[INFO] [stdout]             0x000075a0a3b1d3d4: ;*getfield fieldKinds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@8 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2535)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d3d4: 0000 418b | 5cec 0c44 | 3bd3 0f83 | 6809 0000 | 498d 1cec | 428b 5c93 
+[INFO] [stdout]             0x000075a0a3b1d3ec: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@12 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2535)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]                                 ;   {oop(a &apos;org/weakref/nitro/operator/FlatTypeHandler$Kind&apos;{0x00000007fc7e6ff8})}
+[INFO] [stdout]             0x000075a0a3b1d3ec: 1081 fbff | cd8f ff0f | 8553 0a00 
+[INFO] [stdout]             0x000075a0a3b1d3f8: ;*if_acmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@16 (line 2254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2535)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d3f8: 0062 41fd | 087e ea43 
+[INFO] [stdout]             0x000075a0a3b1d400: ;*invokevirtual getIntUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getIntUnaligned@5 (line 3617)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@13 (line 2536)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d400: 8b6c 0a10 | 3b6c 242c | 0f84 22fe 
+[INFO] [stdout]             0x000075a0a3b1d40c: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@424 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d40c: ffff be45 
+[INFO] [stdout]             0x000075a0a3b1d410: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x000075a0a3b1d410: ffff ffe8 
+[INFO] [stdout]             0x000075a0a3b1d414: ; ImmutableOopMap {}
+[INFO] [stdout]                                 ;*if_icmpeq {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@424 (line 2459)
+[INFO] [stdout]             0x000075a0a3b1d414: c8bf a1ff 
+[INFO] [stdout]             0x000075a0a3b1d418: ;   {post_call_nop}
+[INFO] [stdout]             0x000075a0a3b1d418: 0f1f 8400 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   23.76%  <total for region 1>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 2]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d59c: 40be a1ff 
+[INFO] [stdout]             0x000075a0a3b1d5a0: ;   {post_call_nop}
+[INFO] [stdout]             0x000075a0a3b1d5a0: 0f1f 8400 
+[INFO] [stdout]             0x000075a0a3b1d5a4: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$0@5 (line 89)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d12b7f8::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d5a4: 1807 0002 | 62c1 7d08 | 7ed8 478b | 44c4 0c45 | 3bd0 0f83 | 9002 0000 | 62c1 fd08 | 7ee0 470f 
+[INFO] [stdout]             0x000075a0a3b1d5c4: b64c 1010 | 4585 c974 
+[INFO] [stdout]             0x000075a0a3b1d5cc: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@31 (line 2785)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d5cc: 0845 33c9 | e98b fcff | ff62 c17d | 087e f045 | 85c0 0f84 
+[INFO] [stdout]             0x000075a0a3b1d5e0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@40 (line 2788)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d5e0: c80e 0000 | c441 797e | c047 8b44 | c40c 453b | d00f 8329 | 0c00 0062 | c1fd 087e | f843 8b6c 
+[INFO] [stdout]             0x000075a0a3b1d600: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@48 (line 2789)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d600: 9010 458b 
+[INFO] [stdout]             0x000075a0a3b1d604: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000001d138210&apos;)}
+[INFO] [stdout]             0x000075a0a3b1d604: 44ec 0841 | 81f8 1082 | 1301 0f85 | ac0c 0000 
+[INFO] [stdout]             0x000075a0a3b1d614: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2790)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d614: 4d8d 04ec 
+[INFO] [stdout]    2.47%    0x000075a0a3b1d618: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d138210::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2790)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]    2.47%    0x000075a0a3b1d618: 458b 480c 
+[INFO] [stdout]    0.55%    0x000075a0a3b1d61c: ; implicit exception: dispatches to 0x000075a0a3b1e724
+[INFO] [stdout]    0.55%    0x000075a0a3b1d61c: 438b 6ccc 
+[INFO] [stdout]             0x000075a0a3b1d620: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::values@1 (line 43)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@1 (line 121)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d138210::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2790)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d620: 0c45 8b4c | ec0c 448b | 8424 8000 | 0000 453b | c10f 8341 | 0c00 004d | 8d04 ec44 | 8b8c 2480 
+[INFO] [stdout]             0x000075a0a3b1d640: 0000 0047 | 0fb6 4c08 
+[INFO] [stdout]             0x000075a0a3b1d648: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@5 (line 121)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d138210::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2790)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d648: 10e9 12fc 
+[INFO] [stdout]             0x000075a0a3b1d64c: ;*iconst_1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@471 (line 2470)
+[INFO] [stdout]             0x000075a0a3b1d64c: ffff b801 | 0000 0048 | 83c4 705d 
+[INFO] [stdout]             0x000075a0a3b1d658: ;   {poll_return}
+[INFO] [stdout]             0x000075a0a3b1d658: 493b 6728 | 0f87 8211 
+[INFO] [stdout]             0x000075a0a3b1d660: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000001d1820e0&apos;)}
+[INFO] [stdout]             0x000075a0a3b1d660: 0000 c341 | 81f9 e020 | 1801 0f85 
+[INFO] [stdout]             0x000075a0a3b1d66c: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d66c: e80d 0000 
+[INFO] [stdout]             0x000075a0a3b1d670: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d1820e0::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d670: 448b 4b0c 
+[INFO] [stdout]    0.01%    0x000075a0a3b1d674: ; implicit exception: dispatches to 0x000075a0a3b1e760
+[INFO] [stdout]    0.01%    0x000075a0a3b1d674: 478b 54cc 
+[INFO] [stdout]             0x000075a0a3b1d678: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.I32Vector::values@1 (line 36)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@1 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d1820e0::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d678: 0cc4 4179 | 6ed2 8b6b 
+[INFO] [stdout]             0x000075a0a3b1d680: ;*getfield arg$2 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d1820e0::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d680: 1045 8b4c | ec0c 448b | 9424 8000 | 0000 453b | d10f 8325 | 0d00 004d | 8d0c ec43 
+[INFO] [stdout]             0x000075a0a3b1d69c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@6 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d1820e0::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d69c: 8b6c 9110 | c441 797e | d247 8b4c | d40c 413b | e90f 8359 | 0d00 0049 | c1e2 034d 
+[INFO] [stdout]             0x000075a0a3b1d6b8: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@8 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000001d1820e0::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2173)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@457 (line 2466)
+[INFO] [stdout]             0x000075a0a3b1d6b8: 6354 aa10 | e957 fbff | ffbe e4ff | ffff 6261 | fd08 7eed | 898c 2484 | 0000 00c5 | 7b11 1c24 
+[INFO] [stdout]             0x000075a0a3b1d6d8: 448b 4c24 | 1044 894c | 2408 4489 | 5c24 0c44 | 8954 2414 | 4489 5424 | 184c 8974 | 2428 c5fa 
+[INFO] [stdout]             0x000075a0a3b1d6f8: 115c 241c | c5fb 114c | 2438 c5fb | 1144 2440 | c5fa 1154 
+[INFO] [stdout]             0x000075a0a3b1d70c: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x000075a0a3b1d70c: 244c 90e8 
+[INFO] [stdout]             0x000075a0a3b1d710: ; ImmutableOopMap {rbp=Oop [0]=Oop [28]=NarrowOop [40]=Oop [56]=Oop [64]=Oop [76]=NarrowOop }
+[INFO] [stdout]                                 ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@12 (line 2782)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2447)
+[INFO] [stdout]             0x000075a0a3b1d710: ccbc a1ff 
+[INFO] [stdout]             0x000075a0a3b1d714: ;   {post_call_nop}
+[INFO] [stdout]             0x000075a0a3b1d714: 0f1f 8400 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   20.10%  <total for region 2>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Regions]...............................................................................
+[INFO] [stdout]   23.76%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]   20.10%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]    5.76%               perf-2407615.map  [unknown] 
+[INFO] [stdout]    3.60%                                 <unknown> 
+[INFO] [stdout]    3.20%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]    2.94%                    c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 4, compile id 2592 
+[INFO] [stdout]    2.78%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed, version 8, compile id 2477 
+[INFO] [stdout]    2.49%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]    1.75%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::writeBinaryField, version 2, compile id 2474 
+[INFO] [stdout]    1.67%               perf-2407615.map  [unknown] 
+[INFO] [stdout]    1.57%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::materializeNulls, version 6, compile id 3577 
+[INFO] [stdout]    1.41%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::addNewGroup, version 2, compile id 2503 
+[INFO] [stdout]    1.12%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]    0.84%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::tryGroupedValuesAsDictionary, version 6, compile id 3573 
+[INFO] [stdout]    0.74%                      libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    0.71%  snappy5025222856265512783.tmp  [unknown] 
+[INFO] [stdout]    0.66%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::addNewGroup, version 2, compile id 2503 
+[INFO] [stdout]    0.62%                                 <unknown> 
+[INFO] [stdout]    0.50%                      libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    0.49%                      libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]   23.28%  <...other 1045 warm regions...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Methods (after inlining)]..............................................................
+[INFO] [stdout]   51.02%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2526 
+[INFO] [stdout]    8.28%               perf-2407615.map  [unknown] 
+[INFO] [stdout]    6.89%                                 <unknown> 
+[INFO] [stdout]    3.51%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed, version 8, compile id 2477 
+[INFO] [stdout]    2.95%                    c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 4, compile id 2592 
+[INFO] [stdout]    2.18%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::addNewGroup, version 2, compile id 2503 
+[INFO] [stdout]    2.17%                      libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    1.75%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::writeBinaryField, version 2, compile id 2474 
+[INFO] [stdout]    1.57%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::materializeNulls, version 6, compile id 3577 
+[INFO] [stdout]    1.09%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::tryGroupedValuesAsDictionary, version 6, compile id 3573 
+[INFO] [stdout]    1.01%                    c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::hash, version 6, compile id 2535 
+[INFO] [stdout]    0.98%  snappy5025222856265512783.tmp  [unknown] 
+[INFO] [stdout]    0.57%                    c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::rehash, version 3, compile id 3233 
+[INFO] [stdout]    0.55%                    c2, level 4  org.weakref.nitro.operator.FlatTypeHandlers$1::materializeValues, version 6, compile id 3593 
+[INFO] [stdout]    0.49%                      libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    0.44%                    c2, level 4  org.weakref.nitro.operator.GroupedAggregationOperator::prepareAggregationStates, version 3, compile id 4098 
+[INFO] [stdout]    0.32%                    c2, level 4  java.util.IdentityHashMap::resize, version 2, compile id 3502 
+[INFO] [stdout]    0.32%                   runtime stub  StubRoutines::Stub Generator jbyte_fill_stub 
+[INFO] [stdout]    0.26%                      libjvm.so  void G1ScanCardClosure::do_oop_work<narrowOop>(narrowOop*) 
+[INFO] [stdout]    0.25%                    c2, level 4  org.weakref.nitro.operator.ValueIdInterner::intern, version 4, compile id 2407 
+[INFO] [stdout]   13.39%  <...other 616 warm methods...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Distribution by Source]........................................................................
+[INFO] [stdout]   70.44%                    c2, level 4
+[INFO] [stdout]    8.28%               perf-2407615.map
+[INFO] [stdout]    7.79%                      libjvm.so
+[INFO] [stdout]    6.89%                               
+[INFO] [stdout]    2.48%              [kernel.kallsyms]
+[INFO] [stdout]    0.98%  snappy5025222856265512783.tmp
+[INFO] [stdout]    0.90%                    interpreter
+[INFO] [stdout]    0.64%                      libc.so.6
+[INFO] [stdout]    0.62%                   runtime stub
+[INFO] [stdout]    0.43%                    c1, level 3
+[INFO] [stdout]    0.17%               Unknown, level 0
+[INFO] [stdout]    0.11%           ld-linux-x86-64.so.2
+[INFO] [stdout]    0.10%                         [vdso]
+[INFO] [stdout]    0.07%                    c1, level 1
+[INFO] [stdout]    0.03%                 [nf_conntrack]
+[INFO] [stdout]    0.02%                       [nvidia]
+[INFO] [stdout]    0.01%                         [veth]
+[INFO] [stdout]    0.01%                    c1, level 2
+[INFO] [stdout]    0.01%                       [rfcomm]
+[INFO] [stdout]    0.01%                    [nf_tables]
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] # Run complete. Total time: 00:00:42
+[INFO] [stdout] 
+[INFO] [stdout] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[INFO] [stdout] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[INFO] [stdout] experiments, perform baseline and negative tests that provide experimental control, make sure
+[INFO] [stdout] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[INFO] [stdout] Do not assume the numbers tell you what you want them to tell.
+[INFO] [stdout] 
+[INFO] [stdout] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[INFO] [stdout] extra caution when trusting the results, look into the generated code to check the benchmark still
+[INFO] [stdout] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[INFO] [stdout] different JVMs are already problematic, the performance difference caused by different Blackhole
+[INFO] [stdout] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[INFO] [stdout] 
+[INFO] [stdout] Benchmark                     Mode  Cnt     Score     Error  Units
+[INFO] [stdout] BenchmarkQueries.query67      avgt    3  5469.206 ± 846.397  ms/op
+[INFO] [stdout] BenchmarkQueries.query67:asm  avgt            NaN              ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  43.560 s (Wall Clock)
+[INFO] Finished at: 2026-07-23T13:25:33Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed
+Purged 1 log files (log available in /root/.mvnd/purge-2026-07-23.log)

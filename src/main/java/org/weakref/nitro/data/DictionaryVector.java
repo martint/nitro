@@ -27,11 +27,12 @@ public final class DictionaryVector
     private final I32Vector ownedIds;
     private final int length;
     private final Vector values;
+    private final Object mappingIdentity;
     private Allocator.BufferLeaseOwner transferredIdsOwner;
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, null, ids.length, values, true, true);
+        this(ids, null, ids.length, values, true, true, null);
     }
 
     /**
@@ -46,7 +47,7 @@ public final class DictionaryVector
 
     public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, true, false);
+        return new DictionaryVector(ids, null, length, values, true, false, null);
     }
 
     /**
@@ -71,7 +72,7 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, false, false);
+        return new DictionaryVector(ids, null, length, values, false, false, null);
     }
 
     /**
@@ -85,7 +86,7 @@ public final class DictionaryVector
     public static DictionaryVector wrapOwnedIds(I32Vector ids, int length, Vector values)
     {
         checkArgument(ids != null, "ids is null");
-        return new DictionaryVector(ids.values(), ids, length, values, false, false);
+        return new DictionaryVector(ids.values(), ids, length, values, false, false, null);
     }
 
     private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
@@ -105,13 +106,13 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, false);
+            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, false, null);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, null, length, values, copyIds, false);
+        return new DictionaryVector(ids, null, length, values, copyIds, false, null);
     }
 
-    private DictionaryVector(int[] ids, I32Vector ownedIds, int length, Vector values, boolean copyIds, boolean validate)
+    private DictionaryVector(int[] ids, I32Vector ownedIds, int length, Vector values, boolean copyIds, boolean validate, Object mappingIdentity)
     {
         checkArgument(length >= 0, "length is negative");
         checkArgument(length <= ids.length, "length exceeds ids capacity");
@@ -119,6 +120,7 @@ public final class DictionaryVector
         this.ownedIds = ownedIds;
         this.length = length;
         this.values = values;
+        this.mappingIdentity = mappingIdentity == null ? this : mappingIdentity;
         if (validate) {
             validateIds(ids, length, values.length());
         }
@@ -132,6 +134,28 @@ public final class DictionaryVector
     public Vector values()
     {
         return values;
+    }
+
+    /**
+     * Creates a non-owning view over this exact immutable mapping and value vector. The shared identity lets a
+     * downstream batch cache reuse derived position state without treating a recycled {@code int[]} identity as
+     * proof. The caller must keep this vector's mapping stable for the view's lifetime, as for {@link #wrap}.
+     */
+    public DictionaryVector sharedMappingView()
+    {
+        return new DictionaryVector(ids, null, length, values, false, false, mappingIdentity);
+    }
+
+    /**
+     * Returns true only for views derived from the same logical mapping. Equal contents created independently are
+     * deliberately not considered identical.
+     */
+    public boolean hasSameMapping(DictionaryVector other)
+    {
+        return other != null &&
+                mappingIdentity == other.mappingIdentity &&
+                length == other.length &&
+                values == other.values;
     }
 
     /**

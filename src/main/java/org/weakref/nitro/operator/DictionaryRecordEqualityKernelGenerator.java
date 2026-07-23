@@ -92,7 +92,11 @@ final class DictionaryRecordEqualityKernelGenerator
             int field = shape.comparisonField(orderIndex);
             int nullShape = shape.nullShape(field);
             Label fieldDone = code.newLabel();
-            if (nullShape == NULL_FREE) {
+            if (!shape.nullableRecord()) {
+                // A non-nullable flat record has no leading null byte. Do not interpret the first key byte as a
+                // null bitmap merely because this batch's logical null shape is NULL_FREE.
+            }
+            else if (nullShape == NULL_FREE) {
                 emitRecordNull(code, field);
                 code.ifne(different);
             }
@@ -190,7 +194,13 @@ final class DictionaryRecordEqualityKernelGenerator
         code.iadd();
     }
 
-    record Shape(int fieldCount, int nullShapes, int binaryFields, long fixedOffsets, int comparisonOrder)
+    record Shape(
+            int fieldCount,
+            boolean nullableRecord,
+            int nullShapes,
+            int binaryFields,
+            long fixedOffsets,
+            int comparisonOrder)
     {
         int nullShape(int field)
         {

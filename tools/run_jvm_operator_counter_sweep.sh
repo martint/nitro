@@ -31,11 +31,24 @@ esac
 mkdir -p "$output_dir"
 prefix="$output_dir/${engine}-${suite}"
 benchmark="org\\.weakref\\.${engine}\\.${suite}\\.BenchmarkQueries\\.query.*$"
+events="instructions,cycles,L1-dcache-load-misses,L1-dcache-loads,dTLB-load-misses,dTLB-loads,branch-misses,branches"
+
+warmup_iterations=${JMH_WARMUP_ITERATIONS:-5}
+measurement_iterations=${JMH_MEASUREMENT_ITERATIONS:-5}
+forks=${JMH_FORKS:-1}
 
 monitor_memory()
 {
     while kill -0 "$1" 2>/dev/null; do
-        awk -v now="$(date -u +%FT%TZ)" '/MemAvailable:/{printf "%s mem_available_kib=%s\n", now, $2}' /proc/meminfo
+        awk -v now="$(date -u +%FT%TZ)" '
+            /MemAvailable:/ {available = $2}
+            /SwapFree:/ {swap = $2}
+            /AnonHugePages:/ {huge = $2}
+            END {
+                printf "%s mem_available_kib=%s swap_free_kib=%s anon_huge_pages_kib=%s\n",
+                    now, available, swap, huge
+            }' /proc/meminfo
+        ps -eo pid,ppid,rss,comm,args --sort=-rss | head -12
         sleep 10
     done
 }
@@ -48,5 +61,5 @@ trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 export MAVEN_OPTS=-Xmx2g
 mvnd -Dmaven.gitcommitid.skip=true exec:exec@benchmark \
     -Dbenchmark.include="$benchmark" \
-    -Dbenchmark.options="-wi 3 -i 5 -w 1s -r 1s -f 1 -foe false -prof perfnorm -prof gc -rf json -rff ${prefix}.json -jvmArgsAppend \"-Xmx12g -XX:+UseTransparentHugePages ${data_args}\"" \
+    -Dbenchmark.options="-wi ${warmup_iterations} -i ${measurement_iterations} -w 1s -r 1s -f ${forks} -foe false -prof perfnorm:events=${events} -prof gc -rf json -rff ${prefix}.json -jvmArgsAppend \"-Xmx12g -XX:+UseTransparentHugePages ${data_args}\"" \
     > "${prefix}.log" 2>&1

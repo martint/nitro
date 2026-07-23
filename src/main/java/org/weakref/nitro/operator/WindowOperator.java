@@ -40,6 +40,14 @@ public final class WindowOperator
             Boolean.parseBoolean(System.getProperty("nitro.window.binaryHashPartitionSort", "true"));
     private static final boolean LAZY_OUTPUTS =
             Boolean.parseBoolean(System.getProperty("nitro.window.lazyOutputs", "true"));
+    private static final boolean REUSE_ORDERED_INPUT =
+            Boolean.parseBoolean(System.getProperty("nitro.window.reuseOrderedInput", "true"));
+    private static final int REUSE_ORDERED_INPUT_MIN_ROWS =
+            Integer.getInteger("nitro.window.reuseOrderedInputMinRows", 1_000_000);
+    private static final int REUSE_ORDERED_INPUT_SAMPLES =
+            Integer.getInteger("nitro.window.reuseOrderedInputSamples", 64);
+    private static final boolean DEBUG_REUSE_ORDERED_INPUT =
+            Boolean.getBoolean("nitro.debug.windowReuseOrderedInput");
 
     private final Allocator allocator;
     private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
@@ -58,6 +66,9 @@ public final class WindowOperator
     // primitive positions instead of allocating one RowReference object per row; this also keeps
     // comparator traffic in two compact int arrays rather than pointer-chasing the Java heap.
     private int[] singlePageOrder;
+    private boolean singlePage;
+    private boolean singlePageIdentityOrder;
+    private int singlePageRowCount;
     private int[] batchPositions;
     private int[] recycledLazyBatchPositions;
     private final int[] radixCounts = new int[256];
@@ -110,15 +121,22 @@ public final class WindowOperator
         if (lazyOutputs) {
             return lazyBatch(currentOutputPosition, batchSize);
         }
-        if (singlePageOrder != null) {
+        if (singlePage) {
             ensureBatchPositions(batchSize);
-            System.arraycopy(singlePageOrder, currentOutputPosition, batchPositions, 0, batchSize);
+            if (singlePageIdentityOrder) {
+                for (int index = 0; index < batchSize; index++) {
+                    batchPositions[index] = currentOutputPosition + index;
+                }
+            }
+            else {
+                System.arraycopy(singlePageOrder, currentOutputPosition, batchPositions, 0, batchSize);
+            }
         }
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
-            Streams batchStreams = singlePageOrder == null
-                    ? materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize)
-                    : materializeSinglePageSourceColumnBatch(outputIndex, batchSize);
+            Streams batchStreams = singlePage
+                    ? materializeSinglePageSourceColumnBatch(outputIndex, batchSize)
+                    : materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);
             outputs[outputIndex] = new Output(
                     batchStreams.streams(),
                     batchStreams::get,
@@ -201,6 +219,9 @@ public final class WindowOperator
         allocator.release(allocationContext);
         arrayPool.release(singlePageOrder);
         singlePageOrder = null;
+        singlePage = false;
+        singlePageIdentityOrder = false;
+        singlePageRowCount = 0;
         arrayPool.release(batchPositions);
         batchPositions = null;
         arrayPool.release(recycledLazyBatchPositions);
@@ -242,8 +263,13 @@ public final class WindowOperator
 
         windowOutputs = new Streams[windowFunctions.size()];
         if (pages.size() == 1) {
-            singlePageOrder = selectedPositions(pages.getFirst());
-            stableSortSinglePagePositions(singlePageOrder);
+            singlePage = true;
+            singlePageRowCount = pages.getFirst().mask().count();
+            singlePageIdentityOrder = canReuseIdentityOrder(pages.getFirst());
+            if (!singlePageIdentityOrder) {
+                singlePageOrder = selectedPositions(pages.getFirst());
+                stableSortSinglePagePositions(singlePageOrder);
+            }
             if (FUSED_WINDOW_FUNCTIONS && windowFunctions.size() > 1) {
                 materializeSinglePageWindows();
             }
@@ -274,14 +300,16 @@ public final class WindowOperator
             windowOutputs[functionIndex] = function.emptyOutput(
                     allocator,
                     allocationContext,
-                    singlePageOrder.length);
+                    singlePageRowCount);
             function.reset();
         }
 
         int partitionStart = 0;
         int previousPosition = -1;
-        for (int outputPosition = 0; outputPosition < singlePageOrder.length; outputPosition++) {
-            int inputPosition = singlePageOrder[outputPosition];
+        boolean identityOrder = singlePageIdentityOrder;
+        int[] order = singlePageOrder;
+        for (int outputPosition = 0; outputPosition < singlePageRowCount; outputPosition++) {
+            int inputPosition = identityOrder ? outputPosition : order[outputPosition];
             if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
                 for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
                     RunningWindowFunction function = windowFunctions.get(functionIndex);
@@ -303,11 +331,11 @@ public final class WindowOperator
                         columns,
                         inputPosition,
                         outputPosition,
-                        singlePageOrder.length);
+                        singlePageRowCount);
             }
             previousPosition = inputPosition;
         }
-        if (singlePageOrder.length > 0) {
+        if (singlePageRowCount > 0) {
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
                 RunningWindowFunction function = windowFunctions.get(functionIndex);
                 windowOutputs[functionIndex] = function.finishPartition(
@@ -315,14 +343,14 @@ public final class WindowOperator
                         allocationContext,
                         windowOutputs[functionIndex],
                         partitionStart,
-                        singlePageOrder.length);
+                        singlePageRowCount);
             }
         }
     }
 
     private int rowCount()
     {
-        return singlePageOrder == null ? rows.size() : singlePageOrder.length;
+        return singlePage ? singlePageRowCount : rows.size();
     }
 
     private int[] selectedPositions(TableOperator.Page page)
@@ -388,6 +416,109 @@ public final class WindowOperator
         finally {
             arrayPool.release(scratch);
         }
+    }
+
+    /**
+     * Reuse a dense producer's physical order only after proving that every row is monotonic under the window's
+     * complete PARTITION BY and ORDER BY semantics. Restrict admission to the same flat integer family handled by
+     * the radix sorter so ordinary unordered inputs retain their established path. A small distributed sample
+     * cheaply rejects disorder before the exact pass; the sample is never used as proof.
+     */
+    private boolean canReuseIdentityOrder(TableOperator.Page page)
+    {
+        int length = page.mask().count();
+        if (!REUSE_ORDERED_INPUT || !page.mask().all() || length < REUSE_ORDERED_INPUT_MIN_ROWS) {
+            return false;
+        }
+        FlatIntegerOrderKey[] keys = flatIntegerOrderKeys(page.columns());
+        if (keys == null) {
+            return false;
+        }
+
+        boolean ordered = isIdentityOrderMonotonic(length, keys);
+        if (DEBUG_REUSE_ORDERED_INPUT) {
+            System.err.printf("WindowOperator reuseOrderedInput=%s rows=%d partitions=%d ordering=%d%n",
+                    ordered, length, partitionColumns.length, orderingColumns.length);
+        }
+        return ordered;
+    }
+
+    private boolean isIdentityOrderMonotonic(int length, FlatIntegerOrderKey[] keys)
+    {
+        int intervals = Math.min(REUSE_ORDERED_INPUT_SAMPLES, length - 1);
+        for (int sample = 1; sample <= intervals; sample++) {
+            int right = (int) ((long) sample * (length - 1) / intervals);
+            if (compareFlatIntegerOrder(keys, right - 1, right) > 0) {
+                return false;
+            }
+        }
+        for (int right = 1; right < length; right++) {
+            if (compareFlatIntegerOrder(keys, right - 1, right) > 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private FlatIntegerOrderKey[] flatIntegerOrderKeys(Streams[] columns)
+    {
+        FlatIntegerOrderKey[] keys = new FlatIntegerOrderKey[partitionColumns.length + orderingColumns.length];
+        int keyIndex = 0;
+        for (int column : partitionColumns) {
+            FlatIntegerOrderKey key = flatIntegerOrderKey(columns[column], false);
+            if (key == null) {
+                return null;
+            }
+            keys[keyIndex++] = key;
+        }
+        for (int index = 0; index < orderingColumns.length; index++) {
+            FlatIntegerOrderKey key = flatIntegerOrderKey(columns[orderingColumns[index]], descendingByColumn[index]);
+            if (key == null) {
+                return null;
+            }
+            keys[keyIndex++] = key;
+        }
+        return keys;
+    }
+
+    private static FlatIntegerOrderKey flatIntegerOrderKey(Streams streams, boolean descending)
+    {
+        Vector values = streams.values();
+        Vector nullVector = streams.getOrNull(Stream.NULLS);
+        boolean[] nulls = VectorAccess.isAllFalseNulls(nullVector) ? null :
+                nullVector instanceof BooleanVector booleans ? booleans.values() : null;
+        if (nulls == null && !VectorAccess.isAllFalseNulls(nullVector)) {
+            return null;
+        }
+        return switch (values) {
+            case I64Vector longs -> new FlatIntegerOrderKey(longs.values(), null, nulls, descending);
+            case I32Vector integers -> new FlatIntegerOrderKey(null, integers.values(), nulls, descending);
+            default -> null;
+        };
+    }
+
+    private static int compareFlatIntegerOrder(FlatIntegerOrderKey[] keys, int left, int right)
+    {
+        for (FlatIntegerOrderKey key : keys) {
+            int comparison;
+            if (key.nulls() != null && (key.nulls()[left] || key.nulls()[right])) {
+                boolean leftNull = key.nulls()[left];
+                boolean rightNull = key.nulls()[right];
+                comparison = leftNull == rightNull ? 0 : leftNull ? 1 : -1;
+            }
+            else {
+                comparison = key.longs() != null
+                        ? Long.compare(key.longs()[left], key.longs()[right])
+                        : Integer.compare(key.integers()[left], key.integers()[right]);
+            }
+            if (key.descending()) {
+                comparison = -comparison;
+            }
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
     }
 
     /**
@@ -673,22 +804,24 @@ public final class WindowOperator
     private Streams materializeSinglePageWindow(RunningWindowFunction function)
     {
         Streams[] columns = pages.getFirst().columns();
-        Streams output = function.emptyOutput(allocator, allocationContext, singlePageOrder.length);
+        Streams output = function.emptyOutput(allocator, allocationContext, singlePageRowCount);
         function.reset();
         int partitionStart = 0;
         int previousPosition = -1;
-        for (int outputPosition = 0; outputPosition < singlePageOrder.length; outputPosition++) {
-            int inputPosition = singlePageOrder[outputPosition];
+        boolean identityOrder = singlePageIdentityOrder;
+        int[] order = singlePageOrder;
+        for (int outputPosition = 0; outputPosition < singlePageRowCount; outputPosition++) {
+            int inputPosition = identityOrder ? outputPosition : order[outputPosition];
             if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
                 output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
                 function.reset();
                 partitionStart = outputPosition;
             }
-            output = function.append(allocator, allocationContext, output, columns, inputPosition, outputPosition, singlePageOrder.length);
+            output = function.append(allocator, allocationContext, output, columns, inputPosition, outputPosition, singlePageRowCount);
             previousPosition = inputPosition;
         }
-        if (singlePageOrder.length > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageOrder.length);
+        if (singlePageRowCount > 0) {
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageRowCount);
         }
         return output;
     }
@@ -899,7 +1032,7 @@ public final class WindowOperator
 
     private Vector materializeSourceStreamBatch(int outputIndex, Stream stream, int startPosition, int batchSize, int[] positions)
     {
-        if (singlePageOrder != null) {
+        if (singlePage) {
             Streams sourceStreams = pages.getFirst().columns()[outputIndex];
             return sourceStreams.get(stream).copyPositionsInto(
                     allocator,
@@ -1001,8 +1134,15 @@ public final class WindowOperator
         private Vector materializeSourceStream(int outputIndex, Stream stream)
         {
             int[] sourcePositions = positions();
-            if (singlePageOrder != null && positionMode != SOURCE_POSITIONS) {
-                System.arraycopy(singlePageOrder, startPosition, sourcePositions, 0, batchSize);
+            if (singlePage && positionMode != SOURCE_POSITIONS) {
+                if (singlePageIdentityOrder) {
+                    for (int index = 0; index < batchSize; index++) {
+                        sourcePositions[index] = startPosition + index;
+                    }
+                }
+                else {
+                    System.arraycopy(singlePageOrder, startPosition, sourcePositions, 0, batchSize);
+                }
                 positionMode = SOURCE_POSITIONS;
             }
             return materializeSourceStreamBatch(outputIndex, stream, startPosition, batchSize, sourcePositions);
@@ -1091,6 +1231,8 @@ public final class WindowOperator
         }
         return builder.build();
     }
+
+    private record FlatIntegerOrderKey(long[] longs, int[] integers, boolean[] nulls, boolean descending) {}
 
     private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
 }

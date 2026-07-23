@@ -1,0 +1,40 @@
+Execution time: 2.75s
+Managed allocation bytes: 1254096896
+Managed allocation count: 0
+Managed peak bytes: 900726784
+OperatorWall: Aggregation=843.6 CallbackSink=0.1 FilterProject=34.9 HashBuild=52.9 HashProbe=3.5 Limit=0.0 LocalExchange=7.4 LocalPartition=13.7 OrderBy=0.7 PartialAggregation=918.6 TableScan=809.3
+ScanWall: 809.3ms  ComputeWall: 1875.3ms  (sum 2684.5ms)
+Splits total: 10, finished: 10
+-- Limit[11][100] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, quantity:DOUBLE
+   Output: 100 rows (86.34KB, 1 batches), Cpu time: 78.22us, Wall time: 137.17us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (74.93us/310ns/2.06us/911ns)
+  -- OrderBy[10][o_totalprice DESC NULLS LAST, o_orderdate ASC NULLS LAST] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, quantity:DOUBLE
+     Output: 624 rows (86.34KB, 1 batches), Cpu time: 722.27us, Wall time: 1.07ms, Blocked wall time: 0ns, Peak memory: 227.88KB, Memory allocations: 14, Threads: 1, CPU breakdown: B/I/O/F (218.29us/288.53us/92.86us/122.59us)
+    -- LocalPartition[9][GATHER] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, quantity:DOUBLE
+       Output: 1248 rows (144.84MB, 1030 batches), Cpu time: 1.59ms, Wall time: 1.92ms, Blocked wall time: 2.40s, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (301.74us/858.77us/359.92us/74.28us)
+       LocalPartition: Input: 624 rows (72.38MB, 515 batches), Output: 624 rows (72.38MB, 515 batches), Cpu time: 1.24ms, Wall time: 1.45ms, Blocked wall time: 44.00us, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (228.88us/858.77us/75.55us/74.14us)
+       LocalExchange: Input: 624 rows (72.47MB, 515 batches), Output: 624 rows (72.47MB, 515 batches), Cpu time: 357.37us, Wall time: 471.62us, Blocked wall time: 2.40s, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (72.85us/0ns/284.37us/141ns)
+      -- HashJoin[8][INNER o_custkey=c_custkey] -> c_name:VARCHAR, c_custkey:BIGINT, o_orderkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, quantity:DOUBLE
+         Output: 624 rows (72.38MB, 515 batches), Cpu time: 54.65ms, Wall time: 55.16ms, Blocked wall time: 86.57ms, Peak memory: 128.67MB, Memory allocations: 4122, CPU breakdown: B/I/O/F (433.18us/46.11ms/1.52ms/6.58ms)
+         HashBuild: Input: 1500000 rows (0B, 151 batches), Output: 0 rows (0B, 0 batches), Cpu time: 52.29ms, Wall time: 52.35ms, Blocked wall time: 0ns, Peak memory: 109.96MB, Memory allocations: 13, Threads: 1, CPU breakdown: B/I/O/F (46.10us/45.72ms/22.13us/6.51ms)
+         HashProbe: Input: 624 rows (48.27MB, 515 batches), Output: 624 rows (72.38MB, 515 batches), Cpu time: 2.36ms, Wall time: 2.81ms, Blocked wall time: 86.57ms, Peak memory: 18.71MB, Memory allocations: 4109, Threads: 1, CPU breakdown: B/I/O/F (387.08us/391.22us/1.50ms/74.64us)
+        -- HashJoin[6][INNER o_orderkey=l_orderkey] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE, l_orderkey:BIGINT, quantity:DOUBLE
+           Output: 624 rows (48.27MB, 515 batches), Cpu time: 2.29ms, Wall time: 3.20ms, Blocked wall time: 2.08s, Peak memory: 2.21MB, Memory allocations: 1551, CPU breakdown: B/I/O/F (709.41us/408.90us/961.39us/206.52us)
+           HashBuild: Input: 624 rows (11.17KB, 520 batches), Output: 0 rows (0B, 0 batches), Cpu time: 848.35us, Wall time: 1.30ms, Blocked wall time: 0ns, Peak memory: 88.00KB, Memory allocations: 3, Threads: 1, CPU breakdown: B/I/O/F (388.52us/245.40us/80.67us/133.76us)
+           HashProbe: Input: 624 rows (48.23MB, 515 batches), Output: 624 rows (48.27MB, 515 batches), Cpu time: 1.44ms, Wall time: 1.90ms, Blocked wall time: 2.08s, Peak memory: 2.12MB, Memory allocations: 1548, Threads: 1, CPU breakdown: B/I/O/F (320.89us/163.50us/880.73us/72.76us)
+          -- TableScan[5][table: orders] -> o_orderkey:BIGINT, o_custkey:BIGINT, o_orderdate:DATE, o_totalprice:DOUBLE
+             Input: 624 rows (48.38MB, 515 batches), Raw Input: 15000000 rows (234.47MB), Output: 624 rows (48.38MB, 515 batches), Cpu time: 337.48ms, Wall time: 338.09ms, Blocked wall time: 0ns, Peak memory: 36.09MB, Memory allocations: 6396, Threads: 1, Splits: 3, DynamicFilter producer plan nodes: 6, CPU breakdown: B/I/O/F (74.39us/0ns/337.41ms/210ns)
+          -- Filter[4][expression: gt(ROW["quantity"],300)] -> l_orderkey:BIGINT, quantity:DOUBLE
+             Output: 624 rows (11.17KB, 520 batches), Cpu time: 37.03ms, Wall time: 39.67ms, Blocked wall time: 0ns, Peak memory: 51.00KB, Memory allocations: 1502, Threads: 1, CPU breakdown: B/I/O/F (2.71ms/233.54us/33.88ms/216.87us)
+            -- Aggregation[3][FINAL [l_orderkey] quantity := sum("quantity")] -> l_orderkey:BIGINT, quantity:DOUBLE
+               Output: 15000000 rows (280.98MB, 1500 batches), Cpu time: 844.60ms, Wall time: 854.47ms, Blocked wall time: 0ns, Peak memory: 628.88MB, Memory allocations: 54, Threads: 1, CPU breakdown: B/I/O/F (6.16ms/804.54ms/31.96ms/1.94ms)
+              -- LocalPartition[2][REPARTITION HASH(l_orderkey)] -> l_orderkey:BIGINT, quantity:DOUBLE
+                 Output: 30010810 rows (676.02MB, 27984 batches), Cpu time: 20.30ms, Wall time: 31.74ms, Blocked wall time: 123.43ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (6.89ms/4.07ms/7.42ms/1.93ms)
+                 LocalPartition: Input: 15005405 rows (338.01MB, 13992 batches), Output: 15005405 rows (338.01MB, 13992 batches), Cpu time: 12.88ms, Wall time: 21.24ms, Blocked wall time: 366.00us, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (4.91ms/4.07ms/1.98ms/1.92ms)
+                 LocalExchange: Input: 15005405 rows (338.01MB, 13992 batches), Output: 15005405 rows (338.01MB, 13992 batches), Cpu time: 7.42ms, Wall time: 10.49ms, Blocked wall time: 123.06ms, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (1.98ms/0ns/5.44ms/141ns)
+                -- Aggregation[1][PARTIAL [l_orderkey] quantity := sum(ROW["l_quantity"])] -> l_orderkey:BIGINT, quantity:DOUBLE
+                   Output: 15005405 rows (338.01MB, 13992 batches), Cpu time: 920.95ms, Wall time: 926.57ms, Blocked wall time: 0ns, Peak memory: 135.21MB, Memory allocations: 28224, Threads: 1, CPU breakdown: B/I/O/F (4.57ms/869.68ms/45.82ms/885.56us)
+                  -- TableScan[0][table: lineitem] -> l_orderkey:BIGINT, l_quantity:DOUBLE
+                     Input: 59986052 rows (561.89MB, 6010 batches), Output: 59986052 rows (561.89MB, 6010 batches), Cpu time: 435.31ms, Wall time: 438.80ms, Blocked wall time: 52.00us, Peak memory: 2.70MB, Memory allocations: 19094, Threads: 1, Splits: 4, CPU breakdown: B/I/O/F (845.92us/0ns/434.46ms/211ns)
+        -- TableScan[7][table: customer] -> c_name:VARCHAR, c_custkey:BIGINT
+           Input: 1500000 rows (70.20MB, 151 batches), Output: 1500000 rows (70.20MB, 151 batches), Cpu time: 33.45ms, Wall time: 34.04ms, Blocked wall time: 25.00us, Peak memory: 3.48MB, Memory allocations: 1858, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (25.60us/0ns/33.43ms/270ns)
+

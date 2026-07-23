@@ -125,6 +125,14 @@ public final class ColumnReader
     // misestimate near the boundary only trades ~equal costs.
     private static final int BRANCHLESS_COMPACTION_DENOMINATOR =
             Integer.getInteger("nitro.parquet.branchlessCompactionDenominator", 9);
+    private static final boolean BITMASK_DICTIONARY_COMPACTION =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.bitmaskDictionaryCompaction", "true"));
+    private static final int BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR =
+            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionLowerDenominator", 16);
+    private static final int BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR =
+            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionUpperDenominator", 12);
+    private static final int BITMASK_DICTIONARY_COMPACTION_MIN_DICTIONARY_SIZE =
+            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionMinDictionarySize", 256);
     private static final boolean ADAPTIVE_BRANCHLESS_COMPACTION =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.adaptiveBranchlessCompaction", "true"));
     private static final long ADAPTIVE_BRANCHLESS_COMPACTION_MIN_ROWS =
@@ -236,6 +244,10 @@ public final class ColumnReader
     // int[] mirror of the per-chunk boolean acceptById[] (the Vector API gathers from int[]/long[], not boolean[]).
     private int[] filterAcceptInts = EMPTY_INTS;
     private int filterAcceptIntsChunk = -1;
+    // Compact numeric mirror for scalar compaction: unlike boolean[], byte values can advance an output index without
+    // a conditional, while touching one quarter of the acceptance-table footprint of the SIMD int[] mirror.
+    private byte[] filterAcceptBytes = EMPTY_BYTES;
+    private int filterAcceptBytesChunk = -1;
     private byte[] nativeNullScratch = EMPTY_BYTES;
     private int[] defBuffer = EMPTY_INTS;
     // reusable accumulators for assembling a batch's BinaryVector across pages
@@ -443,6 +455,8 @@ public final class ColumnReader
         nativeSurvivorScratch = EMPTY_INTS;
         arrayPool.release(filterAcceptInts);
         filterAcceptInts = EMPTY_INTS;
+        arrayPool.release(filterAcceptBytes);
+        filterAcceptBytes = EMPTY_BYTES;
         arrayPool.release(nativeNullScratch);
         nativeNullScratch = EMPTY_BYTES;
         arrayPool.release(defBuffer);
@@ -898,6 +912,7 @@ public final class ColumnReader
                     long[] dict = dictionaryLongs;
                     boolean[] accept = acceptByIdLong(predicate);
                     boolean branchlessCompaction = shouldUseBranchlessCompaction();
+                    boolean bitmaskCompaction = shouldUseBitmaskCompaction();
                     if (shouldSkipRejectedDictionaryPage(pageRows)) {
                         skipRejectedDictionaryPage(pageRows);
                         observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
@@ -1024,7 +1039,11 @@ public final class ColumnReader
                                     // Compact this heterogeneous tile branchlessly or branchily depending on the
                                     // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
                                     int positionBase = windowPos + base + offset;
-                                    if (VECTOR_DICT_FILTER && branchlessCompaction) {
+                                    if (bitmaskCompaction) {
+                                        sc = compactLongDictionaryTileByMask(tile, tileRows, positionBase,
+                                                filterAcceptBytes(accept), dict, survivorsOut, valuesOut, sc);
+                                    }
+                                    else if (VECTOR_DICT_FILTER && branchlessCompaction) {
                                         sc = VectorDictFilter.compactTile(tile, tileRows, positionBase,
                                                 filterAcceptInts(accept), dict, survivorsOut, valuesOut, sc);
                                     }
@@ -1138,6 +1157,7 @@ public final class ColumnReader
                     int[] dict = dictionaryInts;
                     boolean[] accept = acceptByIdInt(predicate);
                     boolean branchlessCompaction = shouldUseBranchlessCompaction();
+                    boolean bitmaskCompaction = shouldUseBitmaskCompaction();
                     if (shouldSkipRejectedDictionaryPage(pageRows)) {
                         skipRejectedDictionaryPage(pageRows);
                         observeDictionaryFilterRows(pageRows, pageSurvivorsBefore, sc);
@@ -1249,7 +1269,11 @@ public final class ColumnReader
                                     // Compact this heterogeneous tile branchlessly or branchily depending on the
                                     // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
                                     int positionBase = windowPos + base + offset;
-                                    if (branchlessCompaction) {
+                                    if (bitmaskCompaction) {
+                                        sc = compactIntDictionaryTileByMask(tile, tileRows, positionBase,
+                                                filterAcceptBytes(accept), dict, survivorsOut, valuesOut, sc);
+                                    }
+                                    else if (branchlessCompaction) {
                                         for (int i = 0; i < tileRows; i++) {
                                             int id = tile[i];
                                             valuesOut[sc] = dict[id];
@@ -1340,6 +1364,58 @@ public final class ColumnReader
         return true;
     }
 
+    private boolean shouldUseBitmaskCompaction()
+    {
+        return BITMASK_DICTIONARY_COMPACTION &&
+                dictionarySize >= BITMASK_DICTIONARY_COMPACTION_MIN_DICTIONARY_SIZE &&
+                BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR >
+                        BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR &&
+                (long) acceptedCount * BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR >= dictionarySize &&
+                (long) acceptedCount * BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR < dictionarySize;
+    }
+
+    private static int compactLongDictionaryTileByMask(int[] ids, int count, int positionBase, byte[] accept,
+            long[] dictionary, int[] survivorsOut, long[] valuesOut, int survivorCount)
+    {
+        for (int base = 0; base < count; base += Long.SIZE) {
+            int blockRows = Math.min(Long.SIZE, count - base);
+            long accepted = 0;
+            for (int lane = 0; lane < blockRows; lane++) {
+                accepted |= (long) accept[ids[base + lane]] << lane;
+            }
+            while (accepted != 0) {
+                int lane = Long.numberOfTrailingZeros(accepted);
+                int id = ids[base + lane];
+                survivorsOut[survivorCount] = positionBase + base + lane;
+                valuesOut[survivorCount] = dictionary[id];
+                survivorCount++;
+                accepted &= accepted - 1;
+            }
+        }
+        return survivorCount;
+    }
+
+    private static int compactIntDictionaryTileByMask(int[] ids, int count, int positionBase, byte[] accept,
+            int[] dictionary, int[] survivorsOut, int[] valuesOut, int survivorCount)
+    {
+        for (int base = 0; base < count; base += Long.SIZE) {
+            int blockRows = Math.min(Long.SIZE, count - base);
+            long accepted = 0;
+            for (int lane = 0; lane < blockRows; lane++) {
+                accepted |= (long) accept[ids[base + lane]] << lane;
+            }
+            while (accepted != 0) {
+                int lane = Long.numberOfTrailingZeros(accepted);
+                int id = ids[base + lane];
+                survivorsOut[survivorCount] = positionBase + base + lane;
+                valuesOut[survivorCount] = dictionary[id];
+                survivorCount++;
+                accepted &= accepted - 1;
+            }
+        }
+        return survivorCount;
+    }
+
     private void observeDictionaryFilterRows(int rows, int survivorsBefore, int survivorsAfter)
     {
         dictionaryFilterRowsObserved += rows;
@@ -1409,6 +1485,7 @@ public final class ColumnReader
         if (!sameGeneration || warmBranchyTable) {
             acceptByIdChunk = -1;
             filterAcceptIntsChunk = -1;
+            filterAcceptBytesChunk = -1;
             acceptByIdPredicate = generation >= 0 ? predicate : null;
             acceptByIdPredicateGeneration = generation;
         }
@@ -1427,6 +1504,24 @@ public final class ColumnReader
             filterAcceptIntsChunk = chunkIndex;
         }
         return filterAcceptInts;
+    }
+
+    private byte[] filterAcceptBytes(boolean[] accept)
+    {
+        if (filterAcceptBytesChunk != chunkIndex) {
+            if (filterAcceptBytes.length < dictionarySize) {
+                int retainedFloor = (int) Math.min(Integer.MAX_VALUE, arrayPool.minRetainedBytes());
+                int capacity = arrayPool.isRetainable(retainedFloor)
+                        ? Math.max(dictionarySize, retainedFloor)
+                        : dictionarySize;
+                filterAcceptBytes = replaceBytes(filterAcceptBytes, capacity);
+            }
+            for (int e = 0; e < dictionarySize; e++) {
+                filterAcceptBytes[e] = accept[e] ? (byte) 1 : 0;
+            }
+            filterAcceptBytesChunk = chunkIndex;
+        }
+        return filterAcceptBytes;
     }
 
     private int[] filterTile()

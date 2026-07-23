@@ -107,6 +107,10 @@ class FlatKeyLayout
             Long.getLong("nitro.group.compactBinaryMinDistinctProduct", 1024L);
     private static final int COMPACT_BINARY_MIN_DISCRIMINATING_DISTINCT =
             Integer.getInteger("nitro.group.compactBinaryMinDiscriminatingDistinct", 32);
+    private static final boolean PRECOMPUTE_COMPACT_BINARY_POSITION_IDS =
+            Boolean.parseBoolean(System.getProperty("nitro.group.precomputeCompactBinaryPositionIds", "true"));
+    private static final boolean DEBUG_COMPACT_BINARY_POSITION_IDS =
+            Boolean.getBoolean("nitro.debug.compactBinaryPositionIds");
     private static final int COMPACT_BINARY_SAMPLE_SIZE = 64;
     private static final boolean OWN_GROUPED_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.group.ownedGroupedDictionaryIds", "true"));
@@ -202,6 +206,10 @@ class FlatKeyLayout
     private int[][] batchEntryGlobalId;
     private Vector[] batchEntryGlobalIdDict;
     private long[] batchEntryGlobalIdGeneration;
+    private int[][] batchPositionGlobalId;
+    private DictionaryVector[] fieldDictionaryMapping;
+    private DictionaryVector[] batchPositionDictionaryMapping;
+    private boolean debugCompactBinaryPositionIdsPrinted;
     // Sentinel in batchEntryGlobalId for a dictionary entry not yet interned. A join wraps a grouping-key
     // column over the whole build column, so its dictionary carries far more entries than any batch
     // references. Interning every entry eagerly on the first batch that presents a new dictionary identity
@@ -387,6 +395,17 @@ class FlatKeyLayout
             fixedOffset += compactEmbeddedBinaryRecords && handler.kind() == FlatTypeHandler.Kind.BINARY
                     ? Integer.BYTES
                     : handler.fixedSize();
+        }
+        if (PRECOMPUTE_COMPACT_BINARY_POSITION_IDS && compactEmbeddedBinaryRecords) {
+            return new PositionIdFlatKeyLayout(
+                    fields,
+                    inputChannels,
+                    handlers,
+                    fixedOffsets,
+                    comparisonOrder(handlers),
+                    nullByteCount,
+                    fixedOffset,
+                    anyVariableWidth);
         }
         return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
     }
@@ -637,6 +656,9 @@ class FlatKeyLayout
             batchEntryGlobalId = new int[handlers.length][];
             batchEntryGlobalIdDict = new Vector[handlers.length];
             batchEntryGlobalIdGeneration = new long[handlers.length];
+            batchPositionGlobalId = new int[handlers.length][];
+            fieldDictionaryMapping = new DictionaryVector[handlers.length];
+            batchPositionDictionaryMapping = new DictionaryVector[handlers.length];
             fieldLazyIntern = new boolean[handlers.length];
             fieldLong = new VectorAccess.LongValues[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
@@ -682,6 +704,7 @@ class FlatKeyLayout
             fieldBinaryIds[index] = null;
             fieldBinaryConstantHash[index] = 0;
             fieldBinaryConstantGlobalId[index] = -1;
+            fieldDictionaryMapping[index] = fieldValue instanceof DictionaryVector dictionary ? dictionary : null;
             if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY) {
                 if (fieldValue instanceof BinaryVector base) {
                     fieldBinaryBase[index] = base;
@@ -840,6 +863,7 @@ class FlatKeyLayout
                 }
             }
         }
+        prepareCompactBinaryPositionIds(values);
         batchNullFreeLongBinary = FAST_NULL_FREE_LONG_BINARY &&
                 handlers.length == 2 &&
                 fieldKinds[0] == FlatTypeHandler.Kind.LONG &&
@@ -975,7 +999,13 @@ class FlatKeyLayout
             order |= comparisonOrder[index] << (index * 3);
         }
         generatedRecordEqualityKernel = DictionaryRecordEqualityKernelGenerator.create(
-                new DictionaryRecordEqualityKernelGenerator.Shape(handlers.length, nullShapes, binaryFields, offsets, order));
+                new DictionaryRecordEqualityKernelGenerator.Shape(
+                        handlers.length,
+                        nullByteCount != 0,
+                        nullShapes,
+                        binaryFields,
+                        offsets,
+                        order));
     }
 
     private void prepareConstantNullMixedComposite3()
@@ -1632,6 +1662,61 @@ class FlatKeyLayout
         return globalId;
     }
 
+    int globalIdAtPosition(int fieldIndex, int position)
+    {
+        return globalIdFor(fieldIndex, batchDictionaryIds[fieldIndex][position]);
+    }
+
+    final int preparedGlobalIdAtPosition(int fieldIndex, int position)
+    {
+        return batchPositionGlobalId[fieldIndex][position];
+    }
+
+    private void prepareCompactBinaryPositionIds(Vector[] values)
+    {
+        if (!PRECOMPUTE_COMPACT_BINARY_POSITION_IDS || !compactEmbeddedBinaryRecords || values.length == 0) {
+            return;
+        }
+        int positions = values[0].length();
+        int activeFields = 0;
+        for (int index = 0; index < handlers.length; index++) {
+            if (batchFieldAllNull[index] || !fieldIdComparable[index] || batchDictionaryIds[index] == null) {
+                continue;
+            }
+            int[] dictionaryIds = batchDictionaryIds[index];
+            int[] positioned = batchPositionGlobalId[index];
+            boolean reusable = positioned != null &&
+                    positioned.length >= positions &&
+                    fieldDictionaryMapping[index] != null &&
+                    fieldDictionaryMapping[index].hasSameMapping(batchPositionDictionaryMapping[index]);
+            if (reusable) {
+                activeFields++;
+                continue;
+            }
+            if (positioned == null || positioned.length < positions) {
+                int[] previous = positioned;
+                positioned = borrowInts(positions);
+                batchPositionGlobalId[index] = positioned;
+                release(previous);
+            }
+            int[] entryGlobalIds = batchEntryGlobalId[index];
+            for (int position = 0; position < positions; position++) {
+                int dictionaryId = dictionaryIds[position];
+                int globalId = entryGlobalIds[dictionaryId];
+                positioned[position] = globalId == GLOBAL_ID_NOT_INTERNED
+                        ? globalIdFor(index, dictionaryId)
+                        : globalId;
+            }
+            batchPositionDictionaryMapping[index] = fieldDictionaryMapping[index];
+            activeFields++;
+        }
+        if (DEBUG_COMPACT_BINARY_POSITION_IDS && activeFields > 0 && !debugCompactBinaryPositionIdsPrinted) {
+            debugCompactBinaryPositionIdsPrinted = true;
+            System.err.printf("[compact-binary-position-ids] fields=%d active=%d positions=%d%n",
+                    handlers.length, activeFields, positions);
+        }
+    }
+
     /**
      * Emits a grouped BINARY key column as a {@link DictionaryVector} over the field's interned distinct values
      * (base indexed by global id) using each group's stored id, when every group carried a valid interned id and
@@ -1995,7 +2080,7 @@ class FlatKeyLayout
                 fieldIdComparable != null &&
                 fieldIdComparable[fieldIndex] &&
                 batchDictionaryIds[fieldIndex] != null) {
-            int globalId = globalIdFor(fieldIndex, batchDictionaryIds[fieldIndex][position]);
+            int globalId = globalIdAtPosition(fieldIndex, position);
             if (globalId >= 0) {
                 return fieldInterners[fieldIndex].groupingHash(globalId);
             }
@@ -2023,10 +2108,6 @@ class FlatKeyLayout
     private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
     {
         if (!batchAccessorsReady) {
-            if (compactBinaryRecord(fieldIndex)) {
-                writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
-                return;
-            }
             writeFlatByKind(fieldKinds[fieldIndex], value, position, fixedChunk, fixedOffset, arena);
             return;
         }
@@ -2053,7 +2134,7 @@ class FlatKeyLayout
             }
         }
         if (ID_ONLY_BINARY_RECORDS && fieldIdComparable != null && fieldIdComparable[fieldIndex] && batchDictionaryIds[fieldIndex] != null) {
-            int globalId = globalIdFor(fieldIndex, batchDictionaryIds[fieldIndex][position]);
+            int globalId = globalIdAtPosition(fieldIndex, position);
             if (globalId >= 0) {
                 GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, embedIdOnlyBinaryIds ? globalId : 0);
                 if (!compactBinaryRecord(fieldIndex)) {
@@ -2310,7 +2391,14 @@ class FlatKeyLayout
                 fixedChunk[fixedOffset] = 1;
             }
             else {
-                singleHandler.writeFlat(values[singleInputChannel], position, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena);
+                writeFieldFlat(
+                        0,
+                        values[singleInputChannel],
+                        position,
+                        fixedChunk,
+                        fixedOffset + singleFixedOffset,
+                        variableWidthArena,
+                        recordIndex);
             }
             storeRecordDictionaryIds(recordIndex, position);
             return;
@@ -2341,7 +2429,7 @@ class FlatKeyLayout
             }
             int fieldOffset = fixedOffset + fixedOffsets[1];
             if (idComparable(1, fixedChunk, fieldOffset, recordIndex)) {
-                int probeId = globalIdFor(1, batchDictionaryIds[1][position]);
+                int probeId = globalIdAtPosition(1, position);
                 if (probeId >= 0) {
                     return recordDictionaryId(1, fixedChunk, fieldOffset, recordIndex) == probeId;
                 }
@@ -2356,7 +2444,7 @@ class FlatKeyLayout
                 return false;
             }
             if (idComparable(0, fixedChunk, fixedOffset + singleFixedOffset, recordIndex)) {
-                int probeId = globalIdFor(0, batchDictionaryIds[0][position]);
+                int probeId = globalIdAtPosition(0, position);
                 if (probeId >= 0) {
                     return recordDictionaryId(0, fixedChunk, fixedOffset + singleFixedOffset, recordIndex) == probeId;
                 }
@@ -2375,7 +2463,7 @@ class FlatKeyLayout
             }
             int fieldOffset = fixedOffset + fixedOffsets[index];
             if (idComparable(index, fixedChunk, fieldOffset, recordIndex)) {
-                int probeId = globalIdFor(index, batchDictionaryIds[index][position]);
+                int probeId = globalIdAtPosition(index, position);
                 if (probeId >= 0) {
                     if (recordDictionaryId(index, fixedChunk, fieldOffset, recordIndex) != probeId) {
                         return false;
@@ -2400,7 +2488,8 @@ class FlatKeyLayout
 
     boolean generatedEqualityInputNull(int field, int position)
     {
-        return fieldNullAccess[field].value(position);
+        VectorAccess.BooleanValues nulls = fieldNullAccess[field];
+        return nulls != null && nulls.value(position);
     }
 
     long generatedEqualityInputLong(int field, int position)
@@ -2410,7 +2499,7 @@ class FlatKeyLayout
 
     int generatedEqualityInputGlobalId(int field, int position)
     {
-        return globalIdFor(field, batchDictionaryIds[field][position]);
+        return globalIdAtPosition(field, position);
     }
 
     static int generatedEqualityRecordInt(byte[] fixedChunk, int fixedOffset)
@@ -2476,7 +2565,7 @@ class FlatKeyLayout
                 int packedField = packedDictionaryFieldIndex[index];
                 if (packedField >= 0) {
                     packedRecordDictionaryIds[recordOffset + packedField] = fieldIdComparable[index]
-                            ? globalIdFor(index, batchDictionaryIds[index][position])
+                            ? globalIdAtPosition(index, position)
                             : -1;
                 }
             }
@@ -2486,7 +2575,7 @@ class FlatKeyLayout
             if (recordDictionaryIds[index] == null) {
                 continue;
             }
-            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? globalIdFor(index, batchDictionaryIds[index][position]) : -1;
+            recordDictionaryIds[index][recordIndex] = fieldIdComparable[index] ? globalIdAtPosition(index, position) : -1;
         }
     }
 
@@ -2556,6 +2645,12 @@ class FlatKeyLayout
             }
             Arrays.fill(batchEntryGlobalId, null);
         }
+        if (batchPositionGlobalId != null) {
+            for (int[] ids : batchPositionGlobalId) {
+                release(ids);
+            }
+            Arrays.fill(batchPositionGlobalId, null);
+        }
         if (recordDictionaryIds != null) {
             for (int[] ids : recordDictionaryIds) {
                 release(ids);
@@ -2590,6 +2685,8 @@ class FlatKeyLayout
             Arrays.fill(boundDictionary, null);
             Arrays.fill(batchDictionaryIds, null);
             Arrays.fill(batchEntryGlobalIdDict, null);
+            Arrays.fill(fieldDictionaryMapping, null);
+            Arrays.fill(batchPositionDictionaryMapping, null);
             Arrays.fill(fieldBinaryBase, null);
             Arrays.fill(fieldBinaryIds, null);
             Arrays.fill(fieldLong, null);
@@ -2752,6 +2849,38 @@ class FlatKeyLayout
             return false;
         }
         return (fixedChunk[fixedOffset + fieldIndex / Byte.SIZE] & (1 << (fieldIndex % Byte.SIZE))) != 0;
+    }
+
+    private static final class PositionIdFlatKeyLayout
+            extends FlatKeyLayout
+    {
+        private PositionIdFlatKeyLayout(
+                Field[] fields,
+                int[] inputChannels,
+                FlatTypeHandler[] handlers,
+                int[] fixedOffsets,
+                int[] comparisonOrder,
+                int nullByteCount,
+                int fixedRecordSize,
+                boolean anyVariableWidth)
+        {
+            super(
+                    fields,
+                    inputChannels,
+                    handlers,
+                    fixedOffsets,
+                    comparisonOrder,
+                    nullByteCount,
+                    fixedRecordSize,
+                    anyVariableWidth,
+                    true);
+        }
+
+        @Override
+        int globalIdAtPosition(int fieldIndex, int position)
+        {
+            return preparedGlobalIdAtPosition(fieldIndex, position);
+        }
     }
 
     public record Field(int inputChannel, FlatTypeHandler handler, int fixedOffset, Set<BinaryVector.Trait> binaryTraits)

@@ -1,0 +1,46 @@
+Execution time: 380ms
+Managed allocation bytes: 613416960
+Managed allocation count: 0
+Managed peak bytes: 223346688
+OperatorWall: Aggregation=117.0 CallbackSink=0.4 FilterProject=15.4 HashBuild=21.0 HashProbe=47.1 LocalExchange=0.9 LocalPartition=1.7 OrderBy=5.8 PartialAggregation=55.0 TableScan=97.3
+ScanWall: 97.3ms  ComputeWall: 264.4ms  (sum 361.7ms)
+Splits total: 8, finished: 8
+-- OrderBy[14][supplier_cnt DESC NULLS LAST, p_brand ASC NULLS LAST, p_type ASC NULLS LAST, p_size ASC NULLS LAST] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+   Output: 27840 rows (2.03MB, 3 batches), Cpu time: 5.80ms, Wall time: 5.81ms, Blocked wall time: 0ns, Peak memory: 6.03MB, Memory allocations: 46, Threads: 1, CPU breakdown: B/I/O/F (4.83us/1.15ms/451.24us/4.20ms)
+  -- Aggregation[13][FINAL [p_brand, p_type, p_size] supplier_cnt := count("supplier_cnt")] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+     Output: 27840 rows (2.20MB, 3 batches), Cpu time: 3.28ms, Wall time: 3.29ms, Blocked wall time: 0ns, Peak memory: 11.59MB, Memory allocations: 31, Threads: 1, CPU breakdown: B/I/O/F (2.99us/2.80ms/471.62us/1.14us)
+    -- LocalPartition[12][GATHER] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+       Output: 55680 rows (4.40MB, 6 batches), Cpu time: 260.49us, Wall time: 441.78us, Blocked wall time: 369.71ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (244.01us/8.04us/5.73us/2.71us)
+       LocalPartition: Input: 27840 rows (2.20MB, 3 batches), Output: 27840 rows (2.20MB, 3 batches), Cpu time: 255.86us, Wall time: 435.70us, Blocked wall time: 0ns, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (242.80us/8.04us/2.45us/2.56us)
+       LocalExchange: Input: 27840 rows (2.20MB, 3 batches), Output: 27840 rows (2.20MB, 3 batches), Cpu time: 4.63us, Wall time: 6.08us, Blocked wall time: 369.71ms, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (1.21us/0ns/3.27us/150ns)
+      -- Aggregation[11][PARTIAL [p_brand, p_type, p_size] supplier_cnt := count(ROW["ps_suppkey"])] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, supplier_cnt:BIGINT
+         Output: 27840 rows (2.20MB, 3 batches), Cpu time: 40.56ms, Wall time: 41.82ms, Blocked wall time: 0ns, Peak memory: 12.10MB, Memory allocations: 45, Threads: 1, CPU breakdown: B/I/O/F (908.82us/38.67ms/759.89us/225.09us)
+        -- Aggregation[10][FINAL [p_brand, p_type, p_size, ps_suppkey] ] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, ps_suppkey:BIGINT
+           Output: 1186339 rows (142.39MB, 1602 batches), Cpu time: 113.84ms, Wall time: 115.29ms, Blocked wall time: 0ns, Peak memory: 110.56MB, Memory allocations: 1638, Threads: 1, CPU breakdown: B/I/O/F (901.17us/110.95ms/1.76ms/227.05us)
+          -- LocalPartition[9][REPARTITION HASH(p_brand, p_type, p_size, ps_suppkey)] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, ps_suppkey:BIGINT
+             Output: 2373198 rows (284.84MB, 3204 batches), Cpu time: 2.79ms, Wall time: 4.21ms, Blocked wall time: 64.33ms, Peak memory: 0B, Memory allocations: 0, CPU breakdown: B/I/O/F (945.35us/694.71us/927.44us/225.11us)
+             LocalPartition: Input: 1186599 rows (142.42MB, 1602 batches), Output: 1186599 rows (142.42MB, 1602 batches), Cpu time: 1.86ms, Wall time: 2.92ms, Blocked wall time: 191.00us, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (711.65us/694.71us/229.19us/224.97us)
+             LocalExchange: Input: 1186599 rows (142.42MB, 1602 batches), Output: 1186599 rows (142.42MB, 1602 batches), Cpu time: 932.09us, Wall time: 1.29ms, Blocked wall time: 64.14ms, Peak memory: 0B, Memory allocations: 0, Threads: 1, CPU breakdown: B/I/O/F (233.70us/0ns/698.25us/140ns)
+            -- Aggregation[8][PARTIAL [p_brand, p_type, p_size, ps_suppkey] ] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, ps_suppkey:BIGINT
+               Output: 1186599 rows (142.42MB, 1602 batches), Cpu time: 15.24ms, Wall time: 16.82ms, Blocked wall time: 0ns, Peak memory: 12.58MB, Memory allocations: 5997, Threads: 1, CPU breakdown: B/I/O/F (1.12ms/9.84ms/4.01ms/264.79us)
+              -- HashJoin[7][ANTI ps_suppkey=s_suppkey, null aware] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+                 Output: 1186602 rows (142.42MB, 1602 batches), Cpu time: 9.64ms, Wall time: 11.15ms, Blocked wall time: 7.88ms, Peak memory: 2.47MB, Memory allocations: 1613, CPU breakdown: B/I/O/F (1.02ms/5.53ms/2.74ms/348.43us)
+                 HashBuild: Input: 56 rows (4.55KB, 10 batches), Output: 0 rows (0B, 0 batches), Cpu time: 158.17us, Wall time: 165.23us, Blocked wall time: 0ns, Peak memory: 860.00KB, Memory allocations: 3, Threads: 1, CPU breakdown: B/I/O/F (5.85us/22.93us/2.12us/127.28us)
+                 HashProbe: Input: 1187296 rows (142.48MB, 1602 batches), Output: 1186602 rows (142.42MB, 1602 batches), Cpu time: 9.48ms, Wall time: 10.98ms, Blocked wall time: 7.88ms, Peak memory: 1.63MB, Memory allocations: 1610, Threads: 1, CPU breakdown: B/I/O/F (1.01ms/5.51ms/2.74ms/221.15us)
+                -- HashJoin[6][INNER ps_partkey=p_partkey] -> ps_suppkey:BIGINT, p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER
+                   Output: 1187296 rows (142.48MB, 1602 batches), Cpu time: 59.16ms, Wall time: 59.96ms, Blocked wall time: 0ns, Peak memory: 78.85MB, Memory allocations: 12879, CPU breakdown: B/I/O/F (659.29us/24.88ms/31.42ms/2.20ms)
+                   HashBuild: Input: 296824 rows (23.97MB, 201 batches), Output: 0 rows (0B, 0 batches), Cpu time: 20.91ms, Wall time: 21.02ms, Blocked wall time: 0ns, Peak memory: 43.78MB, Memory allocations: 12, Threads: 1, CPU breakdown: B/I/O/F (91.78us/18.71ms/30.25us/2.08ms)
+                   HashProbe: Input: 8000000 rows (0B, 803 batches), Output: 1187296 rows (142.48MB, 1602 batches), Cpu time: 38.25ms, Wall time: 38.94ms, Blocked wall time: 0ns, Peak memory: 35.07MB, Memory allocations: 12867, Threads: 1, CPU breakdown: B/I/O/F (567.51us/6.17ms/31.39ms/113.05us)
+                  -- TableScan[5][table: partsupp] -> ps_partkey:BIGINT, ps_suppkey:BIGINT
+                     Input: 8000000 rows (143.88MB, 803 batches), Output: 8000000 rows (143.88MB, 803 batches), Cpu time: 72.61ms, Wall time: 73.35ms, Blocked wall time: 0ns, Peak memory: 16.34MB, Memory allocations: 5808, Threads: 1, Splits: 4, CPU breakdown: B/I/O/F (126.06us/0ns/72.48ms/211ns)
+                  -- Filter[2][expression: neq(ROW["p_brand"],Brand#45)] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, p_partkey:BIGINT
+                     Output: 296824 rows (23.97MB, 201 batches), Cpu time: 2.20ms, Wall time: 2.37ms, Blocked wall time: 0ns, Peak memory: 14.50KB, Memory allocations: 202, Threads: 1, CPU breakdown: B/I/O/F (143.26us/31.45us/2.00ms/29.83us)
+                    -- Filter[1][expression: and(and(and(gte("p_size",3),lte("p_size",49)),in("p_size",array_constructor(3,9,14,19,23,36,45,49))),not(like(ROW["p_type"],MEDIUM POLISHED%)))] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, p_partkey:BIGINT
+                       Output: 309084 rows (15.15MB, 201 batches), Cpu time: 12.33ms, Wall time: 12.45ms, Blocked wall time: 0ns, Peak memory: 59.38KB, Memory allocations: 817, Threads: 1, CPU breakdown: B/I/O/F (124.77us/31.89us/12.14ms/28.30us)
+                      -- TableScan[0][table: part] -> p_brand:VARCHAR, p_type:VARCHAR, p_size:INTEGER, p_partkey:BIGINT
+                         Input: 2000000 rows (178.14MB, 201 batches), Output: 2000000 rows (178.14MB, 201 batches), Cpu time: 17.29ms, Wall time: 17.74ms, Blocked wall time: 65.00us, Peak memory: 1.76MB, Memory allocations: 3158, Threads: 1, Splits: 3, CPU breakdown: B/I/O/F (29.64us/0ns/17.26ms/140ns)
+                -- Filter[4][expression: like(ROW["s_comment"],%Customer%Complaints%)] -> s_suppkey:BIGINT, s_comment:VARCHAR
+                   Output: 56 rows (4.55KB, 10 batches), Cpu time: 1.06ms, Wall time: 1.07ms, Blocked wall time: 0ns, Peak memory: 51.25KB, Memory allocations: 14, Threads: 1, CPU breakdown: B/I/O/F (6.90us/1.81us/1.05ms/2.23us)
+                  -- TableScan[3][table: supplier] -> s_suppkey:BIGINT, s_comment:VARCHAR
+                     Input: 100000 rows (10.05MB, 10 batches), Output: 100000 rows (10.05MB, 10 batches), Cpu time: 5.87ms, Wall time: 6.45ms, Blocked wall time: 37.00us, Peak memory: 4.41MB, Memory allocations: 347, Threads: 1, Splits: 1, CPU breakdown: B/I/O/F (2.06us/0ns/5.86ms/211ns)
+

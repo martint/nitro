@@ -28,6 +28,10 @@ public final class GroupIdOperator
 {
     private static final boolean SHARE_DENSE_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.groupId.shareDenseDictionaryIds", "true"));
+    private static final boolean PROPAGATE_DENSE_DICTIONARY_MAPPING_IDENTITY =
+            Boolean.parseBoolean(System.getProperty("nitro.groupId.propagateDenseDictionaryMappingIdentity", "true"));
+    private static final int DENSE_DICTIONARY_MAPPING_MIN_GROUPING_SETS =
+            Integer.getInteger("nitro.groupId.denseDictionaryMappingMinGroupingSets", 8);
     private static final boolean USE_KNOWN_FALSE_METADATA =
             Boolean.parseBoolean(System.getProperty("nitro.groupId.useKnownFalseMetadata", "true"));
     private static final boolean COMPACT_ALL_FALSE_STREAMS =
@@ -37,6 +41,7 @@ public final class GroupIdOperator
     private final Operator source;
     private final int[][] groupingSetInputs;
     private final boolean[] outputCanBeNullExtended;
+    private final DictionaryVector[] currentDenseDictionaryMappings;
     private int[] currentSourcePositions;
 
     private Batch currentSourceBatch;
@@ -52,6 +57,7 @@ public final class GroupIdOperator
         this.source = source;
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
         this.outputCanBeNullExtended = computeOutputNullExtension(groupingSetInputs);
+        this.currentDenseDictionaryMappings = new DictionaryVector[outputCanBeNullExtended.length];
     }
 
     @Override
@@ -92,6 +98,7 @@ public final class GroupIdOperator
             currentSourceBatch.close();
             currentSourceBatch = null;
         }
+        clearDenseDictionaryMappings();
         source.close();
         allocator.release(allocationContext);
     }
@@ -112,6 +119,7 @@ public final class GroupIdOperator
                 currentSourceMask = null;
                 currentSourceDense = false;
                 currentSourcePositions = null;
+                clearDenseDictionaryMappings();
                 currentGroupingSet = 0;
                 continue;
             }
@@ -159,7 +167,7 @@ public final class GroupIdOperator
     private Streams materializeOutput(int outputIndex, int sourceIndex, int rowCount)
     {
         Output sourceOutput = currentSourceBatch.output(sourceIndex >= 0 ? sourceIndex : outputIndex);
-        Vector values = selectValues(sourceOutput.borrow(Stream.VALUES), currentSourcePositions);
+        Vector values = selectValues(sourceOutput.borrow(Stream.VALUES), currentSourcePositions, outputIndex);
 
         Streams.Builder streams = Streams.builder()
                 .put(Stream.VALUES, values);
@@ -203,7 +211,7 @@ public final class GroupIdOperator
      * keeps the same dictionary instance flowing into grouping so {@link FlatGroupingTable} can hash
      * by id rather than by raw bytes. All other shapes fall back to a dense copy.
      */
-    private Vector selectValues(Vector source, int[] positions)
+    private Vector selectValues(Vector source, int[] positions, int outputIndex)
     {
         if (source instanceof DictionaryVector dictionary) {
             if (SHARE_DENSE_DICTIONARY_IDS && currentSourceDense) {
@@ -211,7 +219,19 @@ public final class GroupIdOperator
                 // so a dense expansion can safely share its immutable dictionary mapping.  This is the same
                 // BufferPtr-style lifetime used for the dictionary values and avoids allocating/copying the ids
                 // once per grouping set merely to reproduce an identity selection.
-                return allocator.adopt(allocationContext, DictionaryVector.wrap(dictionary.ids(), dictionary.length(), dictionary.values()));
+                DictionaryVector selected;
+                if (shouldPropagateMappingIdentity()) {
+                    selected = currentDenseDictionaryMappings[outputIndex];
+                    if (selected == null) {
+                        selected = DictionaryVector.wrap(dictionary.ids(), dictionary.length(), dictionary.values());
+                        currentDenseDictionaryMappings[outputIndex] = selected;
+                    }
+                    selected = selected.sharedMappingView();
+                }
+                else {
+                    selected = DictionaryVector.wrap(dictionary.ids(), dictionary.length(), dictionary.values());
+                }
+                return allocator.adopt(allocationContext, selected);
             }
             int[] sourceIds = dictionary.ids();
             int[] ids = new int[positions.length];
@@ -221,6 +241,19 @@ public final class GroupIdOperator
             return allocator.allocateDictionary(allocationContext, ids, dictionary.values());
         }
         return copySelectedVector(source);
+    }
+
+    private void clearDenseDictionaryMappings()
+    {
+        for (int index = 0; index < currentDenseDictionaryMappings.length; index++) {
+            currentDenseDictionaryMappings[index] = null;
+        }
+    }
+
+    private boolean shouldPropagateMappingIdentity()
+    {
+        return PROPAGATE_DENSE_DICTIONARY_MAPPING_IDENTITY &&
+                groupingSetInputs.length >= DENSE_DICTIONARY_MAPPING_MIN_GROUPING_SETS;
     }
 
     private Vector copySelectedVector(Vector source)

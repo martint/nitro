@@ -1,0 +1,1869 @@
+[INFO] Processing build on daemon 104e5845
+[INFO] Scanning for projects...
+[INFO] Njord 0.9.4 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] -------------------------< org.weakref:nitro >--------------------------
+[INFO] Building nitro 1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] 2 problems were encountered while building the effective model for org.apache.yetus:audience-annotations:jar:0.5.0 during dependency collection step for project (use -X to see details)
+[INFO] 
+[INFO] --- exec:3.6.1:exec (benchmark) @ nitro ---
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/root/.m2/repository/org/openjdk/jmh/jmh-core/1.37/jmh-core-1.37.jar)
+[WARNING] [stderr] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[WARNING] [stderr] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[INFO] [stdout] # JMH version: 1.37
+[INFO] [stdout] # VM version: JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1+8
+[INFO] [stdout] # VM invoker: /opt/java/openjdk/bin/java
+[INFO] [stdout] # VM options: --enable-preview --add-modules=jdk.incubator.vector -Dnitro.clickbench.hits.path= -Dnitro.tpcds.parquet.path=/root/data/tpcds-parquet-sf10 -Dnitro.tpcds.parquet.schema=sf10 -Xms8g -Xmx12g -XX:+AlwaysPreTouch -XX:+UseTransparentHugePages
+[INFO] [stdout] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[INFO] [stdout] # Warmup: 1 iterations, 1 s each
+[INFO] [stdout] # Measurement: 1 iterations, 1 s each
+[INFO] [stdout] # Timeout: 30 min per iteration
+[INFO] [stdout] # Threads: 1 thread, will synchronize iterations
+[INFO] [stdout] # Benchmark mode: Average time, time/op
+[INFO] [stdout] # Benchmark: org.weakref.nitro.tpcds.BenchmarkQueries.query67
+[INFO] [stdout] 
+[INFO] [stdout] # Run progress: 0.00% complete, ETA 00:00:02
+[INFO] [stdout] # Fork: 1 of 1
+[INFO] [stdout] # Preparing profilers: LinuxPerfAsmProfiler 
+[INFO] [stdout] # Profilers consume stdout and stderr from target VM, use -v EXTRA to copy to console
+[INFO] [stdout] # Warmup Iteration   1: 11879.668 ms/op
+[INFO] [stdout] Iteration   1: 7621.820 ms/op
+[INFO] [stdout] # Processing profiler results: LinuxPerfAsmProfiler 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] Result "org.weakref.nitro.tpcds.BenchmarkQueries.query67":
+[INFO] [stdout]   7621.820 ms/op
+[INFO] [stdout] 
+[INFO] [stdout] Secondary result "org.weakref.nitro.tpcds.BenchmarkQueries.query67:asm":
+[INFO] [stdout] PrintAssembly processed: 509212 total address lines.
+[INFO] [stdout] Perf output processed (skipped 14.470 seconds):
+[INFO] [stdout]  Column 1: L1-dcache-load-misses (8945 events)
+[INFO] [stdout] 
+[INFO] [stdout] Hottest code regions (>1.00% "L1-dcache-load-misses" events):
+[INFO] [stdout]  Event counts are percents of total event count.
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 1]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatKeyLayout::globalIdFor, version 2, compile id 2355 
+[INFO] [stdout] 
+[INFO] [stdout]           Loading hsdis library failed, undisassembled code is shown in MachCode section
+[INFO] [stdout]           [MachCode]
+[INFO] [stdout]           [Instructions begin]
+[INFO] [stdout]             0x00007a9cebb25f00: 6690 448b | 5608 443b 
+[INFO] [stdout]             0x00007a9cebb25f08: ;   {runtime_call Shared Runtime ic_miss_blob}
+[INFO] [stdout]             0x00007a9cebb25f08: 5008 0f85 | d089 92ff 
+[INFO] [stdout]           [Verified Entry Point]
+[INFO] [stdout]             0x00007a9cebb25f10: 8984 2400 | c0fe ff55 | 4881 ec90 | 0000 0090 | 4181 7f20 | 0100 0000 | 0f85 1915 
+[INFO] [stdout]             0x00007a9cebb25f2c: ;*synchronization entry
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@-1 (line 1616)
+[INFO] [stdout]             0x00007a9cebb25f2c: 0000 488b 
+[INFO] [stdout]             0x00007a9cebb25f30: ;*invokestatic maskReductionCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Byte128Vector$Byte128Mask::toLong@35 (line 776)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::intern@89 (line 119)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@94 (line 1629)
+[INFO] [stdout]             0x00007a9cebb25f30: ee44 8b9e 
+[INFO] [stdout]             0x00007a9cebb25f34: ;*getfield batchEntryGlobalId {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@1 (line 1616)
+[INFO] [stdout]             0x00007a9cebb25f34: c400 0000 
+[INFO] [stdout]             0x00007a9cebb25f38: ; implicit exception: dispatches to 0x00007a9cebb272c0
+[INFO] [stdout]             0x00007a9cebb25f38: 478b 54dc | 0c41 3bd2 | 0f83 9008 | 0000 4f8d 
+[INFO] [stdout]             0x00007a9cebb25f48: ;*invokestatic maskReductionCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Byte128Vector$Byte128Mask::toLong@35 (line 776)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::intern@89 (line 119)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@94 (line 1629)
+[INFO] [stdout]             0x00007a9cebb25f48: 14dc 458b 
+[INFO] [stdout]             0x00007a9cebb25f4c: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@5 (line 1616)
+[INFO] [stdout]             0x00007a9cebb25f4c: 5c92 1047 | 8b4c dc0c | 448b d141 | 3bc9 0f83 | 9808 0000 
+[INFO] [stdout]             0x00007a9cebb25f60: ;*invokestatic maskReductionCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Byte128Vector$Byte128Mask::toLong@35 (line 776)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::intern@89 (line 119)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@94 (line 1629)
+[INFO] [stdout]             0x00007a9cebb25f60: 4b8d 34dc | 448b 4c8e 
+[INFO] [stdout]             0x00007a9cebb25f68: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@9 (line 1617)
+[INFO] [stdout]             0x00007a9cebb25f68: 1041 81f9 | 0000 0080 | 0f85 9805 
+[INFO] [stdout]             0x00007a9cebb25f74: ;*invokestatic maskReductionCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Byte128Vector$Byte128Mask::toLong@35 (line 776)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::intern@89 (line 119)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@94 (line 1629)
+[INFO] [stdout]             0x00007a9cebb25f74: 0000 448b | 85a0 0000 
+[INFO] [stdout]             0x00007a9cebb25f7c: ;*getfield boundDictionary {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::globalIdFor@23 (line 1621)
+[INFO] [stdout]             0x00007a9cebb25f7c: 0043 8b4c | c40c 3bd1 | 0f83 8e08 | 0000 49c1 
+[INFO] [stdout]             0x00007a9cebb25f8c: ;*invokestatic maskReductionCoerced {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.incubator.vector.Byte128Vector$Byte128Mask::toLong@35 (line 776)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::intern@89 (line 119)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]   10.16%  <total for region 1>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 2]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.data.BooleanVector::copy, version 2, compile id 2482 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007a9cebb42270: d410 83fb | 010f 8e1c 
+[INFO] [stdout]             0x00007a9cebb42278: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@49 (line 138)
+[INFO] [stdout]             0x00007a9cebb42278: 0200 00bf | 0100 0000 | c4c1 796e | ca45 8bd6 | 442b d741 | 83c2 fd33 | c93b df44 | 0f4c d141 
+[INFO] [stdout]             0x00007a9cebb42298: 81fa a00f | 0000 b9a0 | 0f00 0044 | 0f47 d144 | 03d7 660f 
+[INFO] [stdout]             0x00007a9cebb422ac: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@29 (line 139)
+[INFO] [stdout]             0x00007a9cebb422ac: 1f44 0000 | 4c63 df42 
+[INFO] [stdout]             0x00007a9cebb422b4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@43 (line 139)
+[INFO] [stdout]             0x00007a9cebb422b4: 8b4c 9a10 | 413b c90f | 83aa 0000 | 000f b674 | 0810 4388 
+[INFO] [stdout]             0x00007a9cebb422c8: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@45 (line 139)
+[INFO] [stdout]             0x00007a9cebb422c8: 7418 1042 
+[INFO] [stdout]             0x00007a9cebb422cc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@43 (line 139)
+[INFO] [stdout]             0x00007a9cebb422cc: 8b4c 9a14 | 413b c90f | 838b 0000 | 000f b674 | 0810 4388 
+[INFO] [stdout]             0x00007a9cebb422e0: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@45 (line 139)
+[INFO] [stdout]             0x00007a9cebb422e0: 7418 1142 
+[INFO] [stdout]             0x00007a9cebb422e4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@43 (line 139)
+[INFO] [stdout]             0x00007a9cebb422e4: 8b4c 9a18 | 413b c973 
+[INFO] [stdout]             0x00007a9cebb422ec: ;   {other}
+[INFO] [stdout]             0x00007a9cebb422ec: 7b0f b674 | 0810 4388 
+[INFO] [stdout]             0x00007a9cebb422f4: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@45 (line 139)
+[INFO] [stdout]             0x00007a9cebb422f4: 7418 1242 
+[INFO] [stdout]             0x00007a9cebb422f8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@43 (line 139)
+[INFO] [stdout]             0x00007a9cebb422f8: 8b4c 9a1c | 413b c973 | 600f b64c | 0810 4388 
+[INFO] [stdout]             0x00007a9cebb42308: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@45 (line 139)
+[INFO] [stdout]             0x00007a9cebb42308: 4c18 1383 
+[INFO] [stdout]             0x00007a9cebb4230c: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@46 (line 138)
+[INFO] [stdout]             0x00007a9cebb4230c: c704 413b 
+[INFO] [stdout]             0x00007a9cebb42310: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@49 (line 138)
+[INFO] [stdout]             0x00007a9cebb42310: fa7c 9d49 
+[INFO] [stdout]             0x00007a9cebb42314: ; ImmutableOopMap {r8=Oop rdx=Oop rax=Oop rbp=Oop r13=Oop xmm0=NarrowOop xmm1=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.data.BooleanVector::copy@49 (line 138)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007a9cebb42314: 8b77 3085 
+[INFO] [stdout]             0x00007a9cebb42318: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@49 (line 138)
+[INFO] [stdout]             0x00007a9cebb42318: 063b fb0f | 8c64 ffff | ffc4 c179 | 7eca 413b 
+[INFO] [stdout]             0x00007a9cebb42328: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@29 (line 139)
+[INFO] [stdout]             0x00007a9cebb42328: fe7d 2390 | 4c63 df42 
+[INFO] [stdout]             0x00007a9cebb42330: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@43 (line 139)
+[INFO] [stdout]             0x00007a9cebb42330: 8b4c 9a10 | 413b c90f | 8364 0100 | 000f b64c | 0810 4388 
+[INFO] [stdout]             0x00007a9cebb42344: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@45 (line 139)
+[INFO] [stdout]             0x00007a9cebb42344: 4c18 10ff 
+[INFO] [stdout]             0x00007a9cebb42348: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::copy@46 (line 138)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    7.02%  <total for region 2>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 3]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed, version 8, compile id 2430 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@10 (line 655)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ad0: 0800 0044 | 8b96 8c00 
+[INFO] [stdout]             0x00007a9cebb33ad8: ;*getfield batchHashes {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@14 (line 656)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ad8: 0000 478b | 5cd4 0c45 | 3bc3 0f83 | f605 0000 
+[INFO] [stdout]             0x00007a9cebb33ae8: ;*getfield batchNormalizedHashesValid {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@22 (line 657)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ae8: 0fb6 6e5a | 49c1 e203 | 4b8b 5cc2 
+[INFO] [stdout]             0x00007a9cebb33af4: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@18 (line 656)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33af4: 1085 ed0f | 8577 0800 
+[INFO] [stdout]             0x00007a9cebb33afc: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@25 (line 657)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33afc: 000f b66e 
+[INFO] [stdout]             0x00007a9cebb33b00: ;*getfield packedHashRecordSlots {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@1 (line 815)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b00: 5585 ed0f | 858f 0800 
+[INFO] [stdout]             0x00007a9cebb33b08: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@4 (line 815)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b08: 0044 8b5e 
+[INFO] [stdout]             0x00007a9cebb33b0c: ;*getfield control {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@88 (line 822)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b0c: 6847 8b54 
+[INFO] [stdout]             0x00007a9cebb33b10: ;*arraylength {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@2 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@93 (line 822)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b10: dc0c 458d | 42f9 4c8b | cb49 c1f9 | 0748 8bfb | 4883 e77f | 418b c923 
+[INFO] [stdout]             0x00007a9cebb33b28: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::bucket@5 (line 1201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@69 (line 817)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b28: 4e38 4881 | cf80 0000 | 008b ff40 | 0fb6 ff49 | b901 0101 | 0101 0101 | 0149 0faf 
+[INFO] [stdout]             0x00007a9cebb33b44: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::repeat@9 (line 1225)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@79 (line 819)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b44: f948 89bc | 2480 0000 | 0045 85c0 | 0f8c f205 | 0000 4183 | c2f9 413b | ca0f 839d 
+[INFO] [stdout]             0x00007a9cebb33b60: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@9 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@93 (line 822)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b60: 0500 004f | 8d14 dc4d 
+[INFO] [stdout]             0x00007a9cebb33b68: ;*invokevirtual getLongUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getLongUnaligned@5 (line 3597)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@93 (line 822)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b68: 8b74 0a10 | 4c8b d74d 
+[INFO] [stdout]             0x00007a9cebb33b70: ;*lxor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::match@2 (line 1235)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@102 (line 823)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b70: 33d6 4d8b | da49 b8ff | fefe fefe | fefe fe4d | 03d8 c442 | a8f2 db49 
+[INFO] [stdout]             0x00007a9cebb33b88: ;   {other}
+[INFO] [stdout]             0x00007a9cebb33b88: ba80 8080 | 8080 8080 
+[INFO] [stdout]             0x00007a9cebb33b90: ;*land {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::match@21 (line 1236)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@102 (line 823)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b90: 804d 23da | 41ba 0100 | 0000 baff 
+[INFO] [stdout]             0x00007a9cebb33b9c: ;*lload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@107 (line 824)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33b9c: ffff ff4c | 8b44 2448 
+[INFO] [stdout]    0.02%    0x00007a9cebb33ba4: ;*getfield recordIndexesByHash {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@218 (line 837)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]    0.02%    0x00007a9cebb33ba4: 458b 4070 | 4c8b 4c24 | 4841 8b71 
+[INFO] [stdout]             0x00007a9cebb33bb0: ;*getfield mask {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::bucket@2 (line 1201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@125 (line 825)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bb0: 384d 85db | 0f84 dd01 
+[INFO] [stdout]             0x00007a9cebb33bb8: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@111 (line 824)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bb8: 0000 410f 
+[INFO] [stdout]             0x00007a9cebb33bbc: ;*getfield packedHashRecordSlots {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@131 (line 826)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bbc: b679 55f3 | 4d0f bccb | 41c1 e903 | 4403 c944 
+[INFO] [stdout]             0x00007a9cebb33bcc: ;*iand {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::bucket@5 (line 1201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@125 (line 825)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bcc: 23ce 85ff | 0f85 5208 
+[INFO] [stdout]             0x00007a9cebb33bd4: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@134 (line 826)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bd4: 0000 438b | 74c4 0c44 | 3bce 0f83 | ac05 0000 | 49c1 e003 | 478b 4488 
+[INFO] [stdout]             0x00007a9cebb33bec: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@223 (line 837)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bec: 1045 85c0 | 0f8c ca07 
+[INFO] [stdout]             0x00007a9cebb33bf4: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@228 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33bf4: 0000 4889 | 5c24 7848 | 8b5c 2448 
+[INFO] [stdout]             0x00007a9cebb33c00: ;*getfield fixedRecordChunks {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@8 (line 1113)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@2 (line 865)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c00: 8b7b 788b | 7320 c4c2 
+[INFO] [stdout]             0x00007a9cebb33c08: ;*ishr {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@5 (line 1112)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@2 (line 865)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c08: 4af7 d841 | 8b74 fc0c | 3bde 0f83 | bc05 0000 | 48c1 e703 
+[INFO] [stdout]             0x00007a9cebb33c1c: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@12 (line 1113)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@2 (line 865)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c1c: 8b74 9f10 | 85f6 0f84 
+[INFO] [stdout]             0x00007a9cebb33c24: ;*ifnonnull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@15 (line 1114)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@2 (line 865)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c24: be02 0000 
+[INFO] [stdout]             0x00007a9cebb33c28: ;*aload_3 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@37 (line 1118)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@2 (line 865)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c28: 498d 04f4 
+[INFO] [stdout]    0.01%    0x00007a9cebb33c2c: ;*arraylength {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@2 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@21 (line 867)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]    0.01%    0x00007a9cebb33c2c: 8b78 0c48 | 8b5c 2448 
+[INFO] [stdout]             0x00007a9cebb33c34: ;*getfield recordsPerChunkMask {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedOffset@2 (line 1141)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@9 (line 866)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c34: 8b5b 2841 | 23d8 488b | 7424 480f 
+[INFO] [stdout]             0x00007a9cebb33c40: ;*imul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedOffset@10 (line 1141)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@9 (line 866)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c40: af5e 0c8d | 6ff9 85ed | 0f8c c206 | 0000 83c7 
+[INFO] [stdout]             0x00007a9cebb33c50: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::index@9 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@21 (line 867)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c50: f93b df0f | 83cb 0500 | 008b fb48 
+[INFO] [stdout]             0x00007a9cebb33c5c: ;*invokevirtual getLongUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getLongUnaligned@5 (line 3597)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@21 (line 867)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c5c: 8b7c 3810 | 483b 7c24 | 780f 85f0 
+[INFO] [stdout]             0x00007a9cebb33c68: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@26 (line 867)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c68: 0100 008b 
+[INFO] [stdout]             0x00007a9cebb33c6c: ;*getfield fixedRecordChunks {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@8 (line 1113)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@45 (line 879)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c6c: 6e78 8b7e 
+[INFO] [stdout]             0x00007a9cebb33c70: ;*getfield recordsPerChunkShift {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@2 (line 1112)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@45 (line 879)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c70: 20c4 c242 
+[INFO] [stdout]             0x00007a9cebb33c74: ;*ishr {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@5 (line 1112)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@45 (line 879)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c74: f7f8 418b | 44ec 0c3b | f80f 8331 | 0600 0049 | 8d34 ec8b 
+[INFO] [stdout]             0x00007a9cebb33c88: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@12 (line 1113)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@45 (line 879)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]                                 ;   {other}
+[INFO] [stdout]             0x00007a9cebb33c88: 74be 1085 | f60f 844f 
+[INFO] [stdout]             0x00007a9cebb33c90: ;*ifnonnull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedChunk@15 (line 1114)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@45 (line 879)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c90: 0300 0049 
+[INFO] [stdout]             0x00007a9cebb33c94: ;*imul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::fixedOffset@10 (line 1141)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@52 (line 880)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33c94: 8d04 f448 | 8b7c 2448 | 440f b66f 
+[INFO] [stdout]             0x00007a9cebb33ca0: ;*getfield packedHashRecordSlots {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::keyOffset@2 (line 1123)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@66 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ca0: 558b 7f5c | 4585 ed0f | 85eb 0700 
+[INFO] [stdout]             0x00007a9cebb33cac: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::keyOffset@5 (line 1123)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@66 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33cac: 0048 8b74 | 2448 8b6e 
+[INFO] [stdout]             0x00007a9cebb33cb4: ;*getfield variableWidthArena {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@70 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33cb4: 6083 c308 | 85ff 0f84 
+[INFO] [stdout]             0x00007a9cebb33cbc: ;*invokevirtual identicalRecordToInput {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@78 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33cbc: 3006 0000 | 448b eb41 | 8bd8 4489 | 4c24 3c89 | 5424 384c | 895c 2430 | 4489 5424 | 244c 8974 
+[INFO] [stdout]             0x00007a9cebb33cdc: 2428 894c 
+[INFO] [stdout]             0x00007a9cebb33ce0: ;*invokevirtual keyOffset {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@66 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ce0: 2420 4c8b | c549 c1e0 
+[INFO] [stdout]             0x00007a9cebb33ce8: ;*getfield variableWidthArena {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@70 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33ce8: 0349 8d34 
+[INFO] [stdout]             0x00007a9cebb33cec: ;*getfield layout {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@58 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33cec: fc48 8bd0 | 418b cd4c | 8b4c 2458 | 488b 7c24 | 6044 8b54 | 2468 4489 | 1424 895c | 2408 4c89 
+[INFO] [stdout]             0x00007a9cebb33d0c: 4c24 4048 | 897c 2450 | 488b 6c24 
+[INFO] [stdout]             0x00007a9cebb33d18: ;   {optimized virtual_call}
+[INFO] [stdout]             0x00007a9cebb33d18: 7866 90e8 
+[INFO] [stdout]             0x00007a9cebb33d1c: ; ImmutableOopMap {[64]=Oop [72]=Oop [80]=Oop [88]=Oop [96]=Oop }
+[INFO] [stdout]                                 ;*invokevirtual identicalRecordToInput {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@78 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33d1c: c0b0 91ff 
+[INFO] [stdout]    0.01%    0x00007a9cebb33d20: ;   {post_call_nop}
+[INFO] [stdout]    0.01%    0x00007a9cebb33d20: 0f1f 8400 
+[INFO] [stdout]             0x00007a9cebb33d24: ;*invokevirtual identicalRecordToInput {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identicalKey@78 (line 881)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::identical@45 (line 870)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@245 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33d24: 9803 0000 | 85c0 0f84 
+[INFO] [stdout]             0x00007a9cebb33d2c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::getIndex@248 (line 838)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@155 (line 677)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33d2c: 1401 0000 | 4c8b 5424 | 4845 8b42 | 708b 5424 | 3844 8b54 | 243c 488b 
+[INFO] [stdout]             0x00007a9cebb33d44: ;*getfield recordIndexesByHash {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::recordIndexByHash@8 (line 858)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@175 (line 679)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33d44: dd45 85d2 | 0f8c 8e00 
+[INFO] [stdout]             0x00007a9cebb33d4c: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@162 (line 678)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed@6 (line 629)
+[INFO] [stdout]             0x00007a9cebb33d4c: 0000 4c8b | 5c24 4841 
+[INFO] [stdout]             0x00007a9cebb33d54: ;*getfield identityGroupIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashedInternal@166 (line 679)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    5.39%  <total for region 3>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 4]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2461 
+[INFO] [stdout] 
+[INFO] [stdout]            scopes pcs     [0x00007a9c64438598,0x00007a9c64439568] = 4048
+[INFO] [stdout]            scopes data    [0x00007a9c64439568,0x00007a9c6443a648] = 4320
+[INFO] [stdout]           [Constant Pool (empty)]
+[INFO] [stdout]           Loading hsdis library failed, undisassembled code is shown in MachCode section
+[INFO] [stdout]           [MachCode]
+[INFO] [stdout]           [Instructions begin]
+[INFO] [stdout]             0x00007a9cebb3ff80: 6690 448b | 5608 443b 
+[INFO] [stdout]             0x00007a9cebb3ff88: ;   {runtime_call Shared Runtime ic_miss_blob}
+[INFO] [stdout]             0x00007a9cebb3ff88: 5008 0f85 | 50e9 90ff 
+[INFO] [stdout]           [Verified Entry Point]
+[INFO] [stdout]    0.03%    0x00007a9cebb3ff90: 8984 2400 | c0fe ff55 | 4881 ec80 | 0000 0090 | 4181 7f20 | 0100 0000 | 0f85 5416 
+[INFO] [stdout]             0x00007a9cebb3ffac: ;*synchronization entry
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@-1 (line 2331)
+[INFO] [stdout]             0x00007a9cebb3ffac: 0000 4889 | 7c24 284d | 8bd1 4c89 | 4424 2089 | 4c24 1c4c | 8bc6 8bae | f800 0000 | 85ed 0f85 
+[INFO] [stdout]             0x00007a9cebb3ffcc: ;*getfield generatedRecordEqualityKernel {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::generatedDictionaryRecordEquality@1 (line 2396)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@5 (line 2331)
+[INFO] [stdout]             0x00007a9cebb3ffcc: 7c0a 0000 
+[INFO] [stdout]             0x00007a9cebb3ffd0: ;*getfield batchNullFreeSingleBinary {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@29 (line 2335)
+[INFO] [stdout]             0x00007a9cebb3ffd0: 0fb6 6e6a | 85ed 0f85 
+[INFO] [stdout]             0x00007a9cebb3ffd8: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@32 (line 2335)
+[INFO] [stdout]             0x00007a9cebb3ffd8: 240d 0000 
+[INFO] [stdout]             0x00007a9cebb3ffdc: ;*getfield batchNullFreeLongBinary {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@61 (line 2338)
+[INFO] [stdout]             0x00007a9cebb3ffdc: 0fb6 6e68 | 85ed 0f85 
+[INFO] [stdout]             0x00007a9cebb3ffe4: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@64 (line 2338)
+[INFO] [stdout]             0x00007a9cebb3ffe4: 400d 0000 
+[INFO] [stdout]             0x00007a9cebb3ffe8: ;*getfield singleField {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@190 (line 2351)
+[INFO] [stdout]             0x00007a9cebb3ffe8: 0fb6 6e5c | 85ed 0f85 
+[INFO] [stdout]             0x00007a9cebb3fff0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@193 (line 2351)
+[INFO] [stdout]             0x00007a9cebb3fff0: 5c0d 0000 | 448b ae88 
+[INFO] [stdout]             0x00007a9cebb3fff8: ;*getfield comparisonOrder {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@319 (line 2367)
+[INFO] [stdout]             0x00007a9cebb3fff8: 0000 0047 
+[INFO] [stdout]             0x00007a9cebb3fffc: ;*arraylength {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@326 (line 2367)
+[INFO] [stdout]             0x00007a9cebb3fffc: 8b4c ec0c | 4585 c90f | 8654 0300 
+[INFO] [stdout]             0x00007a9cebb40008: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@336 (line 2367)
+[INFO] [stdout]             0x00007a9cebb40008: 0041 8d49 | ff41 3bc9 | 0f83 5e0a | 0000 488b 
+[INFO] [stdout]             0x00007a9cebb40018: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@16 (line 2754)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]             0x00007a9cebb40018: ca8b 720c | 4d8b f245 
+[INFO] [stdout]             0x00007a9cebb40020: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@474 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40020: 8b52 0c44 | 8d5e f945 | 85db 0f8c | 8c0a 0000 | 8bfe 4b8d 
+[INFO] [stdout]             0x00007a9cebb40034: ;*getfield comparisonOrder {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@319 (line 2367)
+[INFO] [stdout]             0x00007a9cebb40034: 04ec 8d5f | f945 33db | 33d2 8974 | 244c 4489 | 5424 5889 | 7c24 5c89 | 5424 60eb | 4e0f 1f84 
+[INFO] [stdout]             0x00007a9cebb40054: 0000 0000 | 000f 1f80 | 0000 0000 | 448b 8c24 
+[INFO] [stdout]             0x00007a9cebb40064: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@446 (line 2380)
+[INFO] [stdout]             0x00007a9cebb40064: 9000 0000 | 448b 5c24 
+[INFO] [stdout]             0x00007a9cebb4006c: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@487 (line 2367)
+[INFO] [stdout]             0x00007a9cebb4006c: 0841 ffc3 | 443b 5c24 | 440f 8de2 
+[INFO] [stdout]             0x00007a9cebb40078: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@336 (line 2367)
+[INFO] [stdout]             0x00007a9cebb40078: 0200 004c | 8b44 2410 | 4c8b 7424 | 3844 898c 
+[INFO] [stdout]             0x00007a9cebb40088: ;   {other}
+[INFO] [stdout]             0x00007a9cebb40088: 2490 0000 | 0044 8b6c | 2440 448b | 4c24 4448 | 8b04 248b 
+[INFO] [stdout]             0x00007a9cebb4009c: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@339 (line 2367)
+[INFO] [stdout]             0x00007a9cebb4009c: 5c24 0c46 
+[INFO] [stdout]             0x00007a9cebb400a0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@343 (line 2367)
+[INFO] [stdout]             0x00007a9cebb400a0: 8b54 9810 | 418b b8bc 
+[INFO] [stdout]             0x00007a9cebb400a8: ;*getfield batchFieldAllNull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@1 (line 2695)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb400a8: 0000 0041 
+[INFO] [stdout]             0x00007a9cebb400ac: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@12 (line 2695)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb400ac: 8b74 fc0c | 443b d60f | 831d 0500 | 0048 c1e7 | 0342 0fb6 | 7c17 1085 | ff0f 8464 
+[INFO] [stdout]             0x00007a9cebb400c8: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@13 (line 2695)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb400c8: 0200 00ba 
+[INFO] [stdout]             0x00007a9cebb400cc: ;*invokevirtual inputFieldNull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb400cc: 0100 0000 
+[INFO] [stdout]    0.02%    0x00007a9cebb400d0: ;*getfield nullByteCount {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@1 (line 2751)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]    0.02%    0x00007a9cebb400d0: 418b 680c | 85ed 0f84 
+[INFO] [stdout]             0x00007a9cebb400d8: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@4 (line 2751)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]             0x00007a9cebb400d8: 9005 0000 | 418b fac1 | ff1f c1ef 
+[INFO] [stdout]             0x00007a9cebb400e4: ;*idiv {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@14 (line 2754)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]             0x00007a9cebb400e4: 1d41 03fa | 8bef c1fd | 0303 6c24 
+[INFO] [stdout]             0x00007a9cebb400f0: ;*iadd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@15 (line 2754)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]             0x00007a9cebb400f0: 1c3b 6c24 | 4c0f 8329 | 0500 00c5 | f96e c241 | 8bd2 4489 | 5c24 0889 | 5c24 0c48 | 8904 2444 
+[INFO] [stdout]             0x00007a9cebb40110: 894c 2444 | 4489 6c24 | 404c 8974 | 2438 4c89 | 4424 1044 | 0fbe 5c29 | 1048 894c | 2430 83e7 
+[INFO] [stdout]             0x00007a9cebb40130: f844 2bd7 | 41b9 0100 | 0000 c442 | 29f7 c133 | ed45 85d8 
+[INFO] [stdout]             0x00007a9cebb40144: ;*ireturn {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::isNull@32 (line 2754)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@363 (line 2369)
+[INFO] [stdout]             0x00007a9cebb40144: 400f 95c5 | c4c1 797e | c244 3bd5 | 0f85 6605 
+[INFO] [stdout]             0x00007a9cebb40154: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@372 (line 2370)
+[INFO] [stdout]             0x00007a9cebb40154: 0000 4585 | d20f 8501 
+[INFO] [stdout]             0x00007a9cebb4015c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@379 (line 2373)
+[INFO] [stdout]             0x00007a9cebb4015c: ffff ff4c | 8b4c 2410 | 458b 8184 
+[INFO] [stdout]             0x00007a9cebb40168: ;*getfield fixedOffsets {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@387 (line 2376)
+[INFO] [stdout]             0x00007a9cebb40168: 0000 0047 
+[INFO] [stdout]             0x00007a9cebb4016c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@392 (line 2376)
+[INFO] [stdout]             0x00007a9cebb4016c: 8b5c c40c | 448b d245 | 3bd3 0f83 | 5c05 0000 | 418b ca45 
+[INFO] [stdout]             0x00007a9cebb40180: ;*getfield compactEmbeddedBinaryRecords {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@1 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40180: 0fb6 515e | 4f8d 1cc4 
+[INFO] [stdout]             0x00007a9cebb40188: ;   {other}
+[INFO] [stdout]             0x00007a9cebb40188: 8b7c 241c | 4103 7c8b 
+[INFO] [stdout]             0x00007a9cebb40190: ;*iadd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@393 (line 2376)
+[INFO] [stdout]             0x00007a9cebb40190: 1045 85d2 | 0f84 6609 
+[INFO] [stdout]             0x00007a9cebb40198: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@4 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40198: 0000 458b | 81f4 0000 
+[INFO] [stdout]             0x00007a9cebb401a0: ;*getfield fieldKinds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@8 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401a0: 0047 8b54 
+[INFO] [stdout]             0x00007a9cebb401a4: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@12 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401a4: c40c 413b | ca0f 8361 | 0500 0045 
+[INFO] [stdout]             0x00007a9cebb401b0: ;*getfield anyFieldIdComparable {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@9 (line 2429)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401b0: 0fb6 5160 | 418b d245 | 8b91 a800 
+[INFO] [stdout]             0x00007a9cebb401bc: ;*getfield fieldIdComparable {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@16 (line 2429)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401bc: 0000 458b | ea4f 8d14 | c445 8b5c 
+[INFO] [stdout]             0x00007a9cebb401c8: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@12 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]                                 ;   {oop(a &apos;org/weakref/nitro/operator/FlatTypeHandler$Kind&apos;{0x00000006f7fc2168})}
+[INFO] [stdout]             0x00007a9cebb401c8: 8a10 4181 | fb2d 84ff | de0f 849e 
+[INFO] [stdout]             0x00007a9cebb401d4: ;*if_acmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@16 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@2 (line 2428)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401d4: 0100 0041 
+[INFO] [stdout]             0x00007a9cebb401d8: ;*getfield embedIdOnlyBinaryIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@42 (line 2433)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401d8: 0fb6 695d | 85ed 0f84 
+[INFO] [stdout]             0x00007a9cebb401e0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@45 (line 2433)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401e0: d009 0000 | 418b 99b4 
+[INFO] [stdout]             0x00007a9cebb401e8: ;*getfield packedDictionaryFieldIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@110 (line 2439)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401e8: 0000 0045 
+[INFO] [stdout]             0x00007a9cebb401ec: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@114 (line 2439)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb401ec: 8b44 dc0c | 413b c80f | 8377 0500 | 0044 8bd2 | 4585 d20f | 84f7 0900 
+[INFO] [stdout]             0x00007a9cebb40204: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@122 (line 2440)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40204: 0045 8bd5 
+[INFO] [stdout]             0x00007a9cebb40208: ; implicit exception: dispatches to 0x00007a9cebb41414
+[INFO] [stdout]             0x00007a9cebb40208: 478b 4cd4 
+[INFO] [stdout]             0x00007a9cebb4020c: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@130 (line 2440)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb4020c: 0c4d 8d14 | dc45 8b54 
+[INFO] [stdout]             0x00007a9cebb40214: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.99%  <total for region 4>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 5]..............................................................................
+[INFO] [stdout] , <unknown> 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.64%  <total for region 5>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 6]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2461 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@130 (line 2440)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb4020c: 0c4d 8d14 | dc45 8b54 
+[INFO] [stdout]             0x00007a9cebb40214: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@114 (line 2439)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40214: 8a10 413b | c90f 8391 | 0500 004f | 8d04 ec45 | 0fb6 4408 
+[INFO] [stdout]             0x00007a9cebb40228: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@130 (line 2440)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40228: 1045 85c0 | 0f85 220a 
+[INFO] [stdout]             0x00007a9cebb40230: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@131 (line 2440)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40230: 0000 4c8b | 5424 1041 
+[INFO] [stdout]             0x00007a9cebb40238: ;*getfield inputChannels {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@468 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40238: 8b6a 7c45 | 8b54 ec0c | 413b ca0f | 83c7 0500 | 004d 8d14 | ec41 8b6c 
+[INFO] [stdout]             0x00007a9cebb40250: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@473 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40250: 8a10 3b6c | 2458 0f83 | 0406 0000 | 458b 54ae 
+[INFO] [stdout]             0x00007a9cebb40260: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@474 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40260: 1045 8bca | 4c8b 5424 | 1041 0fb6 
+[INFO] [stdout]             0x00007a9cebb4026c: ;*getfield batchAccessorsReady {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@1 (line 2090)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb4026c: 6a67 85ed | 0f84 4e0a 
+[INFO] [stdout]             0x00007a9cebb40274: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@4 (line 2090)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40274: 0000 438b 
+[INFO] [stdout]             0x00007a9cebb40278: ;*getfield ordinal {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Enum::ordinal@1 (line 128)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@34 (line 2093)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40278: 6cdc 0c83 | fd04 0f83 | 1806 0000 
+[INFO] [stdout]             0x00007a9cebb40284: ;   {oop([I{0x00000006f5bac7d0})}
+[INFO] [stdout]             0x00007a9cebb40284: 49ba d0c7 | baf5 0600 | 0000 418b 
+[INFO] [stdout]             0x00007a9cebb40290: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@37 (line 2093)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40290: 6caa 1083 | fd01 0f85 
+[INFO] [stdout]             0x00007a9cebb40298: ;*tableswitch {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@38 (line 2093)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40298: 3007 0000 | 448b d73b | 7c24 0c0f | 832f 0600 | 004c 8b5c | 2410 458b | 83fc 0000 
+[INFO] [stdout]             0x00007a9cebb402b4: ;*getfield fieldLong {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@87 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402b4: 0047 8b5c 
+[INFO] [stdout]             0x00007a9cebb402b8: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@91 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402b8: c40c 4c8b | 4c24 304b 
+[INFO] [stdout]             0x00007a9cebb402c0: ;*invokevirtual getLongUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getLongUnaligned@5 (line 3597)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsLongs$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_J@45 (line 201)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@83 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402c0: 8b5c 1110 | 413b cb0f | 8357 0600 | 004f 8d14 | c441 8b6c 
+[INFO] [stdout]             0x00007a9cebb402d4: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@91 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402d4: 8a10 458b | 5cec 084d 
+[INFO] [stdout]             0x00007a9cebb402dc: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009912de48&apos;)}
+[INFO] [stdout]             0x00007a9cebb402dc: 8d04 ec41 | 81fb 48de | 1201 0f85 
+[INFO] [stdout]             0x00007a9cebb402e8: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402e8: 8702 0000 
+[INFO] [stdout]             0x00007a9cebb402ec: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009912de48::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402ec: 458b 500c 
+[INFO] [stdout]             0x00007a9cebb402f0: ; implicit exception: dispatches to 0x00007a9cebb41478
+[INFO] [stdout]             0x00007a9cebb402f0: 438b 6cd4 
+[INFO] [stdout]             0x00007a9cebb402f4: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.I64Vector::values@1 (line 36)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$0@1 (line 89)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009912de48::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb402f4: 0c45 8b5c | ec0c 448b | 8424 9000 | 0000 453b | c30f 8375 | 0600 004d | 8d14 ec44 | 8b8c 2490 
+[INFO] [stdout]             0x00007a9cebb40314: 0000 004f 
+[INFO] [stdout]             0x00007a9cebb40318: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40318: 8b54 c210 | 493b da0f | 8527 0800 
+[INFO] [stdout]             0x00007a9cebb40324: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@100 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40324: 0048 8b4c | 2430 e939 | fdff ff41 | 8ba8 b800 
+[INFO] [stdout]             0x00007a9cebb40334: ;*getfield batchFieldNullFree {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@19 (line 2698)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb40334: 0000 418b 
+[INFO] [stdout]             0x00007a9cebb40338: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@30 (line 2698)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb40338: 7cec 0c44 | 3bd7 0f83 | c806 0000 | 498d 3cec | 420f b67c | 1710 85ff | 0f84 6101 
+[INFO] [stdout]             0x00007a9cebb40354: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@31 (line 2698)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb40354: 0000 33d2 | e973 fdff 
+[INFO] [stdout]             0x00007a9cebb4035c: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@336 (line 2367)
+[INFO] [stdout]             0x00007a9cebb4035c: ffb8 0100 | 0000 4881 | c480 0000 
+[INFO] [stdout]             0x00007a9cebb40368: ;   {poll_return}
+[INFO] [stdout]             0x00007a9cebb40368: 005d 493b | 6728 0f87 | 7812 0000 | c385 d20f | 84f3 0c00 
+[INFO] [stdout]             0x00007a9cebb4037c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@12 (line 2429)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb4037c: 0047 8b54 | ec0c 413b | ca0f 83f9 | 0900 004f | 8d1c ec44 | 8bd1 430f 
+[INFO] [stdout]             0x00007a9cebb40394: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@20 (line 2429)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb40394: b66c 1310 | 85ed 0f84 
+[INFO] [stdout]             0x00007a9cebb4039c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@21 (line 2429)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb4039c: 280d 0000 | 8b6c 244c 
+[INFO] [stdout]    0.02%    0x00007a9cebb403a4: ;*isub {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::index@4 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2431)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]    0.02%    0x00007a9cebb403a4: 83c5 fd85 | ed0f 8c59 | 0b00 008b | 6c24 5c83 
+[INFO] [stdout]             0x00007a9cebb403b4: ;*invokestatic checkIndex {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::index@8 (line 101)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@19 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2431)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb403b4: c5fd 448b | df3b fd0f | 831f 0a00 | 0089 7c24 | 4844 8954 | 2418 4d63 
+[INFO] [stdout]             0x00007a9cebb403cc: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@22 (line 110)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2431)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb403cc: d34c 8954 | 2450 4c8b | 5424 304c | 8b5c 2450 | 438b 6c1a 
+[INFO] [stdout]             0x00007a9cebb403e0: ;*invokevirtual getIntUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getIntUnaligned@5 (line 3617)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@29 (line 2431)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb403e0: 1085 ed0f | 8cdb 0b00 
+[INFO] [stdout]             0x00007a9cebb403e8: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::idComparable@32 (line 2431)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@404 (line 2377)
+[INFO] [stdout]             0x00007a9cebb403e8: 0041 8ba9 
+[INFO] [stdout]             0x00007a9cebb403ec: ;*getfield batchDictionaryIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@414 (line 2378)
+[INFO] [stdout]             0x00007a9cebb403ec: a400 0000 
+[INFO] [stdout]             0x00007a9cebb403f0: ; implicit exception: dispatches to 0x00007a9cebb4150c
+[INFO] [stdout]             0x00007a9cebb403f0: 458b 5cec | 0c41 3bcb | 0f83 3e0a | 0000 4d8d | 1cec 448b | d143 8b6c 
+[INFO] [stdout]             0x00007a9cebb40408: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@419 (line 2378)
+[INFO] [stdout]             0x00007a9cebb40408: 9310 458b | 54ec 0c44 | 8b9c 2490 | 0000 0045 | 3bda 0f83 | 440a 0000 | 4d8d 14ec | 438b 4c9a 
+[INFO] [stdout]             0x00007a9cebb40428: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@422 (line 2378)
+[INFO] [stdout]             0x00007a9cebb40428: 1049 8bf1 | 8b54 2418 | 8b6c 241c 
+[INFO] [stdout]             0x00007a9cebb40434: ;   {optimized virtual_call}
+[INFO] [stdout]             0x00007a9cebb40434: 6666 90e8 
+[INFO] [stdout]             0x00007a9cebb40438: ; ImmutableOopMap {[0]=Oop [16]=Oop [32]=Oop [40]=Oop [48]=Oop [56]=Oop [64]=NarrowOop }
+[INFO] [stdout]                                 ;*invokevirtual globalIdFor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@423 (line 2378)
+[INFO] [stdout]             0x00007a9cebb40438: d45a feff 
+[INFO] [stdout]    0.11%    0x00007a9cebb4043c: ;   {post_call_nop}
+[INFO] [stdout]    0.11%    0x00007a9cebb4043c: 0f1f 8400 
+[INFO] [stdout]             0x00007a9cebb40440: ;*invokevirtual globalIdFor {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@423 (line 2378)
+[INFO] [stdout]             0x00007a9cebb40440: b405 0000 | 85c0 0f8c 
+[INFO] [stdout]             0x00007a9cebb40448: ;*iflt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@430 (line 2379)
+[INFO] [stdout]             0x00007a9cebb40448: c80b 0000 | 4c8b 5c24 | 1041 0fb6 
+[INFO] [stdout]             0x00007a9cebb40454: ;*getfield compactEmbeddedBinaryRecords {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@1 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2456)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]             0x00007a9cebb40454: 6b5e 85ed | 0f84 ba0c 
+[INFO] [stdout]             0x00007a9cebb4045c: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@4 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2456)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]             0x00007a9cebb4045c: 0000 418b | abf4 0000 
+[INFO] [stdout]             0x00007a9cebb40464: ;*getfield fieldKinds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@8 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2456)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]             0x00007a9cebb40464: 0045 8b44 | ec0c 448b | 5c24 1845 | 3bd8 0f83 | 380a 0000 | 4d8d 1cec | 448b 4c24 | 1847 8b5c 
+[INFO] [stdout]             0x00007a9cebb40484: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@12 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2456)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]                                 ;   {oop(a &apos;org/weakref/nitro/operator/FlatTypeHandler$Kind&apos;{0x00000006f7fc2168})}
+[INFO] [stdout]             0x00007a9cebb40484: 8b10 4181 | fb2d 84ff | de0f 85d1 
+[INFO] [stdout]             0x00007a9cebb40490: ;*if_acmpne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::compactBinaryRecord@16 (line 2175)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@2 (line 2456)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]             0x00007a9cebb40490: 0a00 0048 | 8b4c 2430 | 4c8b 5c24 | 5042 8b6c 
+[INFO] [stdout]             0x00007a9cebb404a0: ;*invokevirtual getIntUnaligned {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - jdk.internal.misc.Unsafe::getIntUnaligned@5 (line 3617)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleByteArrayAsInts$ArrayHandle::get@31 (line 108)
+[INFO] [stdout]                                 ; - java.lang.invoke.VarHandleGuards::guard_LI_I@45 (line 188)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::recordDictionaryId@13 (line 2457)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@441 (line 2380)
+[INFO] [stdout]             0x00007a9cebb404a0: 1910 3be8 | 0f85 d20c 
+[INFO] [stdout]             0x00007a9cebb404a8: ;*if_icmpeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@446 (line 2380)
+[INFO] [stdout]             0x00007a9cebb404a8: 0000 448b | 8c24 9000 | 0000 e9b1 | fbff ff41 
+[INFO] [stdout]             0x00007a9cebb404b8: ;*getfield batchAccessorsReady {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@37 (line 2701)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb404b8: 0fb6 6867 | 85ed 0f84 
+[INFO] [stdout]             0x00007a9cebb404c0: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@40 (line 2701)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb404c0: 640d 0000 | 418b a818 
+[INFO] [stdout]             0x00007a9cebb404c8: ;*getfield fieldNullAccess {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@44 (line 2702)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb404c8: 0100 0041 | 8b7c ec0c | 443b d70f | 83bf 0c00 | 0049 8d3c | ec42 8b6c 
+[INFO] [stdout]             0x00007a9cebb404e0: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@48 (line 2702)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb404e0: 9710 418b 
+[INFO] [stdout]             0x00007a9cebb404e4: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009913aaa8&apos;)}
+[INFO] [stdout]             0x00007a9cebb404e4: 7cec 0881 | ffa8 aa13 | 010f 85e9 | 0c00 0044 | 8954 2440 | 4489 5c24 | 3c89 5c24 | 3848 8944 
+[INFO] [stdout]             0x00007a9cebb40504: 2430 4489 | 4c24 1844 | 89ac 2494 | 0000 004c | 8974 2410 | 4889 4c24 | 084c 8904 | 2449 8d34 
+[INFO] [stdout]             0x00007a9cebb40524: ec8b 9424 | 9000 0000 
+[INFO] [stdout]             0x00007a9cebb4052c: ;   {optimized virtual_call}
+[INFO] [stdout]             0x00007a9cebb4052c: 6666 90e8 
+[INFO] [stdout]             0x00007a9cebb40530: ; ImmutableOopMap {[0]=Oop [8]=Oop [16]=Oop [32]=Oop [40]=Oop [48]=Oop [148]=NarrowOop }
+[INFO] [stdout]                                 ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2703)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb40530: 5c3d fcff 
+[INFO] [stdout]             0x00007a9cebb40534: ;   {post_call_nop}
+[INFO] [stdout]             0x00007a9cebb40534: 0f1f 8400 
+[INFO] [stdout]             0x00007a9cebb40538: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@59 (line 2703)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@353 (line 2368)
+[INFO] [stdout]             0x00007a9cebb40538: ac06 0001 | 8bf8 4c8b | 0424 488b | 4c24 084c | 8b74 2410 | 448b ac24 | 9400 0000 | 448b 4c24 
+[INFO] [stdout]             0x00007a9cebb40558: 1848 8b44 | 2430 8b5c | 2438 448b | 5c24 3c44 | 8b54 2440 | 8bd7 e95d 
+[INFO] [stdout]             0x00007a9cebb40570: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x0000000099186810&apos;)}
+[INFO] [stdout]             0x00007a9cebb40570: fbff ff41 | 81fb 1068 | 1801 0f85 
+[INFO] [stdout]             0x00007a9cebb4057c: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb4057c: a40d 0000 
+[INFO] [stdout]             0x00007a9cebb40580: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalField@94 (line 2094)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput@479 (line 2387)
+[INFO] [stdout]             0x00007a9cebb40580: 458b 580c 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    3.38%  <total for region 6>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 7]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.GroupIdOperator::materializeOutput, version 2, compile id 3170 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada04: 0845 8b4c 
+[INFO] [stdout]             0x00007a9cebbada08: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada08: 8b10 453b | ca0f 835e | 0700 0046 
+[INFO] [stdout]             0x00007a9cebbada14: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada14: 8b4c 8a10 | 4589 4c88 
+[INFO] [stdout]             0x00007a9cebbada1c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada1c: 1045 8b4c 
+[INFO] [stdout]             0x00007a9cebbada20: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada20: 8b14 453b | ca0f 833a | 0700 0046 
+[INFO] [stdout]             0x00007a9cebbada2c: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada2c: 8b5c 8a10 | 4589 5c88 
+[INFO] [stdout]             0x00007a9cebbada34: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada34: 144c 8b5c 
+[INFO] [stdout]             0x00007a9cebbada38: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada38: 2408 458b 
+[INFO] [stdout]             0x00007a9cebbada3c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada3c: 4c8b 1845 | 3bca 0f83 | 2107 0000 | 468b 4c8a 
+[INFO] [stdout]             0x00007a9cebbada4c: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada4c: 1045 894c 
+[INFO] [stdout]             0x00007a9cebbada50: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada50: 8818 458b 
+[INFO] [stdout]             0x00007a9cebbada54: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada54: 4c8b 1c45 | 3bca 0f83 | 0e07 0000 | 468b 5c8a 
+[INFO] [stdout]             0x00007a9cebbada64: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout]             0x00007a9cebbada64: 1045 895c 
+[INFO] [stdout]             0x00007a9cebbada68: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada68: 881c 83c1 | 043b cb7c 
+[INFO] [stdout]             0x00007a9cebbada70: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@33 (line 254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada70: 8f4d 8b5f 
+[INFO] [stdout]             0x00007a9cebbada74: ; ImmutableOopMap {r8=Oop rdx=Oop rbp=NarrowOop [8]=Oop [32]=Oop [40]=NarrowOop [44]=NarrowOop [48]=Oop [56]=Oop [64]=NarrowOop [68]=NarrowOop [72]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.data.DictionaryVector::copy@33 (line 254)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007a9cebbada74: 3041 8503 | 3bcf 0f8c | 5fff ffff | 3b0c 247d 
+[INFO] [stdout]             0x00007a9cebbada84: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@16 (line 255)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::copyVector@4 (line 984)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::copySelectedVector@13 (line 228)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@126 (line 175)
+[INFO] [stdout]             0x00007a9cebbada84: 2766 6690 | 4c8b 5c24 
+[INFO] [stdout]             0x00007a9cebbada8c: ;*invokestatic valueOf {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator$ContextState::trackVector@30 (line 1288)
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.Allocator::allocate@78 (line 104)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::booleanVector@17 (line 258)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.GroupIdOperator::materializeOutput@235 (line 191)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.69%  <total for region 7>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 8]..............................................................................
+[INFO] [stdout] libjvm.so, ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.62%  <total for region 8>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 9]..............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.data.DictionaryVector::copy, version 3, compile id 2478 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb41900: 4589 4810 | 448b 4c24 | 0841 83c1 | fdbb 0100 | 0000 4183 | f901 0f8e 
+[INFO] [stdout]             0x00007a9cebb41918: ;   {other}
+[INFO] [stdout]             0x00007a9cebb41918: b000 0000 | bfa0 0f00 | 008b 7424 | 082b f383 | c6fd 443b | cb0f 4cf1 | 81fe a00f | 0000 0f47 
+[INFO] [stdout]             0x00007a9cebb41938: f703 f30f 
+[INFO] [stdout]             0x00007a9cebb4193c: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@16 (line 255)
+[INFO] [stdout]             0x00007a9cebb4193c: 1f44 0000 | 4c8b 5424 | 1845 8b54 
+[INFO] [stdout]             0x00007a9cebb41948: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]             0x00007a9cebb41948: 9a10 453b | d30f 83ed | 0000 0046 | 8b54 9010 | 4589 5498 
+[INFO] [stdout]             0x00007a9cebb4195c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb4195c: 104c 8b54 | 2418 458b 
+[INFO] [stdout]             0x00007a9cebb41964: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]             0x00007a9cebb41964: 549a 1445 | 3bd3 0f83 | c400 0000 | 468b 5490 | 1045 8954 
+[INFO] [stdout]             0x00007a9cebb41978: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb41978: 9814 4c8b | 5424 1845 
+[INFO] [stdout]             0x00007a9cebb41980: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]             0x00007a9cebb41980: 8b54 9a18 | 453b d30f | 83ab 0000 | 0046 8b54 | 9010 4589 
+[INFO] [stdout]             0x00007a9cebb41994: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb41994: 5498 184c | 8b54 2418 | 458b 549a 
+[INFO] [stdout]             0x00007a9cebb419a0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]             0x00007a9cebb419a0: 1c45 3bd3 | 0f83 9300 | 0000 468b | 5490 1045 
+[INFO] [stdout]             0x00007a9cebb419b0: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb419b0: 8954 981c 
+[INFO] [stdout]    0.10%    0x00007a9cebb419b4: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@30 (line 254)
+[INFO] [stdout]    0.10%    0x00007a9cebb419b4: 83c3 043b 
+[INFO] [stdout]             0x00007a9cebb419b8: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@33 (line 254)
+[INFO] [stdout]             0x00007a9cebb419b8: de7c 854d 
+[INFO] [stdout]             0x00007a9cebb419bc: ; ImmutableOopMap {r8=Oop rdx=Oop rax=Oop rbp=NarrowOop [24]=Oop [40]=Oop [48]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.data.DictionaryVector::copy@33 (line 254)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007a9cebb419bc: 8b6f 3041 
+[INFO] [stdout]             0x00007a9cebb419c0: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@33 (line 254)
+[INFO] [stdout]             0x00007a9cebb419c0: 8545 0041 | 3bd9 0f8c | 55ff ffff | 3b5c 2408 
+[INFO] [stdout]    0.01%    0x00007a9cebb419d0: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@16 (line 255)
+[INFO] [stdout]    0.01%    0x00007a9cebb419d0: 7d23 6690 | 4c8b 5424 | 1845 8b54 
+[INFO] [stdout]             0x00007a9cebb419dc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@27 (line 255)
+[INFO] [stdout]             0x00007a9cebb419dc: 9a10 453b | d373 5d46 | 8b54 9010 | 4589 5498 
+[INFO] [stdout]             0x00007a9cebb419ec: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@29 (line 255)
+[INFO] [stdout]             0x00007a9cebb419ec: 10ff c33b | 5c24 087c 
+[INFO] [stdout]             0x00007a9cebb419f4: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::copy@13 (line 254)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.59%  <total for region 9>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 10].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@52 (line 2000)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b10: 0045 8b4c | ec0c 448b | 5424 1045 | 3bd1 0f83 | 8804 0000 | 4d8d 04ec | 478b 4490 
+[INFO] [stdout]             0x00007a9cebb45b2c: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@56 (line 2000)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b2c: 1043 8b6c 
+[INFO] [stdout]             0x00007a9cebb45b30: ;*getfield valueGroupingHash {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::groupingHash@1 (line 169)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@59 (line 2000)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b30: c43c 458b | 4cec 0c41 | 3bc1 0f83 | 9004 0000 | 4d8d 04ec | 418b 4c80 
+[INFO] [stdout]             0x00007a9cebb45b48: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.ValueIdInterner::groupingHash@5 (line 169)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@59 (line 2000)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b48: 104c 8b6c | 2418 8b5c | 2414 4c8b | 4424 28e9 | a100 0000 
+[INFO] [stdout]             0x00007a9cebb45b5c: ; implicit exception: dispatches to 0x00007a9cebb46357
+[INFO] [stdout]             0x00007a9cebb45b5c: 418b 4cfc | 0c44 3bd1 | 0f83 ca02 | 0000 4d8d | 0cfc 438b 
+[INFO] [stdout]             0x00007a9cebb45b70: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@111 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b70: 6c91 1045 | 8b4c ec08 | 498d 0cec 
+[INFO] [stdout]    0.01%    0x00007a9cebb45b7c: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x0000000099186810&apos;)}
+[INFO] [stdout]    0.01%    0x00007a9cebb45b7c: 4181 f910 | 6818 0174 
+[INFO] [stdout]             0x00007a9cebb45b84: ;   {metadata(&apos;org/weakref/nitro/function/scalar/builtin/VectorAccess$$Lambda+0x000000009912de48&apos;)}
+[INFO] [stdout]             0x00007a9cebb45b84: 3241 81f9 | 48de 1201 | 0f85 9605 
+[INFO] [stdout]             0x00007a9cebb45b90: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b90: 0000 8b49 
+[INFO] [stdout]             0x00007a9cebb45b94: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009912de48::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b94: 0c41 8b6c 
+[INFO] [stdout]             0x00007a9cebb45b98: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.I64Vector::values@1 (line 36)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$0@1 (line 89)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009912de48::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45b98: cc0c 458b | 4cec 0c8b | 5c24 1c41 | 3bd9 0f83 | 4805 0000 | 4d8d 0cec | 4d8b 4cd9 
+[INFO] [stdout]             0x00007a9cebb45bb4: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$0@5 (line 89)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009912de48::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bb4: 10eb 3a8b 
+[INFO] [stdout]             0x00007a9cebb45bb8: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@1
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bb8: 590c 458b 
+[INFO] [stdout]             0x00007a9cebb45bbc: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.I32Vector::values@1 (line 36)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@1 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bbc: 4cdc 0c8b 
+[INFO] [stdout]             0x00007a9cebb45bc0: ;*getfield arg$2 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bc0: 6910 418b | 7cec 0c8b | 5c24 1c3b | df0f 8355 | 0400 0049 | 8d0c ec8b 
+[INFO] [stdout]             0x00007a9cebb45bd8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@6 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bd8: 6c99 1043 
+[INFO] [stdout]             0x00007a9cebb45bdc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$3@7 (line 95)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099186810::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bdc: 8b4c cc0c | 3be9 0f83 | 7804 0000 | 49c1 e103 | 4d63 4ca9 
+[INFO] [stdout]             0x00007a9cebb45bf0: ;*invokeinterface value {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@114 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bf0: 1049 8bc9 | 48c1 e920 | 4933 c98b 
+[INFO] [stdout]             0x00007a9cebb45bfc: ;*invokevirtual fieldHash {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45bfc: c94c 63c9 
+[INFO] [stdout]    0.01%    0x00007a9cebb45c00: ;*ladd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@269 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]    0.01%    0x00007a9cebb45c00: 4d03 c84d | 8bc1 4c8b | 4c24 08e9 | 07fd ffff | 448b 5c24 | 0847 8bb4 | dc94 0000 
+[INFO] [stdout]             0x00007a9cebb45c1c: ;*getfield dictionaryEntryHashes {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@21 (line 1973)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45c1c: 0043 8b84 | dca8 0000 
+[INFO] [stdout]             0x00007a9cebb45c24: ;*getfield fieldIdComparable {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@7 (line 1994)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45c24: 0043 8b8c | dca4 0000 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.46%  <total for region 10>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 11].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.aggregation.Sum::accumulate, version 4, compile id 2534 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@93 (line 134)
+[INFO] [stdout]             0x00007a9cebb49b70: ffff 8b4c | 2408 412b | cd45 33f6 | 448b 4c24 | 0845 3bcd | 410f 4cce | 81f9 e803 | 0000 41be 
+[INFO] [stdout]             0x00007a9cebb49b90: e803 0000 | 410f 47ce | 4103 cdeb | 3047 8864 
+[INFO] [stdout]             0x00007a9cebb49ba0: ;*bastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@25 (line 141)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49ba0: 0b10 c4c1 | f97e c945 
+[INFO] [stdout]             0x00007a9cebb49ba8: ;*getfield nullGroupCount {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@28 (line 142)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49ba8: 8b71 1841 | ffce 4589 
+[INFO] [stdout]             0x00007a9cebb49bb0: ;*putfield nullGroupCount {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@33 (line 142)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49bb0: 7118 0f1f | 8000 0000 | 000f 1f80 
+[INFO] [stdout]             0x00007a9cebb49bbc: ;*return {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@36 (line 144)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49bbc: 0000 0000 
+[INFO] [stdout]    0.01%    0x00007a9cebb49bc0: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@137 (line 133)
+[INFO] [stdout]    0.01%    0x00007a9cebb49bc0: 41ff c544 
+[INFO] [stdout]             0x00007a9cebb49bc4: ;*if_icmpgt {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@90 (line 133)
+[INFO] [stdout]             0x00007a9cebb49bc4: 3be9 7d98 | 448b 4c24 
+[INFO] [stdout]             0x00007a9cebb49bcc: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@93 (line 134)
+[INFO] [stdout]             0x00007a9cebb49bcc: 0849 63c5 | 450f b674 
+[INFO] [stdout]             0x00007a9cebb49bd4: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@5 (line 121)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009913aaa8::value@5
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@97 (line 134)
+[INFO] [stdout]             0x00007a9cebb49bd4: 0210 4585 | f60f 8559 
+[INFO] [stdout]             0x00007a9cebb49bdc: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@102 (line 134)
+[INFO] [stdout]             0x00007a9cebb49bdc: 0100 0044 | 894c 2408 | 488b 6cc3 
+[INFO] [stdout]             0x00007a9cebb49be8: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@115 (line 137)
+[INFO] [stdout]             0x00007a9cebb49be8: 1044 8bcd 
+[INFO] [stdout]    0.04%    0x00007a9cebb49bec: ;*i2l {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@2 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@116 (line 137)
+[INFO] [stdout]    0.04%    0x00007a9cebb49bec: 4d63 f14c | 3bf5 0f85 
+[INFO] [stdout]             0x00007a9cebb49bf4: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Math::toIntExact@5 (line 1374)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@116 (line 137)
+[INFO] [stdout]             0x00007a9cebb49bf4: 7801 0000 | 458b 7480 
+[INFO] [stdout]             0x00007a9cebb49bfc: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@6 (line 94)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099181550::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@129 (line 138)
+[INFO] [stdout]             0x00007a9cebb49bfc: 1044 3b34 | 2473 624a 
+[INFO] [stdout]             0x00007a9cebb49c04: ;*laload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$longValues$2@7 (line 94)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x0000000099181550::value@9
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@129 (line 138)
+[INFO] [stdout]             0x00007a9cebb49c04: 8b44 f210 | 443b 4c24 | 040f 8399 | 0000 004a 
+[INFO] [stdout]             0x00007a9cebb49c14: ;*lastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@9 (line 139)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49c14: 0144 cf10 | 443b ce0f | 83d7 0000 
+[INFO] [stdout]             0x00007a9cebb49c20: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@15 (line 140)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49c20: 004d 63c9 | 470f b674 | 0b10 4585 | f60f 856a 
+[INFO] [stdout]             0x00007a9cebb49c30: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.SumStateVector::increment@16 (line 140)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.aggregation.Sum::accumulate@134 (line 138)
+[INFO] [stdout]             0x00007a9cebb49c30: ffff ffeb 
+[INFO] [stdout]             0x00007a9cebb49c34: ;   {metadata(&apos;org/weakref/nitro/data/I32Vector&apos;)}
+[INFO] [stdout]             0x00007a9cebb49c34: 8b41 81f8 | 80f4 1101 | 0f85 3f03 | 0000 41bb | 0100 0000 | e988 f9ff 
+[INFO] [stdout]             0x00007a9cebb49c4c: ;   {metadata(&apos;org/weakref/nitro/data/ConcatenatedBooleanVector&apos;)}
+[INFO] [stdout]             0x00007a9cebb49c4c: ff41 81fb | 80a5 1301 | 0f85 3b03 | 0000 41ba | 0100 0000 | e937 fcff | ffbe e4ff | ffff c4e1 
+[INFO] [stdout]             0x00007a9cebb49c6c: f97e c5c5 | fb11 5424 | 0844 896c | 2410 c5fb | 114c 2418 | 4489 4c24 | 1444 8974 | 2420 c5fb 
+[INFO] [stdout]             0x00007a9cebb49c8c: 116c 2428 | c5fb 1164 | 2430 c5fa | 117c 2424 
+[INFO] [stdout]             0x00007a9cebb49c9c: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.17%  <total for region 11>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 12].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout] 
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb4590c: 0000 0000 
+[INFO] [stdout]             0x00007a9cebb45910: ;*ladd {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@234 (line 1845)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45910: 49ff c08b 
+[INFO] [stdout]             0x00007a9cebb45914: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@275 (line 1843)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45914: 5c24 1c49 | 8b7f 3043 | 8b8c dc80 
+[INFO] [stdout]             0x00007a9cebb45920: ;*getfield handlers {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@209 (line 1843)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45920: 0000 0041 
+[INFO] [stdout]             0x00007a9cebb45924: ; ImmutableOopMap {r11=NarrowOop r9=Oop rcx=NarrowOop r13=Oop [32]=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.operator.FlatKeyLayout::hash@275 (line 1843)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007a9cebb45924: ffc2 8507 
+[INFO] [stdout]    0.03%    0x00007a9cebb45928: ; implicit exception: dispatches to 0x00007a9cebb46278
+[INFO] [stdout]    0.03%    0x00007a9cebb45928: 418b 7ccc | 0c44 3bd7 | 0f8d 3b03 
+[INFO] [stdout]             0x00007a9cebb45934: ;*if_icmpge {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@213 (line 1843)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45934: 0000 498b | f889 5c24 
+[INFO] [stdout]             0x00007a9cebb4593c: ;*aload_0 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@216 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb4593c: 1c43 8b8c | dcbc 0000 
+[INFO] [stdout]             0x00007a9cebb45944: ;*getfield batchFieldAllNull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@1 (line 2695)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45944: 0041 8b5c | cc0c 443b | d30f 8385 | 0300 004c | 8bc7 49c1 | e005 4c2b 
+[INFO] [stdout]             0x00007a9cebb4595c: ;*lmul {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@232 (line 1845)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb4595c: c748 c1e1 | 0342 0fb6 | 4c11 1085 
+[INFO] [stdout]             0x00007a9cebb45968: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@13 (line 2695)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45968: c975 a543 | 8b8c dcb8 
+[INFO] [stdout]             0x00007a9cebb45970: ;*getfield batchFieldNullFree {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@19 (line 2698)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45970: 0000 0041 | 8b5c cc0c | 443b d30f | 8387 0300 | 0043 0fb6 
+[INFO] [stdout]             0x00007a9cebb45984: ;*getfield batchAccessorsReady {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@37 (line 2701)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45984: 5cdc 6748 | c1e1 0342 | 0fb6 5411 | 1085 d20f | 84bd feff 
+[INFO] [stdout]             0x00007a9cebb45998: ;*ifeq {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::inputFieldNull@31 (line 2698)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@221 (line 1844)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45998: ff43 8b84 | dca8 0000 
+[INFO] [stdout]             0x00007a9cebb459a0: ;*getfield fieldIdComparable {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@7 (line 1994)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459a0: 0043 8b8c | dca4 0000 
+[INFO] [stdout]             0x00007a9cebb459a8: ;*getfield batchDictionaryIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::binaryFieldHash@23 (line 1994)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@131 (line 1981)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459a8: 0043 8b94 | dc90 0000 
+[INFO] [stdout]             0x00007a9cebb459b0: ;*getfield dictionaryHashedIds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@1 (line 1970)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459b0: 0043 8bbc | dcfc 0000 
+[INFO] [stdout]             0x00007a9cebb459b8: ;*getfield fieldLong {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@107 (line 1980)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459b8: 0047 8bb4 | dc94 0000 
+[INFO] [stdout]             0x00007a9cebb459c0: ;*getfield dictionaryEntryHashes {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@21 (line 1973)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459c0: 004c 894c 
+[INFO] [stdout]             0x00007a9cebb459c4: ;*getfield batchAccessorsReady {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@34 (line 1976)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459c4: 2408 438b 
+[INFO] [stdout]             0x00007a9cebb459c8: ;*getfield inputChannels {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@250 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459c8: 6cdc 7c41 | 8b74 ec0c | 443b d60f | 835f 0300 | 004d 8d0c | ec43 8b6c 
+[INFO] [stdout]             0x00007a9cebb459e0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@255 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459e0: 9110 3b2c | 240f 8379 | 0300 0045 
+[INFO] [stdout]             0x00007a9cebb459ec: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@264 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb459ec: 8b4c ad10 
+[INFO] [stdout]    0.06%    0x00007a9cebb459f0: ; implicit exception: dispatches to 0x00007a9cebb463bc
+[INFO] [stdout]    0.06%    0x00007a9cebb459f0: 418b 74d4 | 0c44 3bd6 | 0f83 8e03 | 0000 48c1 | e203 428b 
+[INFO] [stdout]             0x00007a9cebb45a04: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@12 (line 1971)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a04: 6c92 1085 | ed0f 857c 
+[INFO] [stdout]             0x00007a9cebb45a0c: ;*ifnull {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@17 (line 1972)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a0c: 0200 0085 | db0f 84bd 
+[INFO] [stdout]             0x00007a9cebb45a14: ;*ifne {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@37 (line 1976)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a14: 0400 0043 | 8bac dcf4 
+[INFO] [stdout]             0x00007a9cebb45a1c: ;*getfield fieldKinds {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@57 (line 1979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a1c: 0000 0041 | 8b54 ec0c 
+[INFO] [stdout]    0.01%    0x00007a9cebb45a24: ;   {other}
+[INFO] [stdout]    0.01%    0x00007a9cebb45a24: 443b d20f | 83ab 0300 | 0049 8d1c | ec42 8b5c 
+[INFO] [stdout]             0x00007a9cebb45a34: ;*aaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@61 (line 1979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a34: 9310 418b 
+[INFO] [stdout]             0x00007a9cebb45a38: ;*getfield ordinal {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - java.lang.Enum::ordinal@1 (line 128)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::fieldHash@62 (line 1979)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatKeyLayout::hash@266 (line 1848)
+[INFO] [stdout]                                 ; - org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash@90 (line 361)
+[INFO] [stdout]             0x00007a9cebb45a38: 6cdc 0c83 | fd04 0f83 | c403 0000 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.14%  <total for region 12>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 13].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.data.DictionaryVector::wrap, version 2, compile id 2352 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007a9cebb23770: 4489 4b10 | 4183 fb01 | 0f8e ba07 | 0000 41b9 | 0100 0000 | 33db 891c | 2441 8bde | 412b d983 
+[INFO] [stdout]             0x00007a9cebb23790: c3fd 453b | d90f 4c1c | 2481 fba0 | 0f00 0041 | 0f47 d841 | 03d9 6666 | 0f1f 8400 
+[INFO] [stdout]             0x00007a9cebb237ac: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@45 (line 98)
+[INFO] [stdout]             0x00007a9cebb237ac: 0000 0000 | 428b 7c89 
+[INFO] [stdout]             0x00007a9cebb237b4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@55 (line 98)
+[INFO] [stdout]             0x00007a9cebb237b4: 103b fe0f | 832d 0300 | 008b 7cb8 | 1042 897c 
+[INFO] [stdout]             0x00007a9cebb237c4: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@57 (line 98)
+[INFO] [stdout]             0x00007a9cebb237c4: 8910 428b 
+[INFO] [stdout]             0x00007a9cebb237c8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@55 (line 98)
+[INFO] [stdout]             0x00007a9cebb237c8: 7c89 143b | fe0f 830e | 0300 0044 | 8b6c b810 | 4689 6c89 
+[INFO] [stdout]             0x00007a9cebb237dc: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@57 (line 98)
+[INFO] [stdout]             0x00007a9cebb237dc: 1442 8b7c 
+[INFO] [stdout]             0x00007a9cebb237e0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@55 (line 98)
+[INFO] [stdout]             0x00007a9cebb237e0: 8918 3bfe | 0f83 fc02 | 0000 8b7c | b810 4289 
+[INFO] [stdout]             0x00007a9cebb237f0: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@57 (line 98)
+[INFO] [stdout]             0x00007a9cebb237f0: 7c89 1842 
+[INFO] [stdout]             0x00007a9cebb237f4: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@55 (line 98)
+[INFO] [stdout]             0x00007a9cebb237f4: 8b7c 891c | 3bfe 0f83 | dd02 0000 | 448b 6cb8 | 1046 896c 
+[INFO] [stdout]             0x00007a9cebb23808: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@57 (line 98)
+[INFO] [stdout]             0x00007a9cebb23808: 891c 4183 
+[INFO] [stdout]             0x00007a9cebb2380c: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@58 (line 97)
+[INFO] [stdout]             0x00007a9cebb2380c: c104 443b 
+[INFO] [stdout]             0x00007a9cebb23810: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@61 (line 97)
+[INFO] [stdout]             0x00007a9cebb23810: cb7c 9d49 
+[INFO] [stdout]             0x00007a9cebb23814: ; ImmutableOopMap {rcx=Oop rdx=NarrowOop rax=Oop rbp=NarrowOop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.data.DictionaryVector::wrap@61 (line 97)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]             0x00007a9cebb23814: 8b5f 3085 
+[INFO] [stdout]             0x00007a9cebb23818: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@61 (line 97)
+[INFO] [stdout]             0x00007a9cebb23818: 0345 3bcb | 0f8c 67ff | ffff 453b 
+[INFO] [stdout]             0x00007a9cebb23824: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@45 (line 98)
+[INFO] [stdout]             0x00007a9cebb23824: ce7d 1f90 | 428b 7c89 
+[INFO] [stdout]             0x00007a9cebb2382c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@55 (line 98)
+[INFO] [stdout]             0x00007a9cebb2382c: 103b fe0f | 83b5 0200 | 008b 7cb8 | 1042 897c 
+[INFO] [stdout]             0x00007a9cebb2383c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@57 (line 98)
+[INFO] [stdout]             0x00007a9cebb2383c: 8910 41ff 
+[INFO] [stdout]             0x00007a9cebb23840: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@58 (line 97)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    2.01%  <total for region 13>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 14].............................................................................
+[INFO] [stdout] runtime stub, StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007a9ceb4344e0: 2bc3 4983 | f818 0f8c | a5fd ffff | 4983 e818 | 0f1f 8400 | 0000 0000 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007a9ceb434500: c5fe 6f0c | cfc5 fe7f | 0cce c5fe | 6f4c cf20 | c5fe 7f4c | ce20 c5fe | 6f4c cf40 | c5fe 7f4c 
+[INFO] [stdout]             0x00007a9ceb434520: ce40 c5fe | 6f4c cf60 | c5fe 7f4c | ce60 c5fe | 6f8c cf80 | 0000 00c5 | fe7f 8cce | 8000 0000 
+[INFO] [stdout]             0x00007a9ceb434540: c5fe 6f8c | cfa0 0000 | 00c5 fe7f | 8cce a000 | 0000 4883 | c118 4983 | e818 7fa4 | 4983 c018 
+[INFO] [stdout]             0x00007a9ceb434560: e92c fdff | ff4d 8bd8 | 488b c648 | 8bf7 488b | f84c 8bc6 | 488b c749 | 8bcb f348 | a549 c1e3 
+[INFO] [stdout]             0x00007a9ceb434580: 0349 c1eb | 0348 8bf0 | 498b f849 | 8bcb 4c8b | c24d 2bc3 | e9f8 fcff | ff4c 8bde | 4983 e33f 
+[INFO] [stdout]             0x00007a9ceb4345a0: 0f84 4300 | 0000 49f7 | db49 83c3 | 4049 c1eb | 0349 8bc3 | 49b8 ffff | ffff ffff | ffff c442 
+[INFO] [stdout]             0x00007a9ceb4345c0: f8f5 c0c4 | c1fb 92d0 | 62f1 feca | 6f0c cf62 | f1fe 4a7f | 0cce 498b | cb4c 8bc2 | 4d2b c349 
+[INFO] [stdout]             0x00007a9ceb4345e0: 83f8 180f | 8c59 0000 | 0049 83e8 | 1866 660f | 1f84 0000 | 0000 0066 | 0f1f 8400 | 0000 0000 
+[INFO] [stdout]             0x00007a9ceb434600: 62f1 fe48 | 6f0c cf62 | f1fe 487f | 0cce 62f1 | fe48 6f4c | cf01 62f1 | fe48 7f4c | ce01 62f1 
+[INFO] [stdout]             0x00007a9ceb434620: fe48 6f4c | cf02 62f1 | fe48 7f4c | ce02 4883 | c118 4983 | e818 7fc8 | 4983 c018 | 0f8e a001 
+[INFO] [stdout]             0x00007a9ceb434640: 0000 4983 | f804 7f27 | 48b8 ffff | ffff ffff | ffff c4e2 | b8f5 c0c4 | e1fb 92d0 | 62f1 feaa 
+[INFO] [stdout]             0x00007a9ceb434660: 6f0c cf62 | f1fe 2a7f | 0cce e973 | 0100 0049 | 83f8 087f | 2748 b8ff | ffff ffff | ffff ffc4 
+[INFO] [stdout]             0x00007a9ceb434680: e2b8 f5c0 | c4e1 fb92 | d062 f1fe | ca6f 0ccf | 62f1 fe4a | 7f0c cee9 | 4601 0000 | 4983 f80c 
+[INFO] [stdout]             0x00007a9ceb4346a0: 7f3b 62f1 | fe48 6f0c | cf62 f1fe | 487f 0cce | 4983 e808 | 48b8 ffff | ffff ffff | ffff c4e2 
+[INFO] [stdout]             0x00007a9ceb4346c0: b8f5 c0c4 | e1fb 92d0 | 62f1 feaa | 6f4c cf02 | 62f1 fe2a | 7f4c ce02 | e905 0100 | 0049 83f8 
+[INFO] [stdout]             0x00007a9ceb4346e0: 107f 4762 | f1fe 486f | 0ccf 62f1 | fe48 7f0c | cec5 fe6f | 4ccf 40c5 | fe7f 4cce | 4049 83e8 
+[INFO] [stdout]             0x00007a9ceb434700: 0c48 b8ff | ffff ffff | ffff ffc4 | e2b8 f5c0 | c4e1 fb92 | d062 f1fe | aa6f 4ccf | 0362 f1fe 
+[INFO] [stdout]             0x00007a9ceb434720: 2a7f 4cce | 03e9 b800 | 0000 4983 | f814 7f4b | 62f1 fe48 | 6f0c cf62 | f1fe 487f | 0cce 62f1 
+[INFO] [stdout]             0x00007a9ceb434740: fe48 6f4c | cf01 62f1 | fe48 7f4c | ce01 4983 | e810 48b8 | ffff ffff | ffff ffff | c4e2 b8f5 
+[INFO] [stdout]             0x00007a9ceb434760: c0c4 e1fb | 92d0 62f1 | feaa 6f4c | cf04 62f1 | fe2a 7f4c | ce04 e967 | 0000 0049 | 83f8 180f 
+[INFO] [stdout]             0x00007a9ceb434780: 8ff6 fcff | ff62 f1fe | 486f 0ccf | 62f1 fe48 | 7f0c ce62 | f1fe 486f | 4ccf 0162 | f1fe 487f 
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.88%  <total for region 14>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 15].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda.0x000000009913aaa8::value, version 2, compile id 2154 
+[INFO] [stdout] 
+[INFO] [stdout]            scopes pcs     [0x00007a9c6429f5a8,0x00007a9c6429f658] = 176
+[INFO] [stdout]            scopes data    [0x00007a9c6429f658,0x00007a9c6429f6b0] = 88
+[INFO] [stdout]           [Constant Pool (empty)]
+[INFO] [stdout]           Loading hsdis library failed, undisassembled code is shown in MachCode section
+[INFO] [stdout]           [MachCode]
+[INFO] [stdout]           [Instructions begin]
+[INFO] [stdout]             0x00007a9cebb04280: 6690 448b | 5608 443b 
+[INFO] [stdout]             0x00007a9cebb04288: ;   {runtime_call Shared Runtime ic_miss_blob}
+[INFO] [stdout]             0x00007a9cebb04288: 5008 0f85 | 50a6 94ff 
+[INFO] [stdout]           [Verified Entry Point]
+[INFO] [stdout]    0.19%    0x00007a9cebb04290: 8984 2400 | c0fe ff55 | 4883 ec20 | 4181 7f20 | 0100 0000 | 0f85 8400 
+[INFO] [stdout]             0x00007a9cebb042a8: ;*synchronization entry
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009913aaa8::value@-1
+[INFO] [stdout]             0x00007a9cebb042a8: 0000 448b 
+[INFO] [stdout]             0x00007a9cebb042ac: ;*getfield arg$1 {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009913aaa8::value@1
+[INFO] [stdout]             0x00007a9cebb042ac: 5e0c 478b 
+[INFO] [stdout]             0x00007a9cebb042b0: ;*getfield values {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.BooleanVector::values@1 (line 43)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@1 (line 121)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009913aaa8::value@5
+[INFO] [stdout]             0x00007a9cebb042b0: 5cdc 0c47 | 8b54 dc0c | 413b d273 | 1a4f 8d14 | dc41 0fb6 | 4412 1048 | 83c4 205d 
+[INFO] [stdout]    0.01%    0x00007a9cebb042cc: ;   {poll_return}
+[INFO] [stdout]    0.01%    0x00007a9cebb042cc: 493b 6728 | 0f87 4200 | 0000 c3be | e4ff ffff | 418b eb89 
+[INFO] [stdout]             0x00007a9cebb042e0: ;   {runtime_call UncommonTrapBlob}
+[INFO] [stdout]             0x00007a9cebb042e0: 1424 90e8 
+[INFO] [stdout]             0x00007a9cebb042e4: ; ImmutableOopMap {rbp=NarrowOop }
+[INFO] [stdout]                                 ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@5 (line 121)
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda/0x000000009913aaa8::value@5
+[INFO] [stdout]             0x00007a9cebb042e4: f850 a3ff 
+[INFO] [stdout]             0x00007a9cebb042e8: ;   {post_call_nop}
+[INFO] [stdout]             0x00007a9cebb042e8: 0f1f 8400 
+[INFO] [stdout]             0x00007a9cebb042ec: ;*baload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.function.scalar.builtin.VectorAccess::lambda$booleanValues$1@5 (line 121)
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.87%  <total for region 15>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 16].............................................................................
+[INFO] [stdout] c2, level 4, org.weakref.nitro.data.DictionaryVector::wrap, version 2, compile id 2352 
+[INFO] [stdout] 
+[INFO] [stdout]             0x00007a9cebb238b0: 4810 4183 | fb01 0f8e | 6f07 0000 | ba01 0000 | 0045 8bce | 442b ca41 | 83c1 fd44 | 3bda 440f 
+[INFO] [stdout]             0x00007a9cebb238d0: 4cce 4181 | f9a0 0f00 | 0045 0f47 
+[INFO] [stdout]             0x00007a9cebb238dc: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@97 (line 103)
+[INFO] [stdout]             0x00007a9cebb238dc: c844 03ca 
+[INFO] [stdout]             0x00007a9cebb238e0: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@107 (line 103)
+[INFO] [stdout]             0x00007a9cebb238e0: 8b5c 9010 | 3bdf 0f83 | 2505 0000 | 418b 5c9d | 1089 5c90 
+[INFO] [stdout]             0x00007a9cebb238f4: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@109 (line 103)
+[INFO] [stdout]             0x00007a9cebb238f4: 108b 5c90 
+[INFO] [stdout]             0x00007a9cebb238f8: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@107 (line 103)
+[INFO] [stdout]             0x00007a9cebb238f8: 143b df0f | 8309 0500 | 0041 8b4c | 9d10 894c 
+[INFO] [stdout]             0x00007a9cebb23908: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@109 (line 103)
+[INFO] [stdout]             0x00007a9cebb23908: 9014 8b5c 
+[INFO] [stdout]             0x00007a9cebb2390c: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@107 (line 103)
+[INFO] [stdout]             0x00007a9cebb2390c: 9018 3bdf | 0f83 f804 | 0000 418b | 5c9d 1089 
+[INFO] [stdout]             0x00007a9cebb2391c: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@109 (line 103)
+[INFO] [stdout]             0x00007a9cebb2391c: 5c90 188b 
+[INFO] [stdout]             0x00007a9cebb23920: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@107 (line 103)
+[INFO] [stdout]             0x00007a9cebb23920: 5c90 1c3b | df0f 83dc | 0400 0041 | 8b4c 9d10 
+[INFO] [stdout]    0.31%    0x00007a9cebb23930: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@109 (line 103)
+[INFO] [stdout]    0.31%    0x00007a9cebb23930: 894c 901c 
+[INFO] [stdout]    0.01%    0x00007a9cebb23934: ;*iinc {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@110 (line 102)
+[INFO] [stdout]    0.01%    0x00007a9cebb23934: 83c2 0441 
+[INFO] [stdout]             0x00007a9cebb23938: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@61 (line 97)
+[INFO] [stdout]             0x00007a9cebb23938: 3bd1 7ca4 
+[INFO] [stdout]             0x00007a9cebb2393c: ; ImmutableOopMap {rax=Oop rbp=NarrowOop r13=Oop xmm0=Oop }
+[INFO] [stdout]                                 ;*goto {reexecute=1 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - (reexecute) org.weakref.nitro.data.DictionaryVector::wrap@113 (line 102)
+[INFO] [stdout]             0x00007a9cebb2393c: 4d8b 4f30 
+[INFO] [stdout]    0.01%    0x00007a9cebb23940: ;*goto {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@113 (line 102)
+[INFO] [stdout]                                 ;   {poll}
+[INFO] [stdout]    0.01%    0x00007a9cebb23940: 4185 0141 | 3bd3 0f8c | 75ff ffff | 413b d67d 
+[INFO] [stdout]             0x00007a9cebb23950: ;*aload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@97 (line 103)
+[INFO] [stdout]             0x00007a9cebb23950: 2066 6690 
+[INFO] [stdout]             0x00007a9cebb23954: ;*iaload {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout]                                 ; - org.weakref.nitro.data.DictionaryVector::wrap@107 (line 103)
+[INFO] [stdout]             0x00007a9cebb23954: 8b5c 9010 | 3bdf 0f83 | b104 0000 | 458b 4c9d | 1044 894c 
+[INFO] [stdout]             0x00007a9cebb23968: ;*iastore {reexecute=0 rethrow=0 return_oop=0}
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.76%  <total for region 16>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 17].............................................................................
+[INFO] [stdout] libjvm.so, G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.39%  <total for region 17>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Region 18].............................................................................
+[INFO] [stdout] libjvm.so, void G1ScanCardClosure::do_oop_work<narrowOop>(narrowOop*) 
+[INFO] [stdout] 
+[INFO] [stdout]  <no assembly is recorded, native region>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]    1.14%  <total for region 18>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Regions]...............................................................................
+[INFO] [stdout]   10.16%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::globalIdFor, version 2, compile id 2355 
+[INFO] [stdout]    7.02%                     c2, level 4  org.weakref.nitro.data.BooleanVector::copy, version 2, compile id 2482 
+[INFO] [stdout]    5.39%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed, version 8, compile id 2430 
+[INFO] [stdout]    3.99%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2461 
+[INFO] [stdout]    3.64%                                  <unknown> 
+[INFO] [stdout]    3.38%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2461 
+[INFO] [stdout]    2.69%                     c2, level 4  org.weakref.nitro.operator.GroupIdOperator::materializeOutput, version 2, compile id 3170 
+[INFO] [stdout]    2.62%                       libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    2.59%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::copy, version 3, compile id 2478 
+[INFO] [stdout]    2.46%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout]    2.17%                     c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 4, compile id 2534 
+[INFO] [stdout]    2.14%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout]    2.01%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::wrap, version 2, compile id 2352 
+[INFO] [stdout]    1.88%                    runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    1.87%                     c2, level 4  org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda.0x000000009913aaa8::value, version 2, compile id 2154 
+[INFO] [stdout]    1.76%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::wrap, version 2, compile id 2352 
+[INFO] [stdout]    1.39%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    1.14%                       libjvm.so  void G1ScanCardClosure::do_oop_work<narrowOop>(narrowOop*) 
+[INFO] [stdout]    0.99%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::copy, version 3, compile id 2478 
+[INFO] [stdout]    0.93%                     c2, level 4  org.weakref.nitro.operator.GroupIdOperator::materializeOutput, version 2, compile id 3170 
+[INFO] [stdout]    0.85%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::tryGroupedValuesAsDictionary, version 6, compile id 3522 
+[INFO] [stdout]    0.77%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::boundedTopN, version 8, compile id 3667 
+[INFO] [stdout]    0.77%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::boundedTopN, version 8, compile id 3667 
+[INFO] [stdout]    0.72%                     c2, level 4  org.weakref.nitro.operator.GroupIdOperator::materializeOutput, version 2, compile id 3170 
+[INFO] [stdout]    0.68%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::materializeNulls, version 6, compile id 3529 
+[INFO] [stdout]    0.60%               [kernel.kallsyms]  _copy_from_iter 
+[INFO] [stdout]    0.60%                                  <unknown> 
+[INFO] [stdout]    0.54%                                  <unknown> 
+[INFO] [stdout]    0.50%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout]    0.48%                     c2, level 4  org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong, version 4, compile id 2993 
+[INFO] [stdout]    0.46%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::compareOrdering, version 2, compile id 3646 
+[INFO] [stdout]    0.42%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    0.41%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout]    0.41%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::compareOrdering, version 2, compile id 3646 
+[INFO] [stdout]    0.40%               [kernel.kallsyms]  mutex_lock 
+[INFO] [stdout]    0.40%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::rehash, version 3, compile id 3177 
+[INFO] [stdout]    0.40%                       libjvm.so  PhaseAggressiveCoalesce::insert_copies(Matcher&) 
+[INFO] [stdout]    0.39%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::addNewGroup, version 2, compile id 2456 
+[INFO] [stdout]    0.39%                       libjvm.so  PhaseIdealLoop::build_loop_late(VectorSet&, Node_List&, Node_Stack&) 
+[INFO] [stdout]    0.38%                     c2, level 4  org.weakref.nitro.data.RleVector::copy, version 3, compile id 2547 
+[INFO] [stdout]   29.19%  <...other 1091 warm regions...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Hottest Methods (after inlining)]..............................................................
+[INFO] [stdout]   10.22%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::globalIdFor, version 2, compile id 2355 
+[INFO] [stdout]    7.50%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::identicalRecordToInput, version 6, compile id 2461 
+[INFO] [stdout]    7.07%                     c2, level 4  org.weakref.nitro.data.BooleanVector::copy, version 2, compile id 2482 
+[INFO] [stdout]    6.79%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::prepareBatchHash, version 5, compile id 2517 
+[INFO] [stdout]    6.63%                                  <unknown> 
+[INFO] [stdout]    5.87%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::assignGroupHashed, version 8, compile id 2430 
+[INFO] [stdout]    4.86%                     c2, level 4  org.weakref.nitro.operator.GroupIdOperator::materializeOutput, version 2, compile id 3170 
+[INFO] [stdout]    3.91%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::wrap, version 2, compile id 2352 
+[INFO] [stdout]    3.63%                     c2, level 4  org.weakref.nitro.data.DictionaryVector::copy, version 3, compile id 2478 
+[INFO] [stdout]    2.62%                       libjvm.so  ElfSymbolTable::lookup(unsigned char*, int*, int*, int*, ElfFuncDescTable*) 
+[INFO] [stdout]    2.17%                     c2, level 4  org.weakref.nitro.operator.aggregation.Sum::accumulate, version 4, compile id 2534 
+[INFO] [stdout]    2.08%                       libjvm.so  G1ParScanThreadState::trim_queue_to_threshold(unsigned int) 
+[INFO] [stdout]    1.89%                    runtime stub  StubRoutines::Stub Generator jlong_disjoint_arraycopy_stub 
+[INFO] [stdout]    1.87%                     c2, level 4  org.weakref.nitro.function.scalar.builtin.VectorAccess$$Lambda.0x000000009913aaa8::value, version 2, compile id 2154 
+[INFO] [stdout]    1.76%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::boundedTopN, version 8, compile id 3667 
+[INFO] [stdout]    1.42%                       libjvm.so  void G1ScanCardClosure::do_oop_work<narrowOop>(narrowOop*) 
+[INFO] [stdout]    1.36%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::addNewGroup, version 2, compile id 2456 
+[INFO] [stdout]    1.29%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator::compareOrdering, version 2, compile id 3646 
+[INFO] [stdout]    0.96%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::materializeNulls, version 6, compile id 3529 
+[INFO] [stdout]    0.88%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::tryGroupedValuesAsDictionary, version 6, compile id 3522 
+[INFO] [stdout]    0.82%                     c2, level 4  org.weakref.nitro.operator.TopNRankingOperator$PartitionKey::equals, version 2, compile id 3614 
+[INFO] [stdout]    0.80%                     c2, level 4  org.weakref.nitro.data.RleVector::copy, version 3, compile id 2547 
+[INFO] [stdout]    0.61%               [kernel.kallsyms]  _copy_from_iter 
+[INFO] [stdout]    0.61%                     c2, level 4  org.weakref.nitro.operator.FlatKeyLayout::writeBinaryField, version 2, compile id 2452 
+[INFO] [stdout]    0.48%                     c2, level 4  org.weakref.nitro.operator.NitroParquetScanOperator::gatherLong, version 4, compile id 2993 
+[INFO] [stdout]    0.47%                     c2, level 4  org.weakref.nitro.parquet.JavaSkipDecode::skipDecodeDictLongs, version 4, compile id 2738 
+[INFO] [stdout]    0.47%                     c2, level 4  org.weakref.nitro.operator.FlatGroupingTable::rehash, version 3, compile id 3177 
+[INFO] [stdout]    0.44%                     c2, level 4  org.weakref.nitro.operator.FlatTypeHandlers$1::materializeValues, version 6, compile id 3540 
+[INFO] [stdout]    0.40%                       libjvm.so  PhaseIdealLoop::build_loop_late(VectorSet&, Node_List&, Node_Stack&) 
+[INFO] [stdout]    0.40%               [kernel.kallsyms]  mutex_lock 
+[INFO] [stdout]    0.40%                       libjvm.so  PhaseAggressiveCoalesce::insert_copies(Matcher&) 
+[INFO] [stdout]    0.39%                     c2, level 4  org.weakref.nitro.operator.GroupingState::assignFlatGroups, version 4, compile id 2543 
+[INFO] [stdout]    0.38%                       libjvm.so  IndexSetIterator::advance_and_next() 
+[INFO] [stdout]    0.36%                     c2, level 4  org.weakref.nitro.operator.HashJoinOperator$LongJoinIndex::emitDenseSingleBatchDictionaryRowsPositionsRange, version 4, compile id 2708 
+[INFO] [stdout]    0.35%                     c2, level 4  org.weakref.nitro.operator.GroupIdOperator::materializeGroupingSetBatch, version 2, compile id 3382 
+[INFO] [stdout]    0.35%               [kernel.kallsyms]  __raw_spin_lock_irqsave 
+[INFO] [stdout]    0.35%                       libjvm.so  MethodMatcher::matches(methodHandle const&) const 
+[INFO] [stdout]    0.31%                     c2, level 4  org.weakref.nitro.parquet.ColumnReader::readSelectedLongs, version 7, compile id 3984 
+[INFO] [stdout]    0.26%                       libjvm.so  PhaseIdealLoop::build_loop_late_post_work(Node*, bool) 
+[INFO] [stdout]    0.23%                       libjvm.so  CompilerOracle::tag_blackhole_if_possible(methodHandle const&) 
+[INFO] [stdout]   16.34%  <...other 598 warm methods...>
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] ....[Distribution by Source]........................................................................
+[INFO] [stdout]   68.32%                     c2, level 4
+[INFO] [stdout]   17.61%                       libjvm.so
+[INFO] [stdout]    6.63%                                
+[INFO] [stdout]    3.68%               [kernel.kallsyms]
+[INFO] [stdout]    2.28%                    runtime stub
+[INFO] [stdout]    0.53%                     c1, level 3
+[INFO] [stdout]    0.36%                       libc.so.6
+[INFO] [stdout]    0.19%  snappy16292469868376732598.tmp
+[INFO] [stdout]    0.12%                     interpreter
+[INFO] [stdout]    0.11%                Unknown, level 0
+[INFO] [stdout]    0.07%                perf-2284430.map
+[INFO] [stdout]    0.06%            ld-linux-x86-64.so.2
+[INFO] [stdout]    0.04%                     c1, level 1
+[INFO] [stdout]    0.01%                        [rfcomm]
+[INFO] [stdout] ....................................................................................................
+[INFO] [stdout]  100.00%  <totals>
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] 
+[INFO] [stdout] # Run complete. Total time: 00:00:24
+[INFO] [stdout] 
+[INFO] [stdout] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[INFO] [stdout] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[INFO] [stdout] experiments, perform baseline and negative tests that provide experimental control, make sure
+[INFO] [stdout] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[INFO] [stdout] Do not assume the numbers tell you what you want them to tell.
+[INFO] [stdout] 
+[INFO] [stdout] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[INFO] [stdout] extra caution when trusting the results, look into the generated code to check the benchmark still
+[INFO] [stdout] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[INFO] [stdout] different JVMs are already problematic, the performance difference caused by different Blackhole
+[INFO] [stdout] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[INFO] [stdout] 
+[INFO] [stdout] Benchmark                     Mode  Cnt     Score   Error  Units
+[INFO] [stdout] BenchmarkQueries.query67      avgt       7621.820          ms/op
+[INFO] [stdout] BenchmarkQueries.query67:asm  avgt            NaN            ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  25.411 s (Wall Clock)
+[INFO] Finished at: 2026-07-23T11:06:32Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed

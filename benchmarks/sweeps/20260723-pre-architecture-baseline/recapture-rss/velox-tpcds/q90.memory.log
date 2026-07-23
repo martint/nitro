@@ -1,0 +1,13 @@
+2026-07-23T23:30:48Z mem_available_kib=43840476 swap_free_kib=256 anon_huge_pages_kib=6144
+    PID    PPID   RSS COMMAND         COMMAND
+3734133       1 385684 codex          codex
+    129       1 242572 codex          /root/.codex/packages/standalone/current/codex app-server --remote-control --listen unix://
+3734310     129 38812 bun             bun /opt/bun/install/global/node_modules/@playwright/mcp/cli.js
+2714053 2708714 11336 perf            /usr/local/bin/perf stat -x, -o benchmarks/sweeps/20260723-pre-architecture-baseline/recapture-rss/velox-tpcds/q90.perf.csv -e instructions,cycles,L1-dcache-load-misses,L1-dcache-loads,dTLB-load-misses,dTLB-loads,branch-misses,branches -- taskset -c 0 env LD_LIBRARY_PATH=/root/notes/velox/miniconda/lib:/root/notes/velox/boostlibs:/root/notes/velox/local/lib:/usr/local/lib /root/notes/velox/velox/_build/release/velox/benchmarks/tpcds/velox_nitro_tpcds_benchmark --data_path=/root/data/tpcds-parquet-sf10/sf10 --run_query_verbose=90 --num_drivers=1 --num_io_threads=1 --num_splits_per_file=1 --num_repeats=10 --cache_gb=12
+    132       1  9040 codex           /root/.codex/packages/standalone/current/codex app-server daemon pid-update-loop
+   2002     129  8692 codex-code-mode /opt/codex/packages/standalone/releases/0.144.1-x86_64-unknown-linux-musl/bin/codex-code-mode-host
+2714059 2714054  4360 ps              ps -eo pid,ppid,rss,comm,args --sort=-rss
+2708714 2708240  4352 bash            bash tools/run_velox_operator_counter_sweep.sh tpcds benchmarks/sweeps/20260723-pre-architecture-baseline/recapture-rss
+2708240     129  3776 bash            /bin/bash -c set -euo pipefail out=benchmarks/sweeps/20260723-pre-architecture-baseline/recapture-rss mkdir -p "$out" for suite in tpch tpcds clickbench; do   status="benchmarks/sweeps/20260723-pre-architecture-baseline/velox-$suite.status.csv"   queries=$(awk -F, 'NR>1&&$2==0&&$4==0{printf "%d ",substr($1,2)+0}' "$status")   VELOX_QUERIES="$queries" tools/run_velox_operator_counter_sweep.sh "$suite" "$out" done
+2714054 2708714  2292 bash            bash tools/run_velox_operator_counter_sweep.sh tpcds benchmarks/sweeps/20260723-pre-architecture-baseline/recapture-rss
+2713895       1  2232 sleep           sleep 5

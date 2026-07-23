@@ -85,7 +85,7 @@ class TestFlatGroupingTable
                 DictionaryVector.wrap(ids, size, new I64Vector(new long[] {10, 20, 30})),
                 DictionaryVector.wrap(ids, size, utf8("d", "e", "f")),
                 DictionaryVector.wrap(ids, size, utf8("g", "h", "i"))};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false);
         try {
             layout.beginBatch(values, null);
             assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
@@ -315,6 +315,25 @@ class TestFlatGroupingTable
         }
         finally {
             fallbackRecords.releaseBuffers();
+        }
+
+        FlatKeyLayout nonNullableLayout = FlatKeyLayout.tryCreate(dictionaryValues, false);
+        FlatGroupingTable nonNullableRecords = new FlatGroupingTable(nonNullableLayout, 16, true);
+        try {
+            Vector[] noNulls = new Vector[dictionaryValues.length];
+            nonNullableRecords.beginBatch(dictionaryValues, noNulls);
+            assertThat(nonNullableLayout.usesGeneratedDictionaryRecordEquality()).isTrue();
+            long nextGroup = 0;
+            for (int position = 0; position < size; position++) {
+                long group = nonNullableRecords.assignGroup(dictionaryValues, noNulls, position, nextGroup);
+                assertThat(group).isEqualTo(position % distinct);
+                nextGroup += group == nextGroup ? 1 : 0;
+            }
+            nonNullableRecords.endBatch();
+            assertThat(nonNullableRecords.recordCount()).isEqualTo(distinct);
+        }
+        finally {
+            nonNullableRecords.releaseBuffers();
         }
     }
 

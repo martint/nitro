@@ -259,6 +259,26 @@ public class TestOperators
     }
 
     @Test
+    void testDictionarySharedMappingIdentity()
+    {
+        int[] ids = {2, 0, 1, 2};
+        I64Vector values = new I64Vector(new long[] {10, 20, 30});
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, values);
+        DictionaryVector firstView = dictionary.sharedMappingView();
+        DictionaryVector secondView = firstView.sharedMappingView();
+
+        assertThat(dictionary.hasSameMapping(firstView)).isTrue();
+        assertThat(firstView.hasSameMapping(dictionary)).isTrue();
+        assertThat(firstView.hasSameMapping(secondView)).isTrue();
+        assertThat(firstView.ids()).isSameAs(ids);
+        assertThat(firstView.values()).isSameAs(values);
+
+        assertThat(dictionary.hasSameMapping(DictionaryVector.wrap(ids, values))).isFalse();
+        assertThat(dictionary.hasSameMapping(DictionaryVector.wrap(ids.clone(), values))).isFalse();
+        assertThat(dictionary.hasSameMapping(null)).isFalse();
+    }
+
+    @Test
     void testProjectOperatorSupportsNestedDictionaryIntegerDispatch()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
