@@ -60,6 +60,7 @@ import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
+import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
@@ -2403,6 +2404,29 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(1L, 2.0, 4.0),
                         row(2L, 5.0, 5.0)));
+    }
+
+    @Test
+    void testFusedCountAvgStddevPreservesIndependentResultsAndNulls()
+    {
+        // Put STDDEV first so the scanner role is independent of accumulator kind and output order.
+        Operator grouped = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new StddevSamp(1), new Avg(1), new CountColumn(1)),
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(1L, 1L),
+                                row(1L, null),
+                                row(1L, 3L),
+                                row(2L, null),
+                                row(2L, 5L))));
+        assertThat(operator(grouped))
+                .matchesExactly(List.of(
+                        row(1L, Math.sqrt(2), 2.0, 2L),
+                        row(2L, null, 5.0, 1L)));
     }
 
     @Test

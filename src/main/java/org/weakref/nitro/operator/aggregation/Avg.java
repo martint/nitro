@@ -35,6 +35,11 @@ public class Avg
         this.inputColumn = inputColumn;
     }
 
+    int inputColumn()
+    {
+        return inputColumn;
+    }
+
     @Override
     public FusedAccumulatorSpec fusedSpec()
     {

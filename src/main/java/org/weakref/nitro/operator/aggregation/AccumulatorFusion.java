@@ -35,6 +35,8 @@ public final class AccumulatorFusion
 {
     private static final boolean FUSED_SUM_AVG_F64 =
             Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedSumAvgF64", "true"));
+    private static final boolean FUSED_COUNT_AVG_STDDEV_I64 =
+            Boolean.parseBoolean(System.getProperty("nitro.aggregate.fusedCountAvgStddevI64", "true"));
 
     private AccumulatorFusion() {}
 
@@ -51,6 +53,9 @@ public final class AccumulatorFusion
 
         List<Accumulator> result = new ArrayList<>(accumulators);
         boolean[] paired = new boolean[accumulators.size()];
+        if (FUSED_COUNT_AVG_STDDEV_I64) {
+            fuseCountAvgStddevI64(result, paired);
+        }
         for (int firstIndex = 0; firstIndex < accumulators.size(); firstIndex++) {
             if (paired[firstIndex] || !(accumulators.get(firstIndex) instanceof ConditionalSum first)) {
                 continue;
@@ -100,6 +105,53 @@ public final class AccumulatorFusion
             }
         }
         return result;
+    }
+
+    private static void fuseCountAvgStddevI64(List<Accumulator> accumulators, boolean[] paired)
+    {
+        for (int countIndex = 0; countIndex < accumulators.size(); countIndex++) {
+            if (!(accumulators.get(countIndex) instanceof CountColumn count)) {
+                continue;
+            }
+            int avgIndex = -1;
+            int stddevIndex = -1;
+            for (int candidate = 0; candidate < accumulators.size(); candidate++) {
+                Accumulator accumulator = accumulators.get(candidate);
+                if (accumulator instanceof Avg avg && avg.inputColumn() == count.inputColumn()) {
+                    avgIndex = candidate;
+                }
+                else if (accumulator instanceof StddevSamp stddev && stddev.inputColumn() == count.inputColumn()) {
+                    stddevIndex = candidate;
+                }
+            }
+            if (avgIndex < 0 || stddevIndex < 0) {
+                continue;
+            }
+
+            FusedCountAvgStddevI64.SharedState handle = new FusedCountAvgStddevI64.SharedState();
+            int scannerIndex = Math.min(countIndex, Math.min(avgIndex, stddevIndex));
+            accumulators.set(countIndex, FusedCountAvgStddevI64.create(
+                    accumulators.get(countIndex),
+                    count.inputColumn(),
+                    handle,
+                    FusedCountAvgStddevI64.Kind.COUNT,
+                    countIndex == scannerIndex));
+            accumulators.set(avgIndex, FusedCountAvgStddevI64.create(
+                    accumulators.get(avgIndex),
+                    count.inputColumn(),
+                    handle,
+                    FusedCountAvgStddevI64.Kind.AVG,
+                    avgIndex == scannerIndex));
+            accumulators.set(stddevIndex, FusedCountAvgStddevI64.create(
+                    accumulators.get(stddevIndex),
+                    count.inputColumn(),
+                    handle,
+                    FusedCountAvgStddevI64.Kind.STDDEV,
+                    stddevIndex == scannerIndex));
+            paired[countIndex] = true;
+            paired[avgIndex] = true;
+            paired[stddevIndex] = true;
+        }
     }
 
     private static boolean tryFuseSumAvgF64(List<Accumulator> accumulators, int firstIndex, int secondIndex)

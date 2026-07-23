@@ -53,7 +53,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q14 | 3110.4 | 24692.5 | 5330.0 | 7.939x | 1.714x | 3.347B | 66.198B | — | 66.969B / 18.630B / 1.037B / 29.111B / 4.139M / 49.631M / 66.704M / 12.484B | 587.373B / 154.060B / 6.751B / 254.310B / 13.081M / 579.791M / 472.462M / 112.519B | 92.936B / 27.778B / 1.373B / — / 1.877M / 180.489M / 117.768M / — |
 | q15 | 57.2 | 1912.9 | 99.0 | 33.430x | 1.730x | 48.478M | 5.393B | — | 1.362B / 321.653M / 8.296M / 547.497M / 17.002K / 208.052K / 869.922K / 279.652M | 51.597B / 16.197B / 559.257M / 23.173B / 2.079M / 74.886M / 72.896M / 9.877B | 2.007B / 541.289M / 14.221M / — / 51.516K / 1.056M / 1.079M / — |
 | q16 | 5326.3 | 10858.3 | 8780.0 | 2.039x | 1.648x | 1.597B | 20.283B | 1.600B | 148.906B / 29.099B / 650.008M / 61.884B / 1.286M / 10.773M / 81.054M / 28.994B | 284.257B / 64.001B / 1.224B / 123.886B / 7.148M / 66.939M / 242.878M / 57.153B | 176.351B / 45.834B / 765.948M / 82.917B / 553.084K / 119.104M / 188.660M / 29.121B |
-| q17 | 887.5 | 1822.8 | 1420.0 | 2.054x | 1.600x | — | — | — | 14.549B / 5.196B / 183.918M / 6.013B / 226.476K / 14.514M / 16.690M / 2.971B | 36.748B / 15.022B / 563.288M / 16.218B / 710.284K / 23.170M / 78.504M / 6.751B | 32.263B / 7.449B / 233.496M / — / 336.005K / 20.475M / 19.295M / — |
+| q17 | 516.7 | 1822.8 | 1420.0 | 3.528x | 2.748x | 130.510M | — | — | 9.962B / 2.910B / 70.094M / 4.213B / 146.716K / 1.782M / 17.959M / 2.027B | 36.748B / 15.022B / 563.288M / 16.218B / 710.284K / 23.170M / 78.504M / 6.751B | 32.263B / 7.449B / 233.496M / — / 336.005K / 20.475M / 19.295M / — |
 | q18 | 276.4 | 1153.4 | 531.0 | 4.173x | 1.921x | 84.428M | 4.215B | 6.237B | 5.424B / 1.594B / 42.671M / 2.371B / 112.954K / 1.442M / 8.133M / 1.131B | 33.800B / 13.087B / 480.650M / 16.392B / 951.564K / 36.219M / 98.290M / 6.606B | 9.248B / 2.822B / 86.404M / 4.235B / 418.790K / 11.286M / 8.030M / 1.689B |
 | q19 | 186.5 | 785.6 | 310.0 | 4.212x | 1.662x | 32.753M | — | — | 3.995B / 1.019B / 15.512M / 1.649B / 100.811K / 529.761K / 6.186M / 818.580M | 18.775B / 6.469B / 300.974M / 8.859B / 354.127K / 12.391M / 40.825M / 3.341B | 5.172B / 1.653B / 34.092M / — / 197.527K / 5.643M / 9.085M / — |
 | q20 | 43.8 | 786.4 | 55.0 | 17.972x | 1.257x | 59.900M | — | — | 846.824M / 251.200M / 7.761M / 371.561M / 17.865K / 197.984K / 1.668M / 170.923M | 16.242B / 6.323B / 310.970M / 7.927B / 312.060K / 10.837M / 52.454M / 3.128B | 838.256M / 306.358M / 9.825M / — / 39.766K / 521.572K / 1.823M / — |
@@ -75,7 +75,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q36 | 324.2 | 1552.6 | 447.0 | 4.789x | 1.379x | 368.174M | 5.079B | — | 6.866B / 1.769B / 68.086M / 3.294B / 132.097K / 811.748K / 11.791M / 1.347B | 37.045B / 10.554B / 396.581M / 16.345B / 434.691K / 11.846M / 55.917M / 6.896B | 7.238B / 2.378B / 58.892M / — / 221.895K / 6.942M / 17.065M / — |
 | q37 | 2259.0 | 3383.6 | 4220.0 | 1.498x | 1.868x | — | — | — | 41.729B / 12.368B / 483.182M / 19.254B / 322.829K / 3.782M / 101.222M / 8.729B | 64.703B / 22.996B / 919.357M / 26.504B / 2.934M / 76.443M / 50.473M / 12.819B | 96.460B / 22.092B / 651.512M / — / 409.523K / 31.039M / 96.189M / — |
 | q38 | 830.9 | 2179.3 | 1200.0 | 2.623x | 1.444x | 675.641M | — | — | 19.746B / 4.783B / 128.012M / 8.450B / 299.655K / 3.336M / 18.972M / 3.799B | 58.867B / 16.405B / 465.011M / 25.076B / 484.400K / 21.848M / 85.793M / 10.613B | 20.240B / 6.402B / 142.039M / — / 675.008K / 13.810M / 19.195M / — |
-| q39 | 482.8 | 18813.8 | 726.0 | 38.969x | 1.504x | 189.239M | 85.003B | 328.204M | 11.108B / 2.703B / 64.465M / 4.609B / 106.201K / 1.119M / 6.697M / 2.184B | 446.201B / 106.580B / 4.245B / 201.787B / 4.396M / 40.771M / 189.502M / 83.073B | 11.318B / 3.825B / 191.101M / 5.336B / 256.936K / 8.415M / 4.600M / 2.029B |
+| q39 | 460.2 | 18813.8 | 726.0 | 40.882x | 1.578x | 188.401M | 85.003B | 328.204M | 10.413B / 2.575B / 62.393M / 4.426B / 102.933K / 965.242K / 6.213M / 2.076B | 446.201B / 106.580B / 4.245B / 201.787B / 4.396M / 40.771M / 189.502M / 83.073B | 11.318B / 3.825B / 191.101M / 5.336B / 256.936K / 8.415M / 4.600M / 2.029B |
 | q40 | 94.7 | 1558.3 | 134.0 | 16.448x | 1.414x | 20.350M | — | — | 1.671B / 521.129M / 20.537M / 795.119M / 36.806K / 262.880K / 2.737M / 327.604M | 35.346B / 11.953B / 542.859M / 17.317B / 480.277K / 16.686M / 79.729M / 6.631B | 2.647B / 715.412M / 22.503M / — / 60.309K / 1.777M / 1.827M / — |
 | q41 | 7.6 | 27.7 | 9.0 | 3.634x | 1.183x | — | — | — | 194.929M / 45.920M / 2.177M / 93.115M / 3.612K / 47.158K / 255.620K / 42.710M | 672.096M / 248.704M / 8.030M / 304.835M / 38.040K / 916.151K / 1.969M / 143.857M | 209.123M / 66.339M / 1.525M / — / 11.671K / 92.284K / 276.762K / — |
 | q42 | 99.1 | 515.9 | 144.0 | 5.204x | 1.453x | 9.139M | — | — | 2.183B / 550.184M / 9.173M / 983.334M / 80.161K / 368.343K / 4.391M / 463.386M | 12.580B / 3.952B / 202.570M / 5.553B / 196.866K / 6.513M / 24.213M / 2.172B | 2.158B / 784.705M / 19.152M / — / 114.017K / 2.608M / 4.997M / — |
@@ -192,8 +192,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 |---|---:|---:|---:|---:|---:|---:|
 | TPC-H N/T | 22 | 22 | 1.753x | 31968.2 ms | 57162.5 ms | 1.788x |
 | TPC-H N/V | 22 | 22 | 1.427x | 31968.2 ms | 48207.0 ms | 1.508x |
-| TPC-DS N/T | 99 | 99 | 5.210x | 77657.9 ms | 336095.1 ms | 4.328x |
-| TPC-DS N/V | 99 | 99 | 1.612x | 77657.9 ms | 127411.0 ms | 1.641x |
+| TPC-DS N/T | 99 | 99 | 5.241x | 77264.5 ms | 336095.1 ms | 4.350x |
+| TPC-DS N/V | 99 | 99 | 1.622x | 77264.5 ms | 127411.0 ms | 1.649x |
 | ClickBench N/T | 44 | 44 | 2.575x | 154161.5 ms | 455811.5 ms | 2.957x |
 | ClickBench N/V | 44 | 44 | 2.066x | 154161.5 ms | 330233.0 ms | 2.142x |
 
@@ -201,10 +201,31 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| Overall N/T | 165 | 165 | 3.734x | 263787.6 ms | 849069.1 ms | 3.219x |
-| Overall N/V | 165 | 165 | 1.695x | 263787.6 ms | 505851.0 ms | 1.918x |
+| Overall N/T | 165 | 165 | 3.747x | 263394.2 ms | 849069.1 ms | 3.224x |
+| Overall N/V | 165 | 165 | 1.701x | 263394.2 ms | 505851.0 ms | 1.921x |
 
 ## Sources and qualifications
+
+- The final 2026-07-23 TPC-DS q17/q39 overlay extends the general accumulator-fusion planner to integral
+  `COUNT(column)`, `AVG(column)`, and `STDDEV_SAMP(column)` over one shared input. The first accumulator in output
+  order scans the group IDs, values, and nulls once and updates three independent ordinary states; followers retain
+  their own allocation, growth, initialization, result, and output positions but do not repeat the row scan.
+  Accumulator order is irrelevant, and neither the operator nor the fusion framework recognizes a query, table, or
+  column identity. A one-operation runtime inventory successfully executes all 165 harnesses and finds exactly five
+  physical activations: q17's three input families and q39's two month subplans; TPC-H and ClickBench have none.
+  Against the adjacent disabled three-fork reverse control, q39 improves duration 3.24%, instructions 5.69%, cycles
+  2.23%, L1D misses/loads 1.59%/3.91%, dTLB loads 8.22%, branch misses 6.49%, branches 5.33%, and allocation 0.44%;
+  q17 is a neutral guard with overlapping forks (+0.62% duration/cycles, -0.25% instructions, -2.38% L1D misses,
+  -0.28% L1D loads, -0.05% dTLB misses, -0.45% dTLB loads, +0.89% branch misses, -0.42% branches, and neutral
+  allocation). The q39 publication row is 460.2 ms and 1.578x faster than Velox; branch work remains its sole
+  counter family gap, with total branches now only 2.3% above Velox. Q17's fresh current-source row is 516.7 ms and beats
+  every available Velox counter. Both rows are unpinned JDK 26, one-thread, 12 GiB, three-fork captures with
+  allocation and all eight hardware counters from the same invocation. Seven compiled, real-SF10 operator,
+  Trino-SQL, and repeated-execution parity legs pass; the complete JDK 26 gate passes 1,288 tests with zero
+  failures/errors and 566 skips. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q39-branch-next/`, especially
+  `fused-count-avg-stddev-{on-final-3fork,off-final-reverse-3fork}.json`,
+  `fused-count-avg-stddev-full-inventory.log`, and `fused-count-avg-stddev-parity.log`.
 
 - The final 2026-07-23 TPC-DS q23/q39/q50 overlay removes unobservable build-row storage from a generic
   payload-free single-long inner join after the completed build proves at least 4,096 unique keys in an exact
