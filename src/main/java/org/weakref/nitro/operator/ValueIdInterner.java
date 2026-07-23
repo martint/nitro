@@ -169,6 +169,38 @@ final class ValueIdInterner
         return valueGroupingHash[id];
     }
 
+    /**
+     * Finds an already-interned value without assigning a new id. Unlike {@link #intern}, this remains available
+     * after the adaptive ceiling has overflowed. Normalized-key consumers use it to keep a value that received an
+     * id in an earlier batch in the same physical hash domain, while genuinely new high-cardinality values retain
+     * the ordinary value-hash fallback.
+     */
+    int find(byte[] value, int offset, int length)
+    {
+        if (RECOGNIZE_EMPTY_AFTER_OVERFLOW && length == 0 && emptyId >= 0) {
+            return emptyId;
+        }
+        long hash = hash(value, offset, length);
+        byte tag = (byte) ((hash >>> 56) | 0x80L);
+        int group = ((int) hash) & mask & ~(GROUP - 1);
+        while (true) {
+            ByteVector groupTags = ByteVector.fromArray(SPECIES, slotTags, group);
+            long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
+            while (matchBits != 0) {
+                int slot = group + Long.numberOfTrailingZeros(matchBits);
+                int id = slots[slot] - 1;
+                if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
+                    return id;
+                }
+                matchBits &= matchBits - 1;
+            }
+            if (groupTags.compare(VectorOperators.EQ, (byte) 0).anyTrue()) {
+                return TOO_MANY;
+            }
+            group = (group + GROUP) & mask;
+        }
+    }
+
     boolean valueEquals(int id, byte[] value, int offset, int length)
     {
         return id >= 0 && id < distinct && regionEquals(id, value, offset, length);

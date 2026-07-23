@@ -1,0 +1,55 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query39: 2 iters, 808.1 ms/iter, rows-sink=7084
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q39.sort                           SortOperator               1593.529   15.40%      368.453     188648.027     188648.027        2          184
+  hasNext=  0.028 next=1579.671  borrow=  0.680  take=  0.000  constrain=  0.000  close= 13.150  alloc[hasNext=   0.000 next= 368.179 borrow=   0.045 take=   0.000 constrain=   0.000 close=   0.229] MB
+q39.join.months                    HashJoinOperator           1589.940   15.36%      367.343      94039.871      94039.871        4          184
+  hasNext=  0.004 next=1573.988  borrow=  2.697  take=  0.000  constrain=  0.000  close= 12.940  alloc[hasNext=   0.000 next= 307.162 borrow=  60.113 take=   0.000 constrain=   0.000 close=   0.068] MB
+q39.month2.project.output          ProjectOperator            1114.891   10.77%      237.055     121372.141     121372.141        2        70926
+  hasNext=  0.007 next=1105.888  borrow=  3.435  take=  0.000  constrain=  0.023  close=  5.539  alloc[hasNext=   0.000 next= 179.087 borrow=  57.935 take=   0.000 constrain=   0.000 close=   0.032] MB
+q39.month2.filter.cov              FilterOperator             1114.427   10.77%      222.878     114113.758     114113.758        2        70926
+  hasNext=  0.004 next=1105.828  borrow=  3.056  take=  0.000  constrain=  0.008  close=  5.530  alloc[hasNext=   0.000 next= 179.081 borrow=  43.767 take=   0.000 constrain=   0.000 close=   0.030] MB
+q39.month2.group                   GroupedAggregationOperator   1109.384   10.72%      207.179     106075.699     106075.699        2      1020000
+  hasNext=  0.001 next=1096.493  borrow=  7.348  take=  0.000  constrain=  0.019  close=  5.522  alloc[hasNext=   0.000 next= 137.013 borrow=  70.137 take=   0.000 constrain=   0.000 close=   0.029] MB
+q39.month1.project.output          ProjectOperator             469.866    4.54%      124.951      63975.027      63975.027        2         1548
+  hasNext=  0.008 next=461.412  borrow=  1.025  take=  0.000  constrain=  0.036  close=  7.385  alloc[hasNext=   0.000 next=  96.286 borrow=  28.631 take=   0.000 constrain=   0.000 close=   0.034] MB
+q39.month1.filter.cov              FilterOperator              469.396    4.54%      118.719      60784.035      60784.035        2         1548
+  hasNext=  0.004 next=461.355  borrow=  0.675  take=  0.000  constrain=  0.022  close=  7.339  alloc[hasNext=   0.000 next=  96.279 borrow=  22.410 take=   0.000 constrain=   0.000 close=   0.030] MB
+q39.month1.group                   GroupedAggregationOperator    466.873    4.51%      111.618      57148.535      57148.535        2       523480
+  hasNext=  0.002 next=456.740  borrow=  2.782  take=  0.000  constrain=  0.017  close=  7.331  alloc[hasNext=   0.000 next=  77.754 borrow=  33.835 take=   0.000 constrain=   0.000 close=   0.029] MB
+q39.month2.join.date_dim           HashJoinOperator            412.494    3.99%       44.438        105.824        105.824      430      4080000
+  hasNext=  0.111 next=401.645  borrow=  4.532  take=  0.000  constrain=  0.000  close=  6.138  alloc[hasNext=   0.000 next=  28.011 borrow=  16.196 take=   0.000 constrain=   0.000 close=   0.232] MB
+q39.month2.join.warehouse          HashJoinOperator            401.199    3.88%       38.326         91.270         91.270      430      4080000
+  hasNext=  0.084 next=391.468  borrow=  3.798  take=  0.000  constrain=  0.000  close=  5.784  alloc[hasNext=   0.000 next=  22.032 borrow=  16.061 take=   0.000 constrain=   0.000 close=   0.233] MB
+q39.month2.join.item               HashJoinOperator            392.836    3.80%       15.748         37.502         37.502      430      4080000
+  hasNext=  0.073 next=385.385  borrow=  1.665  take=  0.000  constrain=  0.000  close=  5.646  alloc[hasNext=   0.000 next=  15.477 borrow=   0.197 take=   0.000 constrain=   0.000 close=   0.073] MB
+q39.month2.scan.inventory          NitroParquetScanOperator    379.047    3.66%       10.990         26.293         26.293      428      4080000
+  hasNext=369.082 next=  3.269  borrow=  0.673  take=  0.000  constrain=  0.000  close=  5.931  alloc[hasNext=  10.172 next=   0.571 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.247] MB
+q39.month1.join.date_dim           HashJoinOperator            215.769    2.08%       36.862        164.116        164.116      230      2093920
+  hasNext=  0.050 next=205.921  borrow=  2.147  take=  0.000  constrain=  0.000  close=  7.619  alloc[hasNext=   0.000 next=  28.474 borrow=   8.255 take=   0.000 constrain=   0.000 close=   0.133] MB
+q39.month1.join.warehouse          HashJoinOperator            209.298    2.02%       32.205        143.383        143.383      230      2093920
+  hasNext=  0.036 next=199.998  borrow=  1.827  take=  0.000  constrain=  0.000  close=  7.405  alloc[hasNext=   0.000 next=  23.839 borrow=   8.234 take=   0.000 constrain=   0.000 close=   0.132] MB
+q39.month1.join.item               HashJoinOperator            204.936    1.98%       17.860         79.517         79.517      230      2093920
+  hasNext=  0.035 next=196.796  borrow=  0.812  take=  0.000  constrain=  0.000  close=  7.258  alloc[hasNext=   0.000 next=  17.722 borrow=   0.094 take=   0.000 constrain=   0.000 close=   0.044] MB
+q39.month1.scan.inventory          NitroParquetScanOperator    197.445    1.91%       13.626         61.196         61.196      228      2093920
+  hasNext=188.182 next=  1.527  borrow=  0.332  take=  0.000  constrain=  0.000  close=  7.355  alloc[hasNext=  13.360 next=   0.132 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.134] MB
+q39.month2.scan.date_dim           ProjectOperator               2.547    0.02%        2.793        178.735        178.735       16           56
+  hasNext=  0.015 next=  1.323  borrow=  1.045  take=  0.000  constrain=  0.000  close=  0.157  alloc[hasNext=   0.000 next=   2.392 borrow=   0.387 take=   0.000 constrain=   0.000 close=   0.014] MB
+q39.month1.scan.date_dim           ProjectOperator               2.467    0.02%        2.394        153.205        153.205       16           62
+  hasNext=  0.007 next=  1.311  borrow=  1.047  take=  0.000  constrain=  0.000  close=  0.098  alloc[hasNext=   0.000 next=   2.265 borrow=   0.119 take=   0.000 constrain=   0.000 close=   0.010] MB
+q39.month2.scan.item               NitroParquetScanOperator      1.838    0.02%        0.168          7.839          7.839       22       204000
+  hasNext=  0.012 next=  0.033  borrow=  1.699  take=  0.000  constrain=  0.000  close=  0.085  alloc[hasNext=   0.000 next=   0.005 borrow=   0.156 take=   0.000 constrain=   0.000 close=   0.008] MB
+q39.month1.scan.item               NitroParquetScanOperator      1.835    0.02%        0.131          6.085          6.085       22       204000
+  hasNext=  0.005 next=  0.027  borrow=  1.721  take=  0.000  constrain=  0.000  close=  0.079  alloc[hasNext=   0.000 next=   0.005 borrow=   0.121 take=   0.000 constrain=   0.000 close=   0.005] MB
+q39.month2.scan.warehouse          NitroParquetScanOperator      0.136    0.00%        0.009          4.547          4.547        2           20
+  hasNext=  0.002 next=  0.007  borrow=  0.102  take=  0.000  constrain=  0.000  close=  0.026  alloc[hasNext=   0.000 next=   0.002 borrow=   0.005 take=   0.000 constrain=   0.000 close=   0.002] MB
+q39.month1.scan.warehouse          NitroParquetScanOperator      0.126    0.00%        0.007          3.531          3.531        2           20
+  hasNext=  0.001 next=  0.006  borrow=  0.085  take=  0.000  constrain=  0.000  close=  0.034  alloc[hasNext=   0.000 next=   0.002 borrow=   0.003 take=   0.000 constrain=   0.000 close=   0.002] MB
+Total attributed cpu_ms: 10350.280
+

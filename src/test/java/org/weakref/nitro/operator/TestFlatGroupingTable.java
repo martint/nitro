@@ -843,6 +843,15 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testDictionaryEntryHashReusePreservesWideHybridAccessors()
+    {
+        assertThat(FlatKeyLayout.shouldReuseDictionaryEntryHashes(2, true, false)).isTrue();
+        assertThat(FlatKeyLayout.shouldReuseDictionaryEntryHashes(5, true, false)).isFalse();
+        assertThat(FlatKeyLayout.shouldReuseDictionaryEntryHashes(5, false, false)).isTrue();
+        assertThat(FlatKeyLayout.shouldReuseDictionaryEntryHashes(5, true, true)).isTrue();
+    }
+
+    @Test
     void testEnsureCapacityPreservesExistingAndLaterGroups()
     {
         Vector[] values = {utf8("alpha", "beta", "alpha")};
@@ -1210,7 +1219,8 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {10, 20}),
                 new I64Vector(new long[] {100, 200})};
         Vector[] nulls = {null, null, null, null};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true), 2, true);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
             // The negative value makes this physical batch ineligible for normalized-key scratch, even though the
             // first row itself is in-domain and may recur in a later eligible batch.
@@ -1226,6 +1236,7 @@ class TestFlatGroupingTable
                     new I64Vector(new long[] {10}),
                     new I64Vector(new long[] {100})};
             table.beginBatch(laterValues, nulls);
+            assertThat(layout.tryPrepareNormalizedIntKey(laterValues, nulls, 0)).isTrue();
             table.prepareBatchHashes(laterValues, nulls, Mask.all(1));
             assertThat(table.assignGroup(laterValues, nulls, 0, 2)).isEqualTo(0);
             table.endBatch();

@@ -109,6 +109,10 @@ class TestValueIdInterner
         // The ceiling blocks new ids without another table probe, but the common empty value remains recognizable.
         assertThat(intern(interner, "")).isZero();
         assertThat(intern(interner, "a")).isEqualTo(ValueIdInterner.TOO_MANY);
+        byte[] existing = bytes("a");
+        byte[] missing = bytes("missing");
+        assertThat(interner.find(existing, 0, existing.length)).isEqualTo(1);
+        assertThat(interner.find(missing, 0, missing.length)).isEqualTo(ValueIdInterner.TOO_MANY);
     }
 
     @Test

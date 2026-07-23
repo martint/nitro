@@ -205,6 +205,10 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.streamUnusedBuildPayload", "true"));
     private static final boolean COMPACT_COMPLETED_DIRECT_RANGE_BUILD =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.compactCompletedDirectRangeBuild", "true"));
+    private static final boolean DENSE_UNUSED_BUILD_MEMBERSHIP =
+            Boolean.parseBoolean(System.getProperty("nitro.hash.join.denseUnusedBuildMembership", "true"));
+    private static final int DENSE_UNUSED_BUILD_MEMBERSHIP_MIN_KEYS =
+            Integer.getInteger("nitro.hash.join.denseUnusedBuildMembershipMinKeys", 1 << 12);
     private static final int COMPACT_COMPLETED_DIRECT_RANGE_MIN_SIZE =
             Integer.getInteger("nitro.hash.join.compactCompletedDirectRangeMinSize", 256);
     // Velox-style dynamic filtering: once the (small) build side is materialized, push its single-column key
@@ -1338,7 +1342,7 @@ public class HashJoinOperator
                 }
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false);
+                        joinIndex = new LongJoinIndex(Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1954,7 +1958,8 @@ public class HashJoinOperator
                     groupedLongHashTable,
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
-                    keyOnlyDirectRangeBuild);
+                    keyOnlyDirectRangeBuild,
+                    false);
         }
         if (joinValues.length == 2 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1])) {
             // A schema containing only join keys is not enough to prove the stored row reference is disposable:
@@ -3804,6 +3809,7 @@ public class HashJoinOperator
         private int rowCount;
         private int rowCapacity;
         private final boolean preferCompactRowReferences;
+        private final boolean buildRowReferencesUnused;
         // A capped build was classified from its observed shape as bounded or duplicate-heavy. Those tables either
         // remain in direct-range form or acquire an exact membership filter, so hash probes that survive are
         // predominantly hits. A scalar linear table is cheaper for that shape and avoids allocating control tags;
@@ -3891,7 +3897,8 @@ public class HashJoinOperator
                 boolean groupedHashTable,
                 boolean lazyDuplicateSlotState,
                 boolean implicitSequentialRowReferences,
-                boolean keyOnlyDirectRangeBuild)
+                boolean keyOnlyDirectRangeBuild,
+                boolean buildRowReferencesUnused)
         {
             this.compactChains = COMPACT_CHAINS && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && COMPRESS_KEY_ONLY_DUPLICATES;
@@ -3914,6 +3921,7 @@ public class HashJoinOperator
                             : capInitialHash && PRE_SIZE_CAPPED_ROW_STORAGE ? expectedSize : initialExpectedSize);
             rowCapacity = initialRows;
             preferCompactRowReferences = capInitialHash && COMPACT_CHAIN_ROW_REFERENCES;
+            this.buildRowReferencesUnused = buildRowReferencesUnused;
             this.groupedHashTable = GROUPED_HASH_TABLE && groupedHashTable;
             this.implicitSequentialRowReferences = implicitSequentialRowReferences;
             if (!implicitSequentialRowReferences) {
@@ -6257,6 +6265,29 @@ public class HashJoinOperator
             }
             long range = maxKey - minKey + 1;
             if (range <= 0 || range > MAX_ARRAY_RANGE || range > 2L * size) {
+                return;
+            }
+
+            // A payload-free join needs build row references only to preserve duplicate multiplicity. Once the
+            // completed build proves a unique, gap-free key range, membership is exactly a bounds check and the
+            // physical build position is unobservable. Reuse the existing dense-position probe machinery with
+            // synthetic positions; no query, table, column, or logical-type identity participates in admission.
+            if (DENSE_UNUSED_BUILD_MEMBERSHIP &&
+                    buildRowReferencesUnused &&
+                    size >= DENSE_UNUSED_BUILD_MEMBERSHIP_MIN_KEYS &&
+                    range == size) {
+                directRangeBuild = false;
+                arrayMode = true;
+                denseSingleBatchRowReferenceMode = true;
+                denseRowReferenceBatchIndex = 0;
+                denseRowReferenceFirstPosition = 0;
+                denseRowReferenceBase = 0;
+                releaseDirectBuildArrays();
+                releaseHashTable();
+                releaseRowArrays();
+                if (DEBUG_JOIN_INDEX) {
+                    System.err.printf("[dense-unused-build-membership] keys=%d min=%d max=%d%n", size, minKey, maxKey);
+                }
                 return;
             }
 

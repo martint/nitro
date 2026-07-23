@@ -1632,7 +1632,9 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator();
         List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
-        for (long key = 1; key <= 200; key++) {
+        // Reverse physical order proves that payload-free membership does not depend on a recoverable build-row
+        // reference. Keep the range above the completed-direct-range admission floor.
+        for (long key = 4096; key >= 1; key--) {
             innerRows.add(row(key));
         }
 
@@ -1640,8 +1642,8 @@ public class TestOperatorBatches
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
                         row(1L, 10L),
-                        row(200L, 20L),
-                        row(201L, 30L))),
+                        row(4096L, 20L),
+                        row(4097L, 30L))),
                 0,
                 new ConstantTableOperator(allocator, 1, innerRows),
                 0)

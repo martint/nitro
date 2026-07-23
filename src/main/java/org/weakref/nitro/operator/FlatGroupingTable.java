@@ -263,7 +263,7 @@ final class FlatGroupingTable
             arrayPool.release(previous);
         }
         if (mask.all() &&
-                !layout.batchSupportsNormalizedIntKey() &&
+                !layout.supportsNormalizedIntKeyShape() &&
                 layout.prepareGeneratedDictionaryBatchHashes(size, batchHashes)) {
             batchNormalizedHashesValid = false;
             batchHashesValid = true;
@@ -300,7 +300,7 @@ final class FlatGroupingTable
                 !mask.all() ||
                 mask.none() ||
                 skipBatchHashPrecompute() ||
-                layout.batchSupportsNormalizedIntKey()) {
+                layout.supportsNormalizedIntKeyShape()) {
             return -1;
         }
         return layout.assignGeneratedDictionaryBatch(
@@ -345,18 +345,19 @@ final class FlatGroupingTable
 
     private long prepareBatchHash(Vector[] values, Vector[] nulls, int position, boolean normalize)
     {
-        if (normalize && layout.tryPrepareNormalizedIntKey(values, nulls, position)) {
+        if (layout.tryPrepareNormalizedIntKey(values, nulls, position)) {
             if (DEBUG_NORMALIZED_INT_KEY) {
                 normalizedInputCount++;
             }
-            batchNormalizedFirst[position] = layout.preparedNormalizedFirst();
-            batchNormalizedSecond[position] = layout.preparedNormalizedSecond();
-            batchNormalizedValid[position] = 1;
+            long first = layout.preparedNormalizedFirst();
+            long second = layout.preparedNormalizedSecond();
+            if (normalize) {
+                batchNormalizedFirst[position] = first;
+                batchNormalizedSecond[position] = second;
+                batchNormalizedValid[position] = 1;
+            }
+            return FlatKeyLayout.normalizedIntKeyHash(first, second);
         }
-        // The hash table is persistent across batches, while normalized-key eligibility is a physical batch
-        // property (nested dictionaries can make one batch eligible and a flat/out-of-domain batch ineligible).
-        // Always place records in the encoding-independent logical hash domain. Normalized lanes remain an exact
-        // equality accelerator, but may never select a different bucket for the same SQL key.
         return layout.hash(values, nulls, position);
     }
 
@@ -667,7 +668,7 @@ final class FlatGroupingTable
                 }
                 normalizedFirst = layout.preparedNormalizedFirst();
                 normalizedSecond = layout.preparedNormalizedSecond();
-                hash = layout.hash(values, nulls, position);
+                hash = FlatKeyLayout.normalizedIntKeyHash(normalizedFirst, normalizedSecond);
             }
             else {
                 hash = layout.hash(values, nulls, position);

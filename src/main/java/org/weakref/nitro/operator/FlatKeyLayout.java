@@ -455,6 +455,11 @@ class FlatKeyLayout
         return batchNormalizedIntKeyEligible;
     }
 
+    boolean supportsNormalizedIntKeyShape()
+    {
+        return normalizedIntKeyShape;
+    }
+
     boolean usesGeneratedDictionaryRecordEquality()
     {
         return generatedRecordEqualityKernel != null;
@@ -503,7 +508,7 @@ class FlatKeyLayout
      */
     boolean tryPrepareNormalizedIntKey(Vector[] values, Vector[] nulls, int position)
     {
-        if (!batchNormalizedIntKeyEligible || !batchAccessorsReady) {
+        if (!normalizedIntKeyShape || !batchAccessorsReady) {
             return false;
         }
         long first = 0;
@@ -538,6 +543,17 @@ class FlatKeyLayout
                         fieldInterners[index] = interner;
                     }
                     valueId = interner.intern(binary.data(), binary.startOffset(physicalPosition), binary.length(physicalPosition));
+                }
+                if (valueId < 0) {
+                    BinaryVector binary = fieldBinaryBase[index];
+                    if (binary == null) {
+                        return false;
+                    }
+                    int physicalPosition = binaryEntry(index, position);
+                    valueId = fieldInterners[index].find(
+                            binary.data(),
+                            binary.startOffset(physicalPosition),
+                            binary.length(physicalPosition));
                 }
                 if (valueId < 0 || valueId >= Integer.MAX_VALUE) {
                     return false;
@@ -752,13 +768,23 @@ class FlatKeyLayout
             // amortize. Numeric vectors now expose generations for other derived-state consumers, but enabling a
             // second hash-cache cohort here would require its own activation and whole-query controls.
             long contentGeneration = handlers[index].variableWidth() ? dictionaryValues.contentGeneration() : -1;
-            boolean reusableEntryHashes = REUSE_DICTIONARY_ENTRY_HASHES &&
+            boolean sameDictionaryGeneration = REUSE_DICTIONARY_ENTRY_HASHES &&
                     contentGeneration >= 0 &&
                     dictionaryHashedValues[index] == dictionaryValues &&
                     dictionaryHashedGenerations[index] == contentGeneration;
-            boolean cachedEntryHashes = reusableEntryHashes &&
+            boolean cachedEntryHashes = sameDictionaryGeneration &&
                     dictionaryEntryHashes[index] != null &&
                     dictionaryEntryHashes[index].length >= distinctCount;
+            boolean oversizedDictionary = distinctCount > dictionary.length();
+            // A wide generated hash kernel can mix cached low-cardinality lanes with resolved accessors for an
+            // oversized join-output lane. Eagerly traversing that large base on its second appearance defeats the
+            // hybrid: the one complete pass costs more than hashing only referenced rows. Narrow layouts lack that
+            // mixed-lane amortization opportunity and retain the established recurring-generation admission.
+            boolean reusableEntryHashes = sameDictionaryGeneration &&
+                    shouldReuseDictionaryEntryHashes(
+                            handlers.length,
+                            oversizedDictionary,
+                            cachedEntryHashes);
             // Pre-hashing every distinct dictionary entry pays off only when the dictionary is smaller than the batch
             // it describes (low-card key, values repeat across rows): each entry is hashed once and reused by id. A
             // join-output key instead wraps the whole build column in a dictionary -- far more entries than a probe
@@ -767,7 +793,7 @@ class FlatKeyLayout
             // referenced entries per row. If a later batch presents the same vector generation, the repeated use
             // proves that one complete entry-hash pass can be amortized; vectors without a generation retain the
             // conservative per-batch policy.
-            if (distinctCount > dictionary.length() && !reusableEntryHashes) {
+            if (oversizedDictionary && !reusableEntryHashes) {
                 dictionaryHashedIds[index] = null;
                 release(dictionaryEntryHashes[index]);
                 dictionaryEntryHashes[index] = null;
@@ -907,6 +933,13 @@ class FlatKeyLayout
         batchAccessorsReady = true;
         prepareGeneratedDictionaryRecordEquality();
         decideDiscriminatingHashField(values, nulls);
+    }
+
+    static boolean shouldReuseDictionaryEntryHashes(int fieldCount, boolean oversizedDictionary, boolean cachedEntryHashes)
+    {
+        return cachedEntryHashes ||
+                !oversizedDictionary ||
+                fieldCount < GENERATED_HYBRID_HASH_BATCH_MIN_FIELDS;
     }
 
     private void prepareGeneratedDictionaryRecordEquality()
