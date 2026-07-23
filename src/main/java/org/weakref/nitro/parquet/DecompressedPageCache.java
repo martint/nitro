@@ -106,6 +106,22 @@ public final class DecompressedPageCache
         }
     }
 
+    /**
+     * Returns whether this physical column is consumed by multiple independently constructed readers in the current
+     * query. Consumers may use this execution-time fact to select a representation whose setup is amortized by the
+     * repeated source; page identity and reader state remain private to each consumer.
+     */
+    public boolean hasMultipleConsumers(Source source)
+    {
+        return consumerCount(source) >= 2;
+    }
+
+    public int consumerCount(Source source)
+    {
+        checkOpen();
+        return consumers.getOrDefault(requireNonNull(source, "source is null"), 0);
+    }
+
     public MemorySegment lookup(Source source, long offset, int compressedSize, int uncompressedSize)
     {
         checkOpen();
@@ -170,7 +186,7 @@ public final class DecompressedPageCache
 
     private boolean isReusable(Source source)
     {
-        return reusableSourceCount <= maxReusableSources && consumers.getOrDefault(source, 0) >= 2;
+        return reusableSourceCount <= maxReusableSources && hasMultipleConsumers(source);
     }
 
     private void observeCandidate(PageKey key)

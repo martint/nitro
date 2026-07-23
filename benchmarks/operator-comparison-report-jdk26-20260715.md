@@ -30,7 +30,7 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 | q18 | 1553.0 | 2332.2 | 2750.0 | 1.502x | 1.771x | 1.162B | 5.980B | 1.254B | 25.913B / 8.561B / 291.742M / 13.304B / 3.616M / 12.225M / 31.785M / 5.190B | 34.216B / 13.643B / 422.848M / 17.916B / 1.559M / 19.351M / 64.210M / 6.441B | 49.494B / 14.453B / 508.762M / 23.444B / 1.741M / 36.449M / 38.893M / 7.604B |
 | q19 | 1225.2 | 1879.2 | 1530.0 | 1.534x | 1.249x | 539.129M | — | — | 23.499B / 6.467B / 204.173M / 10.159B / 244.946K / 3.094M / 26.786M / 5.070B | 35.315B / 12.514B / 426.273M / 15.320B / 439.814K / 15.571M / 37.092M / 7.162B | 29.936B / 8.103B / 209.097M / — / 447.862K / 17.190M / 34.447M / — |
 | q20 | 1341.4 | 2031.0 | 1820.0 | 1.514x | 1.357x | 260.932M | 5.636B | — | 20.945B / 7.105B / 369.617M / 10.276B / 485.532K / 4.306M / 21.023M / 4.204B | 33.460B / 13.040B / 548.481M / 14.686B / 18.439M / 68.371M / 39.890M / 6.639B | 33.941B / 9.594B / 331.921M / — / 1.153M / 28.055M / 26.723M / — |
-| q21 | 3787.8 | 7842.7 | 8020.0 | 2.071x | 2.117x | 3.966B | 20.331B | 6.306B | 59.132B / 20.124B / 751.915M / 35.143B / 12.009M / 98.030M / 142.076M / 11.345B | 103.115B / 48.145B / 1.747B / 53.157B / 43.816M / 191.848M / 307.303M / 19.834B | 130.676B / 41.822B / 1.771B / 64.725B / 2.878M / 156.038M / 181.241M / 21.117B |
+| q21 | 3673.6 | 7842.7 | 8020.0 | 2.135x | 2.183x | 3.062B | 20.331B | 6.306B | 59.126B / 19.732B / 656.046M / 34.916B / 1.582M / 90.269M / 140.207M / 11.428B | 103.115B / 48.145B / 1.747B / 53.157B / 43.816M / 191.848M / 307.303M / 19.834B | 130.676B / 41.822B / 1.771B / 64.725B / 2.878M / 156.038M / 181.241M / 21.117B |
 | q22 | 348.7 | 854.8 | 618.0 | 2.452x | 1.772x | 84.671M | — | — | 8.562B / 1.975B / 51.927M / 3.744B / 77.038K / 1.123M / 4.816M / 1.650B | 21.409B / 6.671B / 178.376M / 9.757B / 357.388K / 10.493M / 45.159M / 4.207B | 15.317B / 3.246B / 78.396M / — / 103.894K / 3.051M / 5.310M / — |
 
 ## TPC-DS
@@ -190,8 +190,8 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| TPC-H N/T | 22 | 22 | 1.753x | 31968.2 ms | 57162.5 ms | 1.788x |
-| TPC-H N/V | 22 | 22 | 1.427x | 31968.2 ms | 48207.0 ms | 1.508x |
+| TPC-H N/T | 22 | 22 | 1.756x | 31854.0 ms | 57162.5 ms | 1.795x |
+| TPC-H N/V | 22 | 22 | 1.429x | 31854.0 ms | 48207.0 ms | 1.513x |
 | TPC-DS N/T | 99 | 99 | 5.240x | 77279.3 ms | 336095.1 ms | 4.349x |
 | TPC-DS N/V | 99 | 99 | 1.622x | 77279.3 ms | 127411.0 ms | 1.649x |
 | ClickBench N/T | 44 | 44 | 2.575x | 154161.5 ms | 455811.5 ms | 2.957x |
@@ -201,10 +201,30 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
 
 | comparison | common queries | Nitro wins | geometric-mean Nitro speedup | Nitro duration sum | comparison duration sum | sum-duration speedup |
 |---|---:|---:|---:|---:|---:|---:|
-| Overall N/T | 165 | 165 | 3.747x | 263409.0 ms | 849069.1 ms | 3.223x |
-| Overall N/V | 165 | 165 | 1.701x | 263409.0 ms | 505851.0 ms | 1.920x |
+| Overall N/T | 165 | 165 | 3.748x | 263294.8 ms | 849069.1 ms | 3.225x |
+| Overall N/V | 165 | 165 | 1.701x | 263294.8 ms | 505851.0 ms | 1.921x |
 
 ## Sources and qualifications
+
+- The final 2026-07-23 TPC-H q21 overlay extends the existing null-free fixed-width Parquet page-to-batch decoder
+  with execution-local repeated-source admission. Physical sources are identified only by normalized file and
+  physical-column identity in the query allocator's decompressed-page registry. A scan must cover at least 32M rows
+  and contain at least two numeric anchor fields each registered by three independent readers; once admitted, its
+  numeric fields registered by at least two readers may decode dictionary IDs or plain bodies directly into ordinary
+  pooled output batches. Reader state remains private and the SQL-shaped scan/filter/group/join/TopN graph is
+  unchanged. A complete 165-query census of the broader two-reader rule found only TPC-H q17/q21 and TPC-DS q14/q23
+  beyond the established direct-decoder cohort; ClickBench gained no activation. The broad rule was rejected after
+  q14/q23 worsened duration 0.98%/0.80% and dTLB misses 43.1%/17.9%. The final physical thresholds are a monotonic
+  subset of that census, and the focused runtime inventory admits only q21. Against the adjacent disabled reverse
+  three-fork control, q21 improves duration 2.08%, allocation 0.53%, instructions 1.46%, cycles 2.16%, L1D
+  misses/loads 11.88%/1.70%, dTLB misses/loads 3.94%/2.56%, branch misses 0.28%, and branches 1.32%. The publication
+  row is 3673.6 ms and 3.062 GB/op; Nitro is 2.183x faster than Velox and now beats every available Velox counter,
+  including dTLB misses (1.582M versus 2.878M). Real-SF10 Nitro operator, compiled Nitro, and Trino operator q21
+  reference checks pass with zero skips; the complete JDK 26 gate passes 1,289 tests with zero failures/errors and
+  566 expected skips. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpch-q21-direct-numeric-unconstrained/`, especially
+  `anchored-{on-final-3fork,off-reverse-final-3fork}.json`, `repeated-source-{tpch,tpcds,clickbench}-inventory.log`,
+  `anchored-focused-activation.log`, `q21-parity.log`, and `full-gate.log`.
 
 - The final 2026-07-23 TPC-DS q51 overlay defers source/window output gathers at the existing public batch boundary
   for a window with multiple cooperating functions. Each retained batch owns one recyclable position scratch, so

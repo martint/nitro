@@ -32,9 +32,16 @@ class TestDecompressedPageCache
 
         try (DecompressedPageCache cache = new DecompressedPageCache(pool, 128, 1)) {
             cache.register(source);
+            assertThat(cache.consumerCount(source)).isEqualTo(1);
+            assertThat(cache.hasMultipleConsumers(source)).isFalse();
             assertThat(cache.reserve(source, 11, 7, 16, 8)).isNull();
 
             cache.register(source);
+            assertThat(cache.consumerCount(source)).isEqualTo(2);
+            assertThat(cache.hasMultipleConsumers(source)).isTrue();
+
+            cache.register(source);
+            assertThat(cache.consumerCount(source)).isEqualTo(3);
             assertThat(cache.lookup(source, 11, 7, 16)).isNull();
             DecompressedPageCache.Reservation reservation = cache.reserve(source, 11, 7, 16, 8);
             assertThat(reservation).isNotNull();

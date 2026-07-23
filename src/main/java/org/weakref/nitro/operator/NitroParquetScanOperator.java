@@ -66,6 +66,18 @@ public final class NitroParquetScanOperator
     // preserve page materialization, so the numeric decoder is not removing the pipeline's last page-local buffer.
     private static final boolean DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericBatchDecodeRequireConstraintForAllNumeric", "true"));
+    // Repeated scans of the same large physical column have already paid for independent reader state and will
+    // revisit the same page-sized materialization. Decode dictionary/plain data directly into each public batch:
+    // this removes that intermediate flat page while preserving the receiver's ordinary flat-vector contract.
+    // Admission is execution-local and keyed only by normalized file/physical-column identity.
+    private static final boolean DIRECT_NUMERIC_REPEATED_SOURCE_DECODE =
+            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericRepeatedSourceDecode", "true"));
+    private static final int DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_CONSUMERS =
+            Integer.getInteger("nitro.parquet.directNumericRepeatedSourceAnchorMinConsumers", 3);
+    private static final int DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_COLUMNS =
+            Integer.getInteger("nitro.parquet.directNumericRepeatedSourceAnchorMinColumns", 2);
+    private static final long DIRECT_NUMERIC_REPEATED_SOURCE_MIN_ROWS =
+            Long.getLong("nitro.parquet.directNumericRepeatedSourceMinRows", 1L << 25);
     private static final boolean DEBUG_DIRECT_NUMERIC_BATCH_DECODE =
             Boolean.getBoolean("nitro.debug.directNumericBatchDecode");
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
@@ -456,24 +468,54 @@ public final class NitroParquetScanOperator
     }
 
     private boolean directNumericBatchDecodeConfigured;
+    private boolean repeatedSourceAdmissionReported;
 
     private void enableDirectNumericBatchDecodeIfAdmitted()
     {
         if (directNumericBatchDecodeConfigured) {
             return;
         }
-        if (!directNumericBatchDecodeAdmission.admitted()) {
-            return;
-        }
-        if (DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC && allNumeric && !lazyConstrained) {
-            return;
-        }
-        directNumericBatchDecodeConfigured = true;
-        for (ColumnReader reader : readers) {
-            if (reader.kind() != ColumnReader.Kind.BINARY) {
-                reader.enableDirectNumericBatchDecode();
+        boolean broadEligible = directNumericBatchDecodeAdmission.admitted();
+        boolean broadAdmission = broadEligible &&
+                (!DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC || !allNumeric || lazyConstrained);
+        boolean repeatedSourceCandidate = DIRECT_NUMERIC_REPEATED_SOURCE_DECODE &&
+                totalRows >= DIRECT_NUMERIC_REPEATED_SOURCE_MIN_ROWS;
+        int repeatedAnchorColumns = 0;
+        if (repeatedSourceCandidate) {
+            for (ColumnReader reader : readers) {
+                if (reader.kind() != ColumnReader.Kind.BINARY &&
+                        reader.hasRepeatedSource(DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_CONSUMERS)) {
+                    repeatedAnchorColumns++;
+                }
             }
         }
+        boolean repeatedSourceAdmission =
+                repeatedAnchorColumns >= DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_COLUMNS;
+        if (DEBUG_DIRECT_NUMERIC_BATCH_DECODE && repeatedAnchorColumns > 0 && !repeatedSourceAdmissionReported) {
+            repeatedSourceAdmissionReported = true;
+            System.err.printf(
+                    "[direct-numeric-repeated-source-admission] rows=%d repeatedAnchorColumns=%d admitted=%s%n",
+                    totalRows,
+                    repeatedAnchorColumns,
+                    repeatedSourceAdmission);
+        }
+        boolean allConfigured = true;
+        for (ColumnReader reader : readers) {
+            if (reader.kind() == ColumnReader.Kind.BINARY) {
+                continue;
+            }
+            if (broadAdmission ||
+                    (repeatedSourceAdmission && reader.hasRepeatedSource(2))) {
+                reader.enableDirectNumericBatchDecode();
+            }
+            else {
+                // A later constrain() may admit the scan-wide path for the remaining numeric columns.
+                allConfigured = false;
+            }
+        }
+        // Registration is complete before execution begins. If no scan made the broad path eligible, a later
+        // constrain() cannot change that fact; avoid re-evaluating repeated-source metadata for every output batch.
+        directNumericBatchDecodeConfigured = allConfigured || !broadEligible;
     }
 
     /**

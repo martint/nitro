@@ -544,6 +544,27 @@ public final class ColumnReader
         directNumericBatchDecodeEnabled = true;
     }
 
+    /**
+     * Returns whether every physical source behind this reader is registered by at least {@code minimumConsumers}
+     * independent readers.
+     * This is consulted only after the complete operator tree has been constructed, so registration is complete.
+     */
+    public boolean hasRepeatedSource(int minimumConsumers)
+    {
+        if (minimumConsumers < 2) {
+            throw new IllegalArgumentException("minimumConsumers must be at least 2");
+        }
+        if (decompressedPages == null || chunks.isEmpty()) {
+            return false;
+        }
+        for (Chunk chunk : chunks) {
+            if (chunk.source() == null || decompressedPages.consumerCount(chunk.source()) < minimumConsumers) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** Fill {@code count} INT values into {@code out}; nulls (if any) into {@code nullsOut} (may be null when none). */
     public void readInts(int[] out, boolean[] nullsOut, int count)
     {
