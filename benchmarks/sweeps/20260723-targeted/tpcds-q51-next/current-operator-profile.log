@@ -1,0 +1,41 @@
+WARNING: Using incubator modules: jdk.incubator.vector
+WARNING: A restricted method in java.lang.foreign.SymbolLookup has been called
+WARNING: java.lang.foreign.SymbolLookup::libraryLookup has been called by io.airlift.compress.v3.internal.NativeLoader in an unnamed module (file:/root/.m2/repository/io/airlift/aircompressor-v3/3.4/aircompressor-v3-3.4.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+query51: 3 iters, 1736.2 ms/iter, rows-sink=5600
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q51.top100                         TopNOperator               5019.254   16.81%     4034.536    1377121.740    1377121.740        3          300
+  hasNext=  0.035 next=5000.586  borrow=  2.338  take=  0.000  constrain=  0.000  close= 16.294  alloc[hasNext=   0.000 next=4031.824 borrow=   0.636 take=   0.000 constrain=   0.000 close=   2.077] MB
+q51.filter.cumulative              FilterOperator             4995.946   16.73%     4027.385       1011.539       1011.539     4077       424290
+  hasNext=4492.452 next=482.985  borrow=  3.179  take=  0.000  constrain=  0.022  close= 15.938  alloc[hasNext=3051.849 next= 973.603 borrow=   0.000 take=   0.000 constrain=   0.000 close=   1.897] MB
+q51.window.merged                  WindowOperator             4880.246   16.34%     3957.603        994.012        994.012     4077     16689663
+  hasNext=4491.348 next=366.804  borrow=  3.460  take=  0.000  constrain=  1.873  close= 15.927  alloc[hasNext=3051.828 next= 903.879 borrow=   0.000 take=   0.000 constrain=   0.000 close=   1.896] MB
+q51.project.coalesced_keys         ProjectOperator            3894.317   13.04%     2664.989     909649.419     909649.419        3     16689663
+  hasNext=3806.726 next=  0.098  borrow= 80.074  take=  0.000  constrain=  0.000  close=  7.419  alloc[hasNext=2648.549 next=   0.011 borrow=  15.941 take=   0.000 constrain=   0.000 close=   0.488] MB
+q51.full_join.channels             FullJoinOperator           3814.059   12.77%     2649.030     904202.073     904202.073        3     16689663
+  hasNext=3806.718 next=  0.035  borrow=  0.013  take=  0.000  constrain=  0.000  close=  7.292  alloc[hasNext=2648.549 next=   0.002 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.478] MB
+q51.store_sales.window.running_sum WindowOperator             2368.824    7.93%     1594.063        483.221        483.221     3378     13825245
+  hasNext=2049.243 next=309.144  borrow=  3.312  take=  0.000  constrain=  0.000  close=  6.585  alloc[hasNext=1112.884 next= 480.293 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.886] MB
+q51.store_sales.group.item_date    GroupedAggregationOperator   1409.714    4.72%      941.481     321358.906     321358.906        3     13825245
+  hasNext=  0.009 next=1321.094  borrow= 84.291  take=  0.016  constrain=  0.000  close=  4.289  alloc[hasNext=   0.000 next= 594.270 borrow= 347.201 take=   0.000 constrain=   0.000 close=   0.011] MB
+q51.store_sales.join.date          HashJoinOperator            785.043    2.63%       26.728         16.468         16.468     1662     16557429
+  hasNext=  0.341 next=772.190  borrow=  6.546  take=  0.000  constrain=  0.000  close=  5.738  alloc[hasNext=   0.000 next=  25.056 borrow=   0.826 take=   0.000 constrain=   0.000 close=   0.846] MB
+q51.store_sales.filter.item        FilterOperator              752.088    2.52%        4.530          2.796          2.796     1659     16557429
+  hasNext=721.489 next= 20.303  borrow=  3.697  take=  0.000  constrain=  0.000  close=  6.371  alloc[hasNext=   0.283 next=   2.942 borrow=   0.007 take=   0.000 constrain=   0.000 close=   1.298] MB
+q51.store_sales.scan               NitroParquetScanOperator    742.516    2.49%        2.214          1.367          1.367     1659     16557429
+  hasNext=720.982 next= 13.146  borrow=  1.666  take=  0.000  constrain=  0.919  close=  5.556  alloc[hasNext=   0.274 next=   0.683 borrow=   0.000 take=   0.000 constrain=   0.000 close=   1.257] MB
+q51.web_sales.window.running_sum   WindowOperator              480.219    1.61%      720.234        731.666        731.666     1008      4127919
+  hasNext=406.325 next= 70.278  borrow=  0.973  take=  0.000  constrain=  0.000  close=  2.471  alloc[hasNext= 576.569 next= 143.381 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.284] MB
+q51.web_sales.group.item_date      GroupedAggregationOperator    295.334    0.99%      525.332     179313.289     179313.289        3      4127919
+  hasNext=  0.003 next=282.594  borrow= 11.004  take=  0.022  constrain=  0.000  close=  1.698  alloc[hasNext=   0.000 next= 419.029 borrow= 106.292 take=   0.000 constrain=   0.000 close=   0.011] MB
+q51.web_sales.join.date            HashJoinOperator            152.026    0.51%      271.017        633.611        633.611      438      4339770
+  hasNext=  0.116 next=147.792  borrow=  1.995  take=  0.000  constrain=  0.000  close=  2.053  alloc[hasNext=   0.000 next= 270.543 borrow=   0.243 take=   0.000 constrain=   0.000 close=   0.230] MB
+q51.web_sales.filter.item          FilterOperator              136.479    0.46%      251.609        592.295        592.295      435      4339770
+  hasNext=126.387 next=  6.723  borrow=  1.161  take=  0.000  constrain=  0.000  close=  2.141  alloc[hasNext= 249.595 next=   1.653 borrow=   0.017 take=   0.000 constrain=   0.000 close=   0.345] MB
+q51.web_sales.scan                 NitroParquetScanOperator    132.154    0.44%      250.567        589.840        589.840      435      4339770
+  hasNext=126.189 next=  3.219  borrow=  0.517  take=  0.000  constrain=  0.260  close=  1.895  alloc[hasNext= 249.591 next=   0.643 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.333] MB
+Total attributed cpu_ms: 29858.220
+

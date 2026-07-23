@@ -1115,3 +1115,12 @@ Allocation is normalized bytes per measured query invocation. Nitro and Trino re
   the required `/root/notes/trino` rerun passed. Evidence is under
   `benchmarks/sweeps/20260722-targeted/tpcds-q14-base-position-cache/`; publication artifact is
   `nitro-trino-publication-3fork.json`.
+- The 2026-07-23 TPC-DS q51 contiguous window-output copy is a rejected diagnostic and does not replace the published
+  row. A general vector range-copy API used bulk primitive array copies for already ordered window-function outputs;
+  a one-million-row physical-cardinality gate removed regressions from the other nine TPC-DS window queries. Early
+  one-fork pairs and the guarded cohort favored the candidate, but the canonical unpinned 12 GiB three-fork reverse
+  control was 1659.4/1414.7 ms enabled/disabled. Enabled also raised instructions 6.37%, cycles 17.71%, L1D misses
+  13.93%, dTLB misses/loads 60.74%/74.11%, and branch misses 5.59%, with neutral allocation. Every source/test edit
+  was removed; restored operator tests and real-SF10 Nitro/SQL/Trino q51 parity pass. The first parity launch used a
+  stale Trino path; the required `/root/notes/trino` rerun passed. Evidence is under
+  `benchmarks/sweeps/20260723-targeted/tpcds-q51-next/`; board rows and aggregate summaries are unchanged.
