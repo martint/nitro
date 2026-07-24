@@ -38,10 +38,12 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.StructVector;
@@ -99,6 +101,7 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 public class TestParquetOperator
 {
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
+    private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
     java.nio.file.Path tempDirectory;
@@ -113,7 +116,7 @@ public class TestParquetOperator
                 new ParquetRow(10, false, 300L),
                 new ParquetRow(10, true, 400L)));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Schema inputSchema = new Schema(List.of(
                 new Field("x", BIGINT, false),
                 new Field("maybe", BIGINT, true)));
@@ -172,7 +175,7 @@ public class TestParquetOperator
                 new WideNumericRow(9, 91, 92, 93, 94),
                 new WideNumericRow(10, 101, 102, 103, 104)));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
                 allocator,
                 List.of(file),
@@ -202,7 +205,7 @@ public class TestParquetOperator
                 new ParquetRow(13, true, 103L),
                 new ParquetRow(14, false, null)));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("direct-null-mask-test");
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(file), List.of("maybe"))) {
             Batch batch = scan.next();
@@ -236,7 +239,7 @@ public class TestParquetOperator
                 new ParquetRow(10_001, false, 10_001L),
                 new ParquetRow(10_002, false, null)));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("direct-null-mask-skipped-batch-test");
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(first, second), List.of("maybe"))) {
             Batch skipped = scan.next();
@@ -276,7 +279,7 @@ public class TestParquetOperator
         assertDictionaryEncoding(first, "maybe");
 
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 List.of(first, second),
                 List.of("x", "maybe"))) {
             Batch empty = scan.next();
@@ -306,7 +309,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
@@ -324,7 +327,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
@@ -339,7 +342,7 @@ public class TestParquetOperator
     {
         java.nio.file.Path file = ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("trino-clickbench.parquet"), 3);
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
             Batch batch = operator.next();
 
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
@@ -350,7 +353,7 @@ public class TestParquetOperator
             assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(1L);
         }
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(0, 1000, 1L),
@@ -371,7 +374,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "x");
 
-        try (ParquetScanOperator scan = new ParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe"))) {
+        try (ParquetScanOperator scan = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             Batch batch = scan.next();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
         }
@@ -390,15 +393,15 @@ public class TestParquetOperator
                         new Reference(new Input(2), Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
                 new FilterOperator(
-                        new ParquetScanOperator(new Allocator(), file, List.of("x", "flag", "maybe")),
+                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe")),
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
-                        new Allocator()))) {
+                        new Allocator(EngineResources.createDefault())))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 2, 3);
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
@@ -457,7 +460,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-filter.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(1_200);
@@ -490,7 +493,7 @@ public class TestParquetOperator
 
         int actual = 0;
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 List.of(file),
                 List.of("x", "maybe"))) {
             // Equal-cardinality x/maybe filters retain column order: x leads and nullable maybe narrows its survivors
@@ -615,7 +618,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-homogeneous-runs.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(4_500);
@@ -641,7 +644,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "name");
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
@@ -658,7 +661,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, 102L),
                 new ParquetRow(13, true, 103L)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             Batch batch = operator.next();
             Mask constrainedMask = Mask.sparse(new int[] {2}, 3);
 
@@ -693,7 +696,7 @@ public class TestParquetOperator
                 org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool)) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
                     reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -729,7 +732,7 @@ public class TestParquetOperator
                 org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool)) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
                     reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -795,7 +798,7 @@ public class TestParquetOperator
         try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool)) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
                     reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -834,7 +837,7 @@ public class TestParquetOperator
         try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool)) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
                     reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -865,7 +868,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, 102L),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             operator.next();
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {1}, 2));
@@ -889,7 +892,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), file, List.of("x", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             operator.next();
             Batch batch = operator.next();
 
@@ -922,7 +925,7 @@ public class TestParquetOperator
                 new ParquetRow(13, true, 103L),
                 new ParquetRow(14, false, 104L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(), List.of(first, second), List.of("x", "flag", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
@@ -953,7 +956,7 @@ public class TestParquetOperator
                 new ParquetRow(6, true, 60L)));
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         // Project a squared payload that is only computed when the projected output is borrowed.
         Variable squaredPayload = new Variable(0);
@@ -997,7 +1000,7 @@ public class TestParquetOperator
                 new BinaryParquetRow("bob", null),
                 new BinaryParquetRow("charlie", bytes(4, 5))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector payloads = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
@@ -1027,7 +1030,7 @@ public class TestParquetOperator
                 new ArrayParquetRow(List.of(30L)),
                 new ArrayParquetRow(List.of(40L, 50L, 60L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             I64Vector elements = (I64Vector) arrays.elementValues();
@@ -1050,7 +1053,7 @@ public class TestParquetOperator
                 new ArrayParquetRow(List.of(30L)),
                 new ArrayParquetRow(List.of(40L, 50L, 60L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {3}, 4));
 
@@ -1077,7 +1080,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "name");
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("name", "payload"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
             DictionaryVector names = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
@@ -1109,11 +1112,11 @@ public class TestParquetOperator
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(), file, List.of("name")),
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")),
                 plan,
                 primitiveRegistry,
                 new ReferenceMask(new Reference(contains, Stream.VALUES)),
-                new Allocator())) {
+                new Allocator(EngineResources.createDefault()))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row("alpha"),
@@ -1130,7 +1133,7 @@ public class TestParquetOperator
                 new Utf8PairRow("beta", null),
                 new Utf8PairRow("gamma", "delta")));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
             Batch batch = operator.next();
             BinaryVector left = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector right = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
@@ -1146,7 +1149,7 @@ public class TestParquetOperator
                     batch.borrowMask(),
                     EnumSet.of(Stream.VALUES, Stream.NULLS),
                     Streams.empty(),
-                    new PrimitiveExecutionContext(new Allocator()));
+                    new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
             BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
 
@@ -1167,7 +1170,7 @@ public class TestParquetOperator
                 new Utf8PairRow("élan", "élan"),
                 new Utf8PairRow("élan", "été")));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
             Batch batch = operator.next();
             var leftValues = batch.output(0).borrow(Stream.VALUES);
             var rightValues = batch.output(1).borrow(Stream.VALUES);
@@ -1184,7 +1187,7 @@ public class TestParquetOperator
                     batch.borrowMask(),
                     EnumSet.of(Stream.VALUES),
                     Streams.empty(),
-                    new PrimitiveExecutionContext(new Allocator()));
+                    new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
             BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
 
             assertThat(values.values()[0]).isTrue();
@@ -1208,7 +1211,7 @@ public class TestParquetOperator
         assertDictionaryEncoding(second, "name");
 
         org.weakref.nitro.data.Vector retained;
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(), List.of(first, second), List.of("name"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("name"))) {
             try (Batch firstBatch = scan.next()) {
                 retained = firstBatch.output(0).take(Stream.VALUES);
             }
@@ -1252,7 +1255,7 @@ public class TestParquetOperator
                 Mask.all(5),
                 EnumSet.of(Stream.VALUES, Stream.NULLS),
                 Streams.empty(),
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         org.weakref.nitro.data.Vector values = result.get(Stream.VALUES);
         BooleanVector nulls = (BooleanVector) result.get(Stream.NULLS);
@@ -1295,7 +1298,7 @@ public class TestParquetOperator
                 Mask.all(4),
                 EnumSet.of(Stream.VALUES, Stream.NULLS),
                 Streams.ofValues(existingValues),
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.get(Stream.VALUES)).isSameAs(existingValues);
         assertThat(existingValues.values()).containsExactly(true, false, true, false);
@@ -1326,11 +1329,11 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name")),
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator())) {
+                new Allocator(EngineResources.createDefault()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
             var leftValues = batch.output(0).borrow(Stream.VALUES);
@@ -1363,10 +1366,10 @@ public class TestParquetOperator
                         new Reference(startsWith, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1403,10 +1406,10 @@ public class TestParquetOperator
                         new Reference(hash, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("left_name", "right_name")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1444,19 +1447,19 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(),
+                                        new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(), file, List.of("name")))))))
+                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))))))
                 .matchesExactly(List.of(
                         Row.row(expectedUtf8Hash("alpha"), 2L),
                         Row.row(expectedUtf8Hash("beta"), 2L),
@@ -1475,9 +1478,9 @@ public class TestParquetOperator
                 new BinaryParquetRow("beta", bytes(5))));
 
         try (GroupOperator operator = new GroupOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 0,
-                new ParquetScanOperator(new Allocator(), file, List.of("name")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
             Batch batch = operator.next();
             I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             org.weakref.nitro.data.Vector names = batch.output(1).borrow(Stream.VALUES);
@@ -1502,9 +1505,9 @@ public class TestParquetOperator
                 new BinaryParquetRow("beta", bytes(5))));
 
         try (GroupOperator operator = new GroupOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 0,
-                new ParquetScanOperator(new Allocator(), file, List.of("name")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
             Batch batch = operator.next();
             I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector names = binaryValues(batch.output(1).borrow(Stream.VALUES));
@@ -1536,10 +1539,10 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new ProjectOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         projectionPlan,
                         primitiveRegistry,
-                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))
+                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))
                 .matchesExactly(List.of(
                         Row.row(2L),
                         Row.row(0L),
@@ -1571,19 +1574,19 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(),
+                                        new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(1L, 2L),
                         Row.row(0L, 2L),
@@ -1600,7 +1603,7 @@ public class TestParquetOperator
                 new NullableArrayParquetRow(Arrays.asList((Long) null)),
                 new NullableArrayParquetRow(List.of(30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             I64Vector elements = (I64Vector) arrays.elementValues();
@@ -1641,10 +1644,10 @@ public class TestParquetOperator
                         new Reference(element, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "index")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "index")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1679,10 +1682,10 @@ public class TestParquetOperator
                         new Reference(contains, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1715,11 +1718,11 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")),
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator())) {
+                new Allocator(EngineResources.createDefault()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 
@@ -1738,7 +1741,7 @@ public class TestParquetOperator
                 new StructParquetRow(12, null, false),
                 new StructParquetRow(13, "carol", null)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
 
@@ -1771,7 +1774,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(null),
                 new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector structNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
@@ -1798,7 +1801,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(null),
                 new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {2}, 3));
 
@@ -1829,7 +1832,7 @@ public class TestParquetOperator
                 new MapParquetRow(Map.of()),
                 new MapParquetRow(orderedMap("gamma", 30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             MapVector maps = (MapVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector mapNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
@@ -1863,7 +1866,7 @@ public class TestParquetOperator
                 new MapParquetRow(Map.of()),
                 new MapParquetRow(orderedMap("gamma", 30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {3}, 4));
 
@@ -1904,10 +1907,10 @@ public class TestParquetOperator
                         new Reference(name, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("person")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1939,11 +1942,11 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(), file, List.of("person")),
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(active, Stream.VALUES),
-                new Allocator())) {
+                new Allocator(EngineResources.createDefault()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
 
@@ -1978,24 +1981,24 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(),
+                                        new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
                                         new FilterOperator(
-                                                new ParquetScanOperator(new Allocator(), file, List.of("person")),
+                                                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")),
                                                 new EvaluationPlan(List.of(), List.of()),
                                                 primitiveRegistry,
                                                 new NotMask(new ReferenceMask(new Reference(new Input(0), Stream.NULLS))),
-                                                new Allocator()))))))
+                                                new Allocator(EngineResources.createDefault())))))))
                 .matchesExactly(List.of(
                         Row.row(51L, 2L),
                         Row.row(52L, 2L)));
@@ -2023,10 +2026,10 @@ public class TestParquetOperator
                         new Reference(cardinality, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2058,10 +2061,10 @@ public class TestParquetOperator
                         new Reference(keys, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2107,10 +2110,10 @@ public class TestParquetOperator
                         new Reference(cardinality, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2142,10 +2145,10 @@ public class TestParquetOperator
                         new Reference(valuesArray, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2190,10 +2193,10 @@ public class TestParquetOperator
                         new Reference(cardinality, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2225,10 +2228,10 @@ public class TestParquetOperator
                         new Reference(valuesArray, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2275,10 +2278,10 @@ public class TestParquetOperator
                         new Reference(cardinality, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2312,19 +2315,19 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(),
+                                        new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(2L, 2L),
                         Row.row(0L, 2L),
@@ -2356,10 +2359,10 @@ public class TestParquetOperator
                         new Reference(contains, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2392,11 +2395,11 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")),
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator())) {
+                new Allocator(EngineResources.createDefault()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 
@@ -2433,10 +2436,10 @@ public class TestParquetOperator
                         new Reference(element, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2473,10 +2476,10 @@ public class TestParquetOperator
                         new Reference(element, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             org.weakref.nitro.data.Vector values = batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2508,10 +2511,10 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new ProjectOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         projectionPlan,
                         primitiveRegistry,
-                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))
+                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))
                 .matchesExactly(List.of(
                         Row.row(30L),
                         Row.row(0L),
@@ -2542,10 +2545,10 @@ public class TestParquetOperator
                         new Reference(minimum, Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(), file, List.of("items")))) {
+                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2579,19 +2582,19 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(),
+                                        new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(), file, List.of("items")))))))
+                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(30L, 3L),
                         Row.row(0L, 2L)));
@@ -2635,10 +2638,10 @@ public class TestParquetOperator
         }
     }
 
-    private static ColumnReader columnReader(List<ParquetFile> files, String columnName)
+    private ColumnReader columnReader(List<ParquetFile> files, String columnName)
     {
         ParquetFile.Column first = files.getFirst().column(columnName);
-        ColumnReader reader = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal());
+        ColumnReader reader = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal(), null, arrayPool);
         for (ParquetFile file : files) {
             ParquetFile.Column column = file.column(columnName);
             for (org.apache.parquet.format.RowGroup rowGroup : file.rowGroups()) {

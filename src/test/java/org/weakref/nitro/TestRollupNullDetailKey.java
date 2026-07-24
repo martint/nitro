@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -40,7 +41,7 @@ public class TestRollupNullDetailKey
     @Test
     void rollupKeepsNullDetailDistinctFromSubtotal()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         // channel discriminator = 1 for all rows; id = {10, NULL, 20}; value = {1, 2, 3}.
         I64Vector channel = new I64Vector(new long[] {1, 1, 1});
         I64Vector id = new I64Vector(new long[] {10, 99, 20});

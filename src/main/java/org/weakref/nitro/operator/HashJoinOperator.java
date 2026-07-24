@@ -358,7 +358,7 @@ public class HashJoinOperator
     private int fastInnerFilterDepth;
     private VectorAccess.BooleanValues fastInnerFilterNulls;
     private final JoinBufferSupport buffers;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final BufferedJoinInput bufferedInner;
     private final Streams[] outerSchema;
     private final Streams[] innerSchema;
@@ -524,6 +524,7 @@ public class HashJoinOperator
         }
 
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         allocator.register(allocationContext);
         allocator.register(buildAllocationContext);
         this.outer = outer;
@@ -562,7 +563,7 @@ public class HashJoinOperator
         this.currentOuterJoinValues = new Vector[effectiveJoinKeyCount];
         this.currentOuterJoinNulls = new Vector[effectiveJoinKeyCount];
         JoinScratch pooledScratch = POOL_JOIN_SCRATCH
-                ? PrimitiveArrayPool.shared().borrow(JoinScratch.class, BATCH_SIZE, JoinScratch.class)
+                ? arrayPool.borrow(JoinScratch.class, BATCH_SIZE, JoinScratch.class)
                 : null;
         this.joinScratch = pooledScratch != null ? pooledScratch : new JoinScratch(BATCH_SIZE);
         this.outputOuterPositions = joinScratch.outputOuterPositions;
@@ -1353,7 +1354,7 @@ public class HashJoinOperator
                 }
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
+                        joinIndex = new LongJoinIndex(arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1963,6 +1964,7 @@ public class HashJoinOperator
             // through the existing chains, but avoid eagerly copying every reference into CSR form before a probe
             // whose output may be tiny (q84 builds 2.9M rows and emits about 1.2K matches).
             return new LongJoinIndex(
+                    arrayPool,
                     expectedSize,
                     innerSchema.length == innerJoinColumns.length,
                     capInitialHash,
@@ -1976,12 +1978,12 @@ public class HashJoinOperator
             // A schema containing only join keys is not enough to prove the stored row reference is disposable:
             // callers may still project those inner keys.  Omit the reference only for the streaming shape, whose
             // output and residual-filter checks establish that no downstream consumer can observe inner payload.
-            return new LongPairJoinIndex(expectedSize, canStreamUnusedBuildPayload(), capInitialHash);
+            return new LongPairJoinIndex(arrayPool, expectedSize, canStreamUnusedBuildPayload(), capInitialHash);
         }
         if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
-            return new LongTripleJoinIndex(expectedSize);
+            return new LongTripleJoinIndex(arrayPool, expectedSize);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues, arrayPool);
         if (layout != null) {
             return new FlatJoinIndex(layout, expectedSize);
         }
@@ -2028,7 +2030,7 @@ public class HashJoinOperator
         allocator.release(buildAllocationContext);
         if (POOL_JOIN_SCRATCH && !joinScratchReleased) {
             joinScratchReleased = true;
-            PrimitiveArrayPool.shared().retain(JoinScratch.class, BATCH_SIZE, joinScratch.retainedBytes(), joinScratch);
+            arrayPool.retain(JoinScratch.class, BATCH_SIZE, joinScratch.retainedBytes(), joinScratch);
         }
     }
 
@@ -3872,7 +3874,7 @@ public class HashJoinOperator
                 Boolean.parseBoolean(System.getProperty("nitro.join.keyOnlyDirectRangeBuild", "true"));
         private static final int KEY_ONLY_DIRECT_RANGE_MIN_ROWS =
                 Integer.getInteger("nitro.join.keyOnlyDirectRangeMinRows", 1 << 20);
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
 
         // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
         private long[] keys;
@@ -3970,6 +3972,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches;
 
         private LongJoinIndex(
+                PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
                 boolean capInitialHash,
@@ -3979,6 +3982,7 @@ public class HashJoinOperator
                 boolean keyOnlyDirectRangeBuild,
                 boolean buildRowReferencesUnused)
         {
+            this.arrayPool = arrayPool;
             this.compactChains = COMPACT_CHAINS && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && COMPRESS_KEY_ONLY_DUPLICATES;
             this.lazyDuplicateSlotState = lazyDuplicateSlotState;
@@ -3993,7 +3997,7 @@ public class HashJoinOperator
             // payload-bearing build stores one row reference and one chain link for every buffered row regardless
             // of key cardinality. Its exact row count is already known, so sizing these append-only arrays from the
             // hash cap only forces geometric growth and temporarily retains every obsolete generation in the
-            // process-wide primitive pool.
+            // engine-owned primitive pool.
             int initialRows = Math.max(16,
                     compressDuplicateReferences && SIZE_COMPRESSED_ROW_STORAGE_BY_DISTINCT_KEYS
                             ? initialExpectedSize
@@ -6855,7 +6859,7 @@ public class HashJoinOperator
                 Integer.getInteger("nitro.join.flatDictionaryProbeCacheMaxCardinality", 1 << 16);
         private static final int DICTIONARY_PROBE_CACHE_MIN_ROWS_PER_ENTRY =
                 Integer.getInteger("nitro.join.flatDictionaryProbeCacheMinRowsPerEntry", 2);
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
         private final FlatGroupingTable table;
         private final boolean primitiveSingleRows;
         private long[] singleRows;
@@ -6873,6 +6877,7 @@ public class HashJoinOperator
 
         private FlatJoinIndex(FlatKeyLayout layout, int expectedSize)
         {
+            this.arrayPool = layout.primitiveArrays();
             int initialSize = Math.max(16, expectedSize);
             this.primitiveSingleRows = FLAT_PRIMITIVE_SINGLE_ROWS;
             this.table = new FlatGroupingTable(layout, primitiveSingleRows ? initialSize : 1024, true);
@@ -7171,7 +7176,7 @@ public class HashJoinOperator
         // Duplicate state is lazy, so a rare duplicate must not pre-size storage from the whole build. Once a dense
         // table fills its first bounded duplicate page and duplicate rows already cover at least half the distinct-key
         // count, the build has established a long reuse horizon; jump once to the exact build-row upper bound instead
-        // of retaining every geometric generation in the process-wide pool.
+        // of retaining every geometric generation in the engine-owned pool.
         private static final boolean PRE_SIZE_DENSE_DUPLICATE_ROWS =
                 Boolean.parseBoolean(System.getProperty("nitro.join.preSizeDensePairDuplicateRows", "true"));
         // A tag match is rare on negative probes. On JDK 26, converting every 16-lane VectorMask to a scalar bitset
@@ -7187,7 +7192,7 @@ public class HashJoinOperator
         // where every collision step was another full {first,second,row} cache-miss load.
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
 
         private byte[] tags;
         // Co-located entry table. Compact slots contain {normalizedKey,rowReference}; wide slots contain
@@ -7239,8 +7244,9 @@ public class HashJoinOperator
         private long[] nativeFirst;
         private long[] nativeSecond;
 
-        private LongPairJoinIndex(int expectedSize, boolean keyOnlyBuild, boolean capInitialHash)
+        private LongPairJoinIndex(PrimitiveArrayPool arrayPool, int expectedSize, boolean keyOnlyBuild, boolean capInitialHash)
         {
+            this.arrayPool = arrayPool;
             this.expectedBuildRows = expectedSize;
             this.keyOnlyBuild = keyOnlyBuild && COMPACT_KEY_ONLY_BUILD;
             this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, LongJoinIndex.INITIAL_HASH_EXPECTED_CAP);
@@ -8324,7 +8330,7 @@ public class HashJoinOperator
         // read rather than a {first,second,third,row} cache-miss load.
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
 
         private byte[] tags;
         // Co-located entry table: for slot s, entries[4*s] = firstKey, entries[4*s+1] = secondKey, entries[4*s+2] =
@@ -8343,8 +8349,9 @@ public class HashJoinOperator
         private long[] nativeSecond;
         private long[] nativeThird;
 
-        private LongTripleJoinIndex(int expectedSize)
+        private LongTripleJoinIndex(PrimitiveArrayPool arrayPool, int expectedSize)
         {
+            this.arrayPool = arrayPool;
             int capacity = GROUP;
             while (capacity < expectedSize / LOAD_FACTOR) {
                 capacity <<= 1;

@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.tpcds;
 
+import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 
@@ -35,6 +37,8 @@ public final class VerifySkip
 
     public static void main(String[] args)
     {
+        EngineResources engineResources = EngineResources.createDefault();
+        PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
         String table = args[0];
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         List<Path> files = tables.tableFiles(table);
@@ -45,7 +49,7 @@ public final class VerifySkip
                 batchSize = b;
                 pattern = pat;
                 for (int c = 1; c < args.length; c++) {
-                    verify(files, args[c]);
+                    verify(files, args[c], arrayPool);
                 }
             }
         }
@@ -70,11 +74,11 @@ public final class VerifySkip
         };
     }
 
-    private static void verify(List<Path> files, String column)
+    private static void verify(List<Path> files, String column, PrimitiveArrayPool arrayPool)
     {
         int capacity = batchSize;
-        ColumnReader full = reader(files, column);
-        ColumnReader skip = reader(files, column);
+        ColumnReader full = reader(files, column, arrayPool);
+        ColumnReader skip = reader(files, column, arrayPool);
         long totalRows = 0;
         ParquetFile.Column meta;
         try (ParquetFile f = ParquetFile.open(files.get(0))) {
@@ -134,14 +138,14 @@ public final class VerifySkip
         System.out.println("OK skip==full for " + column + " (" + totalRows + " rows, " + checked + " survivors checked)");
     }
 
-    private static ColumnReader reader(List<Path> files, String column)
+    private static ColumnReader reader(List<Path> files, String column, PrimitiveArrayPool arrayPool)
     {
         ColumnReader reader = null;
         for (Path p : files) {
             ParquetFile file = ParquetFile.open(p);
             ParquetFile.Column col = file.column(column);
             if (reader == null) {
-                reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal());
+                reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal(), null, arrayPool);
             }
             for (var rowGroup : file.rowGroups()) {
                 reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);

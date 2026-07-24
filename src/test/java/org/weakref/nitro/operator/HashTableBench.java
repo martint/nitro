@@ -25,7 +25,9 @@ import io.trino.spi.type.TypeOperators;
 import io.trino.spi.type.VarcharType;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 
@@ -47,6 +49,7 @@ public final class HashTableBench
 
     public static void main(String[] args)
     {
+        PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
         int rows = args.length > 0 ? Integer.parseInt(args[0]) : 10_000_000;
         int distinct = args.length > 1 ? Integer.parseInt(args[1]) : 2_000_000;
         // Build a pool of distinct realistic strings (SearchPhrase-like: 8-28 UTF-8 bytes), then sample.
@@ -72,9 +75,9 @@ public final class HashTableBench
 
         for (int iter = 0; iter < 6; iter++) {
             long t0 = System.nanoTime();
-            int ng = runNitro(nitroBatches, distinct);
+            int ng = runNitro(nitroBatches, distinct, arrayPool);
             long t1 = System.nanoTime();
-            int bg = runNitroBulk(nitroBatches, distinct);
+            int bg = runNitroBulk(nitroBatches, distinct, arrayPool);
             long t2 = System.nanoTime();
             int tg = runTrino(trinoPages, distinct);
             long t3 = System.nanoTime();
@@ -83,7 +86,7 @@ public final class HashTableBench
         }
     }
 
-    private static int runNitroBulk(Vector[][] batches, int expectedDistinct)
+    private static int runNitroBulk(Vector[][] batches, int expectedDistinct, PrimitiveArrayPool arrayPool)
     {
         FlatGroupingTable table = null;
         long nextGroupId = 0;
@@ -91,7 +94,7 @@ public final class HashTableBench
         for (Vector[] values : batches) {
             int count = values[0].length();
             if (table == null) {
-                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false);
+                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool);
                 table = new FlatGroupingTable(layout, Math.max(16, expectedDistinct));
             }
             Mask mask = Mask.all(count);
@@ -110,7 +113,7 @@ public final class HashTableBench
 
     private static Vector[][] buildNitroBatches(byte[][] keys)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("input");
         int rows = keys.length;
         int batches = (rows + BATCH - 1) / BATCH;
@@ -150,7 +153,7 @@ public final class HashTableBench
         return result;
     }
 
-    private static int runNitro(Vector[][] batches, int expectedDistinct)
+    private static int runNitro(Vector[][] batches, int expectedDistinct, PrimitiveArrayPool arrayPool)
     {
         FlatGroupingTable table = null;
         long nextGroupId = 0;
@@ -158,7 +161,7 @@ public final class HashTableBench
         for (Vector[] values : batches) {
             int count = values[0].length();
             if (table == null) {
-                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false);
+                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool);
                 table = new FlatGroupingTable(layout, Math.max(16, expectedDistinct));
             }
             table.beginBatch(values, nulls);

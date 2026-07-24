@@ -50,7 +50,7 @@ public final class WindowOperator
             Boolean.getBoolean("nitro.debug.windowReuseOrderedInput");
 
     private final Allocator allocator;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final Allocator.Context allocationContext = new Allocator.Context("WindowOperator");
     private final Operator source;
     private final int[] partitionColumns;
@@ -85,6 +85,7 @@ public final class WindowOperator
             throw new IllegalArgumentException("windowFunctions is empty");
         }
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.source = source;
         this.partitionColumns = partitionColumns.clone();
         this.orderingColumns = orderingColumns.clone();

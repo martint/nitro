@@ -64,6 +64,11 @@ final class JoinBufferSupport
         this.allocationContext = allocationContext;
     }
 
+    PrimitiveArrayPool primitiveArrays()
+    {
+        return allocator.primitiveArrays();
+    }
+
     public Streams borrowStreams(Output output)
     {
         Streams.Builder streams = Streams.builder();
@@ -631,12 +636,12 @@ final class JoinBufferSupport
 
     PositionMappingCache newPositionMappingCache()
     {
-        return POSITION_MAPPING_CACHE ? new PositionMappingCache() : null;
+        return POSITION_MAPPING_CACHE ? new PositionMappingCache(allocator.primitiveArrays(), false) : null;
     }
 
     PositionMappingCache newRecyclingPositionMappingCache()
     {
-        return POSITION_MAPPING_CACHE ? new PositionMappingCache(true) : null;
+        return POSITION_MAPPING_CACHE ? new PositionMappingCache(allocator.primitiveArrays(), true) : null;
     }
 
     private Streams copyStreamsPositions(Streams existing, Streams source, int[] sourcePositions, int outputStart, int size)
@@ -1957,7 +1962,7 @@ final class JoinBufferSupport
         return Streams.builder().putAll(existing);
     }
 
-    private static PositionMappingCache positionCache(Output input, PositionMappingCache sharedPositionCache)
+    private PositionMappingCache positionCache(Output input, PositionMappingCache sharedPositionCache)
     {
         if (!POSITION_MAPPING_CACHE) {
             return null;
@@ -1972,10 +1977,10 @@ final class JoinBufferSupport
         if (hasConcreteStream(input, Stream.ERRORS)) {
             streamCount++;
         }
-        return streamCount > 1 ? new PositionMappingCache() : null;
+        return streamCount > 1 ? new PositionMappingCache(allocator.primitiveArrays(), false) : null;
     }
 
-    private static PositionMappingCache positionCache(Streams input, PositionMappingCache sharedPositionCache)
+    private PositionMappingCache positionCache(Streams input, PositionMappingCache sharedPositionCache)
     {
         if (!POSITION_MAPPING_CACHE) {
             return null;
@@ -1990,12 +1995,12 @@ final class JoinBufferSupport
         if (input.hasErrors()) {
             streamCount++;
         }
-        return streamCount > 1 ? new PositionMappingCache() : null;
+        return streamCount > 1 ? new PositionMappingCache(allocator.primitiveArrays(), false) : null;
     }
 
     static final class PositionMappingCache
     {
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
         private final boolean recycling;
         private final Object[] mappings = new Object[POSITION_MAPPING_CACHE_SIZE];
         private final int[][] sourcePositions = new int[POSITION_MAPPING_CACHE_SIZE][];
@@ -2004,13 +2009,9 @@ final class JoinBufferSupport
         private final int[][] mappedPositions = new int[POSITION_MAPPING_CACHE_SIZE][];
         private int count;
 
-        private PositionMappingCache()
+        private PositionMappingCache(PrimitiveArrayPool arrayPool, boolean recycling)
         {
-            this(false);
-        }
-
-        private PositionMappingCache(boolean recycling)
-        {
+            this.arrayPool = arrayPool;
             this.recycling = recycling;
         }
 

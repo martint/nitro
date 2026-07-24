@@ -18,6 +18,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -60,7 +61,7 @@ public class TestQueries
     void testQuery00()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query00(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query00(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(0, 1000, 1L, 20130701, "https://google.com", ""),
                     row(10, 1200, 2L, 20130702, "https://example.com", ""),
@@ -77,7 +78,7 @@ public class TestQueries
     void testQuery01()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(8L)));
         }
     }
@@ -86,7 +87,7 @@ public class TestQueries
     void testQuery02()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query02(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(5L)));
         }
     }
@@ -95,7 +96,7 @@ public class TestQueries
     void testQuery07()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query07(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query07(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(20130701L, 20130801L)));
         }
     }
@@ -104,7 +105,7 @@ public class TestQueries
     void testQuery03()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query03(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query03(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(80L, 8L, 792.5)));
         }
     }
@@ -113,7 +114,7 @@ public class TestQueries
     void testQuery04()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query04(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query04(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(54_386_366_612_455_058.0)));
         }
     }
@@ -122,7 +123,7 @@ public class TestQueries
     void testQuery05()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query05(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query05(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(5L)));
         }
     }
@@ -131,7 +132,7 @@ public class TestQueries
     void testQuery06()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query06(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query06(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(5L)));
         }
     }
@@ -140,7 +141,7 @@ public class TestQueries
     void testQuery08()
             throws IOException
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         try (Operator query = ClickBenchHitsSupport.query08(allocator, primitiveRegistry, writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
@@ -153,7 +154,7 @@ public class TestQueries
     void testQuery09()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query09(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query09(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(9L, 4L),
                     row(7L, 2L),
@@ -165,7 +166,7 @@ public class TestQueries
     void testQuery10()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query10(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query10(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(9L, 40L, 4L, 610.0, 4L),
                     row(7L, 30L, 3L, 1000.0, 2L),
@@ -177,7 +178,7 @@ public class TestQueries
     void testQuery11()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query11(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query11(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row("pixel", 3L),
                     row("iphone", 2L)));
@@ -188,7 +189,7 @@ public class TestQueries
     void testQuery12()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query12(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query12(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(3L, "pixel", 3L),
                     row(1L, "iphone", 2L)));
@@ -199,7 +200,7 @@ public class TestQueries
     void testQuery13()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(4);
             assertThat(rows.getFirst()).isEqualTo(row("news", 2L));
@@ -210,7 +211,7 @@ public class TestQueries
     void testQuery13ManyGroups()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture(160))) {
+        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture(160))) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()[0]).isInstanceOf(String.class);
@@ -222,7 +223,7 @@ public class TestQueries
     void testQuery14()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query14(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query14(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row("news", 2L),
                     row("phone", 1L),
@@ -235,7 +236,7 @@ public class TestQueries
     void testQuery15()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query15(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query15(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(3L, "news", 2L),
                     row(1L, "phone", 1L),
@@ -248,7 +249,7 @@ public class TestQueries
     void testQuery16()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query16(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query16(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(5);
             assertThat(rows.getFirst()).isEqualTo(row(2L, 3L));
@@ -260,7 +261,7 @@ public class TestQueries
     void testQuery17()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query17(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query17(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(8);
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -274,7 +275,7 @@ public class TestQueries
     void testQuery18()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query18(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query18(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(1L, "", 1L),
                     row(2L, "", 1L),
@@ -291,7 +292,7 @@ public class TestQueries
     void testQuery19()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query19(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query19(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(8);
             assertThat(rows.getFirst().values()).hasSize(4);
@@ -306,7 +307,7 @@ public class TestQueries
     void testQuery20()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query20(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query20(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(ClickBenchHitsSupport.QUERY20_USER_ID)));
         }
     }
@@ -315,7 +316,7 @@ public class TestQueries
     void testQuery25()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query25(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query25(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row("map"),
                     row("phone"),
@@ -329,7 +330,7 @@ public class TestQueries
     void testQuery26()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query26(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query26(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row("map"),
                     row("news"),
@@ -343,7 +344,7 @@ public class TestQueries
     void testQuery27()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query27(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query27(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row("map"),
                     row("phone"),
@@ -357,7 +358,7 @@ public class TestQueries
     void testQuery30()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query30(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query30(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             Object[] sums = new Object[90];
             for (int offset = 0; offset < sums.length; offset++) {
                 sums[offset] = 6_340L + (8L * offset);
@@ -370,7 +371,7 @@ public class TestQueries
     void testQuery34()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(7);
             assertThat(rows.getFirst()).isEqualTo(row("https://google.com/search", 2L));
@@ -381,7 +382,7 @@ public class TestQueries
     void testQuery35()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query35(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query35(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(7);
             assertThat(rows.getFirst()).isEqualTo(row(1L, "https://google.com/search", 2L));
@@ -392,7 +393,7 @@ public class TestQueries
     void testQuery21()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query21(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query21(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(4L)));
         }
     }
@@ -401,7 +402,7 @@ public class TestQueries
     void testQuery22()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query22(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query22(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -412,7 +413,7 @@ public class TestQueries
     void testQuery23()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query23(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query23(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -423,7 +424,7 @@ public class TestQueries
     void testQuery24()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query24(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query24(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values().length).isGreaterThan(20);
@@ -434,7 +435,7 @@ public class TestQueries
     void testQuery28()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query28(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query28(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -443,7 +444,7 @@ public class TestQueries
     void testQuery29()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query29(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query29(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -452,7 +453,7 @@ public class TestQueries
     void testQuery31()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query31(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query31(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -463,7 +464,7 @@ public class TestQueries
     void testQuery32()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query32(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query32(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -474,7 +475,7 @@ public class TestQueries
     void testQuery33()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query33(new Allocator(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query33(new Allocator(EngineResources.createDefault()), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -485,7 +486,7 @@ public class TestQueries
     void testQuery36()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query36(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query36(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -496,7 +497,7 @@ public class TestQueries
     void testQuery37()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query37(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query37(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -507,7 +508,7 @@ public class TestQueries
     void testQuery38()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query38(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query38(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -518,7 +519,7 @@ public class TestQueries
     void testQuery39()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query39(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query39(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -527,7 +528,7 @@ public class TestQueries
     void testQuery40()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query40(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query40(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -536,7 +537,7 @@ public class TestQueries
     void testQuery41()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query41(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query41(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -545,7 +546,7 @@ public class TestQueries
     void testQuery42()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query42(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -554,7 +555,7 @@ public class TestQueries
     void testQuery43()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query43(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query43(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), writeHitsFixture())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(query)).isEmpty();
         }
     }
@@ -563,7 +564,7 @@ public class TestQueries
     void testQuery01SplitDirectory()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(), writeSplitHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(EngineResources.createDefault()), writeSplitHitsFixture())) {
             assertThat(operator(query)).matchesExactly(List.of(row(16L)));
         }
     }
@@ -572,7 +573,7 @@ public class TestQueries
     void testQuery34SplitDirectory()
             throws IOException
     {
-        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(), writeSplitHitsFixture())) {
+        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(EngineResources.createDefault()), writeSplitHitsFixture())) {
             List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(7);
             assertThat(rows.getFirst()).isEqualTo(row("https://google.com/search", 4L));

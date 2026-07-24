@@ -19,27 +19,17 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 
 /**
- * A process-wide, bounded lease for large primitive work arrays.
+ * An explicitly owned, bounded lease for large primitive work arrays.
  *
- * <p>The vector allocator's pools are intentionally scoped to an allocator instance. Query-state arrays need a
- * longer-lived owner so a fresh query can reuse the previous query's build storage, but that owner must not turn
- * transient peak memory into an unbounded steady-state tax. This pool therefore uses exact capacity buckets and a
- * hard FIFO byte ceiling. Arrays smaller than the configured minimum are left to the normal allocator/GC path.
+ * <p>The vector allocator's pools are intentionally scoped to an allocator instance. Query-state arrays can use a
+ * longer-lived owner so a fresh query can reuse the previous query's build storage, but that lifetime is selected by
+ * the embedding engine and passed through {@link EngineResources}; it is never process-global. This pool uses exact
+ * capacity buckets and a hard FIFO byte ceiling. Arrays smaller than the configured minimum are left to the normal
+ * allocator/GC path.
  */
 public final class PrimitiveArrayPool
+        implements AutoCloseable
 {
-    private static final long MIN_DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
-    private static final long MAX_DEFAULT_MAX_RETAINED_BYTES = 1L << 30;
-    private static final long DEFAULT_MIN_RETAINED_BYTES = 256L << 10;
-    private static final long DEFAULT_MAX_RETAINED_NATIVE_BYTES = 256L << 20;
-
-    private static final PrimitiveArrayPool SHARED = new PrimitiveArrayPool(
-            Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", defaultMaxRetainedBytes()),
-            Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES));
-    private static final PrimitiveArrayPool SHARED_NATIVE_BUFFERS = new PrimitiveArrayPool(
-            Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
-            Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES));
-
     private final long maxRetainedBytes;
     private final long minRetainedBytes;
     private final Map<Key, ArrayDeque<Entry>> buckets = new HashMap<>();
@@ -49,16 +39,7 @@ public final class PrimitiveArrayPool
     private long retainedBytes;
     private long borrowedBytes;
     private long reusedBytes;
-
-    private static long defaultMaxRetainedBytes()
-    {
-        // Keep the original bounded footprint on small heaps, but let large analytic-query heaps retain enough of
-        // their actual primitive working set to avoid recreating it every invocation. The hard upper bound remains
-        // below one tenth of the 12 GiB publication heap, and the explicit property remains authoritative.
-        return Math.min(
-                MAX_DEFAULT_MAX_RETAINED_BYTES,
-                Math.max(MIN_DEFAULT_MAX_RETAINED_BYTES, Runtime.getRuntime().maxMemory() / 12));
-    }
+    private boolean closed;
 
     public PrimitiveArrayPool(long maxRetainedBytes, long minRetainedBytes)
     {
@@ -72,25 +53,9 @@ public final class PrimitiveArrayPool
         this.minRetainedBytes = minRetainedBytes;
     }
 
-    public static PrimitiveArrayPool shared()
-    {
-        return SHARED;
-    }
-
-    /**
-     * Returns the process-wide bounded retention domain for native buffers.
-     *
-     * <p>Native workspaces have an independent budget so retaining one cannot evict reusable Java primitive arrays
-     * and turn an off-heap optimization into downstream heap allocation. The same generic family/capacity API is
-     * available to any reader or operator that owns a recyclable native buffer.
-     */
-    public static PrimitiveArrayPool sharedNativeBuffers()
-    {
-        return SHARED_NATIVE_BUFFERS;
-    }
-
     public synchronized int[] borrowInts(int length)
     {
+        checkOpen();
         int[] array = borrow(int[].class, length, int[].class);
         return array != null ? array : new int[length];
     }
@@ -102,29 +67,34 @@ public final class PrimitiveArrayPool
      */
     public synchronized int[] tryBorrowInts(int length)
     {
+        checkOpen();
         return borrow(int[].class, length, int[].class);
     }
 
     public synchronized byte[] borrowBytes(int length)
     {
+        checkOpen();
         byte[] array = borrow(byte[].class, length, byte[].class);
         return array != null ? array : new byte[length];
     }
 
     public synchronized long[] borrowLongs(int length)
     {
+        checkOpen();
         long[] array = borrow(long[].class, length, long[].class);
         return array != null ? array : new long[length];
     }
 
     public synchronized boolean[] borrowBooleans(int length)
     {
+        checkOpen();
         boolean[] array = borrow(boolean[].class, length, boolean[].class);
         return array != null ? array : new boolean[length];
     }
 
     public synchronized void release(int[] array)
     {
+        checkOpen();
         if (array != null) {
             retain(int[].class, array.length, (long) array.length * Integer.BYTES, array);
         }
@@ -132,6 +102,7 @@ public final class PrimitiveArrayPool
 
     public synchronized void release(byte[] array)
     {
+        checkOpen();
         if (array != null) {
             retain(byte[].class, array.length, array.length, array);
         }
@@ -139,6 +110,7 @@ public final class PrimitiveArrayPool
 
     public synchronized void release(long[] array)
     {
+        checkOpen();
         if (array != null) {
             retain(long[].class, array.length, (long) array.length * Long.BYTES, array);
         }
@@ -146,6 +118,7 @@ public final class PrimitiveArrayPool
 
     public synchronized void release(boolean[] array)
     {
+        checkOpen();
         if (array != null) {
             retain(boolean[].class, array.length, array.length, array);
         }
@@ -153,6 +126,7 @@ public final class PrimitiveArrayPool
 
     public synchronized <T> T borrow(Object family, int capacity, Class<T> type)
     {
+        checkOpen();
         Key key = new Key(family, capacity);
         ArrayDeque<Entry> bucket = buckets.get(key);
         if (bucket == null) {
@@ -173,11 +147,12 @@ public final class PrimitiveArrayPool
     }
 
     /**
-     * Offers a reusable buffer to the shared budget. Returns false when the buffer is below the pooling threshold or
+     * Offers a reusable buffer to this owner's budget. Returns false when the buffer is below the pooling threshold or
      * cannot fit under the hard ceiling, allowing the caller to keep it in a cheaper query-local pool instead.
      */
     public synchronized boolean retain(Object family, int capacity, long bytes, Object buffer)
     {
+        checkOpen();
         if (bytes < minRetainedBytes || bytes > maxRetainedBytes) {
             return false;
         }
@@ -223,6 +198,25 @@ public final class PrimitiveArrayPool
         return reusedBytes;
     }
 
+    public synchronized void clear()
+    {
+        buckets.clear();
+        retainedBuffers.clear();
+        oldest = null;
+        newest = null;
+        retainedBytes = 0;
+    }
+
+    @Override
+    public synchronized void close()
+    {
+        if (closed) {
+            return;
+        }
+        clear();
+        closed = true;
+    }
+
     /** Returns whether a buffer of this size can participate in this pool, without acquiring the pool lock. */
     public boolean isRetainable(long bytes)
     {
@@ -233,6 +227,13 @@ public final class PrimitiveArrayPool
     public long minRetainedBytes()
     {
         return minRetainedBytes;
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Primitive array pool is closed");
+        }
     }
 
     private void evictOldest()

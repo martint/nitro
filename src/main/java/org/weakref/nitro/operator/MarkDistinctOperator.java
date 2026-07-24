@@ -28,6 +28,7 @@ public class MarkDistinctOperator
     private static final int[] EMPTY_POSITIONS = new int[0];
 
     private final Allocator allocator;
+    private final PrimitiveArrayPool arrayPool;
     private final Operator source;
     private final int[] distinctColumns;
     private final boolean retainNulls;
@@ -58,6 +59,7 @@ public class MarkDistinctOperator
     public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls)
     {
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.source = source;
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
@@ -131,7 +133,7 @@ public class MarkDistinctOperator
             distinctKeySet.releaseBuffers();
             distinctKeySet = null;
         }
-        PrimitiveArrayPool.shared().release(distinctPositions);
+        arrayPool.release(distinctPositions);
         distinctPositions = EMPTY_POSITIONS;
         Arrays.fill(values, null);
         Arrays.fill(nulls, null);
@@ -146,8 +148,8 @@ public class MarkDistinctOperator
 
         if (distinctPositions.length < sourceMask.selectedCount()) {
             int[] previous = distinctPositions;
-            distinctPositions = PrimitiveArrayPool.shared().borrowInts(sourceMask.selectedCount());
-            PrimitiveArrayPool.shared().release(previous);
+            distinctPositions = arrayPool.borrowInts(sourceMask.selectedCount());
+            arrayPool.release(previous);
         }
 
         int selectedCount;
@@ -158,7 +160,7 @@ public class MarkDistinctOperator
                 nulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             if (distinctKeySet == null) {
-                distinctKeySet = DistinctKeySet.create(values, retainNulls);
+                distinctKeySet = DistinctKeySet.create(values, retainNulls, arrayPool);
             }
             distinctKeySet.reserveAdditional(sourceMask.selectedCount());
             selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);

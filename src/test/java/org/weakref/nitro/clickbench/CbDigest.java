@@ -16,6 +16,7 @@ package org.weakref.nitro.clickbench;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -38,12 +39,12 @@ public final class CbDigest
             try {
                 Method m = ClickBenchHitsSupport.class.getDeclaredMethod(name, Allocator.class, PrimitiveRegistry.class, Path.class);
                 m.setAccessible(true);
-                operator = (Operator) m.invoke(null, new Allocator(), registry, dir);
+                operator = (Operator) m.invoke(null, new Allocator(EngineResources.createDefault()), registry, dir);
             }
             catch (NoSuchMethodException e) {
                 Method m = ClickBenchHitsSupport.class.getDeclaredMethod(name, Allocator.class, Path.class);
                 m.setAccessible(true);
-                operator = (Operator) m.invoke(null, new Allocator(), dir);
+                operator = (Operator) m.invoke(null, new Allocator(EngineResources.createDefault()), dir);
             }
             List<?> rows;
             try (Operator op = operator) {

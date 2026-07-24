@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -180,7 +181,7 @@ class TestFusedGroupedAggregation
                 pages.add(TableOperator.Page.values(size, new Vector[] {new I64Vector(keys)}, Mask.all(size)));
             }
 
-            Allocator allocator = new Allocator();
+            Allocator allocator = new Allocator(EngineResources.createDefault());
             Operator operator = new GroupedAggregationOperator(
                     allocator,
                     List.of(0),
@@ -429,7 +430,7 @@ class TestFusedGroupedAggregation
                     Mask.all(size)));
         }
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -488,7 +489,7 @@ class TestFusedGroupedAggregation
             Map<Long, long[]> reference,
             boolean checkCount)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),

@@ -54,11 +54,6 @@ final class PooledLongHashSet
     private long addCalls;
     private boolean admissionReported;
 
-    PooledLongHashSet(int expectedSize)
-    {
-        this(expectedSize, PrimitiveArrayPool.shared(), VECTOR_TAGS);
-    }
-
     PooledLongHashSet(int expectedSize, PrimitiveArrayPool arrayPool)
     {
         this(expectedSize, arrayPool, VECTOR_TAGS);

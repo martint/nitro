@@ -15,6 +15,7 @@ package org.weakref.nitro.jit;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Streams;
@@ -58,7 +59,7 @@ public class TestBatchFunctionCompiler
         List<Streams> inputs = List.of(
                 Streams.ofValues(new I64Vector(a)), Streams.ofValues(new I64Vector(b)),
                 Streams.ofValues(new I64Vector(c)), Streams.ofValues(new I64Vector(d)));
-        PrimitiveExecutionContext context = new PrimitiveExecutionContext(new Allocator());
+        PrimitiveExecutionContext context = new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault()));
 
         // Dense (mask.all): the contiguous, auto-vectorizable path.
         long[] dense = ((I64Vector) function.apply(inputs, Mask.all(rows), Set.of(Stream.VALUES), null, context).values()).values();

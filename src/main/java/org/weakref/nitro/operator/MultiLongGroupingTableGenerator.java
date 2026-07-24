@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.PrimitiveArrayPool;
+
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
@@ -44,6 +46,7 @@ final class MultiLongGroupingTableGenerator
     private MultiLongGroupingTableGenerator() {}
 
     private static final ClassDesc CD_BASE = ClassDesc.of("org.weakref.nitro.operator.AbstractMultiLongGroupingTable");
+    private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_LONG_ARRAY_2D = CD_long.arrayType().arrayType();
     private static final ClassDesc CD_BYTE_ARRAY = CD_byte.arrayType();
@@ -59,24 +62,28 @@ final class MultiLongGroupingTableGenerator
 
     private static final ConcurrentHashMap<Integer, MethodHandle> CONSTRUCTORS = new ConcurrentHashMap<>();
 
-    static AbstractMultiLongGroupingTable create(int arity, int expectedSize)
+    static AbstractMultiLongGroupingTable create(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
-        return create(arity, expectedSize, true);
+        return create(arity, expectedSize, true, arrayPool);
     }
 
-    static AbstractMultiLongGroupingTable createDistinct(int arity, int expectedSize)
+    static AbstractMultiLongGroupingTable createDistinct(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
-        return create(arity, expectedSize, false);
+        return create(arity, expectedSize, false, arrayPool);
     }
 
-    private static AbstractMultiLongGroupingTable create(int arity, int expectedSize, boolean retainGroupKeys)
+    private static AbstractMultiLongGroupingTable create(
+            int arity,
+            int expectedSize,
+            boolean retainGroupKeys,
+            PrimitiveArrayPool arrayPool)
     {
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(arity, MultiLongGroupingTableGenerator::generate);
         try {
-            return (AbstractMultiLongGroupingTable) constructor.invoke(expectedSize, retainGroupKeys);
+            return (AbstractMultiLongGroupingTable) constructor.invoke(arrayPool, expectedSize, retainGroupKeys);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated grouping table for arity " + arity, e);
@@ -92,13 +99,14 @@ final class MultiLongGroupingTableGenerator
             builder.withSuperclass(CD_BASE);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
 
-            // <init>(int expectedSize, boolean retainGroupKeys) { super(arity, expectedSize, retainGroupKeys); }
-            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_int, CD_boolean), ClassFile.ACC_PUBLIC, code -> {
+            // <init>(PrimitiveArrayPool, int, boolean) { super(pool, arity, expectedSize, retainGroupKeys); }
+            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_boolean), ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
+                code.aload(1);
                 code.loadConstant(arity);
-                code.iload(1);
                 code.iload(2);
-                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int, CD_boolean));
+                code.iload(3);
+                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_int, CD_boolean));
                 code.return_();
             });
 
@@ -113,7 +121,9 @@ final class MultiLongGroupingTableGenerator
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
                     .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
-            return lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class, int.class, boolean.class));
+            return lookup.findConstructor(
+                    lookup.lookupClass(),
+                    MethodType.methodType(void.class, PrimitiveArrayPool.class, int.class, boolean.class));
         }
         catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to generate grouping table for arity " + arity, e);

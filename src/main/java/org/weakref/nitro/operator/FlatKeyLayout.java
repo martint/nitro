@@ -135,7 +135,7 @@ class FlatKeyLayout
             Integer.getInteger("nitro.group.discriminatingFieldHashSampleSize", 128);
     private static final int DISCRIMINATING_FIELD_HASH_MIN_DISTINCT_PERCENT =
             Integer.getInteger("nitro.group.discriminatingFieldHashMinDistinctPercent", 90);
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final Field[] fields;
     private final int[] inputChannels;
     private final FlatTypeHandler[] handlers;
@@ -317,8 +317,19 @@ class FlatKeyLayout
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
 
-    FlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize, boolean anyVariableWidth, boolean compactEmbeddedBinaryRecords)
+    FlatKeyLayout(
+            PrimitiveArrayPool arrayPool,
+            Field[] fields,
+            int[] inputChannels,
+            FlatTypeHandler[] handlers,
+            int[] fixedOffsets,
+            int[] comparisonOrder,
+            int nullByteCount,
+            int fixedRecordSize,
+            boolean anyVariableWidth,
+            boolean compactEmbeddedBinaryRecords)
     {
+        this.arrayPool = arrayPool;
         this.fields = fields;
         this.inputChannels = inputChannels;
         this.handlers = handlers;
@@ -356,7 +367,7 @@ class FlatKeyLayout
         this.fieldUsesIdOnlyRecords = new boolean[handlers.length];
     }
 
-    public static FlatKeyLayout tryCreate(Vector[] values, boolean nullable)
+    public static FlatKeyLayout tryCreate(Vector[] values, boolean nullable, PrimitiveArrayPool arrayPool)
     {
         Field[] fields = new Field[values.length];
         int[] inputChannels = new int[values.length];
@@ -398,6 +409,7 @@ class FlatKeyLayout
         }
         if (PRECOMPUTE_COMPACT_BINARY_POSITION_IDS && compactEmbeddedBinaryRecords) {
             return new PositionIdFlatKeyLayout(
+                    arrayPool,
                     fields,
                     inputChannels,
                     handlers,
@@ -407,7 +419,7 @@ class FlatKeyLayout
                     fixedOffset,
                     anyVariableWidth);
         }
-        return new FlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
+        return new FlatKeyLayout(arrayPool, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
     }
 
     private static boolean admitsCompactBinaryRecords(Vector[] values, FlatTypeHandler[] handlers)
@@ -449,9 +461,14 @@ class FlatKeyLayout
         return distinct;
     }
 
-    public static FlatKeyLayout tryCreate(Vector[] values)
+    public static FlatKeyLayout tryCreate(Vector[] values, PrimitiveArrayPool arrayPool)
     {
-        return tryCreate(values, false);
+        return tryCreate(values, false, arrayPool);
+    }
+
+    PrimitiveArrayPool primitiveArrays()
+    {
+        return arrayPool;
     }
 
     public int fieldCount()
@@ -2855,6 +2872,7 @@ class FlatKeyLayout
             extends FlatKeyLayout
     {
         private PositionIdFlatKeyLayout(
+                PrimitiveArrayPool arrayPool,
                 Field[] fields,
                 int[] inputChannels,
                 FlatTypeHandler[] handlers,
@@ -2865,6 +2883,7 @@ class FlatKeyLayout
                 boolean anyVariableWidth)
         {
             super(
+                    arrayPool,
                     fields,
                     inputChannels,
                     handlers,

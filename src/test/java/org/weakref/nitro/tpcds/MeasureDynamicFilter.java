@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -57,9 +58,9 @@ public class MeasureDynamicFilter
         boolean dynamicFilter = Boolean.getBoolean("nitro.dynamicFilter");
 
         // Correctness: the skip-decode-scan tree must match the ordinary-scan tree exactly.
-        long[] reference = run(() -> new TrinoParquetScanOperator(new Allocator(), files, COLUMNS, true));
+        long[] reference = run(() -> new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, true));
         SkipDecodeScanOperator.Profile.reset();
-        long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(), files, COLUMNS));
+        long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS));
         System.out.printf("reference rows=%d checksum=%d ; skipScan rows=%d checksum=%d ; match=%b ; %s%n",
                 reference[0], reference[1], skip[0], skip[1], reference[0] == skip[0] && reference[1] == skip[1],
                 SkipDecodeScanOperator.Profile.summary());
@@ -68,7 +69,7 @@ public class MeasureDynamicFilter
         long best = Long.MAX_VALUE;
         for (int i = 0; i < 7; i++) {
             long start = System.nanoTime();
-            run(() -> new SkipDecodeScanOperator(new Allocator(), files, COLUMNS));
+            run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS));
             long elapsed = System.nanoTime() - start;
             if (i >= 2) {
                 best = Math.min(best, elapsed);
@@ -80,7 +81,7 @@ public class MeasureDynamicFilter
     /** Build store_sales(probe) ⋈ {STORE_KEY}(build) on ss_store_sk; drain and return {rowCount, checksum}. */
     private static long[] run(Supplier<Operator> probeFactory)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator probe = probeFactory.get();
         Operator dimension = new TableOperator(1, List.of(
                 new TableOperator.Page(1, new Streams[] {Streams.ofValues(new I64Vector(new long[] {STORE_KEY}))}, Mask.all(1))));

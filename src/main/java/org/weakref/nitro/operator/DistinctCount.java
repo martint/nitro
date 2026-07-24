@@ -18,6 +18,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
@@ -32,6 +33,7 @@ public class DistinctCount
         implements Accumulator
 {
     private final int inputColumn;
+    private PrimitiveArrayPool arrayPool;
 
     public DistinctCount(int inputColumn)
     {
@@ -47,6 +49,7 @@ public class DistinctCount
     @Override
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
+        arrayPool = allocator.primitiveArrays();
         DistinctCountStateVector stateVector = new DistinctCountStateVector();
         stateVector.ensureGroupCapacity(size);
         return Streams.ofValues(allocator.adopt(allocationContext, stateVector));
@@ -153,13 +156,13 @@ public class DistinctCount
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
-    private static DistinctIndex distinctIndex(DistinctCountStateVector stateVector, Vector[] keyValues)
+    private DistinctIndex distinctIndex(DistinctCountStateVector stateVector, Vector[] keyValues)
     {
         Object implementation = stateVector.implementation();
         if (implementation != null) {
             return (DistinctIndex) implementation;
         }
-        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues));
+        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues, arrayPool));
         stateVector.setImplementation(index);
         return index;
     }

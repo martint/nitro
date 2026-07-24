@@ -151,7 +151,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState());
+        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState(allocator.primitiveArrays()));
     }
 
     private GroupedAggregationOperator(
@@ -1139,6 +1139,7 @@ public class GroupedAggregationOperator
         private final Vector[] values;
         private final Vector[] nulls;
         private DistinctKeySet distinctKeySet;
+        private PrimitiveArrayPool arrayPool;
         private int[] distinctPositions = EMPTY_POSITIONS;
 
         private DistinctAggregationGroup(int[] inputColumns, int[] aggregationIndexes)
@@ -1156,6 +1157,7 @@ public class GroupedAggregationOperator
 
         public Mask select(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount, Allocator allocator, Allocator.Context allocationContext)
         {
+            arrayPool = allocator.primitiveArrays();
             if (mask.none()) {
                 return allocator.allocateSparseMask(allocationContext, EMPTY_POSITIONS, mask.size());
             }
@@ -1163,8 +1165,8 @@ public class GroupedAggregationOperator
             values[0] = groups;
             if (distinctPositions.length < mask.selectedCount()) {
                 int[] previous = distinctPositions;
-                distinctPositions = PrimitiveArrayPool.shared().borrowInts(mask.selectedCount());
-                PrimitiveArrayPool.shared().release(previous);
+                distinctPositions = arrayPool.borrowInts(mask.selectedCount());
+                arrayPool.release(previous);
             }
 
             try {
@@ -1174,8 +1176,8 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = GROUP_PARTITIONED_LONG_DISTINCT && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values)
-                            : DistinctKeySet.create(values);
+                            ? DistinctKeySet.createGroupedLong(values, arrayPool)
+                            : DistinctKeySet.create(values, arrayPool);
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
@@ -1192,7 +1194,9 @@ public class GroupedAggregationOperator
                 distinctKeySet.releaseBuffers();
                 distinctKeySet = null;
             }
-            PrimitiveArrayPool.shared().release(distinctPositions);
+            if (arrayPool != null) {
+                arrayPool.release(distinctPositions);
+            }
             distinctPositions = EMPTY_POSITIONS;
             Arrays.fill(values, null);
             Arrays.fill(nulls, null);

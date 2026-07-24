@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -45,7 +46,7 @@ public class TestSemiJoinDictionaryKey
     void semiJoinWithDictionaryProbeKeyIsDeterministicAndCorrect()
     {
         for (int iteration = 0; iteration < 200; iteration++) {
-            Allocator allocator = new Allocator();
+            Allocator allocator = new Allocator(EngineResources.createDefault());
             // Probe (outer): key column is a DictionaryVector over base {A,B,C,D}; rows reference A,B,C,D,B,D.
             DictionaryVector probeKey = new DictionaryVector(
                     new int[] {0, 1, 2, 3, 1, 3},
@@ -71,7 +72,7 @@ public class TestSemiJoinDictionaryKey
     @Test
     void semiJoinDictionaryMatchCacheResetsForDifferentDictionaryValues()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator outer = twoBatches(
                 2,
                 new Streams[] {

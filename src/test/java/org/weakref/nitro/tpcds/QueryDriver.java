@@ -15,6 +15,7 @@ package org.weakref.nitro.tpcds;
 
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
@@ -106,7 +107,7 @@ public final class QueryDriver
     private static Operator construct(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)
             throws Exception
     {
-        return (Operator) method.invoke(null, new Allocator(), registry, tables);
+        return (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), registry, tables);
     }
 
     private static Operator constructUnchecked(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)

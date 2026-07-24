@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -208,7 +209,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorRetainsObservedConcurrentVectorWorkingSet()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("wide-project-working-set");
         List<I64Vector> firstGeneration = new ArrayList<>();
         for (int index = 0; index < 90; index++) {
@@ -308,7 +309,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDifferenceFromAllKeepsLogicalComplement()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("MaskComplement");
 
         Mask remaining = allocator.differenceMask(context, Mask.all(8), Mask.sparse(new int[] {1, 3, 6}, 8));
@@ -328,7 +329,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorSparseMaskTakesOneOwnedCopy()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("SparseMaskCopy");
         int[] scratch = {1, 3, 6, 99};
 
@@ -342,7 +343,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorReleasesOnlyUnreferencedEncodedChildren()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("ReplacementTree");
         I32Vector ids = allocator.allocate(context, I32Vector.class, 8, I32Vector::new);
         I64Vector values = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
@@ -357,7 +358,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorTracksDerivedMaskAllocations()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("MaskTest");
 
         Mask all = allocator.allocateAllMask(context, 6);
@@ -374,7 +375,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorReusesVectorInstancesAfterRelease()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("VectorPool");
 
         I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
@@ -391,7 +392,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDoesNotReuseDifferentLogicalVectorLength()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("ExactVectorPool");
 
         I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
@@ -406,7 +407,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDoesNotReuseBinaryVectorWithDifferentLogicalLength()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("ExactBinaryVectorPool");
 
         BinaryVector first = BinaryVector.allocate(allocator, context, 8, 32);
@@ -421,7 +422,7 @@ public class TestBatchRuntime
     @Test
     void testBinaryVectorCopyMaskedPreservesSparseSelectedPositions()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BinaryCopyMasked");
 
         BinaryVector values = new BinaryVector(5, 64);
@@ -443,7 +444,7 @@ public class TestBatchRuntime
     @Test
     void testBinaryVectorCopySinglePositionPreservesSparseOutputOffsets()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BinaryCopySingleSparse");
 
         BinaryVector values = new BinaryVector(3, 32);
@@ -465,7 +466,7 @@ public class TestBatchRuntime
     @Test
     void testBinaryVectorCopyPositionsIntoAppendsFromMultipleSources()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BinaryCopyAppend");
 
         BinaryVector first = new BinaryVector(4, 32);
@@ -495,7 +496,7 @@ public class TestBatchRuntime
     @Test
     void testBinaryVectorCopyPositionsIntoAppendsLargeChunks()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BinaryCopyLargeAppend");
 
         BinaryVector first = new BinaryVector(10_000, 200_000);
@@ -599,7 +600,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorRetainsFlatVectorWorkingSetBeyondStaticFamilyDefault()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("CappedVectorPool");
 
         int maxRetained = new I64Vector(8).poolMaxRetained();
@@ -624,7 +625,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorRetainsBinaryVectorWorkingSetBeyondStaticFamilyDefault()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("CappedBinaryVectorPool");
 
         BinaryVector first = BinaryVector.allocate(allocator, context, 8, 16);
@@ -651,7 +652,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorReusesLargeVariableWidthVectorWithCeilingCapacity()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("VariableWidthCeilingCapacity");
 
         // This is large enough to qualify for the process-wide pool. It must nevertheless remain in the
@@ -667,7 +668,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorBoundsLocalVariableWidthPoolByBytes()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BoundedVariableWidthPool");
 
         List<BinaryVector> released = new ArrayList<>();
@@ -689,7 +690,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDoesNotPoolSupersededGrowthVectors()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("DiscardGrowthVectors");
 
         I64Vector first = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
@@ -710,7 +711,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDoesNotPoolOversizedSumStateVector()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("LargeSumStatePool");
 
         SumStateVector first = allocator.allocate(context, SumStateVector.class, 1_000_000, SumStateVector::new);
@@ -724,7 +725,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorDoesNotPoolOversizedAvgStateVector()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("LargeAvgStatePool");
 
         AvgStateVector first = allocator.allocate(context, AvgStateVector.class, 600_000, AvgStateVector::new);
@@ -748,7 +749,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorReusesMaskInstancesAfterRelease()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("MaskPool");
 
         Mask first = allocator.allocateRangeMask(context, 4, 3);
@@ -766,7 +767,7 @@ public class TestBatchRuntime
     @Test
     void testAllocatorReusesEmptyMaskAndPreservesZeroSizeAllInvariant()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("EmptyMaskPool");
 
         Mask first = allocator.allocateEmptyMask(context, 7);
@@ -784,7 +785,7 @@ public class TestBatchRuntime
     @Test
     void testTransferredVectorIsNotReturnedToAllocatorPool()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GeneratorOperator(allocator, 4, 4, List.of(new SequenceGenerator(0)));
 
         Batch batch = operator.next();
@@ -799,7 +800,7 @@ public class TestBatchRuntime
     @Test
     void testTransferredMaskIsNotReturnedToAllocatorPool()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L)));
 
         Batch batch = operator.next();
@@ -814,7 +815,7 @@ public class TestBatchRuntime
     @Test
     void testTransferDetachesMaskFromItsOwningContext()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context owner = new Allocator.Context("Owner");
         Allocator.Context borrower = new Allocator.Context("Borrower");
 
@@ -830,7 +831,7 @@ public class TestBatchRuntime
     @Test
     void testTransferDetachesVectorFromItsOwningContext()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context owner = new Allocator.Context("Owner");
         Allocator.Context borrower = new Allocator.Context("Borrower");
 
@@ -846,7 +847,7 @@ public class TestBatchRuntime
     @Test
     void testTransferDetachesNestedChildVectorsFromTheirOwningContext()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("Nested");
 
         ArrayVector array = allocator.allocateArray(context, 2);
@@ -876,7 +877,7 @@ public class TestBatchRuntime
     @Test
     void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new ConstantTableOperator(
                 allocator,
                 2,

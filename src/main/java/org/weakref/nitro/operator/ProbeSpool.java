@@ -33,7 +33,7 @@ final class ProbeSpool
 {
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("ProbeSpool");
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final Operator source;
     private final int outputCount;
     private final List<TableOperator.Page> pages = new ArrayList<>();
@@ -45,6 +45,7 @@ final class ProbeSpool
     ProbeSpool(Allocator allocator, Operator source, int outputCount)
     {
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.source = source;
         this.outputCount = outputCount;
     }

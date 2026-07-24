@@ -18,6 +18,8 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -56,6 +58,9 @@ public final class OperatorExecutionDriver
             close();
             throw new IllegalStateException("execution is cancelled");
         }
+        if (allocator.memoryBlocked().isPresent()) {
+            return DriverResult.BLOCKED;
+        }
         if (context.isYieldRequested()) {
             return DriverResult.YIELDED;
         }
@@ -77,6 +82,12 @@ public final class OperatorExecutionDriver
     public boolean isFinished()
     {
         return finished;
+    }
+
+    /// Host continuation for a [DriverResult#BLOCKED] result.
+    public Optional<CompletionStage<Void>> blocked()
+    {
+        return allocator.memoryBlocked();
     }
 
     @Override

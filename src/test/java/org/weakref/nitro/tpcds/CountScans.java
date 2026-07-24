@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Operator;
 
 import java.lang.reflect.Method;
@@ -49,7 +50,7 @@ public class CountScans
             method.setAccessible(true);
             TpcdsParquetSupport.SCAN_COUNT.set(0);
             try {
-                Operator operator = (Operator) method.invoke(null, new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+                Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
                 if (operator == null) {
                     continue;
                 }

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
@@ -50,15 +51,23 @@ final class BigintPairFlatKeyLayout
     private VectorAccess.BooleanValues firstNullAccessor;
     private VectorAccess.BooleanValues secondNullAccessor;
 
-    private BigintPairFlatKeyLayout(Field[] fields, int[] inputChannels, FlatTypeHandler[] handlers, int[] fixedOffsets, int[] comparisonOrder, int nullByteCount, int fixedRecordSize)
+    private BigintPairFlatKeyLayout(
+            PrimitiveArrayPool arrayPool,
+            Field[] fields,
+            int[] inputChannels,
+            FlatTypeHandler[] handlers,
+            int[] fixedOffsets,
+            int[] comparisonOrder,
+            int nullByteCount,
+            int fixedRecordSize)
     {
-        super(fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
+        super(arrayPool, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
         this.firstKeyOffset = fixedOffsets[0];
         this.secondKeyOffset = fixedOffsets[1];
         this.nullable = nullByteCount > 0;
     }
 
-    static BigintPairFlatKeyLayout create(Vector[] values, boolean nullable)
+    static BigintPairFlatKeyLayout create(Vector[] values, boolean nullable, PrimitiveArrayPool arrayPool)
     {
         if (values.length != 2) {
             throw new IllegalArgumentException("BigintPairFlatKeyLayout requires exactly two columns");
@@ -83,7 +92,7 @@ final class BigintPairFlatKeyLayout
         FlatTypeHandler[] handlers = new FlatTypeHandler[] {handler, handler};
         int[] fixedOffsets = new int[] {firstOffset, secondOffset};
         int[] comparisonOrder = new int[] {0, 1};
-        return new BigintPairFlatKeyLayout(fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + keySize);
+        return new BigintPairFlatKeyLayout(arrayPool, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + keySize);
     }
 
     @Override

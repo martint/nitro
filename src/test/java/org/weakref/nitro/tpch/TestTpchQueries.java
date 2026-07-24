@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Operator;
 
@@ -45,91 +46,91 @@ public class TestTpchQueries
     @Test
     void query01()
     {
-        assertMatchesReference("01", tables -> TpchParquetSupport.query01(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("01", tables -> TpchParquetSupport.query01(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query03()
     {
-        assertMatchesReference("03", tables -> TpchParquetSupport.query03(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("03", tables -> TpchParquetSupport.query03(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query04()
     {
-        assertMatchesReference("04", tables -> TpchParquetSupport.query04(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("04", tables -> TpchParquetSupport.query04(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query05()
     {
-        assertMatchesReference("05", tables -> TpchParquetSupport.query05(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("05", tables -> TpchParquetSupport.query05(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query06()
     {
-        assertMatchesReference("06", tables -> TpchParquetSupport.query06(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("06", tables -> TpchParquetSupport.query06(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query10()
     {
-        assertMatchesReference("10", tables -> TpchParquetSupport.query10(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("10", tables -> TpchParquetSupport.query10(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query12()
     {
-        assertMatchesReference("12", tables -> TpchParquetSupport.query12(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("12", tables -> TpchParquetSupport.query12(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query14()
     {
-        assertMatchesReference("14", tables -> TpchParquetSupport.query14(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("14", tables -> TpchParquetSupport.query14(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query19()
     {
-        assertMatchesReference("19", tables -> TpchParquetSupport.query19(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("19", tables -> TpchParquetSupport.query19(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query07()
     {
-        assertMatchesReference("07", tables -> TpchParquetSupport.query07(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("07", tables -> TpchParquetSupport.query07(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query08()
     {
-        assertMatchesReference("08", tables -> TpchParquetSupport.query08(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("08", tables -> TpchParquetSupport.query08(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query09()
     {
-        assertMatchesReference("09", tables -> TpchParquetSupport.query09(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("09", tables -> TpchParquetSupport.query09(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query13()
     {
-        assertMatchesReference("13", tables -> TpchParquetSupport.query13(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("13", tables -> TpchParquetSupport.query13(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query16()
     {
-        assertMatchesReference("16", tables -> TpchParquetSupport.query16(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("16", tables -> TpchParquetSupport.query16(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query18()
     {
-        assertMatchesReference("18", tables -> TpchParquetSupport.query18(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("18", tables -> TpchParquetSupport.query18(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
@@ -137,43 +138,43 @@ public class TestTpchQueries
     {
         // The output sorts by a double sum: near-equal values order differently across engines, so rows
         // within a tolerance-tied run of the sort key compare as sets.
-        assertMatchesReferenceWithTies("11", 1, tables -> TpchParquetSupport.query11(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReferenceWithTies("11", 1, tables -> TpchParquetSupport.query11(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query15()
     {
-        assertMatchesReference("15", tables -> TpchParquetSupport.query15(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("15", tables -> TpchParquetSupport.query15(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query17()
     {
-        assertMatchesReference("17", tables -> TpchParquetSupport.query17(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("17", tables -> TpchParquetSupport.query17(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query02()
     {
-        assertMatchesReference("02", tables -> TpchParquetSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("02", tables -> TpchParquetSupport.query02(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query20()
     {
-        assertMatchesReference("20", tables -> TpchParquetSupport.query20(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("20", tables -> TpchParquetSupport.query20(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query21()
     {
-        assertMatchesReference("21", tables -> TpchParquetSupport.query21(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("21", tables -> TpchParquetSupport.query21(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     @Test
     void query22()
     {
-        assertMatchesReference("22", tables -> TpchParquetSupport.query22(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables));
+        assertMatchesReference("22", tables -> TpchParquetSupport.query22(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
     }
 
     private static void assertMatchesReferenceWithTies(String queryId, int sortKeyColumn, java.util.function.Function<TpchParquetTables, Operator> query)

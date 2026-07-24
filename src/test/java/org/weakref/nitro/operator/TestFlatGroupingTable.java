@@ -18,8 +18,10 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
@@ -29,6 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestFlatGroupingTable
 {
+    private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
+
     @Test
     void testGeneratedDictionaryHashNullFreePairRequiresEnoughRows()
     {
@@ -40,7 +44,7 @@ class TestFlatGroupingTable
         Vector[] small = {
                 DictionaryVector.wrap(smallIds, smallSize, new I64Vector(new long[] {10, 20, 30})),
                 DictionaryVector.wrap(smallIds, smallSize, utf8("a", "b", "c"))};
-        FlatKeyLayout smallLayout = FlatKeyLayout.tryCreate(small, true);
+        FlatKeyLayout smallLayout = FlatKeyLayout.tryCreate(small, true, arrayPool);
         try {
             smallLayout.beginBatch(small, null);
             assertThat(smallLayout.prepareGeneratedDictionaryBatchHashes(smallSize, new long[smallSize])).isFalse();
@@ -58,7 +62,7 @@ class TestFlatGroupingTable
         Vector[] large = {
                 DictionaryVector.wrap(largeIds, largeSize, new I64Vector(new long[] {10, 20, 30})),
                 DictionaryVector.wrap(largeIds, largeSize, utf8("a", "b", "c"))};
-        FlatKeyLayout largeLayout = FlatKeyLayout.tryCreate(large, true);
+        FlatKeyLayout largeLayout = FlatKeyLayout.tryCreate(large, true, arrayPool);
         try {
             largeLayout.beginBatch(large, null);
             assertThat(largeLayout.prepareGeneratedDictionaryBatchHashes(largeSize, new long[largeSize])).isTrue();
@@ -85,7 +89,7 @@ class TestFlatGroupingTable
                 DictionaryVector.wrap(ids, size, new I64Vector(new long[] {10, 20, 30})),
                 DictionaryVector.wrap(ids, size, utf8("d", "e", "f")),
                 DictionaryVector.wrap(ids, size, utf8("g", "h", "i"))};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool);
         try {
             layout.beginBatch(values, null);
             assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
@@ -124,7 +128,7 @@ class TestFlatGroupingTable
                 new BooleanVector(mixedNullValues),
                 null,
                 null};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool);
         try {
             layout.beginBatch(values, nulls);
             long[] expected = new long[size];
@@ -168,8 +172,8 @@ class TestFlatGroupingTable
                 null,
                 null};
 
-        FlatGroupingTable fused = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 16, true);
-        FlatGroupingTable decoupled = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 16, true);
+        FlatGroupingTable fused = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 16, true);
+        FlatGroupingTable decoupled = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 16, true);
         try {
             I64Vector fusedGroups = new I64Vector(size);
             fused.beginBatch(values, nulls);
@@ -252,7 +256,7 @@ class TestFlatGroupingTable
                 null,
                 null};
 
-        FlatKeyLayout idLayout = FlatKeyLayout.tryCreate(dictionaryValues, true);
+        FlatKeyLayout idLayout = FlatKeyLayout.tryCreate(dictionaryValues, true, arrayPool);
         FlatGroupingTable idRecords = new FlatGroupingTable(idLayout, 16, true);
         try {
             idRecords.beginBatch(dictionaryValues, nulls);
@@ -292,7 +296,7 @@ class TestFlatGroupingTable
             idRecords.releaseBuffers();
         }
 
-        FlatKeyLayout fallbackLayout = FlatKeyLayout.tryCreate(dictionaryValues, true);
+        FlatKeyLayout fallbackLayout = FlatKeyLayout.tryCreate(dictionaryValues, true, arrayPool);
         FlatGroupingTable fallbackRecords = new FlatGroupingTable(fallbackLayout, 16, true);
         try {
             fallbackRecords.beginBatch(flatValues, nulls);
@@ -317,7 +321,7 @@ class TestFlatGroupingTable
             fallbackRecords.releaseBuffers();
         }
 
-        FlatKeyLayout nonNullableLayout = FlatKeyLayout.tryCreate(dictionaryValues, false);
+        FlatKeyLayout nonNullableLayout = FlatKeyLayout.tryCreate(dictionaryValues, false, arrayPool);
         FlatGroupingTable nonNullableRecords = new FlatGroupingTable(nonNullableLayout, 16, true);
         try {
             Vector[] noNulls = new Vector[dictionaryValues.length];
@@ -363,7 +367,7 @@ class TestFlatGroupingTable
                 DictionaryVector.wrap(largeIds, size, utf8(compactTestStrings("large-", 1023))),
                 DictionaryVector.wrap(mediumIds, size, utf8(compactTestStrings("medium-", 15))),
                 DictionaryVector.wrap(constantIds, size, utf8("constant"))};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(first, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(first, true, arrayPool), 16, true);
         try {
             table.beginBatch(first, null);
             table.prepareBatchHashes(first, null, Mask.all(size));
@@ -434,7 +438,7 @@ class TestFlatGroupingTable
                 DictionaryVector.wrap(constantIds, size, utf8("first")),
                 DictionaryVector.wrap(constantIds, size, utf8("second")),
                 DictionaryVector.wrap(constantIds, size, utf8("third"))};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 16, true);
         try {
             table.beginBatch(values, null);
             table.prepareBatchHashes(values, null, Mask.all(size));
@@ -472,7 +476,7 @@ class TestFlatGroupingTable
                 DictionaryVector.wrap(ids, size, utf8(compactTestStrings("second-", cardinality))),
                 DictionaryVector.wrap(ids, size, utf8(compactTestStrings("third-", cardinality))),
                 DictionaryVector.wrap(ids, size, utf8(compactTestStrings("fourth-", cardinality)))};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 16, true);
         try {
             table.beginBatch(values, null);
             table.prepareBatchHashes(values, null, Mask.all(size));
@@ -494,7 +498,7 @@ class TestFlatGroupingTable
     {
         Vector[] values = {utf8("alpha", "beta")};
         Vector[] nulls = {new BooleanVector(new boolean[] {false, false})};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 2, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 2, true);
         try {
             // A process-wide pooled fixed-record chunk may contain a null flag from its preceding owner. The
             // null-free single-binary writer must establish the complete new record rather than depend on the
@@ -526,7 +530,7 @@ class TestFlatGroupingTable
         Vector[] values = {new I64Vector(keys), utf8(labels)};
         Vector[] nulls = {null, null};
 
-        GroupingState oneBatch = new GroupingState();
+        GroupingState oneBatch = new GroupingState(arrayPool);
         try {
             oneBatch.assignGroups(values, nulls, Mask.all(size), new I64Vector(size), false);
             assertThat(oneBatch.usesPackedFlatIdentitySlots()).isFalse();
@@ -535,7 +539,7 @@ class TestFlatGroupingTable
             oneBatch.releaseBuffers();
         }
 
-        GroupingState sustained = new GroupingState();
+        GroupingState sustained = new GroupingState(arrayPool);
         try {
             sustained.assignGroups(values, nulls, Mask.all(size), new I64Vector(size), true);
             assertThat(sustained.usesPackedFlatIdentitySlots()).isTrue();
@@ -556,7 +560,7 @@ class TestFlatGroupingTable
             second[position] = position * 3L;
         }
 
-        GroupingState compact = new GroupingState();
+        GroupingState compact = new GroupingState(arrayPool);
         try {
             compact.assignGroups(
                     new Vector[] {new I64Vector(first), new I64Vector(second)},
@@ -574,7 +578,7 @@ class TestFlatGroupingTable
         for (int position = 0; position < size; position++) {
             wideFirst[position] += 1L << 40;
         }
-        GroupingState fullWidth = new GroupingState();
+        GroupingState fullWidth = new GroupingState(arrayPool);
         try {
             fullWidth.assignGroups(
                     new Vector[] {new I64Vector(wideFirst), new I64Vector(second)},
@@ -604,7 +608,7 @@ class TestFlatGroupingTable
                 4,
                 new BooleanVector(new boolean[] {false, true, false}));
         Vector[] firstNulls = {DictionaryVector.wrapNested(new int[] {3, 0, 1, 2, 3}, 5, innerNulls), null, null, null, null, null};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 4, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 4, true);
         try {
             table.beginBatch(values, firstNulls);
             table.prepareBatchHashes(values, firstNulls, Mask.all(5));
@@ -648,7 +652,7 @@ class TestFlatGroupingTable
         tinyCube[5] = compactTestLongs(size, 1);
         tinyCube[6] = compactTestLongs(size, 10);
         tinyCube[7] = compactTestLongs(size, 100);
-        assertThat(FlatKeyLayout.tryCreate(tinyCube).usesCompactEmbeddedBinaryRecords()).isFalse();
+        assertThat(FlatKeyLayout.tryCreate(tinyCube, arrayPool).usesCompactEmbeddedBinaryRecords()).isFalse();
 
         Vector[] unreused = new Vector[8];
         for (int field = 0; field < 5; field++) {
@@ -657,13 +661,13 @@ class TestFlatGroupingTable
         unreused[5] = compactTestLongs(size, 1);
         unreused[6] = compactTestLongs(size, 10);
         unreused[7] = compactTestLongs(size, 100);
-        assertThat(FlatKeyLayout.tryCreate(unreused).usesCompactEmbeddedBinaryRecords()).isFalse();
+        assertThat(FlatKeyLayout.tryCreate(unreused, arrayPool).usesCompactEmbeddedBinaryRecords()).isFalse();
     }
 
     @Test
     void testCompactEmbeddedBinaryRecordsPreserveIdsFallbacksAndMaterialization()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("compact-embedded-binary-records");
         int size = 1024;
         Vector[] first = {
@@ -675,7 +679,7 @@ class TestFlatGroupingTable
                 compactTestLongs(size, 1),
                 compactTestLongs(size, 10),
                 compactTestLongs(size, 100)};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(first);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(first, arrayPool);
         assertThat(layout.usesCompactEmbeddedBinaryRecords()).isTrue();
         assertThat(layout.fixedRecordSize()).isEqualTo(5 * Integer.BYTES + 3 * Long.BYTES);
 
@@ -739,11 +743,11 @@ class TestFlatGroupingTable
     @Test
     void testSingleDictionaryGroupCacheObservesPooledContentGeneration()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("dictionary-group-cache-generation");
         BinaryVector first = binary(allocator, context, "alpha", "beta");
         Vector[] firstValues = {DictionaryVector.wrap(new int[] {0, 1, 0, 1}, 4, first)};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true, arrayPool), 16, true);
         try {
             table.beginBatch(firstValues, new Vector[] {null});
             table.prepareBatchHashes(firstValues, new Vector[] {null}, Mask.all(4));
@@ -784,11 +788,11 @@ class TestFlatGroupingTable
     @Test
     void testSingleDictionaryGroupCacheRejectsSparseBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("sparse-dictionary-group-cache");
         BinaryVector dictionary = binary(allocator, context, "alpha", "beta");
         Vector[] values = {DictionaryVector.wrap(new int[] {0, 1, 0, 1}, 4, dictionary)};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, true, arrayPool), 16, true);
         try {
             table.beginBatch(values, new Vector[] {null});
             table.prepareBatchHashes(values, new Vector[] {null}, Mask.sparse(new int[] {0, 2}, 4));
@@ -804,9 +808,9 @@ class TestFlatGroupingTable
     @Test
     void testDictionaryValueIdsObservePooledBinaryGeneration()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("pooled-dictionary-generation");
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         int[] firstId = {0};
         int[] secondId = {1};
 
@@ -874,7 +878,7 @@ class TestFlatGroupingTable
     void testEnsureCapacityPreservesExistingAndLaterGroups()
     {
         Vector[] values = {utf8("alpha", "beta", "alpha")};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values), 2);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(values, arrayPool), 2);
         try {
             table.beginBatch(values, new Vector[] {null});
             assertThat(table.assignGroup(values, null, 0, 0)).isEqualTo(0);
@@ -905,7 +909,7 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {2000, 2000, 2001, 2000}),
                 new I64Vector(new long[] {1, 1, 1, 2}),
                 utf8("books", "books", "books", "books")};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(first), 4);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(first, arrayPool), 4);
         try {
             table.beginBatch(first, null);
             table.prepareBatchHashes(first, null, Mask.all(4));
@@ -940,7 +944,7 @@ class TestFlatGroupingTable
             assertThat(table.assignGroup(repeated, null, 0, 5)).isEqualTo(0);
             table.endBatch();
 
-            Allocator allocator = new Allocator();
+            Allocator allocator = new Allocator(EngineResources.createDefault());
             Allocator.Context context = new Allocator.Context("single-run-binary-grouped-output");
             try {
                 Vector groupedChannel = table.groupedValues(0, Mask.all(5), null, allocator, context).values();
@@ -978,7 +982,7 @@ class TestFlatGroupingTable
             sharedIds[position] = position;
         }
 
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector initialGroups = new I64Vector(size);
         state.assignGroups(
                 new Vector[] {
@@ -1020,7 +1024,7 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {0, 0, 0, 0})};
         BooleanVector allNull = new BooleanVector(new boolean[] {true, true, true, true});
         BooleanVector nullFree = new BooleanVector(new boolean[] {false, false, false, false});
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         try {
             I64Vector grandTotal = new I64Vector(ids.length);
             state.assignGroups(values, new Vector[] {allNull, allNull, nullFree}, Mask.all(ids.length), grandTotal);
@@ -1135,7 +1139,7 @@ class TestFlatGroupingTable
             categoricalValues[position] = "category-" + (position & 15);
         }
 
-        GroupingState distinct = new GroupingState();
+        GroupingState distinct = new GroupingState(arrayPool);
         I64Vector distinctGroups = new I64Vector(size);
         distinct.assignGroups(new Vector[] {utf8(distinctValues)}, new Vector[] {null}, Mask.all(size), distinctGroups);
         assertThat(distinct.usesFlatSingleRecordIdentity()).isTrue();
@@ -1144,7 +1148,7 @@ class TestFlatGroupingTable
         assertThat(distinctGroups.values()[size - 1]).isEqualTo(size - 1L);
         distinct.releaseBuffers();
 
-        GroupingState categorical = new GroupingState();
+        GroupingState categorical = new GroupingState(arrayPool);
         I64Vector categoricalGroups = new I64Vector(size);
         categorical.assignGroups(new Vector[] {utf8(categoricalValues)}, new Vector[] {null}, Mask.all(size), categoricalGroups);
         assertThat(categorical.usesFlatSingleRecordIdentity()).isFalse();
@@ -1161,7 +1165,7 @@ class TestFlatGroupingTable
         Vector[] nulls = {firstNulls};
         BinaryVector first = utf8("alpha", "ignored", "beta", "alpha");
         Vector[] firstValues = {first};
-        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true), 16, true);
+        FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true, arrayPool), 16, true);
         try {
             table.beginBatch(firstValues, nulls);
             assertThat(table.assignGroup(firstValues, nulls, 0, 0)).isEqualTo(0);
@@ -1200,7 +1204,7 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {10, 10, 20, 10}),
                 new I64Vector(new long[] {1, 1, 1, 2})};
         Vector[] nulls = {null, null, null, null};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool);
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
             table.beginBatch(firstValues, nulls);
@@ -1238,7 +1242,7 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {10, 20}),
                 new I64Vector(new long[] {100, 200})};
         Vector[] nulls = {null, null, null, null};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool);
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
             // The negative value makes this physical batch ineligible for normalized-key scratch, even though the

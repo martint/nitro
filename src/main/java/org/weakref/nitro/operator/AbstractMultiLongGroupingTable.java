@@ -55,7 +55,7 @@ abstract class AbstractMultiLongGroupingTable
     final int arity;
     final int stride;
     final boolean storesGroupIds;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     long[] entries;
     byte[] nullMasks;
     // Swiss-table control byte per slot: 0 marks an empty slot, otherwise a 7-bit hash fragment with the high bit set
@@ -74,8 +74,9 @@ abstract class AbstractMultiLongGroupingTable
         return (byte) ((hash >>> 24) | 0x80);
     }
 
-    AbstractMultiLongGroupingTable(int arity, int expectedSize, boolean retainGroupKeys)
+    AbstractMultiLongGroupingTable(PrimitiveArrayPool arrayPool, int arity, int expectedSize, boolean retainGroupKeys)
     {
+        this.arrayPool = arrayPool;
         this.arity = arity;
         this.storesGroupIds = retainGroupKeys;
         this.stride = arity + (storesGroupIds ? 1 : 0);

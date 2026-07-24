@@ -28,6 +28,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -72,7 +73,7 @@ public class BenchmarkOperators
     private static final int UTF8_JOIN_NULL_EVERY = 7;
     private static final int UTF8_JOIN_WIDE_PAYLOAD_LENGTH = 128;
 
-    private final Allocator allocator = new Allocator();
+    private final Allocator allocator = new Allocator(EngineResources.createDefault());
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private TableOperator.Page groupUtf8Page;
     private TableOperator.Page outerJoinUtf8Page;

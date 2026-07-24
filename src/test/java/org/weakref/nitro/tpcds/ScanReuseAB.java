@@ -14,6 +14,7 @@
 package org.weakref.nitro.tpcds;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -66,7 +67,7 @@ public final class ScanReuseAB
 
     private static long run(String mode, List<Path> files)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         long sum = 0;
         try (Operator operator = switch (mode) {
             case "hardwood" -> new HardwoodParquetScanOperator(allocator, files, COLUMNS);

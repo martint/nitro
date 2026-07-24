@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.tpcds;
 
+import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 
@@ -32,6 +34,8 @@ public final class VerifyDfSkip
 
     public static void main(String[] args)
     {
+        EngineResources engineResources = EngineResources.createDefault();
+        PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
         String table = "inventory";
         String filterColumn = "inv_date_sk";
         String payloadColumn = args.length > 0 ? args[0] : "inv_item_sk";
@@ -53,7 +57,7 @@ public final class VerifyDfSkip
         boolean filterIsInt = filterMeta.type() == org.apache.parquet.format.Type.INT32 && !filterMeta.decimal();
 
         // First pass: global min/max of the filter column to pick a ~20% clustered range.
-        ColumnReader probe = reader(files, filterColumn);
+        ColumnReader probe = reader(files, filterColumn, arrayPool);
         long min = Long.MAX_VALUE;
         long max = Long.MIN_VALUE;
         int[] buf = new int[window];
@@ -79,9 +83,9 @@ public final class VerifyDfSkip
         long hi = min + (max - min) / 5;   // first 20% of the date domain (clustered when date-sorted)
         System.out.println("filter " + filterColumn + " range [" + lo + "," + hi + "] of [" + min + "," + max + "]");
 
-        ColumnReader date = reader(files, filterColumn);
-        ColumnReader skip = reader(files, payloadColumn);
-        ColumnReader full = reader(files, payloadColumn);
+        ColumnReader date = reader(files, filterColumn, arrayPool);
+        ColumnReader skip = reader(files, payloadColumn, arrayPool);
+        ColumnReader full = reader(files, payloadColumn, arrayPool);
         ParquetFile.Column meta;
         try (ParquetFile f = ParquetFile.open(files.get(0))) {
             meta = f.column(payloadColumn);
@@ -147,14 +151,14 @@ public final class VerifyDfSkip
         System.out.println("OK df-skip==full for " + payloadColumn + " (" + checked + " survivors checked, window=" + window + ")");
     }
 
-    private static ColumnReader reader(List<Path> files, String column)
+    private static ColumnReader reader(List<Path> files, String column, PrimitiveArrayPool arrayPool)
     {
         ColumnReader reader = null;
         for (Path p : files) {
             ParquetFile file = ParquetFile.open(p);
             ParquetFile.Column col = file.column(column);
             if (reader == null) {
-                reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal());
+                reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal(), null, arrayPool);
             }
             for (var rowGroup : file.rowGroups()) {
                 reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);

@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -61,7 +62,7 @@ public final class Q39Perf
     private static long run(Method method, PrimitiveRegistry registry, TpcdsParquetTables tables)
             throws Exception
     {
-        try (Operator operator = (Operator) method.invoke(null, new Allocator(), registry, tables)) {
+        try (Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), registry, tables)) {
             return OperatorAssertions.OperatorAssert.toRows(operator).size();
         }
     }

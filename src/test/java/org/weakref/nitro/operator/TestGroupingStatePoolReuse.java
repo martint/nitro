@@ -18,8 +18,10 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 
 import java.nio.charset.StandardCharsets;
@@ -28,11 +30,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestGroupingStatePoolReuse
 {
+    private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
+
     @Test
     public void testReleasedDirectIndexDoesNotExposeStaleGroups()
     {
         for (int execution = 0; execution < 2; execution++) {
-            GroupingState state = new GroupingState();
+            GroupingState state = new GroupingState(arrayPool);
             int size = 10_000;
             long[] firstKeys = new long[size];
             long[] secondKeys = new long[size];
@@ -56,7 +60,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testSingleLongGroupingMigratesToDirectIndexAndBackWithoutChangingIds()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         int firstSize = 10_000;
         long[] firstKeys = new long[firstSize];
         for (int index = 0; index < firstSize; index++) {
@@ -98,7 +102,7 @@ public class TestGroupingStatePoolReuse
             firstKeys[index] = compressibleSparseKey(index);
         }
 
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(firstSize);
         state.assignGroups(new I64Vector(firstKeys), null, Mask.all(firstSize), firstGroups);
         assertThat(firstGroups.values()[0]).isZero();
@@ -131,7 +135,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntTripleGroupingPreservesKeysAndFirstSeenIds()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector groups = new I64Vector(5);
         state.assignGroups(
                 new Vector[] {
@@ -145,7 +149,7 @@ public class TestGroupingStatePoolReuse
         assertThat(groups.values()).containsExactly(0, 1, 0, 2, 3);
         assertThat(state.groupCount()).isEqualTo(4);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("packedIntTripleTest");
         assertThat(((I64Vector) state.groupedValues(0, Mask.all(4), null, allocator, context).values()).values())
                 .containsExactly(1, -1, Integer.MAX_VALUE, -1);
@@ -161,7 +165,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntTripleGroupingPromotesOnNullAndWideValue()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(2);
         state.assignGroups(
                 new Vector[] {
@@ -188,7 +192,7 @@ public class TestGroupingStatePoolReuse
         assertThat(secondGroups.values()).containsExactly(2, 1, 3);
         assertThat(state.groupCount()).isEqualTo(4);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("packedIntTriplePromotionTest");
         Streams first = state.groupedValues(0, Mask.all(4), null, allocator, context);
         Streams third = state.groupedValues(2, Mask.all(4), null, allocator, context);
@@ -204,7 +208,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPreservesSignedKeysAndFirstSeenIds()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector groups = new I64Vector(4);
         state.assignGroups(
                 new Vector[] {
@@ -217,7 +221,7 @@ public class TestGroupingStatePoolReuse
         assertThat(groups.values()).containsExactly(0, 1, 0, 2);
         assertThat(state.groupCount()).isEqualTo(3);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("packedIntPairTest");
         Streams first = state.groupedValues(0, Mask.all(3), null, allocator, context);
         Streams second = state.groupedValues(1, Mask.all(3), null, allocator, context);
@@ -232,7 +236,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPromotesOnNullWithoutChangingIds()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(2);
         state.assignGroups(
                 new Vector[] {new I64Vector(new long[] {1, 3}), new I64Vector(new long[] {2, 4})},
@@ -250,7 +254,7 @@ public class TestGroupingStatePoolReuse
         assertThat(secondGroups.values()).containsExactly(2, 1, 3);
         assertThat(state.groupCount()).isEqualTo(4);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("packedIntPairPromotionTest");
         Streams first = state.groupedValues(0, Mask.all(4), null, allocator, context);
         Streams second = state.groupedValues(1, Mask.all(4), null, allocator, context);
@@ -265,7 +269,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPromotesOnWideValue()
     {
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(1);
         state.assignGroups(
                 new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {2})},
@@ -282,7 +286,7 @@ public class TestGroupingStatePoolReuse
                 secondGroups);
         assertThat(secondGroups.values()).containsExactly(0, 1);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("packedIntPairWidePromotionTest");
         Streams first = state.groupedValues(0, Mask.all(2), null, allocator, context);
         assertThat(((I64Vector) first.values()).values()).containsExactly(1, wide);
@@ -304,7 +308,7 @@ public class TestGroupingStatePoolReuse
         DictionaryVector longInner = DictionaryVector.wrapNested(new int[] {1, 2, 0, 1}, 4, longLeaf);
 
         int[] outerIds = {1, 0, 3, 2, 1};
-        GroupingState state = new GroupingState();
+        GroupingState state = new GroupingState(arrayPool);
         I64Vector groups = new I64Vector(outerIds.length);
         state.assignGroups(
                 new Vector[] {
@@ -328,7 +332,7 @@ public class TestGroupingStatePoolReuse
         BinaryVector secondValues = dictionaryValues(dictionarySize, "b");
         int[] firstIds = {0, 1, 2, 3, 4};
 
-        GroupingState first = new GroupingState();
+        GroupingState first = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(firstIds.length);
         first.assignGroups(
                 new Vector[] {DictionaryVector.wrap(firstIds, firstValues), DictionaryVector.wrap(firstIds, secondValues)},
@@ -338,7 +342,7 @@ public class TestGroupingStatePoolReuse
         assertThat(firstGroups.values()).containsExactly(0, 1, 2, 3, 4);
         first.releaseBuffers();
 
-        GroupingState second = new GroupingState();
+        GroupingState second = new GroupingState(arrayPool);
         I64Vector secondGroups = new I64Vector(1);
         int[] secondIds = {4};
         second.assignGroups(
@@ -355,7 +359,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPooledFlatRecordDoesNotReadNullVariableWidthPayload()
     {
-        GroupingState first = new GroupingState();
+        GroupingState first = new GroupingState(arrayPool);
         I64Vector firstGroups = new I64Vector(1);
         first.assignGroups(
                 new Vector[] {binaryValue("prefix"), binaryValue("poison"), new I64Vector(new long[] {1})},
@@ -364,7 +368,7 @@ public class TestGroupingStatePoolReuse
                 firstGroups);
         first.releaseBuffers();
 
-        GroupingState second = new GroupingState();
+        GroupingState second = new GroupingState(arrayPool);
         I64Vector secondGroups = new I64Vector(1);
         second.assignGroups(
                 new Vector[] {binaryValue("x"), binaryValue("ignored"), new I64Vector(new long[] {2})},
@@ -372,7 +376,7 @@ public class TestGroupingStatePoolReuse
                 Mask.all(1),
                 secondGroups);
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("pooledFlatRecordTest");
         Streams grouped = second.groupedValues(1, Mask.all(1), null, allocator, context);
         assertThat(((BooleanVector) grouped.get(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS)).values()[0]).isTrue();

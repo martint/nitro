@@ -14,6 +14,8 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
 import java.util.HashMap;
@@ -29,6 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TestMultiLongGroupingTable
 {
+    private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
+
     @Test
     void testAllAritiesAgainstReferenceModel()
     {
@@ -55,7 +59,7 @@ class TestMultiLongGroupingTable
             positions[position] = position;
         }
 
-        AbstractMultiLongGroupingTable table = MultiLongGroupingTableGenerator.createDistinct(arity, 16);
+        AbstractMultiLongGroupingTable table = MultiLongGroupingTableGenerator.createDistinct(arity, 16, arrayPool);
         assertThat(table.stride).isEqualTo(arity);
         assertThat(table.keysByGroup).isNull();
         assertThat(table.assignDistinctBatchNullFree(keyAccessors, nullAccessors, positions, rows, positions, 0))
@@ -90,8 +94,8 @@ class TestMultiLongGroupingTable
             }
             long[] compactResult = new long[rows];
             long[] referenceResult = new long[rows];
-            LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16);
-            LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16);
+            LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool);
+            LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16, arrayPool);
             long compactCount = compact.assignBatch(keyAccessors, nullAccessors, positions, rows, compactResult, 0);
             long referenceCount = reference.assignBatch(keyAccessors, nullAccessors, positions, rows, referenceResult, 0);
             assertThat(compactResult).isEqualTo(referenceResult);
@@ -120,9 +124,9 @@ class TestMultiLongGroupingTable
     @Test
     void testAdaptiveGroupingPairSkipsShortLivedPreTerminalGeneration()
     {
-        AdaptiveLongGroupingTable groupingPair = AdaptiveLongGroupingTable.create(2, 16);
-        AdaptiveLongGroupingTable distinctPair = AdaptiveLongGroupingTable.createDistinct(2, 16);
-        AdaptiveLongGroupingTable groupingTriple = AdaptiveLongGroupingTable.create(3, 16);
+        AdaptiveLongGroupingTable groupingPair = AdaptiveLongGroupingTable.create(2, 16, arrayPool);
+        AdaptiveLongGroupingTable distinctPair = AdaptiveLongGroupingTable.createDistinct(2, 16, arrayPool);
+        AdaptiveLongGroupingTable groupingTriple = AdaptiveLongGroupingTable.create(3, 16, arrayPool);
         int quarterTerminalCapacity = 1 << 22;
 
         assertThat(groupingPair.terminalReuseEligible(quarterTerminalCapacity)).isTrue();
@@ -158,8 +162,8 @@ class TestMultiLongGroupingTable
             for (int column = 0; column < arity; column++) {
                 nonNullAccessors[column] = ignored -> false;
             }
-            LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16);
-            LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16);
+            LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool);
+            LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16, arrayPool);
             compact.ensureCapacity(rows);
             long compactCount = compact.assignBatch(keyAccessors, null, null, rows, compactResult, 0);
             long referenceCount = reference.assignBatch(keyAccessors, nonNullAccessors, positions, rows, referenceResult, 0);
@@ -191,7 +195,7 @@ class TestMultiLongGroupingTable
             keyAccessors[column] = position -> columnKeys[position];
         }
 
-        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(arity, 16);
+        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(arity, 16, arrayPool);
         int[] distinctPositions = new int[keys[0].length];
 
         long nextGroupId = table.assignDistinctBatch(
@@ -230,7 +234,7 @@ class TestMultiLongGroupingTable
     @Test
     void testAdaptiveDistinctGroupedProbePreservesLinearOrderAndWrap()
     {
-        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(2, 800_000);
+        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.createDistinct(2, 800_000, arrayPool);
         int fragment = 0xA5;
         int mismatch = 0x81 << 24 | 1;
         int last = table.slots.length - 1;
@@ -282,8 +286,8 @@ class TestMultiLongGroupingTable
         }
         long[] compactResult = new long[rows];
         long[] referenceResult = new long[rows];
-        LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16);
-        LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16);
+        LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool);
+        LongGroupingTable reference = MultiLongGroupingTableGenerator.create(arity, 16, arrayPool);
         compact.ensureCapacity(rows);
         long compactCount = compact.assignBatch(keyAccessors, partialNullAccessors, null, rows, compactResult, 0);
         long referenceCount = reference.assignBatch(keyAccessors, referenceNullAccessors, positions, rows, referenceResult, 0);
@@ -299,7 +303,7 @@ class TestMultiLongGroupingTable
         reference.releaseBuffers();
     }
 
-    private static void assertMatchesReference(int arity, int rows, int distinctPerColumn, long seed, double nullFraction)
+    private void assertMatchesReference(int arity, int rows, int distinctPerColumn, long seed, double nullFraction)
     {
         Random random = new Random(seed);
         // Build the key columns and null flags.
@@ -327,7 +331,7 @@ class TestMultiLongGroupingTable
         }
         long[] result = new long[rows];
 
-        AbstractMultiLongGroupingTable table = MultiLongGroupingTableGenerator.create(arity, 16);
+        AbstractMultiLongGroupingTable table = MultiLongGroupingTableGenerator.create(arity, 16, arrayPool);
         long nextGroupId = table.assignBatch(keyAccessors, nullAccessors, positions, rows, result, 0L);
 
         // Reference: first-seen ids over the canonical (nullMask, key-or-0) tuple.

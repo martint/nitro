@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.PrimitiveArrayPool;
+
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
@@ -35,6 +37,7 @@ final class AdaptiveLongGroupingTableGenerator
     private AdaptiveLongGroupingTableGenerator() {}
 
     private static final ClassDesc CD_BASE = ClassDesc.of("org.weakref.nitro.operator.AdaptiveLongGroupingTable");
+    private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_LONG_ARRAY_2D = CD_LONG_ARRAY.arrayType();
@@ -46,14 +49,14 @@ final class AdaptiveLongGroupingTableGenerator
 
     private static final ConcurrentHashMap<Integer, MethodHandle> CONSTRUCTORS = new ConcurrentHashMap<>();
 
-    static AdaptiveLongGroupingTable create(int arity, int expectedSize, boolean groupedProbeEligible)
+    static AdaptiveLongGroupingTable create(int arity, int expectedSize, boolean groupedProbeEligible, PrimitiveArrayPool arrayPool)
     {
         int shape = arity << 1 | (groupedProbeEligible ? 1 : 0);
         MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(
                 shape,
                 key -> generate(key >>> 1, (key & 1) != 0));
         try {
-            return (AdaptiveLongGroupingTable) constructor.invoke(expectedSize);
+            return (AdaptiveLongGroupingTable) constructor.invoke(arrayPool, expectedSize);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated compact grouping table for arity " + arity, e);
@@ -70,12 +73,13 @@ final class AdaptiveLongGroupingTableGenerator
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_BASE);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
-            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_int), ClassFile.ACC_PUBLIC, code -> {
+            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int), ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
+                code.aload(1);
                 code.loadConstant(arity);
-                code.iload(1);
+                code.iload(2);
                 code.loadConstant(groupedProbeEligible ? 1 : 0);
-                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_int, CD_int, CD_boolean));
+                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_int, CD_boolean));
                 code.return_();
             });
             builder.withMethodBody("normalizeBatch", normalizeType(), ClassFile.ACC_PUBLIC, code -> emitNormalize(code, arity));
@@ -91,7 +95,9 @@ final class AdaptiveLongGroupingTableGenerator
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup()
                     .defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
-            return lookup.findConstructor(lookup.lookupClass(), MethodType.methodType(void.class, int.class));
+            return lookup.findConstructor(
+                    lookup.lookupClass(),
+                    MethodType.methodType(void.class, PrimitiveArrayPool.class, int.class));
         }
         catch (ReflectiveOperationException e) {
             throw new RuntimeException("Failed to generate compact grouping table for arity " + arity, e);

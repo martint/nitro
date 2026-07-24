@@ -16,6 +16,7 @@ package org.weakref.nitro.tpch;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -37,7 +38,7 @@ public final class TpchDigest
                     name, Allocator.class, PrimitiveRegistry.class, TpchParquetTables.class);
             method.setAccessible(true);
             List<?> rows;
-            try (Operator operator = (Operator) method.invoke(null, new Allocator(), registry, tables)) {
+            try (Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), registry, tables)) {
                 rows = OperatorAssertions.OperatorAssert.toRows(operator);
             }
             long digest = 1125899906842597L;

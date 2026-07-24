@@ -23,6 +23,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -102,7 +103,7 @@ import static org.weakref.nitro.data.Row.row;
 @Execution(ExecutionMode.SAME_THREAD)
 public class TestOperators
 {
-    private final Allocator allocator = new Allocator();
+    private final Allocator allocator = new Allocator(EngineResources.createDefault());
 
     @AfterAll
     void tearDown()

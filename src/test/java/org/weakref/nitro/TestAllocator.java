@@ -16,21 +16,107 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.function.scalar.builtin.VectorAccess;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestAllocator
 {
     @Test
+    void testEngineResourcesAreIsolatedAndExplicitlyClosed()
+    {
+        EngineResources first = EngineResources.createDefault();
+        EngineResources second = EngineResources.createDefault();
+        PrimitiveArrayPool firstArrays = first.primitiveArrays();
+
+        int[] retained = new int[1 << 16];
+        assertThat(firstArrays.retain(int[].class, retained.length, (long) retained.length * Integer.BYTES, retained)).isTrue();
+        assertThat(firstArrays.retainedBytes()).isEqualTo((long) retained.length * Integer.BYTES);
+        assertThat(second.primitiveArrays().retainedBytes()).isZero();
+
+        first.close();
+        assertThatThrownBy(first::primitiveArrays)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Engine resources are closed");
+        assertThatThrownBy(() -> firstArrays.release(new int[1]))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Primitive array pool is closed");
+        assertThat(second.primitiveArrays().retainedBytes()).isZero();
+        second.close();
+    }
+
+    @Test
+    void testResidentMemoryIncludesRetainedPool()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("test");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            I64Vector vector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            long bytes = vector.retainedBytes();
+
+            assertThat(allocator.residentBytes()).isEqualTo(bytes);
+            assertThat(memory.reservedBytes()).isEqualTo(bytes);
+
+            allocator.release(context, vector);
+            assertThat(allocator.residentBytes()).isEqualTo(bytes);
+            assertThat(memory.reservedBytes()).isEqualTo(bytes);
+
+            I64Vector reused = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            assertThat(reused).isSameAs(vector);
+            assertThat(memory.reservedBytes()).isEqualTo(bytes);
+
+            allocator.discard(context, reused);
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testClosingAllocatorReleasesResidentConstantsAndPools()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator allocator = new Allocator(EngineResources.createDefault(), memory);
+        Allocator.Context context = new Allocator.Context("test");
+
+        allocator.borrowAllFalseBoolean(context, 32);
+        I64Vector vector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+        allocator.release(context, vector);
+        assertThat(memory.reservedBytes()).isPositive();
+
+        allocator.close();
+        assertThat(memory.reservedBytes()).isZero();
+        assertThat(allocator.residentBytes()).isZero();
+        allocator.close();
+    }
+
+    @Test
+    void testBlockedMemoryContinuationIsExposed()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        memory.blocked = new CompletableFuture<>();
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            allocator.allocate(new Allocator.Context("test"), I64Vector.class, 8, I64Vector::new);
+
+            assertThat(allocator.memoryBlocked()).contains(memory.blocked);
+            memory.blocked.complete(null);
+            assertThat(allocator.memoryBlocked()).isEmpty();
+        }
+    }
+
+    @Test
     void testCompatibleMaskPoolCanSpillEntireLocalBucket()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Object compatibilityGroup = new Object();
         Allocator.Context producer = new Allocator.Context("producer", new Object(), compatibilityGroup);
         Allocator.Context consumer = new Allocator.Context("consumer", new Object(), compatibilityGroup);
@@ -52,7 +138,7 @@ class TestAllocator
     void testCompatibleVectorPoolRequiresThreeRegisteredGroups()
     {
         Object compatibilityGroup = new Object();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context first = new Allocator.Context("first", new Object(), compatibilityGroup);
         Allocator.Context second = new Allocator.Context("second", new Object(), compatibilityGroup);
         allocator.register(first);
@@ -65,7 +151,7 @@ class TestAllocator
         assertThat(secondVector).isNotSameAs(isolated);
         allocator.release(second, secondVector);
 
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
         first = new Allocator.Context("first", new Object(), compatibilityGroup);
         second = new Allocator.Context("second", new Object(), compatibilityGroup);
         Allocator.Context third = new Allocator.Context("third", new Object(), compatibilityGroup);
@@ -81,7 +167,7 @@ class TestAllocator
     @Test
     void testCompatibilityAdmissionDoesNotAccumulateAcrossExecutions()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Object compatibilityGroup = new Object();
         Allocator.Context first = new Allocator.Context("first", new Object(), compatibilityGroup);
         Allocator.Context second = new Allocator.Context("second", new Object(), compatibilityGroup);
@@ -109,7 +195,7 @@ class TestAllocator
     @Test
     void testSharedResourceClosesAfterLastLease()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Object key = new Object();
         AtomicInteger closes = new AtomicInteger();
 
@@ -130,7 +216,7 @@ class TestAllocator
     @Test
     void testAllFalseBooleanConstantIsSharedAndUnowned()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("test");
 
         Vector first = allocator.borrowAllFalseBoolean(context, 5);
@@ -159,6 +245,32 @@ class TestAllocator
         public void close()
         {
             closes.incrementAndGet();
+        }
+    }
+
+    private static final class TestingMemoryReservation
+            implements org.weakref.nitro.core.execution.MemoryReservation
+    {
+        private long reserved;
+        private CompletableFuture<Void> blocked = CompletableFuture.completedFuture(null);
+
+        @Override
+        public CompletionStage<Void> reserve(long bytes)
+        {
+            reserved += bytes;
+            return blocked;
+        }
+
+        @Override
+        public void release(long bytes)
+        {
+            reserved -= bytes;
+        }
+
+        @Override
+        public long reservedBytes()
+        {
+            return reserved;
         }
     }
 }

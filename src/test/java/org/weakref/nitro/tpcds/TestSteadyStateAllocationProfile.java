@@ -15,6 +15,7 @@ package org.weakref.nitro.tpcds;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
@@ -28,7 +29,7 @@ class TestSteadyStateAllocationProfile
     void testSeparatesHighWaterAndSteadyStateBatches()
     {
         SteadyStateAllocationProfile.Report report = SteadyStateAllocationProfile.measure(
-                () -> new GeneratorOperator(new Allocator(), 10, 2, List.of(new SequenceGenerator(0))),
+                () -> new GeneratorOperator(new Allocator(EngineResources.createDefault()), 10, 2, List.of(new SequenceGenerator(0))),
                 2);
 
         assertThat(report.highWaterBatches()).isEqualTo(2);

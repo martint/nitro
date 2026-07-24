@@ -22,6 +22,7 @@ package org.weakref.nitro.tpcds;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -64,7 +65,7 @@ public class MeasureSkipDecode
 
     private static int runQ88(TpcdsParquetTables tables, CompiledTpcdsQueries.Composite q88)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : q88.stages()) {
             virtuals.put(stage.virtualName(),

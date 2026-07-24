@@ -15,6 +15,7 @@ package org.weakref.nitro.tpch;
 
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
@@ -41,14 +42,14 @@ public final class QueryDriver
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         long sink = 0;
         for (int iteration = 0; iteration < warmup; iteration++) {
-            sink += consume(query(query, new Allocator(), registry, tables));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables));
         }
 
         if (Boolean.getBoolean("nitro.steadyStateAllocationProfile")) {
             int highWaterBatches = Integer.getInteger("nitro.allocationProfile.highWaterBatches", 8);
             for (int iteration = 0; iteration < measured; iteration++) {
                 SteadyStateAllocationProfile.Report report = SteadyStateAllocationProfile.measure(
-                        () -> query(query, new Allocator(), registry, tables),
+                        () -> query(query, new Allocator(EngineResources.createDefault()), registry, tables),
                         highWaterBatches);
                 sink += report.sink();
                 System.out.printf("%s allocation pass %d: %s%n", query, iteration + 1, report.formatReport());
@@ -62,7 +63,7 @@ public final class QueryDriver
             for (int iteration = 0; iteration < measured; iteration++) {
                 sink += HashJoinOperator.withMaterializationProfile(
                         profile,
-                        () -> consume(query(query, new Allocator(), registry, tables)));
+                        () -> consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables)));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -73,7 +74,7 @@ public final class QueryDriver
         if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, new Allocator(), registry, tables));
+                sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -85,7 +86,7 @@ public final class QueryDriver
         for (int iteration = 0; iteration < measured; iteration++) {
             sink += consume(TpchParquetSupport.withOperatorCpuProfile(
                     profile,
-                    () -> query(query, new Allocator(), registry, tables)));
+                    () -> query(query, new Allocator(EngineResources.createDefault()), registry, tables)));
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);

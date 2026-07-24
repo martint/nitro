@@ -184,7 +184,7 @@ public final class NitroParquetScanOperator
     private final DecompressedPageCache decompressedPages;
     private final Allocator.SharedResource<DirectNumericBatchDecodeAdmission> directNumericBatchDecodeLease;
     private final DirectNumericBatchDecodeAdmission directNumericBatchDecodeAdmission;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
     private final ColumnReader[] readers;
@@ -320,10 +320,13 @@ public final class NitroParquetScanOperator
     public NitroParquetScanOperator(Allocator allocator, List<Path> paths, List<String> columns)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
+        this.arrayPool = allocator.primitiveArrays();
         this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", BUFFER_POOL);
         this.allocationContext = batchBuffers.context();
         this.decompressedPageCacheLease = SHARED_DECOMPRESSED_PAGES
-                ? allocator.acquireSharedResource(DECOMPRESSED_PAGE_CACHE, DecompressedPageCache::new)
+                ? allocator.acquireSharedResource(
+                        DECOMPRESSED_PAGE_CACHE,
+                        () -> new DecompressedPageCache(allocator.engineResources().nativeBuffers()))
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
@@ -346,7 +349,7 @@ public final class NitroParquetScanOperator
 
         for (int c = 0; c < columnCount; c++) {
             ParquetFile.Column first = files[0].column(columns.get(c));
-            readers[c] = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal(), decompressedPages);
+            readers[c] = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal(), decompressedPages, arrayPool);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];

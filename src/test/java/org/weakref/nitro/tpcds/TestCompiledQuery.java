@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -44,7 +45,7 @@ public class TestCompiledQuery
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        CompiledQuerySupport.Loaded data = CompiledQuerySupport.load(new Allocator(), tables);
+        CompiledQuerySupport.Loaded data = CompiledQuerySupport.load(new Allocator(EngineResources.createDefault()), tables);
 
         Map<Long, Long> interpreted = runInterpreted(data);
         Map<Long, Long> compiled = runCompiled(data);
@@ -69,7 +70,7 @@ public class TestCompiledQuery
                 new org.weakref.nitro.jit.QueryLowering.Column("i_category", org.weakref.nitro.jit.ColumnEncoding.STRING, true));
         query.where(new org.weakref.nitro.jit.Plan.StringMatch(query.position("i_category"), List.of("Books"), false)).count();
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, query.lower());
         long compiledCount = run.result().columns()[0][0];
 
         // Reference: count non-null 'Books' rows directly from the loaded dictionary column.
@@ -108,11 +109,11 @@ public class TestCompiledQuery
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_quantity");
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, query.lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, query.lower());
         Operator bridged = new org.weakref.nitro.operator.CompiledOperator(run.result());
 
         List<Row> interpreted = OperatorAssertions.OperatorAssert.toRows(
-                CompiledQuerySupport.interpreted(new Allocator(), CompiledQuerySupport.load(new Allocator(), tables)));
+                CompiledQuerySupport.interpreted(new Allocator(EngineResources.createDefault()), CompiledQuerySupport.load(new Allocator(EngineResources.createDefault()), tables)));
 
         assertThat(interpreted).isNotEmpty();
         assertThat(OperatorAssertions.operator(bridged)).matches(interpreted);
@@ -133,15 +134,15 @@ public class TestCompiledQuery
                 .aggregate("sum", "ss_quantity");
         org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
 
-        Map<Long, Long> eager = toMap(CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result());
+        Map<Long, Long> eager = toMap(CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result());
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
                 org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         Map<Long, Long> streamed = toMap(streaming.execute(
-                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity"),
+                CompiledQuerySupport.parquetFlatSource(new Allocator(EngineResources.createDefault()), tables, "store_sales", "ss_item_sk", "ss_quantity"),
                 new org.weakref.nitro.jit.Column[0][], new int[0]));
         Map<Long, Long> zeroCopy = toMap(streaming.execute(
-                CompiledQuerySupport.parquetColumnarSource(new Allocator(), tables, "store_sales", "ss_item_sk", "ss_quantity"),
+                CompiledQuerySupport.parquetColumnarSource(new Allocator(EngineResources.createDefault()), tables, "store_sales", "ss_item_sk", "ss_quantity"),
                 new org.weakref.nitro.jit.Column[0][], new int[0]));
 
         assertThat(streamed).isEqualTo(eager);
@@ -183,7 +184,7 @@ public class TestCompiledQuery
     private static Map<Long, Long> runInterpreted(CompiledQuerySupport.Loaded data)
     {
         Map<Long, Long> result = new HashMap<>();
-        try (Operator aggregation = CompiledQuerySupport.interpreted(new Allocator(), data)) {
+        try (Operator aggregation = CompiledQuerySupport.interpreted(new Allocator(EngineResources.createDefault()), data)) {
             while (aggregation.hasNext()) {
                 try (Batch batch = aggregation.next()) {
                     Mask mask = batch.borrowMask();

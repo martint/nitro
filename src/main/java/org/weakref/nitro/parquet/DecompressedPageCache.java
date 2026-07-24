@@ -29,7 +29,7 @@ import static org.weakref.nitro.data.NativeBufferAdvice.preferHugePages;
 /**
  * Query-local immutable page reuse for physical columns consumed by more than one reader.
  *
- * <p>The cache owns one bounded direct slab. The slab itself participates in the process-wide primitive-buffer
+ * <p>The cache owns one bounded direct slab. The slab itself participates in the embedding engine's primitive-buffer
  * budget, so subsequent queries can recycle the same native storage while cache metadata and page identities remain
  * query-local. A source becomes eligible only after two independent readers register it and it demonstrates enough
  * page misses to amortize retaining the stream. Single-scan and short repeated columns retain the ordinary one-page
@@ -61,10 +61,10 @@ public final class DecompressedPageCache
     private int reusableSourceCount;
     private boolean closed;
 
-    public DecompressedPageCache()
+    public DecompressedPageCache(PrimitiveArrayPool pool)
     {
         this(
-                PrimitiveArrayPool.sharedNativeBuffers(),
+                pool,
                 Integer.getInteger("nitro.parquet.sharedDecompressedPageBytes", DEFAULT_CAPACITY),
                 Integer.getInteger("nitro.parquet.sharedDecompressedPageMinSourcePages", DEFAULT_MIN_SOURCE_PAGES),
                 Integer.getInteger("nitro.parquet.sharedDecompressedPageMinBytesPerSource", DEFAULT_MIN_BYTES_PER_SOURCE));

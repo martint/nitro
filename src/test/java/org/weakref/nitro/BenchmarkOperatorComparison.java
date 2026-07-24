@@ -27,6 +27,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Utf8Traits;
@@ -146,7 +147,7 @@ public class BenchmarkOperatorComparison
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
     }
 
     // Every pipeline terminates in a global sum over all of the operator-under-test's output columns.

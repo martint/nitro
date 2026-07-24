@@ -25,11 +25,6 @@ final class PositionBuffer
     private int maskStart;
     private int count;
 
-    PositionBuffer()
-    {
-        this(PrimitiveArrayPool.shared());
-    }
-
     PositionBuffer(PrimitiveArrayPool arrayPool)
     {
         this.arrayPool = arrayPool;

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
@@ -319,7 +320,7 @@ public class TestCompiledClickBenchQueries
     {
         ClickBenchParquetTables tables = requireHits();
         CompiledTpcdsQueries.Ported ported = portedForData.apply(tables.directory());
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
     }
 
@@ -338,13 +339,13 @@ public class TestCompiledClickBenchQueries
     {
         ClickBenchParquetTables tables = requireHits();
         CompiledTpcdsQueries.Ported ported = portedForData.apply(tables.directory());
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
         assertTopKRows(actual, expected, sortColumn, offsetCut);
@@ -394,7 +395,7 @@ public class TestCompiledClickBenchQueries
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
         assertTopKRows(actual, expected, sortColumn, false);
@@ -411,15 +412,15 @@ public class TestCompiledClickBenchQueries
         ClickBenchParquetTables tables = requireHits();
 
         CompiledTpcdsQueries.Ported limited = CompiledClickBenchQueries.query18();
-        CompiledQuerySupport.LoweredResult limitedRun = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, limited.query().lower());
+        CompiledQuerySupport.LoweredResult limitedRun = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables, limited.query().lower());
         assertThat(limitedRun.result().rowCount()).isEqualTo(10);
 
-        Operator harnessChain = ClickBenchHitsSupport.query18(new Allocator(), tables.directory());
+        Operator harnessChain = ClickBenchHitsSupport.query18(new Allocator(EngineResources.createDefault()), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).hasSize(10);
 
         CompiledTpcdsQueries.Ported full = CompiledClickBenchQueries.query18Unlimited();
-        CompiledQuerySupport.LoweredResult fullRun = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, full.query().lower());
+        CompiledQuerySupport.LoweredResult fullRun = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables, full.query().lower());
         long[] users = fullRun.result().columns()[0];
         long[] phraseIds = fullRun.result().columns()[1];
         long[] counts = fullRun.result().columns()[2];
@@ -439,7 +440,7 @@ public class TestCompiledClickBenchQueries
 
     private static CompiledQuerySupport.LoweredResult runComposite(ClickBenchParquetTables tables, CompiledTpcdsQueries.Composite composite)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
@@ -457,7 +458,7 @@ public class TestCompiledClickBenchQueries
     private static void assertHiddenKeyTopKMatchesHarness(CompiledTpcdsQueries.Composite composite, String stageName, HarnessChain harness)
     {
         ClickBenchParquetTables tables = requireHits();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
@@ -478,7 +479,7 @@ public class TestCompiledClickBenchQueries
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
         assertThat(actual.stream().map(row -> (String) row.values()[0]).toList()).isEqualTo(stageValues);
 
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).hasSameSizeAs(actual);
         int start = 0;
@@ -511,7 +512,7 @@ public class TestCompiledClickBenchQueries
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
 
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables.directory());
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
         assertThat(expected).isNotEmpty();

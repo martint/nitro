@@ -19,6 +19,7 @@ import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
@@ -57,7 +58,7 @@ public class TestRealData
     @Test
     void testQuery01()
     {
-        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query01(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(99_997_497L)));
         }
     }
@@ -65,7 +66,7 @@ public class TestRealData
     @Test
     void testQuery00()
     {
-        try (Operator query = ClickBenchHitsSupport.query00(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query00(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             assertThat(query.outputCount()).isEqualTo(6);
             boolean sawBatch = false;
             long totalRows = 0;
@@ -105,7 +106,7 @@ public class TestRealData
     @Test
     void testQuery02()
     {
-        try (Operator query = ClickBenchHitsSupport.query02(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query02(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(630_500L)));
         }
     }
@@ -113,7 +114,7 @@ public class TestRealData
     @Test
     void testQuery07()
     {
-        try (Operator query = ClickBenchHitsSupport.query07(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query07(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(row(15_888L, 15_917L)));
         }
     }
@@ -121,7 +122,7 @@ public class TestRealData
     @Test
     void testQuery03()
     {
-        try (Operator query = ClickBenchHitsSupport.query03(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query03(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).matches(rowsList -> rowsList.size() == 1);
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -134,7 +135,7 @@ public class TestRealData
     @Test
     void testQuery04()
     {
-        try (Operator query = ClickBenchHitsSupport.query04(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query04(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -145,7 +146,7 @@ public class TestRealData
     @Test
     void testQuery05()
     {
-        try (Operator query = ClickBenchHitsSupport.query05(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query05(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
@@ -156,7 +157,7 @@ public class TestRealData
     @Test
     void testQuery06()
     {
-        try (Operator query = ClickBenchHitsSupport.query06(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query06(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().values()[0]).isInstanceOf(Long.class);
@@ -167,7 +168,7 @@ public class TestRealData
     @Test
     void testQuery08()
     {
-        try (Operator query = ClickBenchHitsSupport.query08(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query08(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             assertThat(operator(query)).matchesExactly(List.of(
                     row(2L, 404_602L),
                     row(27L, 113_167L),
@@ -185,7 +186,7 @@ public class TestRealData
     @Test
     void testQuery09()
     {
-        try (Operator query = ClickBenchHitsSupport.query09(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query09(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -197,7 +198,7 @@ public class TestRealData
     @Test
     void testQuery10()
     {
-        try (Operator query = ClickBenchHitsSupport.query10(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query10(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -212,7 +213,7 @@ public class TestRealData
     @Test
     void testQuery11()
     {
-        try (Operator query = ClickBenchHitsSupport.query11(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query11(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -224,7 +225,7 @@ public class TestRealData
     @Test
     void testQuery12()
     {
-        try (Operator query = ClickBenchHitsSupport.query12(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query12(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -237,7 +238,7 @@ public class TestRealData
     @Test
     void testQuery13()
     {
-        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query13(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -249,7 +250,7 @@ public class TestRealData
     @Test
     void testQuery14()
     {
-        try (Operator query = ClickBenchHitsSupport.query14(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query14(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -261,7 +262,7 @@ public class TestRealData
     @Test
     void testQuery15()
     {
-        try (Operator query = ClickBenchHitsSupport.query15(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query15(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -274,7 +275,7 @@ public class TestRealData
     @Test
     void testQuery16()
     {
-        try (Operator query = ClickBenchHitsSupport.query16(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query16(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -286,7 +287,7 @@ public class TestRealData
     @Test
     void testQuery17()
     {
-        try (Operator query = ClickBenchHitsSupport.query17(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query17(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -299,7 +300,7 @@ public class TestRealData
     @Test
     void testQuery18()
     {
-        try (Operator query = ClickBenchHitsSupport.query18(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query18(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -312,7 +313,7 @@ public class TestRealData
     @Test
     void testQuery19()
     {
-        try (Operator query = ClickBenchHitsSupport.query19(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query19(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(4);
@@ -326,7 +327,7 @@ public class TestRealData
     @Test
     void testQuery20()
     {
-        try (Operator query = ClickBenchHitsSupport.query20(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query20(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -338,7 +339,7 @@ public class TestRealData
     @Test
     void testQuery25()
     {
-        try (Operator query = ClickBenchHitsSupport.query25(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query25(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -349,7 +350,7 @@ public class TestRealData
     @Test
     void testQuery26()
     {
-        try (Operator query = ClickBenchHitsSupport.query26(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query26(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -360,7 +361,7 @@ public class TestRealData
     @Test
     void testQuery27()
     {
-        try (Operator query = ClickBenchHitsSupport.query27(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query27(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -371,7 +372,7 @@ public class TestRealData
     @Test
     void testQuery30()
     {
-        try (Operator query = ClickBenchHitsSupport.query30(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query30(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().values()).hasSize(90);
@@ -384,7 +385,7 @@ public class TestRealData
     @Test
     void testQuery34()
     {
-        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query34(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -396,7 +397,7 @@ public class TestRealData
     @Test
     void testQuery35()
     {
-        try (Operator query = ClickBenchHitsSupport.query35(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query35(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -409,7 +410,7 @@ public class TestRealData
     @Test
     void testQuery21()
     {
-        try (Operator query = ClickBenchHitsSupport.query21(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query21(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(1);
             assertThat(rows.getFirst().values()).hasSize(1);
@@ -421,7 +422,7 @@ public class TestRealData
     @Test
     void testQuery22()
     {
-        try (Operator query = ClickBenchHitsSupport.query22(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query22(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -431,7 +432,7 @@ public class TestRealData
     @Test
     void testQuery23()
     {
-        try (Operator query = ClickBenchHitsSupport.query23(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query23(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -441,7 +442,7 @@ public class TestRealData
     @Test
     void testQuery24()
     {
-        try (Operator query = ClickBenchHitsSupport.query24(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query24(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).hasSize(10);
             assertThat(rows.getFirst().values().length).isGreaterThan(20);
@@ -451,7 +452,7 @@ public class TestRealData
     @Test
     void testQuery28()
     {
-        try (Operator query = ClickBenchHitsSupport.query28(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query28(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -461,7 +462,7 @@ public class TestRealData
     @Test
     void testQuery29()
     {
-        try (Operator query = ClickBenchHitsSupport.query29(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query29(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(4);
@@ -471,7 +472,7 @@ public class TestRealData
     @Test
     void testQuery31()
     {
-        try (Operator query = ClickBenchHitsSupport.query31(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query31(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -481,7 +482,7 @@ public class TestRealData
     @Test
     void testQuery32()
     {
-        try (Operator query = ClickBenchHitsSupport.query32(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query32(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -491,7 +492,7 @@ public class TestRealData
     @Test
     void testQuery33()
     {
-        try (Operator query = ClickBenchHitsSupport.query33(new Allocator(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query33(new Allocator(EngineResources.createDefault()), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -501,7 +502,7 @@ public class TestRealData
     @Test
     void testQuery36()
     {
-        try (Operator query = ClickBenchHitsSupport.query36(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query36(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(5);
@@ -511,7 +512,7 @@ public class TestRealData
     @Test
     void testQuery37()
     {
-        try (Operator query = ClickBenchHitsSupport.query37(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query37(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -521,7 +522,7 @@ public class TestRealData
     @Test
     void testQuery38()
     {
-        try (Operator query = ClickBenchHitsSupport.query38(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query38(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -531,7 +532,7 @@ public class TestRealData
     @Test
     void testQuery39()
     {
-        try (Operator query = ClickBenchHitsSupport.query39(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query39(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);
@@ -541,7 +542,7 @@ public class TestRealData
     @Test
     void testQuery40()
     {
-        try (Operator query = ClickBenchHitsSupport.query40(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query40(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(6);
@@ -551,7 +552,7 @@ public class TestRealData
     @Test
     void testQuery41()
     {
-        try (Operator query = ClickBenchHitsSupport.query41(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query41(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -561,7 +562,7 @@ public class TestRealData
     @Test
     void testQuery42()
     {
-        try (Operator query = ClickBenchHitsSupport.query42(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query42(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(3);
@@ -571,7 +572,7 @@ public class TestRealData
     @Test
     void testQuery43()
     {
-        try (Operator query = ClickBenchHitsSupport.query43(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
+        try (Operator query = ClickBenchHitsSupport.query43(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), actualHitsDirectory())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(query);
             assertThat(rows).isNotEmpty();
             assertThat(rows.getFirst().values()).hasSize(2);

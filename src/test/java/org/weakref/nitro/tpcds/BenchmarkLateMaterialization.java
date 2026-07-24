@@ -27,6 +27,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.jit.QueryLowering;
@@ -88,7 +89,7 @@ public class BenchmarkLateMaterialization
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
     }
 
     @Benchmark

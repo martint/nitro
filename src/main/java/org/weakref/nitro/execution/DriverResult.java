@@ -17,6 +17,7 @@ package org.weakref.nitro.execution;
 public enum DriverResult
 {
     OUTPUT,
+    BLOCKED,
     YIELDED,
     FINISHED
 }

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -61,12 +62,12 @@ public class DumpResults
                 try {
                     m = ClickBenchHitsSupport.class.getDeclaredMethod(name, Allocator.class, PrimitiveRegistry.class, Path.class);
                     m.setAccessible(true);
-                    operator = (Operator) m.invoke(null, new Allocator(), registry, dir);
+                    operator = (Operator) m.invoke(null, new Allocator(EngineResources.createDefault()), registry, dir);
                 }
                 catch (NoSuchMethodException e) {
                     m = ClickBenchHitsSupport.class.getDeclaredMethod(name, Allocator.class, Path.class);
                     m.setAccessible(true);
-                    operator = (Operator) m.invoke(null, new Allocator(), dir);
+                    operator = (Operator) m.invoke(null, new Allocator(EngineResources.createDefault()), dir);
                 }
                 List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
                 Path file = out.resolve(String.format("q%02d.txt", q));

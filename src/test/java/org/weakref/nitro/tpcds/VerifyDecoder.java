@@ -16,6 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -47,8 +48,8 @@ public final class VerifyDecoder
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         List<Path> files = tables.tableFiles(table);
 
-        long[][] nitro = digest(new NitroParquetScanOperator(new Allocator(), files, columns), columns.size());
-        long[][] trino = digest(new TrinoParquetScanOperator(new Allocator(), files, columns), columns.size());
+        long[][] nitro = digest(new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
+        long[][] trino = digest(new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
 
         if (nitro[0][0] != trino[0][0]) {
             throw new AssertionError("row count: nitro=" + nitro[0][0] + " trino=" + trino[0][0]);

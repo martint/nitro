@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -32,7 +33,7 @@ class TestBatchBufferScope
     @Test
     void returnsUntakenBuffersForNextGeneration()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BatchBufferScope scope = new BatchBufferScope(allocator, "test");
         I64Vector first = allocator.allocate(scope.context(), I64Vector.class, 32, I64Vector::new);
         Batch batch = scope.batch(
@@ -49,7 +50,7 @@ class TestBatchBufferScope
     @Test
     void takenBufferIsDetachedFromReusePool()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BatchBufferScope scope = new BatchBufferScope(allocator, "test");
         I64Vector first = allocator.allocate(scope.context(), I64Vector.class, 32, I64Vector::new);
         Batch batch = scope.batch(
@@ -66,7 +67,7 @@ class TestBatchBufferScope
     @Test
     void takingEncodedVectorDoesNotDetachBorrowedChild()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context upstream = new Allocator.Context("upstream");
         I64Vector borrowedChild = allocator.allocate(upstream, I64Vector.class, 4, I64Vector::new);
         BatchBufferScope scope = new BatchBufferScope(allocator, "test");
@@ -86,7 +87,7 @@ class TestBatchBufferScope
     @Test
     void ownedDictionaryIdsFollowTheEncodingLifecycleWithoutClaimingBorrowedValues()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context upstream = new Allocator.Context("upstream");
         I64Vector borrowedValues = allocator.allocate(upstream, I64Vector.class, 4, I64Vector::new);
         BatchBufferScope scope = new BatchBufferScope(allocator, "dictionary");
@@ -112,7 +113,7 @@ class TestBatchBufferScope
     @Test
     void takenDictionaryIdsReturnWhenTheFinalForwardedOutputCloses()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BatchBufferScope scope = new BatchBufferScope(allocator, "dictionary");
         I32Vector ids = allocator.allocate(scope.context(), I32Vector.class, 4, I32Vector::new);
         DictionaryVector encoded = DictionaryVector.wrapOwnedIds(ids, 4, new I64Vector(4));
@@ -138,7 +139,7 @@ class TestBatchBufferScope
     @Test
     void borrowedNestedEncodingDoesNotReleaseItsChildLease()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BatchBufferScope scope = new BatchBufferScope(allocator, "dictionary");
         I32Vector ids = allocator.allocate(scope.context(), I32Vector.class, 4, I32Vector::new);
         DictionaryVector encoded = DictionaryVector.wrapOwnedIds(ids, 4, new I64Vector(4));
@@ -166,7 +167,7 @@ class TestBatchBufferScope
     @Test
     void constrainedForeignMaskKeepsItsOwner()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context upstream = new Allocator.Context("upstream");
         Mask foreign = allocator.allocateSparseMask(upstream, new int[] {1, 3, 5}, 10);
         BatchBufferScope scope = new BatchBufferScope(allocator, "test");
@@ -183,7 +184,7 @@ class TestBatchBufferScope
     @Test
     void staleFacadesStayClosedAndOverlappingGenerationsAreRejected()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BatchBufferScope scope = new BatchBufferScope(allocator, "test");
         I64Vector vector = allocator.allocate(scope.context(), I64Vector.class, 1, I64Vector::new);
         Output output = new Output(Set.of(Stream.VALUES), _ -> vector, scope);
@@ -203,7 +204,7 @@ class TestBatchBufferScope
     @Test
     void compatibleScopesSharePoolsWithoutSharingOwnership()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Object poolGroup = new Object();
         BatchBufferScope firstScope = new BatchBufferScope(allocator, "first", poolGroup);
         BatchBufferScope secondScope = new BatchBufferScope(allocator, "second", poolGroup);
@@ -224,7 +225,7 @@ class TestBatchBufferScope
     @Test
     void composesAdditionalGenerationOwnerWithoutPerOutputCallbacks()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context evaluatorContext = new Allocator.Context("evaluator");
         I64Vector vector = allocator.allocate(evaluatorContext, I64Vector.class, 8, I64Vector::new);
         int[] calls = new int[3];

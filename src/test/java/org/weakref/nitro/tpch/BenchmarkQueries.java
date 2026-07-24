@@ -27,6 +27,7 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -43,6 +44,7 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkQueries
 {
+    private final EngineResources engineResources = EngineResources.createDefault();
     private Allocator allocator;
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private TpchParquetTables tables;
@@ -57,7 +59,7 @@ public class BenchmarkQueries
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator();
+        allocator = new Allocator(engineResources);
     }
 
     @Benchmark

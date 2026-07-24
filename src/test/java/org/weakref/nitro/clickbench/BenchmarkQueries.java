@@ -27,6 +27,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.Benchmarks;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Operator;
@@ -44,7 +45,8 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkQueries
 {
-    private final Allocator allocator = new Allocator();
+    private final EngineResources engineResources = EngineResources.createDefault();
+    private final Allocator allocator = new Allocator(engineResources);
     private final PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
     private Path clickBenchHitsDirectory;
 

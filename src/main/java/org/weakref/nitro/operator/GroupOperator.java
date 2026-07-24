@@ -31,7 +31,7 @@ public class GroupOperator
     private final Operator source;
     private final Vector[] groupValues;
     private final Vector[] groupNulls;
-    private final GroupingState groupingState = new GroupingState();
+    private final GroupingState groupingState;
     private BatchState currentBatchState;
     private I64Vector reusableResult;
 
@@ -43,6 +43,7 @@ public class GroupOperator
     public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source)
     {
         this.allocator = allocator;
+        this.groupingState = new GroupingState(allocator.primitiveArrays());
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.groupValues = new Vector[groupByColumns.length];

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Operator;
 
@@ -58,7 +59,7 @@ public class DumpResults
             }
             method.setAccessible(true);
             try {
-                Operator operator = (Operator) method.invoke(null, new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+                Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
                 List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
                 Path file = out.resolve(String.format("q%02d.txt", q));
                 try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {

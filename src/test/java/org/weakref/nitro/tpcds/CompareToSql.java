@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -74,7 +75,7 @@ public class CompareToSql
                 method.setAccessible(true);
 
                 Map<String, Integer> nitro;
-                try (Operator op = (Operator) method.invoke(null, new Allocator(), registry, tables)) {
+                try (Operator op = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), registry, tables)) {
                     nitro = canonicalMultiset(toCanonicalRows(OperatorAssertions.OperatorAssert.toRows(op)));
                 }
                 catch (Throwable t) {

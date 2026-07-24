@@ -37,6 +37,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.LongPredicate;
 
+import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.BE_LONG;
 import static org.weakref.nitro.parquet.ParquetFile.LE_INT;
 import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
@@ -67,7 +68,7 @@ public final class ColumnReader
             Boolean.parseBoolean(System.getProperty("nitro.parquet.recycleBinaryDictionaryScratch", "true"));
     private static final boolean DEBUG_DICTIONARY_FILTER_SUMMARY =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.debugDictionaryFilterSummary", "false"));
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
 
     public enum Kind
     {
@@ -355,13 +356,15 @@ public final class ColumnReader
     private boolean pageHeaderModeDecided;
     private boolean useFastPageHeader;
 
-    public ColumnReader(Type physicalType, boolean optional, int typeLength, boolean decimal)
+    public ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool)
     {
-        this(physicalType, optional, typeLength, decimal, null);
-    }
-
-    public ColumnReader(Type physicalType, boolean optional, int typeLength, boolean decimal, DecompressedPageCache decompressedPages)
-    {
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.physicalType = physicalType;
         this.optional = optional;
         this.typeLength = typeLength;
@@ -404,7 +407,7 @@ public final class ColumnReader
      */
     public ColumnReader newSibling()
     {
-        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal, decompressedPages);
+        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal, decompressedPages, arrayPool);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }

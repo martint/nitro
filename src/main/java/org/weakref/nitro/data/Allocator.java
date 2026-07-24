@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -22,8 +23,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
@@ -33,6 +37,7 @@ import static java.util.Objects.requireNonNull;
 
 // TODO: support hierarchical contexts
 public class Allocator
+        implements AutoCloseable
 {
     private static final boolean DIRECT_SINGLE_RUN_RLE =
             Boolean.parseBoolean(System.getProperty("nitro.directSingleRunRle", "true"));
@@ -71,8 +76,36 @@ public class Allocator
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final EngineResources engineResources;
+    private final PrimitiveArrayPool primitiveArrays;
+    private final MemoryReservation memoryReservation;
     private Context lastContext;
     private ContextState lastContextState;
+    private CompletableFuture<Void> memoryBlocked = CompletableFuture.completedFuture(null);
+    private long residentBytes;
+    private boolean closed;
+
+    public Allocator(EngineResources engineResources)
+    {
+        this(engineResources, null);
+    }
+
+    public Allocator(EngineResources engineResources, MemoryReservation memoryReservation)
+    {
+        this.engineResources = requireNonNull(engineResources, "engineResources is null");
+        this.primitiveArrays = engineResources.primitiveArrays();
+        this.memoryReservation = memoryReservation;
+    }
+
+    public EngineResources engineResources()
+    {
+        return engineResources;
+    }
+
+    public PrimitiveArrayPool primitiveArrays()
+    {
+        return primitiveArrays;
+    }
 
     /**
      * Calculates the capacity of a vector that can hold the desired size, plus some extra space.
@@ -162,6 +195,7 @@ public class Allocator
         return allFalseBooleanVectors.computeIfAbsent(length, size -> {
             BooleanVector value = new BooleanVector(size);
             value.markAllFalse();
+            reserveResident(value.retainedBytes());
             return value;
         });
     }
@@ -839,6 +873,48 @@ public class Allocator
         pendingCompatibilityStates.clear();
     }
 
+    /// Continuation supplied by the host when the current resident reservation is blocked.
+    public Optional<CompletionStage<Void>> memoryBlocked()
+    {
+        if (memoryBlocked.isDone()) {
+            return Optional.empty();
+        }
+        return Optional.of(memoryBlocked);
+    }
+
+    public long residentBytes()
+    {
+        return residentBytes;
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (memoryReservation != null && residentBytes != 0) {
+            memoryReservation.release(residentBytes);
+        }
+        residentBytes = 0;
+        states.clear();
+        pools.clear();
+        for (SharedResourceState state : sharedResources.values()) {
+            try {
+                state.value.close();
+            }
+            catch (Exception e) {
+                throw new RuntimeException("Failed to close shared allocator resource", e);
+            }
+        }
+        sharedResources.clear();
+        allFalseBooleanVectors.clear();
+        pendingCompatibilityStates.clear();
+        lastContext = null;
+        lastContextState = null;
+    }
+
     public long peakBytes(Context context)
     {
         long peak = 0;
@@ -1124,16 +1200,51 @@ public class Allocator
 
     private ContextState state(Context context)
     {
+        if (closed) {
+            throw new IllegalStateException("allocator is closed");
+        }
         if (context == lastContext) {
             return lastContextState;
         }
 
         ContextState state = states.computeIfAbsent(context, key -> new ContextState(
+                this,
                 pools.computeIfAbsent(key.poolGroup(), _ -> new PoolState()),
                 pools.computeIfAbsent(key.compatibilityGroup(), _ -> new PoolState())));
         lastContext = context;
         lastContextState = state;
         return state;
+    }
+
+    private void reserveResident(long bytes)
+    {
+        if (bytes <= 0) {
+            return;
+        }
+        if (memoryReservation != null) {
+            CompletionStage<Void> continuation = requireNonNull(memoryReservation.reserve(bytes), "memory continuation is null");
+            CompletableFuture<Void> future = continuation.toCompletableFuture();
+            if (!future.isDone()) {
+                memoryBlocked = memoryBlocked.isDone()
+                        ? future
+                        : CompletableFuture.allOf(memoryBlocked, future);
+            }
+        }
+        residentBytes += bytes;
+    }
+
+    private void releaseResident(long bytes)
+    {
+        if (bytes <= 0) {
+            return;
+        }
+        if (bytes > residentBytes) {
+            throw new IllegalStateException("released more resident memory than allocated");
+        }
+        residentBytes -= bytes;
+        if (memoryReservation != null) {
+            memoryReservation.release(bytes);
+        }
     }
 
     private static int[] positions(Mask mask)
@@ -1214,6 +1325,7 @@ public class Allocator
     private static final class ContextState
             implements BufferLeaseOwner
     {
+        private final Allocator allocator;
         private final Stats stats = new Stats();
         private final PoolState pool;
         private final PoolState compatibilityCandidate;
@@ -1222,9 +1334,12 @@ public class Allocator
         private final Map<Object, Integer> inUseVectorCounts = new HashMap<>();
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
         private Mask inUseMasksHead;
+        private boolean borrowedVectorResident;
+        private boolean borrowedMaskResident;
 
-        private ContextState(PoolState pool, PoolState compatibilityPool)
+        private ContextState(Allocator allocator, PoolState pool, PoolState compatibilityPool)
         {
+            this.allocator = requireNonNull(allocator, "allocator is null");
             this.pool = requireNonNull(pool, "pool is null");
             this.compatibilityCandidate = requireNonNull(compatibilityPool, "compatibilityPool is null");
             this.compatibilityPool = pool;
@@ -1238,10 +1353,16 @@ public class Allocator
         public <T extends Vector> T borrowVector(Object family, int minimumCapacity, boolean exactCapacityMatch, Class<T> vectorType)
         {
             T vector = borrowVector(pool, family, minimumCapacity, exactCapacityMatch, vectorType);
+            borrowedVectorResident = vector != null;
             if (vector == null && compatibilityActive()) {
                 vector = borrowVector(compatibilityPool, family, minimumCapacity, exactCapacityMatch, vectorType);
+                borrowedVectorResident = vector != null;
             }
-            return vector != null ? vector : PrimitiveArrayPool.shared().borrow(family, minimumCapacity, vectorType);
+            if (vector != null) {
+                return vector;
+            }
+            borrowedVectorResident = false;
+            return allocator.primitiveArrays.borrow(family, minimumCapacity, vectorType);
         }
 
         private static <T extends Vector> T borrowVector(
@@ -1280,14 +1401,20 @@ public class Allocator
 
         public void trackVector(Vector vector, boolean reused)
         {
+            if (!borrowedVectorResident) {
+                allocator.reserveResident(vector.retainedBytes());
+            }
+            borrowedVectorResident = false;
             // Only track vectors that participate in pooling. Non-pooled vectors (e.g. DictionaryVector
             // wrapping borrowed data) can be left to GC without going through the IdentityHashMap on
             // adoption, which avoids per-position overhead in join output materialization.
             Object family = vector.poolFamily();
-            if (family != null && inUseVectors.add(vector)) {
-                int inUse = inUseVectorCounts.merge(family, 1, Integer::sum);
-                if (ADAPTIVE_VECTOR_POOL_HIGH_WATER) {
-                    vectorHighWater.merge(family, inUse, Math::max);
+            if ((family != null || allocator.memoryReservation != null) && inUseVectors.add(vector)) {
+                if (family != null) {
+                    int inUse = inUseVectorCounts.merge(family, 1, Integer::sum);
+                    if (ADAPTIVE_VECTOR_POOL_HIGH_WATER) {
+                        vectorHighWater.merge(family, inUse, Math::max);
+                    }
                 }
             }
             stats.acquire(vector.retainedBytes(), reused);
@@ -1302,6 +1429,7 @@ public class Allocator
             stats.releaseBytes(vector.retainedBytes());
             Object family = vector.poolFamily();
             if (family == null) {
+                allocator.releaseResident(vector.retainedBytes());
                 return;
             }
             addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
@@ -1313,6 +1441,7 @@ public class Allocator
                 return;
             }
             stats.releaseBytes(vector.retainedBytes());
+            allocator.releaseResident(vector.retainedBytes());
         }
 
         public boolean transferVector(Vector vector)
@@ -1345,8 +1474,10 @@ public class Allocator
         public Mask borrowMask(int requiredCapacity)
         {
             Mask mask = borrowMask(pool, requiredCapacity);
+            borrowedMaskResident = mask != null;
             if (mask == null && compatibilityActive()) {
                 mask = borrowMask(compatibilityPool, requiredCapacity);
+                borrowedMaskResident = mask != null;
             }
             return mask;
         }
@@ -1367,6 +1498,10 @@ public class Allocator
 
         public void trackMask(Mask mask, boolean reused)
         {
+            if (!borrowedMaskResident) {
+                allocator.reserveResident(maskBytes(mask));
+            }
+            borrowedMaskResident = false;
             if (!mask.trackedInUse()) {
                 mask.markTrackedInUse();
                 mask.trackedPrevious(null);
@@ -1413,6 +1548,9 @@ public class Allocator
                 if (family != null) {
                     addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
                 }
+                else {
+                    allocator.releaseResident(vector.retainedBytes());
+                }
             }
             Mask mask = inUseMasksHead;
             while (mask != null) {
@@ -1432,10 +1570,14 @@ public class Allocator
             Mask mask = inUseMasksHead;
             while (mask != null) {
                 Mask next = mask.trackedNext();
+                allocator.releaseResident(maskBytes(mask));
                 mask.clearTrackedInUse();
                 mask = next;
             }
             inUseMasksHead = null;
+            for (Vector vector : inUseVectors) {
+                allocator.releaseResident(vector.retainedBytes());
+            }
             inUseVectors.clear();
             inUseVectorCounts.clear();
             stats.release();
@@ -1446,7 +1588,10 @@ public class Allocator
             if (!inUseVectors.remove(vector)) {
                 return false;
             }
-            Object family = requireNonNull(vector.poolFamily(), "tracked vector has no pool family");
+            Object family = vector.poolFamily();
+            if (family == null) {
+                return true;
+            }
             int remaining = inUseVectorCounts.get(family) - 1;
             if (remaining == 0) {
                 inUseVectorCounts.remove(family);
@@ -1475,10 +1620,12 @@ public class Allocator
 
         private void addVectorToPool(Object family, int capacity, int maxRetained, Vector vector)
         {
-            if (!LOCAL_VECTOR_WORKING_SET && maxRetained > 0 && PrimitiveArrayPool.shared().retain(family, capacity, vector.retainedBytes(), vector)) {
+            if (!LOCAL_VECTOR_WORKING_SET && maxRetained > 0 && allocator.primitiveArrays.retain(family, capacity, vector.retainedBytes(), vector)) {
+                allocator.releaseResident(vector.retainedBytes());
                 return;
             }
             if (maxRetained <= 0 || MAX_LOCAL_VECTOR_POOL_BYTES <= 0) {
+                allocator.releaseResident(vector.retainedBytes());
                 return;
             }
             int retentionLimit = Math.max(maxRetained, vectorHighWater.getOrDefault(family, 0));
@@ -1486,11 +1633,11 @@ public class Allocator
                 int reserve = COMPATIBLE_POOL_LOCAL_RESERVE;
                 retentionLimit = Math.min(retentionLimit, Math.max(0, reserve));
             }
-            // Keep the active allocator's reuse pool in front of the process-wide pool. In particular,
-            // variable-width vectors are borrowed with ceiling-capacity semantics, while the shared pool is
+            // Keep the active allocator's reuse pool in front of the engine-owned cross-execution pool. In particular,
+            // variable-width vectors are borrowed with ceiling-capacity semantics, while the owner pool is
             // deliberately keyed by exact capacity. Sending a large BinaryVector directly to the shared pool
             // therefore made parquet scans allocate again whenever the next batch had a slightly different byte
-            // length. Retain the bounded working set locally and use the shared pool only for excess idle vectors.
+            // length. Retain the bounded working set locally and use the owner pool only for excess idle vectors.
             pool.vectorPool
                     .computeIfAbsent(family, _ -> new TreeMap<>())
                     .computeIfAbsent(capacity, _ -> new ArrayDeque<>())
@@ -1525,7 +1672,8 @@ public class Allocator
                 addVectorToCompatibilityPool(family, vector);
             }
             else {
-                PrimitiveArrayPool.shared().retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+                allocator.primitiveArrays.retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+                allocator.releaseResident(vector.retainedBytes());
             }
         }
 
@@ -1564,7 +1712,8 @@ public class Allocator
             if (removeFromOrder(compatibilityPool.vectorPoolGlobalOrder, vector)) {
                 compatibilityPool.vectorPoolBytes -= vector.retainedBytes();
             }
-            PrimitiveArrayPool.shared().retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+            allocator.primitiveArrays.retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
+            allocator.releaseResident(vector.retainedBytes());
         }
 
         private void addMaskToPool(Mask mask)
@@ -1579,8 +1728,11 @@ public class Allocator
                             .computeIfAbsent(excess.capacity(), _ -> new ArrayDeque<>());
                     compatibleBucket.addLast(excess);
                     while (compatibleBucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
-                        compatibleBucket.removeFirst();
+                        allocator.releaseResident(maskBytes(compatibleBucket.removeFirst()));
                     }
+                }
+                else {
+                    allocator.releaseResident(maskBytes(excess));
                 }
             }
             if (bucket.isEmpty()) {

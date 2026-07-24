@@ -46,7 +46,7 @@ final class MembershipSet
         if (index == null) {
             FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
             LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
-                    ? LongIndex.tryCreate(values, nulls, mask)
+                    ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
                     : null;
             index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext);
         }
@@ -178,7 +178,7 @@ final class MembershipSet
     {
         private final Allocator allocator;
         private final Allocator.Context allocationContext;
-        private final GroupingState grouping = new GroupingState();
+        private final GroupingState grouping;
         private I64Vector scratch;
         private Vector probeValues;
         private Vector probeNulls;
@@ -187,6 +187,7 @@ final class MembershipSet
         {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
+            this.grouping = new GroupingState(allocator.primitiveArrays());
         }
 
         @Override
@@ -240,7 +241,7 @@ final class MembershipSet
         private static final int MAX_CAPACITY_BITS = 1 << 26;
         private static final long MAX_BITS_PER_OBSERVED_KEY = 256;
 
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
         private long[] bits;
         private long base;
         private int capacityBits;
@@ -248,12 +249,13 @@ final class MembershipSet
         private VectorAccess.LongValues probeValues;
         private VectorAccess.BooleanValues probeNulls;
 
-        private LongIndex(long base, int capacityBits)
+        private LongIndex(long base, int capacityBits, PrimitiveArrayPool arrayPool)
         {
+            this.arrayPool = arrayPool;
             allocateBits(base, capacityBits);
         }
 
-        private static LongIndex tryCreate(Vector values, Vector nulls, Mask mask)
+        private static LongIndex tryCreate(Vector values, Vector nulls, Mask mask, PrimitiveArrayPool arrayPool)
         {
             if (mask.none()) {
                 return null;
@@ -280,7 +282,7 @@ final class MembershipSet
             if (required <= 0 || required > MAX_CAPACITY_BITS || required > (long) observed * MAX_BITS_PER_OBSERVED_KEY) {
                 return null;
             }
-            return new LongIndex(alignedMin, bitCapacity(required));
+            return new LongIndex(alignedMin, bitCapacity(required), arrayPool);
         }
 
         @Override

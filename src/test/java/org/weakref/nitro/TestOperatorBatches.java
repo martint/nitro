@@ -19,6 +19,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -93,7 +94,7 @@ public class TestOperatorBatches
     @Test
     void testConstantTableOperatorProducesBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L)));
 
         Batch batch = operator.next();
@@ -103,7 +104,7 @@ public class TestOperatorBatches
     @Test
     void testConstantTableOperatorProducesI32Batch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new ConstantTableOperator(allocator, 1, List.of(row(1), row(2), row(3)));
 
         Batch batch = operator.next();
@@ -114,7 +115,7 @@ public class TestOperatorBatches
     @Test
     void testGeneratorOperatorProducesBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(10)));
 
         Batch batch = operator.next();
@@ -124,7 +125,7 @@ public class TestOperatorBatches
     @Test
     void testProjectOperatorProducesProjectedBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
         EvaluationPlan evaluationPlan = new EvaluationPlan(
@@ -149,7 +150,7 @@ public class TestOperatorBatches
     @Test
     void testFilterOperatorProducesFilteredBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable threshold = new Variable(0);
         Variable predicate = new Variable(1);
@@ -179,7 +180,7 @@ public class TestOperatorBatches
     @Test
     void testFilterOperatorDoesNotTreatNullIntegerValuesAsEqual()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable constant = new Variable(0);
         Variable predicate = new Variable(1);
@@ -216,7 +217,7 @@ public class TestOperatorBatches
     @Test
     void testAggregationOperatorProducesAggregateBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new Sum(0), new CountAll()),
@@ -230,7 +231,7 @@ public class TestOperatorBatches
     @Test
     void testAggregationOperatorAcceptsI32Input()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new AggregationOperator(
                 allocator,
                 List.of(new Sum(0), new CountAll()),
@@ -244,7 +245,7 @@ public class TestOperatorBatches
     @Test
     void testAggregationOperatorSumsDictionaryEncodedIndicatorsWithCompactNulls()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         DictionaryVector values = new DictionaryVector(
                 new int[] {1, 0, 1, 1, 0, 1},
                 new I64Vector(new long[] {0, 1}));
@@ -289,7 +290,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorSumsRleEncodedIndicators()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         I64Vector groups = new I64Vector(new long[] {0, 1, 0, 1, 1, 2});
         RleVector values = new RleVector(new int[] {6}, new I64Vector(new long[] {1}));
         RleVector nulls = new RleVector(new int[] {6}, new BooleanVector(new boolean[] {false}));
@@ -338,7 +339,7 @@ public class TestOperatorBatches
     @Test
     void testAggregationOperatorSkipsEmptyProjectedBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable threshold = new Variable(0);
         Variable predicate = new Variable(1);
@@ -372,7 +373,7 @@ public class TestOperatorBatches
     @Test
     void testAvgAccumulatorHandlesDictionaryEncodedNullStream()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Avg accumulator = new Avg(0);
         Streams state = accumulator.allocate(allocator, new Allocator.Context("test"), 1);
         accumulator.initialize(state, 0, 1);
@@ -400,7 +401,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorProducesGroupedAggregateBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
@@ -422,7 +423,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorHandlesDictionaryEncodedGroupNulls()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         DictionaryVector groupNulls = new DictionaryVector(new int[] {0, 1, 0}, new BooleanVector(new boolean[] {false, true}));
         Operator operator = new GroupedAggregationOperator(
                 allocator,
@@ -456,7 +457,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCoalescesSharedDictionaryCompositeKeysByValue()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BinaryVector cities = new BinaryVector(5, 10);
         cities.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         cities.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
@@ -514,7 +515,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorKeepsAllNullSumGroupsNull()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -533,7 +534,7 @@ public class TestOperatorBatches
     @Test
     void testFullJoinOperatorNullExtendsUnmatchedRows()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new FullJoinOperator(
                 allocator,
@@ -552,7 +553,7 @@ public class TestOperatorBatches
     @Test
     void testFullJoinOperatorCrossesPooledRowReferenceChunkBoundary()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<Row> outerRows = new ArrayList<>();
         for (long key = 0; key <= 65_536; key++) {
             outerRows.add(row(key, key + 1));
@@ -575,7 +576,7 @@ public class TestOperatorBatches
     @Test
     void testSortedFullJoinOperatorPreservesDuplicateMultiplicityAndNullSemantics()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = FullJoinOperator.sorted(
                 allocator,
@@ -607,7 +608,7 @@ public class TestOperatorBatches
     @Test
     void testSortedFullJoinOperatorMergesDuplicateRunsAcrossBatchBoundaries()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator outer = new UnionAllOperator(2, List.of(
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L))),
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 11L), row(2L, 20L)))));
@@ -630,7 +631,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorProducesRunningPartitionedAggregates()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -659,7 +660,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorProducesPartitionAverageWithoutOrdering()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -688,7 +689,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorProducesPartitionSumWithoutOrdering()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -717,7 +718,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorGroupsNullPartitionKeysTogether()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         // PARTITION BY places all null-keyed rows in a single partition, so they share one sum (5 + 7).
         try (Operator operator = new WindowOperator(
@@ -743,7 +744,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorHashPartitionsBinaryAndNullKeysExactly()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -772,7 +773,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorProducesRankWithTies()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -797,7 +798,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorRadixOrdersSignedNullableDescendingKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -824,7 +825,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorEmitsLargeResultsAcrossMultipleBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         for (int value = 1; value <= 5_000; value++) {
             rows.add(row(1L, (long) value));
@@ -871,7 +872,7 @@ public class TestOperatorBatches
     @Test
     void testWindowOperatorRetainedBatchResolvesAfterAdvance()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         for (int value = 5_000; value >= 1; value--) {
             rows.add(row(1L, (long) value));
@@ -902,7 +903,7 @@ public class TestOperatorBatches
     @Test
     void testTopNRankingOperatorEmitsLargeResultsAcrossMultipleBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         for (int value = 5_000; value >= 1; value--) {
             rows.add(row((long) value));
@@ -959,7 +960,7 @@ public class TestOperatorBatches
     @Test
     void testBatchSliceOperatorSplitsLargeBatchWithoutDroppingRows()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         for (long value = 0; value < 5_000; value++) {
             rows.add(row(value));
@@ -992,7 +993,7 @@ public class TestOperatorBatches
     @Test
     void testTopNOperatorSupportsProjectedOrderingAfterBatchSlicing()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
@@ -1041,7 +1042,7 @@ public class TestOperatorBatches
     @Test
     void testTopNRankingOperatorPreservesUtf8PayloadColumns()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new TopNRankingOperator(
                 allocator,
@@ -1067,7 +1068,7 @@ public class TestOperatorBatches
     @Test
     void testTopNRankingOperatorPreservesUtf8PayloadColumnsAcrossMultipleBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
@@ -1101,7 +1102,7 @@ public class TestOperatorBatches
     @Test
     void testTopNRankingAndSingleWindowOperatorPreserveUtf8PayloadColumnsAcrossMultipleBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
@@ -1142,7 +1143,7 @@ public class TestOperatorBatches
     @Test
     void testTopNRankingAndWindowOperatorsPreserveUtf8PayloadColumnsAcrossMultipleBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         List<org.weakref.nitro.data.Row> rows = new ArrayList<>();
         List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
@@ -1214,7 +1215,7 @@ public class TestOperatorBatches
     @Test
     void testChainedWindowOperatorsPreserveUtf8PayloadColumns()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -1246,7 +1247,7 @@ public class TestOperatorBatches
     @Test
     void testSingleWindowOperatorPreservesUtf8PayloadColumns()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -1272,7 +1273,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanFuseGroupingAndAggregation()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -1292,7 +1293,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanExposeGroupingKeyBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
@@ -1320,7 +1321,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanFuseMultipleGroupingKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -1347,7 +1348,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanFuseThreeLongGroupingKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
@@ -1374,7 +1375,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorPreservesEmptyUtf8GroupingKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
@@ -1405,7 +1406,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanExposeMultipleGroupingKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
@@ -1436,7 +1437,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorCanGroupTwoUtf8KeysAndLongKey()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2),
@@ -1469,7 +1470,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorPreservesNullableCompositeKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -1500,7 +1501,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorPreservesNullableCompositeLongKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -1533,7 +1534,7 @@ public class TestOperatorBatches
     @Test
     void testGroupedAggregationOperatorMaterializesOnlyConstrainedBinaryKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupedAggregationOperator(
                 allocator,
                 0,
@@ -1562,14 +1563,14 @@ public class TestOperatorBatches
     void testGroupedAggregationOperatorSupportsRetainedBatchesForTopNPayloadDeferral()
     {
         Operator operator = new GroupedAggregationOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 0,
                 List.of(1),
                 List.of(new CountAll()),
                 new GroupOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         0,
-                        new ConstantTableOperator(new Allocator(), 1, List.of(
+                        new ConstantTableOperator(new Allocator(EngineResources.createDefault()), 1, List.of(
                                 row("alpha"),
                                 row("alpha"),
                                 row("beta")))));
@@ -1579,7 +1580,7 @@ public class TestOperatorBatches
 
     void testLimitOperatorProducesLimitedBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new LimitOperator(allocator, 3, new GeneratorOperator(allocator, 5, 5, List.of(new SequenceGenerator(0))));
 
         Batch batch = operator.next();
@@ -1590,7 +1591,7 @@ public class TestOperatorBatches
     @Test
     void testGroupOperatorProducesGroupBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new GroupOperator(
                 allocator,
                 0,
@@ -1603,7 +1604,7 @@ public class TestOperatorBatches
     @Test
     void testTopNOperatorProducesTopNBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new TopNOperator(
                 allocator,
                 2,
@@ -1617,7 +1618,7 @@ public class TestOperatorBatches
     @Test
     void testTopNOperatorSupportsI32OrderingAndPayloadColumns()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new TopNOperator(
                 allocator,
                 2,
@@ -1637,7 +1638,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsI32EquiJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -1661,7 +1662,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorStreamsUnusedUniqueDirectRangeBuildPayload()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
         // Reverse physical order proves that payload-free membership does not depend on a recoverable build-row
         // reference. Keep the range above the completed-direct-range admission floor.
@@ -1687,7 +1688,7 @@ public class TestOperatorBatches
     @Test
     void testProjectOperatorCountsNonNullI32Zeros()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
         Streams[] columns = new Streams[] {
@@ -1723,7 +1724,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesNullableI32ZerosForCountExpression()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
 
         Streams[] outerColumns = new Streams[] {
@@ -1762,7 +1763,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsRlePayloadsAcrossJoinedOuterPositions()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
 
         Streams[] outerColumns = new Streams[] {
                 Streams.ofValues(new I64Vector(new long[] {1L, 2L, 3L})),
@@ -1783,7 +1784,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesInnerNullsAcrossMultipleInnerPages()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         int firstBatchSize = 250_000;
         int secondBatchSize = 250_001;
 
@@ -1878,7 +1879,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsI64EquiJoinWithDuplicateMatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -1903,7 +1904,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinDenseSingleBatchReferencesFallBackWhenBuildRowsHaveHoles()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(
@@ -1927,7 +1928,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinDenseSingleBatchRangeOutputCompactsMatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -1953,7 +1954,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorOutputCanFeedAnotherHashJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new HashJoinOperator(
                 allocator,
                 new HashJoinOperator(
@@ -1981,7 +1982,7 @@ public class TestOperatorBatches
     @Test
     void testSemiJoinOperatorFiltersUtf8Membership()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new SemiJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2003,7 +2004,7 @@ public class TestOperatorBatches
     @Test
     void testSemiJoinOperatorFiltersI64Membership()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new SemiJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2025,7 +2026,7 @@ public class TestOperatorBatches
     @Test
     void testSemiJoinOperatorAntiJoinKeepsNullUtf8ProbeKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new SemiJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2050,7 +2051,7 @@ public class TestOperatorBatches
     @Test
     void testSemiJoinOperatorCanProjectMatchColumn()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new SemiJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2074,7 +2075,7 @@ public class TestOperatorBatches
     @Test
     void testGroupIdOperatorExpandsGroupingSets()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new GroupIdOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 3, List.of(
@@ -2098,7 +2099,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsProbeOuterJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2119,7 +2120,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorEncodesAllUnmatchedBuildOutputAsSingleRuns()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(
@@ -2148,7 +2149,7 @@ public class TestOperatorBatches
     @Test
     void testProbeOuterJoinNullStreamPreservesNullableBuildValues()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator joined = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(
@@ -2178,7 +2179,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesNullableOuterPayloadForAggregations()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator joined = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 3, List.of(
@@ -2209,7 +2210,7 @@ public class TestOperatorBatches
     @Test
     void testEnforceSingleRowOperatorPassesThroughSingleRow()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new EnforceSingleRowOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(row(11L, "value"))))) {
@@ -2221,7 +2222,7 @@ public class TestOperatorBatches
     @Test
     void testEnforceSingleRowOperatorProducesNullRowForEmptyInput()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new EnforceSingleRowOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of()))) {
@@ -2233,7 +2234,7 @@ public class TestOperatorBatches
     @Test
     void testEnforceSingleRowOperatorRejectsMultipleRows()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         try (Operator operator = new EnforceSingleRowOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(row(11L), row(12L))))) {
@@ -2255,7 +2256,7 @@ public class TestOperatorBatches
         names.setBytes(3, "delta".getBytes(UTF_8));
 
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 new TableOperator(
@@ -2291,7 +2292,7 @@ public class TestOperatorBatches
         payload.setElements(Streams.ofValues(new I64Vector(new long[] {10L, 11L, 20L, 30L, 31L, 32L})));
 
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 new TableOperator(
@@ -2314,11 +2315,11 @@ public class TestOperatorBatches
     void testTopNOperatorOrdersUtf8Keys()
     {
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         2,
                         List.of(
                                 row("apple", 1L),
@@ -2338,12 +2339,12 @@ public class TestOperatorBatches
     void testTopNOperatorOrdersNullsLastForAscendingUtf8Keys()
     {
         List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 3,
                 0,
                 false,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         1,
                         List.of(
                                 row("beta"),
@@ -2360,12 +2361,12 @@ public class TestOperatorBatches
     void testTopNOperatorExcludesNullsAtAscendingCutoff()
     {
         List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 false,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         1,
                         List.of(
                                 row("beta"),
@@ -2381,11 +2382,11 @@ public class TestOperatorBatches
     void testTopNOperatorOrdersDoubles()
     {
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         2,
                         List.of(
                                 row(1.5, 10L),
@@ -2404,12 +2405,12 @@ public class TestOperatorBatches
     void testTopNOperatorSupportsMultiKeyOrdering()
     {
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 3,
                 new int[] {0, 1},
                 new boolean[] {false, false},
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         3,
                         List.of(
                                 row(20L, "pear", 1L),
@@ -2432,7 +2433,7 @@ public class TestOperatorBatches
     @Test
     void testTopNOperatorSupportsProjectedUtf8OrderingWithSlotReuse()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         EvaluationPlan evaluationPlan = new EvaluationPlan(
                 List.of(),
@@ -2491,7 +2492,7 @@ public class TestOperatorBatches
                         }),
                 });
 
-        Operator operator = new TopNOperator(new Allocator(), 2, 0, source);
+        Operator operator = new TopNOperator(new Allocator(EngineResources.createDefault()), 2, 0, source);
 
         Batch batch = operator.next();
 
@@ -2514,7 +2515,7 @@ public class TestOperatorBatches
         payloads.setBytes(2, "a".getBytes(UTF_8));
 
         Operator operator = new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 3,
                 0,
                 new TableOperator(
@@ -2542,11 +2543,11 @@ public class TestOperatorBatches
     void testTopNOperatorClearsNullablePayloadWhenSlotIsReused()
     {
         List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 0,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         3,
                         List.of(
                                 row(1L, null, null),
@@ -2562,12 +2563,12 @@ public class TestOperatorBatches
     void testTopNOperatorClearsNullableOrderingAndPayloadWhenSlotIsReused()
     {
         List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 2,
                 new int[] {2},
                 new boolean[] {false},
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         3,
                         List.of(
                                 row(10L, null, null),
@@ -2583,12 +2584,12 @@ public class TestOperatorBatches
     void testTopNOperatorPreservesZeroNullablePayloadWithUtf8Ordering()
     {
         List<org.weakref.nitro.data.Row> rows = OperatorAssertions.OperatorAssert.toRows(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 6,
                 new int[] {0, 1, 2, 5},
                 new boolean[] {false, false, false, false},
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         6,
                         List.of(
                                 row("Zulu", "Zulu", "Zulu", 1_000_000L, null, null),
@@ -2613,11 +2614,11 @@ public class TestOperatorBatches
     void testOffsetOperatorReusesPrefetchedTopNBatch()
     {
         CountingNextOperator source = new CountingNextOperator(new TopNOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 3,
                 0,
                 new ConstantTableOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         1,
                         List.of(
                                 row(5L),
@@ -2625,7 +2626,7 @@ public class TestOperatorBatches
                                 row(3L),
                                 row(2L)))));
 
-        Operator operator = new OffsetOperator(new Allocator(), 1, source);
+        Operator operator = new OffsetOperator(new Allocator(EngineResources.createDefault()), 1, source);
 
         assertThat(operator.hasNext()).isTrue();
         Batch batch = operator.next();
@@ -2644,14 +2645,14 @@ public class TestOperatorBatches
     void testOperatorAssertionsToRowsClosesOffsetBatches()
     {
         Operator operator = new OffsetOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 1,
                 new TopNOperator(
-                        new Allocator(),
+                        new Allocator(EngineResources.createDefault()),
                         3,
                         0,
                         new ConstantTableOperator(
-                                new Allocator(),
+                                new Allocator(EngineResources.createDefault()),
                                 1,
                                 List.of(
                                         row(5L),
@@ -2666,7 +2667,7 @@ public class TestOperatorBatches
     @Test
     void testNestedLoopJoinOperatorProducesJoinBatch()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L))),
@@ -2688,7 +2689,7 @@ public class TestOperatorBatches
         names.setBytes(1, "blue".getBytes(UTF_8));
 
         Operator operator = new NestedLoopJoinOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 new TableOperator(
                         1,
                         List.of(TableOperator.Page.values(
@@ -2717,7 +2718,7 @@ public class TestOperatorBatches
     @Test
     void testNestedLoopJoinOperatorSupportsI64EquiJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2742,7 +2743,7 @@ public class TestOperatorBatches
     @Test
     void testNestedLoopJoinOperatorSupportsUtf8EquiJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2771,7 +2772,7 @@ public class TestOperatorBatches
     @Test
     void testNestedLoopJoinOperatorSupportsMultiKeyEquiJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 3, List.of(
@@ -2802,7 +2803,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsMultiKeyEquiJoin()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 3, List.of(
@@ -2833,7 +2834,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesLargeSingleBatchPositionsForDuplicateLongPairs()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         int duplicatePosition = 70_000;
         int rowCount = duplicatePosition + 1;
         long[] firstKeys = new long[rowCount];
@@ -2874,7 +2875,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsThreeLongJoinKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 4, List.of(
@@ -2907,7 +2908,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorSupportsTwoUtf8JoinKeys()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 3, List.of(
@@ -2943,7 +2944,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorCopiesDictionaryWrappedInnerPayloads()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         BinaryVector payloadValues = new BinaryVector(2, "alpha".length() + "beta".length());
         payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         payloadValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
@@ -2980,7 +2981,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesSparseBinaryInnerPayloadsAfterConstrain()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(
@@ -3015,7 +3016,7 @@ public class TestOperatorBatches
         payload.setElements(Streams.ofValues(new I64Vector(new long[] {100L, 101L, 200L})));
 
         Operator operator = new HashJoinOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 new TableOperator(
                         1,
                         List.of(TableOperator.Page.values(
@@ -3055,7 +3056,7 @@ public class TestOperatorBatches
         secondPageKeys.setBytes(0, "aa".getBytes(UTF_8));
         secondPageKeys.setBytes(1, "bb".getBytes(UTF_8));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new TableOperator(
@@ -3092,7 +3093,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesLazyNonRetainedOuterPayloadAcrossOutputBatches()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.data.Row> innerRows = new ArrayList<>();
         for (int index = 0; index < 4_500; index++) {
             innerRows.add(row(1L, 1000L + index));
@@ -3132,7 +3133,7 @@ public class TestOperatorBatches
     @Test
     void testHashJoinOperatorPreservesObservedSchemaOnEmptyResult()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new HashJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(row("alpha"))),
@@ -3151,7 +3152,7 @@ public class TestOperatorBatches
     @Test
     void testNestedLoopJoinOperatorPreservesObservedSchemaOnEmptyResult()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator operator = new NestedLoopJoinOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 1, List.of(row("alpha"))),

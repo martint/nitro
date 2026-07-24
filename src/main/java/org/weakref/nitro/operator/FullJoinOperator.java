@@ -42,7 +42,7 @@ public final class FullJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.fullJoin.retainInputBatches", "true"));
 
     private final Allocator allocator;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final Allocator.Context allocationContext = new Allocator.Context("FullJoinOperator");
     private final Operator outer;
     private final Operator inner;
@@ -79,6 +79,7 @@ public final class FullJoinOperator
             throw new IllegalArgumentException("Join key counts must match");
         }
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.outer = outer;
         this.inner = inner;
         this.outerJoinColumns = outerJoinColumns.clone();

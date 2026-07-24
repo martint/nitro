@@ -14,6 +14,7 @@
 package org.weakref.nitro.clickbench;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -37,13 +38,13 @@ public final class QueryDriver
         Path hits = ClickBenchHitsSupport.requiredActualHitsDirectory();
         long sink = 0;
         for (int iteration = 0; iteration < warmup; iteration++) {
-            sink += consume(query(query, new Allocator(), hits));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits));
         }
 
         if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, new Allocator(), hits));
+                sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -55,7 +56,7 @@ public final class QueryDriver
         for (int iteration = 0; iteration < measured; iteration++) {
             sink += consume(ClickBenchHitsSupport.withOperatorCpuProfile(
                     profile,
-                    () -> query(query, new Allocator(), hits)));
+                    () -> query(query, new Allocator(EngineResources.createDefault()), hits)));
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);

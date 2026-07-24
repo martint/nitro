@@ -103,6 +103,25 @@ class TestArchitectureDependencies
                 .noneMatch(path -> read(path).contains("Schema.unspecified"));
     }
 
+    @Test
+    void testPrimitivePoolsAreExplicitlyOwned()
+            throws IOException
+    {
+        Pattern ambientPool = Pattern.compile(
+                "PrimitiveArrayPool\\.(?:shared|sharedNativeBuffers)\\(|" +
+                        "static\\s+(?:final\\s+)?PrimitiveArrayPool\\s+\\w+\\s*(?:=|;)");
+        List<Path> violations;
+        try (var files = Files.walk(MAIN_SOURCES.resolve("org/weakref/nitro"))) {
+            violations = files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> matches(path, ambientPool))
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("stateful pools must be owned by EngineResources and passed through constructors")
+                .isEmpty();
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();

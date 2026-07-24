@@ -36,6 +36,7 @@ public final class MarkDistinctMarkerOperator
     private static final int[] EMPTY_POSITIONS = new int[0];
 
     private final Allocator allocator;
+    private final PrimitiveArrayPool arrayPool;
     private final int[] distinctColumns;
     private final boolean retainNulls;
     private final Operator source;
@@ -58,6 +59,7 @@ public final class MarkDistinctMarkerOperator
             throw new IllegalArgumentException("distinctColumns is empty");
         }
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
         this.source = source;
@@ -153,7 +155,7 @@ public final class MarkDistinctMarkerOperator
             distinctKeySet.releaseBuffers();
             distinctKeySet = null;
         }
-        PrimitiveArrayPool.shared().release(distinctPositions);
+        arrayPool.release(distinctPositions);
         distinctPositions = EMPTY_POSITIONS;
         Arrays.fill(values, null);
         Arrays.fill(nulls, null);
@@ -201,8 +203,8 @@ public final class MarkDistinctMarkerOperator
         }
         if (distinctPositions.length < mask.selectedCount()) {
             int[] previous = distinctPositions;
-            distinctPositions = PrimitiveArrayPool.shared().borrowInts(mask.selectedCount());
-            PrimitiveArrayPool.shared().release(previous);
+            distinctPositions = arrayPool.borrowInts(mask.selectedCount());
+            arrayPool.release(previous);
         }
         try {
             for (int index = 0; index < distinctColumns.length; index++) {
@@ -211,7 +213,7 @@ public final class MarkDistinctMarkerOperator
                 nulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             if (distinctKeySet == null) {
-                distinctKeySet = DistinctKeySet.create(values, retainNulls);
+                distinctKeySet = DistinctKeySet.create(values, retainNulls, arrayPool);
             }
             distinctKeySet.reserveAdditional(mask.selectedCount());
             batchState.distinctCount = distinctKeySet.addBatch(values, nulls, mask, distinctPositions);

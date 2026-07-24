@@ -28,6 +28,7 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
@@ -79,7 +80,7 @@ public class BenchmarkCompiledVsTrino
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
     }
 
     @Benchmark

@@ -25,6 +25,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
@@ -91,7 +92,7 @@ public class BenchmarkBatchFunction
         inputs = List.of(Streams.ofValues(new I64Vector(a)), Streams.ofValues(new I64Vector(b)),
                 Streams.ofValues(new I64Vector(c)), Streams.ofValues(new I64Vector(d)));
         mask = Mask.all(rows);
-        context = new PrimitiveExecutionContext(new Allocator());
+        context = new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault()));
         // Reusable output buffers -> allocation-free steady state for both sides.
         fusedOut = Streams.ofValues(new I64Vector(rows));
         ab = Streams.ofValues(new I64Vector(rows));

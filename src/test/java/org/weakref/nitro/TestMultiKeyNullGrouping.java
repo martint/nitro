@@ -16,6 +16,7 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -41,7 +42,7 @@ public class TestMultiKeyNullGrouping
     @Test
     void multiLongKeyCollapsesNullsWithDifferingUnderlyingValues()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         I64Vector key0 = new I64Vector(new long[] {7, 7, 7});
         // key1 is NULL on all rows, but carries different stale values (5, 9, 13) under the null flag.
         I64Vector key1 = new I64Vector(new long[] {5, 9, 13});
@@ -91,7 +92,7 @@ public class TestMultiKeyNullGrouping
         // (string, long) key forces the FlatGroupingTable path (mixed types). The long key is NULL on all rows
         // but carries different stale values (5, 9, 13) under the null flag (TPC-DS q77 ROLLUP subtotal). All
         // rows whose tuple is logically ("c", NULL) must collapse into one group.
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         org.weakref.nitro.data.BinaryVector key0 = utf8("c", "c", "c");
         I64Vector key1 = new I64Vector(new long[] {5, 9, 13});
         BooleanVector key1Nulls = new BooleanVector(new boolean[] {true, true, true});

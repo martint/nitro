@@ -78,7 +78,7 @@ final class BufferedJoinInput
     private static final int ERRORS_FLAG = 1 << 2;
 
     private final JoinBufferSupport buffers;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private final int columnCount;
     private final Streams[] schema;
     private final java.util.Set<Stream>[] outputStreams;
@@ -90,7 +90,7 @@ final class BufferedJoinInput
     private final List<InnerBatch> coalescedSources = new ArrayList<>();
     private Batch firstRetainedBatch;
     private int[] densePositionsCache = new int[0];
-    private final PositionBuffer compactionPositions = new PositionBuffer();
+    private final PositionBuffer compactionPositions;
     private final JoinBufferSupport.PositionMappingCache compactionMappings;
 
     private boolean loaded;
@@ -102,6 +102,8 @@ final class BufferedJoinInput
     BufferedJoinInput(JoinBufferSupport buffers, int columnCount)
     {
         this.buffers = buffers;
+        this.arrayPool = buffers.primitiveArrays();
+        this.compactionPositions = new PositionBuffer(arrayPool);
         this.columnCount = columnCount;
         this.schema = new Streams[columnCount];
         this.outputStreams = (java.util.Set<Stream>[]) new java.util.Set<?>[columnCount];

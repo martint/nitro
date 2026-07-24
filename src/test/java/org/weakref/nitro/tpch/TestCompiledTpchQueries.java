@@ -15,6 +15,7 @@ package org.weakref.nitro.tpch;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.jit.CompiledPipeline;
 import org.weakref.nitro.jit.Types;
 import org.weakref.nitro.tpcds.CompiledQuerySupport;
@@ -236,7 +237,7 @@ public class TestCompiledTpchQueries
 
     private static CompiledQuerySupport.LoweredResult runComposite(TpchParquetTables tables, CompiledTpcdsQueries.Composite composite)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
@@ -249,7 +250,7 @@ public class TestCompiledTpchQueries
         var tables = TpchParquetTables.actualIfPresent();
         assumeTrue(tables.isPresent(), "TPC-H parquet data not present");
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables.orElseThrow(), ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables.orElseThrow(), ported.query().lower());
         assertMatchesReference(queryId, run, ported.stringColumns());
     }
 

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
@@ -35,7 +36,7 @@ public class TestJoinBufferSupport
     @Test
     void testPrimitivePositionCopiesHonorInputAndOutputOffsets()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
         JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
 
@@ -73,7 +74,7 @@ public class TestJoinBufferSupport
     @Test
     void testAllFalseCopyStaysCompactUntilTrueValueArrives()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
         JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
 
@@ -106,7 +107,7 @@ public class TestJoinBufferSupport
     @Test
     void testDictionaryBinaryPositionCopyKeepsCompactDictionaryWhenRepeated()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
         JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
 
@@ -139,7 +140,7 @@ public class TestJoinBufferSupport
     @Test
     void testDictionaryBinaryPositionCopyFallsBackWhenOutputIsPartial()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
         JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
 
@@ -180,7 +181,7 @@ public class TestJoinBufferSupport
 
     private static void assertCopiedBooleans(Vector source, int[] positions, boolean... expected)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
         JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
 

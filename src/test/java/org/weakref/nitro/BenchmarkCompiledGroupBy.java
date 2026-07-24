@@ -25,6 +25,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
@@ -60,7 +61,7 @@ public class BenchmarkCompiledGroupBy
     @Param({"1000", "100000", "2000000"})
     private int groups;
 
-    private final Allocator allocator = new Allocator();
+    private final Allocator allocator = new Allocator(EngineResources.createDefault());
 
     private long[] k;
     private long[] v;

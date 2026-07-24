@@ -50,7 +50,7 @@ public class SemiJoinOperator
     private final boolean includeMatches;
     private final boolean outputMatches;
     private final MembershipSet membership;
-    private final PositionScratch selectionScratch = new PositionScratch();
+    private final PositionScratch selectionScratch;
 
     private boolean loaded;
     private BatchState currentBatchState;
@@ -76,6 +76,7 @@ public class SemiJoinOperator
         this.outerJoinColumn = outerJoinColumn;
         this.innerJoinColumn = innerJoinColumn;
         this.allocator = allocator;
+        this.selectionScratch = new PositionScratch(allocator.primitiveArrays());
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
         this.membership = new MembershipSet(allocator, ALLOCATION_CONTEXT);
@@ -303,7 +304,7 @@ public class SemiJoinOperator
             return;
         }
         if (smallBinaryMembership == null) {
-            smallBinaryMembership = new SmallBinarySet(SMALL_BINARY_SET_MAX_VALUES);
+            smallBinaryMembership = new SmallBinarySet(SMALL_BINARY_SET_MAX_VALUES, allocator.primitiveArrays());
         }
         if (!smallBinaryMembership.addValues(values, nulls, mask)) {
             smallBinaryMembershipAbandoned = true;
@@ -378,8 +379,13 @@ public class SemiJoinOperator
 
     private static final class PositionScratch
     {
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
         private int[] positions = new int[0];
+
+        private PositionScratch(PrimitiveArrayPool arrayPool)
+        {
+            this.arrayPool = arrayPool;
+        }
 
         private int[] ensure(int count)
         {
@@ -426,7 +432,7 @@ public class SemiJoinOperator
         private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
         private final int maxValues;
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
         private byte[][] values = new byte[8][];
         private int[] lengths = new int[8];
         private int[] hashes = new int[8];
@@ -440,9 +446,10 @@ public class SemiJoinOperator
         private Vector cachedDictionaryValues;
         private byte[] cachedDictionaryMatchStates = new byte[0];
 
-        private SmallBinarySet(int maxValues)
+        private SmallBinarySet(int maxValues, PrimitiveArrayPool arrayPool)
         {
             this.maxValues = maxValues;
+            this.arrayPool = arrayPool;
         }
 
         private static boolean supports(Vector values)

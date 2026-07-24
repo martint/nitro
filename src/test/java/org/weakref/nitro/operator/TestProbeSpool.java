@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
@@ -30,7 +31,7 @@ class TestProbeSpool
     @Test
     void testCompleteInputCollectsKeysAndReplaysRows()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         ProbeSpool spool = new ProbeSpool(allocator, new TableOperator(2, List.of(
                 page(new long[] {1, 2, 3}, new long[] {11, 12, 13}),
                 page(new long[] {4, 2}, new long[] {14, 12}))), 2);
@@ -51,7 +52,7 @@ class TestProbeSpool
     @Test
     void testOverflowReplaysPrefixAndRemainingSourceWithoutFilter()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         ProbeSpool spool = new ProbeSpool(allocator, new TableOperator(1, List.of(
                 page(new long[] {1, 2, 3}),
                 page(new long[] {4, 5, 6}),

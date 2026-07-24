@@ -14,6 +14,7 @@
 package org.weakref.nitro.tpcds;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
@@ -61,7 +62,7 @@ public final class ScanIpcDriver
     private static long drainScan(TpcdsParquetTables tables)
             throws Exception
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<java.nio.file.Path> files = tables.tableFiles("store_sales");
         Operator scan = new MultiStageOperator(COLUMNS.size(), files, path -> new TrinoParquetScanOperator(allocator, path, COLUMNS));
         long sum = 0;

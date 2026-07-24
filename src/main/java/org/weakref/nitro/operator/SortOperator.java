@@ -30,7 +30,7 @@ public class SortOperator
     private final Allocator allocator;
     private final Operator source;
     private final TopNState state;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
     private int[] orderedSlots = new int[0];
     private int[] sortScratch = new int[0];
     private long[] sortKeys = new long[0];
@@ -47,6 +47,7 @@ public class SortOperator
             throw new IllegalArgumentException("Sort ordering columns and directions must have the same length");
         }
         this.allocator = allocator;
+        this.arrayPool = allocator.primitiveArrays();
         this.source = source;
         this.state = new TopNState(columns, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), 256);
     }

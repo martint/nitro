@@ -70,7 +70,7 @@ final class FlatGroupingTable
     private final int fixedRecordChunkSize;
     private final boolean identityGroupIds;
     private final boolean packedHashRecordSlots;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
 
     private byte[] control;
     private int[] groupIdsByHash;
@@ -132,6 +132,7 @@ final class FlatGroupingTable
 
     FlatGroupingTable(FlatKeyLayout layout, int expectedSize, boolean identityGroupIds, boolean packedHashRecordSlots)
     {
+        this.arrayPool = layout.primitiveArrays();
         this.layout = layout;
         this.identityGroupIds = identityGroupIds &&
                 Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.identityGroupIds", "true"));
@@ -139,7 +140,7 @@ final class FlatGroupingTable
         // tables already prove that physical record order is the logical group id, so they avoid paying for a second
         // group-id map and are the structurally compact cohort where the wider self-contained slot can win.
         this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds;
-        this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena() : null;
+        this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;
         this.fixedRecordSize = (packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
         if (POOL_SIZED_RECORD_CHUNKS) {
@@ -1244,11 +1245,17 @@ final class FlatGroupingTable
     static final class FlatVariableWidthArena
     {
         private static final int CHUNK_SIZE = 1 << 20;
-        private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+        private final PrimitiveArrayPool arrayPool;
 
-        private byte[][] chunks = new byte[][] {borrowChunk()};
+        private byte[][] chunks;
         private int chunkIndex;
         private int chunkOffset;
+
+        private FlatVariableWidthArena(PrimitiveArrayPool arrayPool)
+        {
+            this.arrayPool = arrayPool;
+            this.chunks = new byte[][] {borrowChunk()};
+        }
 
         public long append(byte[] source, int sourceOffset, int length)
         {

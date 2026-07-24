@@ -25,6 +25,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
@@ -58,10 +59,10 @@ public class BenchmarkCompiledQuery
     public void setup()
     {
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual();
-        data = CompiledQuerySupport.load(new Allocator(), tables);
+        data = CompiledQuerySupport.load(new Allocator(EngineResources.createDefault()), tables);
         compiled = CompiledQuerySupport.compile();
 
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
         if (jitCompiled() != interpreted()) {
             throw new IllegalStateException("mismatch: jit=" + jitCompiled() + " interpreted=" + interpreted());
         }
@@ -70,7 +71,7 @@ public class BenchmarkCompiledQuery
     @Setup(Level.Invocation)
     public void setupInvocation()
     {
-        allocator = new Allocator();
+        allocator = new Allocator(EngineResources.createDefault());
     }
 
     @Benchmark

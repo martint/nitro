@@ -18,8 +18,14 @@ import java.util.concurrent.CompletionStage;
 /// Host-accounted execution memory.
 public interface MemoryReservation
 {
+    /// Adds bytes to the reservation immediately.
+    ///
+    /// The returned continuation is complete when the host permits execution to continue. A host
+    /// may therefore account the bytes and return an incomplete stage to apply backpressure without
+    /// exposing its scheduler or memory-context types to Nitro.
     CompletionStage<Void> reserve(long bytes);
 
+    /// Removes bytes from the reservation.
     void release(long bytes);
 
     long reservedBytes();

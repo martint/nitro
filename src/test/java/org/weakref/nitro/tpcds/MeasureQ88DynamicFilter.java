@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -77,7 +78,7 @@ public class MeasureQ88DynamicFilter
 
     private static long runQ88(TpcdsParquetTables tables, PrimitiveRegistry registry)
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Operator q88 = TpcdsParquetSupport.query88(allocator, registry, tables);
         long checksum = 0;
         try (q88) {

@@ -58,7 +58,7 @@ class AdaptiveLongGroupingTable
 
     final int arity;
     private final boolean groupedProbeEligible;
-    private final PrimitiveArrayPool arrayPool = PrimitiveArrayPool.shared();
+    private final PrimitiveArrayPool arrayPool;
 
     int[] slots;
     int slotMask;
@@ -89,12 +89,13 @@ class AdaptiveLongGroupingTable
     private long[] promotedAssignedGroups = new long[0];
     private int[] reusedTerminalSlots;
 
-    AdaptiveLongGroupingTable(int arity, int expectedSize, boolean groupedProbeEligible)
+    AdaptiveLongGroupingTable(PrimitiveArrayPool arrayPool, int arity, int expectedSize, boolean groupedProbeEligible)
     {
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
         this.arity = arity;
+        this.arrayPool = arrayPool;
         this.groupedProbeEligible = groupedProbeEligible;
         if (DEBUG_SHAPES) {
             System.err.printf("[adaptive-long-grouping] create arity=%d expected=%d%n", arity, expectedSize);
@@ -117,14 +118,14 @@ class AdaptiveLongGroupingTable
         nullMasksByGroup = new byte[0];
     }
 
-    static AdaptiveLongGroupingTable create(int arity, int expectedSize)
+    static AdaptiveLongGroupingTable create(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
-        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, false);
+        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, false, arrayPool);
     }
 
-    static AdaptiveLongGroupingTable createDistinct(int arity, int expectedSize)
+    static AdaptiveLongGroupingTable createDistinct(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
-        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, true);
+        return AdaptiveLongGroupingTableGenerator.create(arity, expectedSize, true, arrayPool);
     }
 
     @Override
@@ -622,7 +623,7 @@ class AdaptiveLongGroupingTable
         if (DEBUG_SHAPES) {
             System.err.printf("[adaptive-long-grouping] promote arity=%d groups=%d slots=%d%n", arity, groupCount, slots.length);
         }
-        LongGroupingTable target = MultiLongGroupingTableGenerator.create(arity, Math.max(16, toIntExact(groupCount)));
+        LongGroupingTable target = MultiLongGroupingTableGenerator.create(arity, Math.max(16, toIntExact(groupCount)), arrayPool);
         if (groupCount != 0) {
             VectorAccess.LongValues[] values = new VectorAccess.LongValues[arity];
             VectorAccess.BooleanValues[] nulls = new VectorAccess.BooleanValues[arity];

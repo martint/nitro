@@ -59,6 +59,7 @@ final class FusedConditionalSums
         private final int valueColumn;
         private final ConditionalSum.Literal[] literals;
         private final SumStateVector[] sums;
+        private PrimitiveArrayPool arrayPool;
         private boolean[] fullyInitialized;
 
         private SharedState(int discriminatorColumn, int valueColumn, int count)
@@ -85,6 +86,7 @@ final class FusedConditionalSums
         @Override
         public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
         {
+            shared.arrayPool = allocator.primitiveArrays();
             Streams state = Streams.ofValues(allocator.allocate(allocationContext, SumStateVector.class, size, SumStateVector::new));
             shared.sums[ordinal] = (SumStateVector) state.values();
             if (shared.fullyInitialized == null) {
@@ -156,7 +158,7 @@ final class FusedConditionalSums
         @Override
         public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
         {
-            try (OrdinalResolver resolver = OrdinalResolver.create(streams.values(shared.discriminatorColumn), shared.literals)) {
+            try (OrdinalResolver resolver = OrdinalResolver.create(streams.values(shared.discriminatorColumn), shared.literals, shared.arrayPool)) {
                 Vector discriminatorNullVector = streams.stream(shared.discriminatorColumn, Stream.NULLS);
                 boolean discriminatorNullFree = VectorAccess.isAllFalseNulls(discriminatorNullVector);
                 VectorAccess.BooleanValues discriminatorNulls = discriminatorNullFree ? null : VectorAccess.booleanValues(discriminatorNullVector);
@@ -173,7 +175,7 @@ final class FusedConditionalSums
         @Override
         public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
         {
-            try (OrdinalResolver resolver = OrdinalResolver.create(streams.values(shared.discriminatorColumn), shared.literals)) {
+            try (OrdinalResolver resolver = OrdinalResolver.create(streams.values(shared.discriminatorColumn), shared.literals, shared.arrayPool)) {
                 Vector discriminatorNullVector = streams.stream(shared.discriminatorColumn, Stream.NULLS);
                 boolean discriminatorNullFree = VectorAccess.isAllFalseNulls(discriminatorNullVector);
                 VectorAccess.BooleanValues discriminatorNulls = discriminatorNullFree ? null : VectorAccess.booleanValues(discriminatorNullVector);
@@ -232,11 +234,11 @@ final class FusedConditionalSums
         @Override
         default void close() {}
 
-        static OrdinalResolver create(Vector values, ConditionalSum.Literal[] literals)
+        static OrdinalResolver create(Vector values, ConditionalSum.Literal[] literals, PrimitiveArrayPool arrayPool)
         {
             return switch (values) {
                 case DictionaryVector dictionary -> {
-                    OrdinalResolver dictionaryResolver = create(dictionary.values(), literals);
+                    OrdinalResolver dictionaryResolver = create(dictionary.values(), literals, arrayPool);
                     int[] ids = dictionary.ids();
                     yield new OrdinalResolver()
                     {
@@ -254,7 +256,7 @@ final class FusedConditionalSums
                     };
                 }
                 case RleVector rle -> {
-                    OrdinalResolver runResolver = create(rle.values(), literals);
+                    OrdinalResolver runResolver = create(rle.values(), literals, arrayPool);
                     yield new OrdinalResolver()
                     {
                         @Override
@@ -270,16 +272,16 @@ final class FusedConditionalSums
                         }
                     };
                 }
-                case BinaryVector binary -> lookup(binary, literals);
-                case I64Vector longs -> lookup(longs.values(), literals);
-                case I32Vector ints -> lookup(ints.values(), literals);
+                case BinaryVector binary -> lookup(binary, literals, arrayPool);
+                case I64Vector longs -> lookup(longs.values(), literals, arrayPool);
+                case I32Vector ints -> lookup(ints.values(), literals, arrayPool);
                 default -> throw new IllegalArgumentException("Unsupported conditional discriminator: " + values.getClass().getSimpleName());
             };
         }
 
-        private static OrdinalResolver lookup(BinaryVector values, ConditionalSum.Literal[] literals)
+        private static OrdinalResolver lookup(BinaryVector values, ConditionalSum.Literal[] literals, PrimitiveArrayPool arrayPool)
         {
-            int[] ordinals = PrimitiveArrayPool.shared().borrowInts(values.length());
+            int[] ordinals = arrayPool.borrowInts(values.length());
             for (int position = 0; position < values.length(); position++) {
                 int ordinal = -1;
                 for (int candidate = 0; candidate < literals.length; candidate++) {
@@ -290,25 +292,25 @@ final class FusedConditionalSums
                 }
                 ordinals[position] = ordinal;
             }
-            return pooledLookup(ordinals);
+            return pooledLookup(ordinals, arrayPool);
         }
 
-        private static OrdinalResolver lookup(long[] values, ConditionalSum.Literal[] literals)
+        private static OrdinalResolver lookup(long[] values, ConditionalSum.Literal[] literals, PrimitiveArrayPool arrayPool)
         {
-            int[] ordinals = PrimitiveArrayPool.shared().borrowInts(values.length);
+            int[] ordinals = arrayPool.borrowInts(values.length);
             for (int position = 0; position < values.length; position++) {
                 ordinals[position] = longOrdinal(values[position], literals);
             }
-            return pooledLookup(ordinals);
+            return pooledLookup(ordinals, arrayPool);
         }
 
-        private static OrdinalResolver lookup(int[] values, ConditionalSum.Literal[] literals)
+        private static OrdinalResolver lookup(int[] values, ConditionalSum.Literal[] literals, PrimitiveArrayPool arrayPool)
         {
-            int[] ordinals = PrimitiveArrayPool.shared().borrowInts(values.length);
+            int[] ordinals = arrayPool.borrowInts(values.length);
             for (int position = 0; position < values.length; position++) {
                 ordinals[position] = longOrdinal(values[position], literals);
             }
-            return pooledLookup(ordinals);
+            return pooledLookup(ordinals, arrayPool);
         }
 
         private static int longOrdinal(long value, ConditionalSum.Literal[] literals)
@@ -321,7 +323,7 @@ final class FusedConditionalSums
             return -1;
         }
 
-        private static OrdinalResolver pooledLookup(int[] ordinals)
+        private static OrdinalResolver pooledLookup(int[] ordinals, PrimitiveArrayPool arrayPool)
         {
             return new OrdinalResolver()
             {
@@ -334,7 +336,7 @@ final class FusedConditionalSums
                 @Override
                 public void close()
                 {
-                    PrimitiveArrayPool.shared().release(ordinals);
+                    arrayPool.release(ordinals);
                 }
             };
         }

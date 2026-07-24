@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
@@ -45,10 +46,10 @@ public class TestCompiledTpcdsQueries
 
         // store_sales: a 64-bit surrogate key + measure, a 32-bit quantity; date_dim: 32-bit d_year. The widths are
         // read from the actual file, not the logical type -- the foundation for per-file variant specialization.
-        int[] ss = CompiledQuerySupport.discoverNumericWidths(new Allocator(), tables, "store_sales",
+        int[] ss = CompiledQuerySupport.discoverNumericWidths(new Allocator(EngineResources.createDefault()), tables, "store_sales",
                 List.of("ss_item_sk", "ss_ext_sales_price", "ss_quantity"));
         assertThat(ss).containsExactly(64, 64, 32);
-        int[] dd = CompiledQuerySupport.discoverNumericWidths(new Allocator(), tables, "date_dim", List.of("d_date_sk", "d_year"));
+        int[] dd = CompiledQuerySupport.discoverNumericWidths(new Allocator(EngineResources.createDefault()), tables, "date_dim", List.of("d_date_sk", "d_year"));
         assertThat(dd).containsExactly(64, 32);
     }
 
@@ -421,11 +422,11 @@ public class TestCompiledTpcdsQueries
 
         for (var entry : ported.entrySet()) {
             org.weakref.nitro.jit.QueryLowering.Lowered lowered = entry.getValue().query().lower();
-            org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result();
+            org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
             org.weakref.nitro.jit.StreamingPipeline streaming =
                     org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
             org.weakref.nitro.jit.CompiledPipeline.Result lazy =
-                    CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, lowered, streaming, true);
+                    CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming, true);
             assertThat(rows(lazy)).as("Q%s streaming-lazy vs eager", entry.getKey()).isEqualTo(rows(eager));
         }
     }
@@ -451,11 +452,11 @@ public class TestCompiledTpcdsQueries
                 .aggregate("sum", "ss_ext_sales_price");
         org.weakref.nitro.jit.QueryLowering.Lowered joinLowered = joinQuery.lower();
 
-        org.weakref.nitro.jit.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(), tables, joinLowered).result();
+        org.weakref.nitro.jit.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered).result();
         org.weakref.nitro.jit.StreamingPipeline joinStreaming =
                 org.weakref.nitro.jit.PipelineCompiler.compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
         org.weakref.nitro.jit.CompiledPipeline.Result joinLazy =
-                CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, joinLowered, joinStreaming, true);
+                CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered, joinStreaming, true);
 
         assertThat(rows(joinLazy)).isEqualTo(rows(joinEager));
         assertThat(joinLazy.rowCount()).isGreaterThan(0);
@@ -485,10 +486,10 @@ public class TestCompiledTpcdsQueries
 
         var probe = lowered.inputs().get(0);
         org.weakref.nitro.jit.CompiledPipeline.Result eager = streaming.execute(
-                CompiledQuerySupport.parquetFlatSource(new Allocator(), tables, probe.table(), probe.columns()),
+                CompiledQuerySupport.parquetFlatSource(new Allocator(EngineResources.createDefault()), tables, probe.table(), probe.columns()),
                 new org.weakref.nitro.jit.Column[0][], new int[0]);
         org.weakref.nitro.jit.CompiledPipeline.Result lazy = streaming.execute(
-                CompiledQuerySupport.parquetLazySource(new Allocator(), tables, probe.table(), probe.columns(), lowered.pipeline()),
+                CompiledQuerySupport.parquetLazySource(new Allocator(EngineResources.createDefault()), tables, probe.table(), probe.columns(), lowered.pipeline()),
                 new org.weakref.nitro.jit.Column[0][], new int[0]);
 
         assertThat(lazy.rowCount()).isEqualTo(1).isEqualTo(eager.rowCount());
@@ -506,12 +507,12 @@ public class TestCompiledTpcdsQueries
         // i_category dictionary is materialized once, so its group-key ids stay consistent across probe batches.
         org.weakref.nitro.jit.QueryLowering.Lowered lowered = CompiledTpcdsQueries.query42().query().lower();
 
-        org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(), tables, lowered).result();
+        org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
                 org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         org.weakref.nitro.jit.CompiledPipeline.Result streamed =
-                CompiledQuerySupport.runStreamingLowered(new Allocator(), tables, lowered, streaming);
+                CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming);
 
         assertThat(rows(streamed)).isEqualTo(rows(eager));
         assertThat(streamed.rowCount()).isGreaterThan(0);
@@ -546,7 +547,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
     }
 
@@ -555,13 +556,13 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         byte[][][] dictionaries = new byte[run.result().columns().length][][];
         for (CompiledTpcdsQueries.DictRef ref : ported.stringColumns()) {
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
         Operator compiled = new CompiledOperator(run.result(), dictionaries);
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> actual = normalizeQuery26CompiledAverages(OperatorAssertions.OperatorAssert.toRows(compiled), true);
         List<Row> expected = normalizeQuery26CompiledAverages(OperatorAssertions.OperatorAssert.toRows(harnessChain), false);
         assertThat(actual).containsExactlyElementsOf(expected);
@@ -596,7 +597,7 @@ public class TestCompiledTpcdsQueries
         for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
             branches.add(branch.lower());
         }
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : union.stages()) {
             virtuals.put(stage.virtualName(),
@@ -634,7 +635,7 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledTpcdsQueries.Composite composite = CompiledTpcdsQueries.query98();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
@@ -646,7 +647,7 @@ public class TestCompiledTpcdsQueries
         }
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(new CompiledOperator(run.result(), dictionaries)));
 
-        Operator harnessChain = TpcdsParquetSupport.query98(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        Operator harnessChain = TpcdsParquetSupport.query98(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
 
@@ -698,7 +699,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
@@ -753,7 +754,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         List<org.weakref.nitro.jit.QueryLowering.Lowered> branches = new ArrayList<>();
         for (org.weakref.nitro.jit.QueryLowering branch : composite.branches()) {
             branches.add(branch.lower());
@@ -777,7 +778,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         // Assemble the union subquery independently for each year (no reuse), then group and filter each to its year.
         virtuals.put(query.currentUnion(), CompiledQuerySupport.materializeUnion(allocator, tables, lowerBranches(query.branches()), List.of()));
@@ -812,7 +813,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         virtuals.put("q51_web_grouped", CompiledQuerySupport.materializeStage(allocator, tables, query.webGrouped().lower(), virtuals, List.of()));
         virtuals.put("q51_web_window", CompiledQuerySupport.materializeStage(allocator, tables, query.webWindow().lower(), virtuals, List.of()));
@@ -834,7 +835,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         virtuals.put("q05_web_returns", CompiledQuerySupport.materializeStage(allocator, tables, query.webReturns().lower(), virtuals, List.of()));
         List<CompiledQuerySupport.Materialized> channels = new ArrayList<>();
@@ -867,7 +868,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.PreStage pre : query.stages()) {
             switch (pre) {
@@ -969,7 +970,7 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledTpcdsQueries.Ported ported = CompiledTpcdsQueries.query17();
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), TpcdsParquetSupport::query17, tables, true);
     }
 
@@ -981,7 +982,7 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledTpcdsQueries.Ported ported = CompiledTpcdsQueries.query18();
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), TpcdsParquetSupport::query18, tables, true);
     }
 
@@ -1040,7 +1041,7 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledTpcdsQueries.Composite composite = CompiledTpcdsQueries.query84();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
         for (CompiledTpcdsQueries.Stage stage : composite.stages()) {
             virtuals.put(stage.virtualName(),
@@ -1065,7 +1066,7 @@ public class TestCompiledTpcdsQueries
             actual.add(new Row(new Object[] {id, name}));
         }
 
-        Operator harnessChain = TpcdsParquetSupport.query84(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        Operator harnessChain = TpcdsParquetSupport.query84(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         assertThat(expected).isNotEmpty();
         assertThat(normalize(actual)).containsExactlyElementsOf(expected);
@@ -1149,7 +1150,7 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(), tables, ported.query().lower());
+        CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runStreamingPorted(new Allocator(EngineResources.createDefault()), tables, ported.query().lower());
         assertBridgedRowsMatch(run, ported.stringColumns(), harness, tables);
     }
 
@@ -1160,7 +1161,7 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runMultiStage(
-                new Allocator(), tables, staged.subquery().lower(), staged.main().lower(), staged.virtualTable());
+                new Allocator(EngineResources.createDefault()), tables, staged.subquery().lower(), staged.main().lower(), staged.virtualTable());
         assertBridgedRowsMatch(run, staged.stringColumns(), harness, tables);
     }
 
@@ -1188,7 +1189,7 @@ public class TestCompiledTpcdsQueries
         List<Row> actual = normalize(OperatorAssertions.OperatorAssert.toRows(compiled));
         // Materialize the compiled rows before executing the independent harness oracle. Keeping both query
         // consumers active at once turns this result check into an accidental overlapping-lifetime stress test.
-        Operator harnessChain = harness.build(new Allocator(), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        Operator harnessChain = harness.build(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
         List<Row> expected = normalize(OperatorAssertions.OperatorAssert.toRows(harnessChain));
         if (!allowEmptyOracle) {
             assertThat(expected).isNotEmpty();

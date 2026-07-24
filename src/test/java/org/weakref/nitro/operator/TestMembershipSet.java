@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -30,7 +31,7 @@ class TestMembershipSet
     @Test
     void exactLongMembershipSurvivesRangeExpansionAndEncodedProbe()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
         try {
             long[] initial = new long[1_024];
@@ -64,7 +65,7 @@ class TestMembershipSet
     @Test
     void sparseExtremeLongDomainFallsBackWithoutLosingExactness()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
         try {
             set.addBatch(
@@ -93,7 +94,7 @@ class TestMembershipSet
     @Test
     void denseLongMembershipConvertsToHashWhenLaterKeysEscapeTheBoundedDomain()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
         try {
             set.addBatch(new I64Vector(new long[] {1, 2, 2, 3}), null, Mask.all(4));
@@ -122,7 +123,7 @@ class TestMembershipSet
     @Test
     void emptyBuildRejectsEveryProbe()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
         try {
             set.beginProbeBatch(new I64Vector(new long[] {1, 2}), null);

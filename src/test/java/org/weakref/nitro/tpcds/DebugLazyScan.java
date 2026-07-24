@@ -15,6 +15,7 @@ package org.weakref.nitro.tpcds;
 
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.NitroParquetScanOperator;
@@ -46,7 +47,7 @@ public final class DebugLazyScan
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         // Large multi-page constrained FACT scan: filter on ss_quantity, masked-read nullable ss_customer_sk.
-        Operator scan = new NitroParquetScanOperator(new Allocator(), tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
+        Operator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
 
         Variable literal = new Variable(0);
         Variable greater = new Variable(1);
@@ -55,10 +56,10 @@ public final class DebugLazyScan
                 new Assignment(greater, new Call("lt", List.of(
                         new Reference(literal, Stream.VALUES),
                         new Reference(new Input(0), Stream.VALUES))), AllMask.ALL)), List.of());
-        Operator filter = new FilterOperator(scan, plan, registry, new ReferenceMask(new Reference(greater, Stream.VALUES)), new Allocator());
+        Operator filter = new FilterOperator(scan, plan, registry, new ReferenceMask(new Reference(greater, Stream.VALUES)), new Allocator(EngineResources.createDefault()));
         // GROUP BY masked nullable ss_customer_sk (index 1), SUM(ss_quantity index 0).
         Operator grouped = new org.weakref.nitro.operator.GroupedAggregationOperator(
-                new Allocator(),
+                new Allocator(EngineResources.createDefault()),
                 List.of(Integer.valueOf(1)),
                 List.of(new org.weakref.nitro.operator.aggregation.Sum(0)),
                 filter);

@@ -24,6 +24,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
@@ -58,7 +59,7 @@ public class BenchmarkCompiledJoin
     private static final int GROUPS = 100;
     private static final int CHUNK = 4096;
 
-    private final Allocator allocator = new Allocator();
+    private final Allocator allocator = new Allocator(EngineResources.createDefault());
 
     private static final long SPARSE_STRIDE = 1_000_000;
 

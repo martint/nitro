@@ -19,6 +19,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -71,7 +72,7 @@ public class TestPlanEvaluator
     @Test
     void testFlatBooleanReferenceCompactsOwnedMaskInPlaceWithoutTemporaryMask()
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Reference valuesReference = new Reference(new Input(0), Stream.VALUES);
         PlanEvaluator evaluator = new PlanEvaluator(
                 new EvaluationPlan(List.of(), List.of()),
@@ -104,7 +105,7 @@ public class TestPlanEvaluator
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
-                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}))), new Allocator());
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result.values()).containsExactly(11L, 22L, 33L);
@@ -131,7 +132,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 0, 3}),
                 new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}),
-                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300}))), new Allocator(), new Object(), true);
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300}))), new Allocator(EngineResources.createDefault()), new Object(), true);
 
         Streams result = evaluator.evaluate(totalValues, Mask.all(3));
         assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(111L, 220L, 333L);
@@ -169,7 +170,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3, 4}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300, 400}),
-                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {1000, 2000, 3000, 4000}))), new Allocator());
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {1000, 2000, 3000, 4000}))), new Allocator(EngineResources.createDefault()));
 
         // Materialize the first column and hold its result, as a downstream consumer would after the
         // ProjectOperator hands out the column's vector.
@@ -199,7 +200,7 @@ public class TestPlanEvaluator
                 List.of(new Assignment(nullValue, new Call("null_i64", List.of()), AllMask.ALL)),
                 List.of(new Reference(nullValue, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(nullValue, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(true, true, true);
@@ -224,7 +225,7 @@ public class TestPlanEvaluator
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
-                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
@@ -241,7 +242,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(new Input(0), Stream.VALUES)), Mask.all(3));
         assertThat(result.count()).isEqualTo(2);
@@ -258,7 +259,7 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(List.of(), List.of(reference));
         AtomicInteger vectorResolveCount = new AtomicInteger();
         AtomicInteger maskResolveCount = new AtomicInteger();
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PlanEvaluator evaluator = new PlanEvaluator(
                 plan,
                 primitiveRegistry(),
@@ -309,7 +310,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false, true}),
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false, false}),
                         new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, true, false, false}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(new Input(0), Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -359,7 +360,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, false}),
                         new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {0, 0, 0, 1}),
                         new Reference(new Input(2), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, true}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(
                 new AndMask(List.of(
@@ -405,7 +406,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams literal = evaluator.evaluate(new Reference(needle, Stream.VALUES), Mask.all(3));
         assertThat(literal.values()).isInstanceOf(RleVector.class);
@@ -443,7 +444,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES),
                         new DictionaryVector(new int[] {0, 1, 2, 0, 2}, dictionary))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(
                 new Reference(contains, Stream.VALUES),
@@ -476,7 +477,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), inputValues,
                         new Reference(new Input(0), Stream.NULLS), inputNulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams lengths = evaluator.evaluate(new Reference(length, Stream.VALUES), Mask.all(2));
         assertThat(((I64Vector) lengths.get(Stream.VALUES)).values()).containsExactly(5L, 0L);
@@ -507,7 +508,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {7, 11}),
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true}),
                         new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {3, 5}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams productStreams = evaluator.evaluate(new Reference(product, Stream.VALUES), Mask.all(2));
         assertThat(((I64Vector) productStreams.get(Stream.VALUES)).values()[0]).isEqualTo(21L);
@@ -546,7 +547,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(6));
         assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(true, true, true, false, false, false);
@@ -584,7 +585,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), input,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(6));
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
@@ -636,7 +637,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask mask = Mask.sparse(new int[] {1, 3, 4}, 5);
         Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), mask);
@@ -680,7 +681,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES), conditions,
                         new Reference(new Input(1), Stream.VALUES), trueValues,
                         new Reference(new Input(2), Stream.VALUES), falseValues)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(selected, Stream.VALUES), Mask.sparse(new int[] {1, 3}, 4));
         BinaryVector values = (BinaryVector) result.values();
@@ -708,7 +709,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.sparse(new int[] {1, 3}, 4));
         BinaryVector hosts = (BinaryVector) result.values();
@@ -748,7 +749,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(4));
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
@@ -803,7 +804,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         DictionaryVector actual = (DictionaryVector) evaluator.evaluate(new Reference(host, Stream.VALUES), Mask.all(inputs.length)).values();
         BinaryVector actualValues = (BinaryVector) actual.values();
@@ -846,7 +847,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), input,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams valuesResult = evaluator.evaluate(new Reference(upper, Stream.VALUES), Mask.all(3));
         Streams nullsResult = evaluator.evaluate(new Reference(upper, Stream.NULLS), Mask.all(3));
@@ -883,7 +884,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), input,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams valuesResult = evaluator.evaluate(new Reference(cast, Stream.VALUES), Mask.all(3));
         Streams nullsResult = evaluator.evaluate(new Reference(cast, Stream.NULLS), Mask.all(3));
@@ -923,7 +924,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), person,
                         new Reference(new Input(0), Stream.NULLS), parentNulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(name, Stream.VALUES), Mask.all(4));
         BinaryVector values = (BinaryVector) result.get(Stream.VALUES);
@@ -987,7 +988,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.NULLS), mapNulls,
                         new Reference(new Input(1), Stream.VALUES), lookupKeys,
                         new Reference(new Input(1), Stream.NULLS), lookupNulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(lookup, Stream.VALUES), Mask.all(4));
         I64Vector values = (I64Vector) result.get(Stream.VALUES);
@@ -1034,7 +1035,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.ERRORS), mapErrors,
                         new Reference(new Input(1), Stream.VALUES), lookupKeys,
                         new Reference(new Input(1), Stream.ERRORS), lookupErrors)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(lookup, Stream.ERRORS), Mask.all(3));
         BooleanVector errors = (BooleanVector) result.get(Stream.ERRORS);
@@ -1096,7 +1097,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(1), Stream.VALUES), lookupKeys,
                         new Reference(new Input(1), Stream.NULLS), keyNulls,
                         new Reference(new Input(1), Stream.ERRORS), keyErrors)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(contains, Stream.VALUES), Mask.all(4));
         BooleanVector values = (BooleanVector) result.get(Stream.VALUES);
@@ -1156,7 +1157,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(1), Stream.VALUES), indices,
                         new Reference(new Input(1), Stream.NULLS), indexNulls,
                         new Reference(new Input(1), Stream.ERRORS), indexErrors)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(element, Stream.VALUES), Mask.all(6));
         I64Vector values = (I64Vector) result.get(Stream.VALUES);
@@ -1192,7 +1193,7 @@ public class TestPlanEvaluator
                 Mask.sparse(new int[] {1, 3}, maps.length()),
                 Set.of(Stream.VALUES, Stream.NULLS),
                 output,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.values()).isNotSameAs(reusableValues);
         assertThat(result.get(Stream.NULLS)).isNotSameAs(reusableNulls);
@@ -1234,7 +1235,7 @@ public class TestPlanEvaluator
                 Mask.sparse(new int[] {0, 2}, maps.length()),
                 Set.of(Stream.VALUES, Stream.NULLS),
                 output,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.values()).isNotSameAs(reusableValues);
         assertThat(result.get(Stream.NULLS)).isNotSameAs(reusableNulls);
@@ -1264,7 +1265,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.values()).isInstanceOf(RleVector.class);
         RleVector vector = (RleVector) result.values();
@@ -1284,7 +1285,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.values()).isInstanceOf(RleVector.class);
         RleVector vector = (RleVector) result.values();
@@ -1305,7 +1306,7 @@ public class TestPlanEvaluator
                 Mask.all(3),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) result.values()).values()).containsExactly(17L, 67L, 25L);
     }
@@ -1322,7 +1323,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         Streams dictionaryFlat = add.apply(
                 List.of(
@@ -1331,7 +1332,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         Streams dictionaryDictionary = add.apply(
                 List.of(
@@ -1340,7 +1341,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) flatDictionary.values()).values()).containsExactly(31L, 12L, 23L, 34L);
         assertThat(((I64Vector) dictionaryFlat.values()).values()).containsExactly(31L, 12L, 23L, 34L);
@@ -1359,7 +1360,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         Streams dictionaryDictionary = or.apply(
                 List.of(
@@ -1368,7 +1369,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((BooleanVector) dictionaryFlat.values()).values()).containsExactly(false, false, true, false);
         assertThat(((BooleanVector) dictionaryDictionary.values()).values()).containsExactly(true, true, true, false);
@@ -1386,7 +1387,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(addExact.values()).isInstanceOf(RleVector.class);
         assertThat(((I64Vector) ((RleVector) addExact.values()).values()).values()).containsExactly(11L, 21L, 25L);
@@ -1400,7 +1401,7 @@ public class TestPlanEvaluator
                 Mask.all(4),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(subtractExact.values()).isInstanceOf(I64Vector.class);
         assertThat(((I64Vector) subtractExact.values()).values()).containsExactly(9L, 8L, 27L, 26L);
@@ -1419,7 +1420,7 @@ public class TestPlanEvaluator
                 Mask.all(2),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) addExact.values()).values()).containsExactly(Long.MIN_VALUE, 3L);
         assertThat(((BooleanVector) addExact.get(Stream.ERRORS)).values()).containsExactly(true, false);
@@ -1431,7 +1432,7 @@ public class TestPlanEvaluator
                 Mask.all(2),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) subtractExact.values()).values()).containsExactly(Long.MAX_VALUE, 7L);
         assertThat(((BooleanVector) subtractExact.get(Stream.ERRORS)).values()).containsExactly(true, false);
@@ -1449,7 +1450,7 @@ public class TestPlanEvaluator
                 Mask.all(3),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) divide.values()).values()).containsExactly(4L, 0L, 11L);
         assertThat(((BooleanVector) divide.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
@@ -1461,7 +1462,7 @@ public class TestPlanEvaluator
                 Mask.all(3),
                 Set.of(Stream.VALUES, Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(((I64Vector) modulo.values()).values()).containsExactly(2L, 0L, 2L);
         assertThat(((BooleanVector) modulo.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
@@ -1479,7 +1480,7 @@ public class TestPlanEvaluator
                 Mask.all(3),
                 Set.of(Stream.ERRORS),
                 null,
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(divide.has(Stream.VALUES)).isFalse();
         assertThat(((BooleanVector) divide.get(Stream.ERRORS)).values()).containsExactly(false, true, false);
@@ -1503,7 +1504,7 @@ public class TestPlanEvaluator
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 20})),
-                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}))), new Allocator());
+                new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(10L, 1L, 20L, 1L);
@@ -1523,7 +1524,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(result, Stream.VALUES)));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
-                new Reference(new Input(0), Stream.VALUES), dictionary)), new Allocator());
+                new Reference(new Input(0), Stream.VALUES), dictionary)), new Allocator(EngineResources.createDefault()));
 
         assertThat(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES)).isSameAs(dictionary);
     }
@@ -1546,7 +1547,7 @@ public class TestPlanEvaluator
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30})),
-                new Reference(new Input(2), Stream.VALUES), new DictionaryVector(new int[] {1, 1, 0, 0}, new I64Vector(new long[] {1, 2})))), new Allocator());
+                new Reference(new Input(2), Stream.VALUES), new DictionaryVector(new int[] {1, 1, 0, 0}, new I64Vector(new long[] {1, 2})))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(30L, 2L, 20L, 1L);
@@ -1575,7 +1576,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, false, false}),
                 new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {false, true, true, false}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
-                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
@@ -1611,7 +1612,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {4, 4, 4, 4}),
                 new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {4, 4, 4, 4}),
                 new Reference(new Input(4), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
-                new Reference(new Input(5), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+                new Reference(new Input(5), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 1L);
@@ -1635,7 +1636,7 @@ public class TestPlanEvaluator
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {20, 21, 22}),
-                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {5, 0, 2}))), new Allocator());
+                new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {5, 0, 2}))), new Allocator(EngineResources.createDefault()));
 
         BooleanVector errorsVector = (BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS);
         assertThat(errorsVector.values()).containsExactly(false, true, false);
@@ -1650,7 +1651,7 @@ public class TestPlanEvaluator
                 new EvaluationPlan(List.of(), List.of(inputNulls, inputErrors)),
                 new PrimitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         assertThat(readBooleans(evaluator.evaluate(inputNulls, Mask.all(3)).get(Stream.NULLS))).containsExactly(false, false, false);
         assertThat(readBooleans(evaluator.evaluate(inputErrors, Mask.all(3)).get(Stream.ERRORS))).containsExactly(false, false, false);
@@ -1675,7 +1676,7 @@ public class TestPlanEvaluator
                         new Assignment(copied, new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(source, Stream.ERRORS)), AllMask.ALL)),
                 List.of(copiedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(copiedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1707,7 +1708,7 @@ public class TestPlanEvaluator
                         new Assignment(copied, new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(source, Stream.VALUES)), AllMask.ALL)),
                 List.of(copiedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(copiedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1746,7 +1747,7 @@ public class TestPlanEvaluator
                 List.of(mergedErrors));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
-                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator());
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
         assertThat(trueRequestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1800,7 +1801,7 @@ public class TestPlanEvaluator
                 List.of(mergedErrors));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
-                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator());
+                new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
         assertThat(trueRequestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1824,7 +1825,7 @@ public class TestPlanEvaluator
                 List.of(errors),
                 Map.of(errors, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1859,7 +1860,7 @@ public class TestPlanEvaluator
                         values, StreamPlan.MATERIALIZED,
                         errors, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
@@ -1889,7 +1890,7 @@ public class TestPlanEvaluator
                 List.of(nulls),
                 Map.of(nulls, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         BooleanVector nullsVector = (BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS);
         assertThat(nullsVector.values()).containsExactly(false, true, false);
@@ -1922,7 +1923,7 @@ public class TestPlanEvaluator
                         values, StreamPlan.MATERIALIZED,
                         nulls, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
@@ -1957,7 +1958,7 @@ public class TestPlanEvaluator
                         errors, StreamPlan.MATERIALIZED),
                 Map.of(values, new ReferenceMask(values))));
 
-        PlanEvaluator evaluator = new PlanEvaluator(normalizedPlan, primitiveRegistry, inputResolver(Map.of()), new Allocator());
+        PlanEvaluator evaluator = new PlanEvaluator(normalizedPlan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
@@ -2004,7 +2005,7 @@ public class TestPlanEvaluator
                 return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
             }
             return null;
-        }, new Allocator());
+        }, new Allocator(EngineResources.createDefault()));
 
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
         assertThat(maskSizes.get()).containsExactly(8, 5);
@@ -2055,7 +2056,7 @@ public class TestPlanEvaluator
                 return new I64Vector(new long[] {2, 2, 2, 2, 2, 2, 2, 2});
             }
             return null;
-        }, new Allocator());
+        }, new Allocator(EngineResources.createDefault()));
 
         evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(8));
         assertThat(maskSizes.get()).containsExactly(8, 7);
@@ -2082,7 +2083,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {4, 5, 6}))), allocator);
@@ -2119,7 +2120,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
                 new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, true}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
-                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(2L, 2L, 1L, 2L);
@@ -2136,7 +2137,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
                         new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
                         new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, true}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(
                 new AndMask(List.of(
@@ -2183,7 +2184,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES), haystack,
                         new Reference(new Input(0), Stream.NULLS), haystackNulls,
                         new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {5}, needle))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(
                 new NotMask(new ReferenceMask(new Reference(predicate, Stream.VALUES))),
@@ -2216,7 +2217,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {0, 1, 0, 5, 7}),
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, false, false}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(
                 new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))),
@@ -2252,7 +2253,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {7L, 0L, 9L}),
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams valuesResult = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(3));
         assertThat(((I64Vector) valuesResult.get(Stream.VALUES)).values()).containsExactly(7L, 0L, 9L);
@@ -2282,7 +2283,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, true}),
                         new Reference(new Input(1), Stream.VALUES), new I32Vector(new int[] {2, 3, 4, 5}),
                         new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, true, true}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(4));
         assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(20L, 0L, 0L, 0L);
@@ -2307,7 +2308,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(castValue, Stream.VALUES), Mask.all(4));
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
@@ -2359,7 +2360,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(sum, Stream.VALUES), Mask.all(3));
         assertThat(result.get(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
@@ -2394,7 +2395,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.VALUES)).values()).containsExactly(false, true, false);
@@ -2418,7 +2419,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(5));
 
@@ -2443,7 +2444,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(isNull, Stream.VALUES), Mask.all(4));
 
@@ -2476,7 +2477,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask nullRows = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
         assertThat(evaluator.evaluateInPlace(new ReferenceMask(resultReference), nullRows)).isSameAs(nullRows);
@@ -2532,7 +2533,7 @@ public class TestPlanEvaluator
                                 : allocator.allocateSparseMask(context, new int[] {0, 2, 5}, 3, mask.size());
                     }
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask nullRows = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
         assertThat(evaluator.evaluateInPlace(new ReferenceMask(resultReference), nullRows)).isSameAs(nullRows);
@@ -2566,7 +2567,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {9L, 5L}),
                         new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {2L, 0L}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(average, Stream.VALUES), Mask.all(2));
         assertThat(((F64Vector) result.get(Stream.VALUES)).values()).containsExactly(4.5, 0.0);
@@ -2603,7 +2604,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(difference, Stream.ERRORS), Mask.all(2));
         assertThat(((BooleanVector) result.get(Stream.ERRORS)).values()).containsExactly(true, false);
@@ -2646,7 +2647,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(shifted, Stream.VALUES), Mask.all(3));
         assertThat(((I64Vector) result.get(Stream.VALUES)).values()).containsExactly(3L, 6L, 2L);
@@ -2683,7 +2684,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(equalsSeven, Stream.VALUES)), Mask.all(3));
         assertThat(result.selectedCount()).isEqualTo(1);
@@ -2721,7 +2722,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(lessThan, Stream.NULLS), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, false);
@@ -2752,7 +2753,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {100L, 105L, 80L, 100L}),
                         new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {90L, 100L, 100L, 0L}),
                         new Reference(new Input(1), Stream.NULLS), new BooleanVector(new boolean[] {false, false, false, false}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(deviationLarge, Stream.VALUES)), Mask.all(4));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -2795,7 +2796,7 @@ public class TestPlanEvaluator
                     }
                     return null;
                 },
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(product, Stream.NULLS), Mask.all(2));
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true);
@@ -2826,7 +2827,7 @@ public class TestPlanEvaluator
                 new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
                 new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
-                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator());
+                new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 1L, 1L, 2L);
@@ -2843,7 +2844,7 @@ public class TestPlanEvaluator
                         new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
                         new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
                         new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false}))),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(
                 new OrMask(List.of(
@@ -2889,7 +2890,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(equals, Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -2929,7 +2930,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -2966,7 +2967,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(lessThan, Stream.VALUES), Mask.all(5));
         assertThat(result.values()).isInstanceOf(DictionaryVector.class);
@@ -3013,7 +3014,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(3);
@@ -3055,7 +3056,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         BooleanVector result = (BooleanVector) evaluator.evaluate(new Reference(matches, Stream.VALUES), Mask.all(7)).values();
         assertThat(result.values()).containsExactly(true, true, false, false, false, false, true);
@@ -3109,7 +3110,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(3);
@@ -3170,7 +3171,7 @@ public class TestPlanEvaluator
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -3224,7 +3225,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluateInPlace(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(5));
         assertThat(result.selectedCount()).isEqualTo(4);
@@ -3273,7 +3274,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         Mask result = evaluator.evaluate(new ReferenceMask(new Reference(matches, Stream.VALUES)), Mask.all(3));
         assertThat(result.selectedCount()).isEqualTo(2);
@@ -3315,7 +3316,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result).isInstanceOf(DictionaryVector.class);
@@ -3358,7 +3359,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.sparse(new int[] {0, 2}, 3)).get(Stream.VALUES);
         assertThat(result).isInstanceOf(DictionaryVector.class);
@@ -3399,7 +3400,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result).isInstanceOf(DictionaryVector.class);
@@ -3442,7 +3443,7 @@ public class TestPlanEvaluator
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
-                new Allocator());
+                new Allocator(EngineResources.createDefault()));
 
         org.weakref.nitro.data.Vector result = evaluator.evaluate(new Reference(substring, Stream.VALUES), Mask.all(5)).get(Stream.VALUES);
         assertThat(result).isInstanceOf(RleVector.class);
@@ -3468,7 +3469,7 @@ public class TestPlanEvaluator
                 Mask.all(3),
                 Set.of(Stream.NULLS),
                 Streams.empty(),
-                new PrimitiveExecutionContext(new Allocator()));
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
 
         assertThat(result.has(Stream.VALUES)).isFalse();
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, true);

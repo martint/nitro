@@ -30,6 +30,7 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.execution.DriverResult;
@@ -83,7 +84,7 @@ class TestCoreIntegrationSlice
     void testResolvedScanFilterProjectIslandOwnsSchemaAndLifecycle()
             throws ReflectiveOperationException, IOException
     {
-        Allocator allocator = new Allocator();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         Schema inputSchema = new Schema(List.of(new Field("value", BIGINT, false)));
         Schema outputSchema = new Schema(List.of(new Field("result", BIGINT, false)));
 
@@ -189,12 +190,53 @@ class TestCoreIntegrationSlice
         AtomicBoolean yield = new AtomicBoolean(true);
         TestingExecutionContext context = new TestingExecutionContext(yield);
         Operator source = new SingleBatchOperator(0, Mask.all(0), () -> new Output[0]);
-        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(), context)) {
+        try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, new Allocator(EngineResources.createDefault()), context)) {
             assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.YIELDED);
             yield.set(false);
             assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
             assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.FINISHED);
         }
+    }
+
+    @Test
+    void testDriverExposesHostMemoryBackpressure()
+    {
+        CompletableFuture<Void> continuation = new CompletableFuture<>();
+        MemoryReservation memory = new MemoryReservation()
+        {
+            private long reserved;
+
+            @Override
+            public CompletionStage<Void> reserve(long bytes)
+            {
+                reserved += bytes;
+                return continuation;
+            }
+
+            @Override
+            public void release(long bytes)
+            {
+                reserved -= bytes;
+            }
+
+            @Override
+            public long reservedBytes()
+            {
+                return reserved;
+            }
+        };
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            allocator.allocate(new Allocator.Context("test"), I64Vector.class, 8, I64Vector::new);
+            Operator source = new SingleBatchOperator(0, Mask.all(0), () -> new Output[0]);
+            try (OperatorExecutionDriver driver = new OperatorExecutionDriver(source, allocator, new TestingExecutionContext())) {
+                assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.BLOCKED);
+                assertThat(driver.blocked()).contains(continuation);
+
+                continuation.complete(null);
+                assertThat(driver.processNext(_ -> {})).isEqualTo(DriverResult.OUTPUT);
+            }
+        }
+        assertThat(memory.reservedBytes()).isZero();
     }
 
     private static ResolvedCall resolvedCall(
