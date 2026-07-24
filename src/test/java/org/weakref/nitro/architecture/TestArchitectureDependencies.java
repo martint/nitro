@@ -154,6 +154,16 @@ class TestArchitectureDependencies
                 .isFalse();
     }
 
+    @Test
+    void testOutputDiagnosticsAreNotProcessGlobal()
+    {
+        assertThat(MAIN_SOURCES.resolve("org/weakref/nitro/operator/OutputDebug.java"))
+                .as("runtime diagnostics must be explicitly constructed and scoped to an execution")
+                .doesNotExist();
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/Output.java")))
+                .doesNotContain("OutputDebug");
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();

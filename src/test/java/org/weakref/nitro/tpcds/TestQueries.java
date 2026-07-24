@@ -28,7 +28,6 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.OutputDebug;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -1162,7 +1161,6 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        OutputDebug.reset();
         try (Operator query = TpcdsParquetSupport.query64(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables)) {
             HashJoinOperator.withMaterializationProfile(profile, () -> {
                 consumeOperator(query);
@@ -1171,9 +1169,6 @@ public class TestQueries
         }
 
         System.out.println(profile.formatReport());
-        if (OutputDebug.enabled()) {
-            System.out.println(OutputDebug.snapshot());
-        }
     }
 
     @Test
@@ -1252,7 +1247,6 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        OutputDebug.reset();
         try (Operator query = TpcdsParquetSupport.query80(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables)) {
             HashJoinOperator.withMaterializationProfile(profile, () -> {
                 consumeOperator(query);
@@ -1261,9 +1255,6 @@ public class TestQueries
         }
 
         System.out.println(profile.formatReport());
-        if (OutputDebug.enabled()) {
-            System.out.println(OutputDebug.snapshot());
-        }
     }
 
     @Test
