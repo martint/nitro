@@ -28,7 +28,7 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
-import org.weakref.nitro.jit.QueryLowering.Lowered;
+import org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered;
 import org.weakref.nitro.tpcds.CompiledQuerySupport;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries;
 

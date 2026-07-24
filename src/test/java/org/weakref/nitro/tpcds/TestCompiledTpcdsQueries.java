@@ -19,7 +19,7 @@ import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.operator.CompiledOperator;
+import org.weakref.nitro.legacy.pipeline.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
 
 import java.util.ArrayList;
@@ -421,11 +421,11 @@ public class TestCompiledTpcdsQueries
         ported.put("99", CompiledTpcdsQueries.query99());
 
         for (var entry : ported.entrySet()) {
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered = entry.getValue().query().lower();
-            org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
-            org.weakref.nitro.jit.StreamingPipeline streaming =
-                    new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
-            org.weakref.nitro.jit.CompiledPipeline.Result lazy =
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered = entry.getValue().query().lower();
+            org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
+            org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
+                    new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+            org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result lazy =
                     CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming, true);
             assertThat(rows(lazy)).as("Q%s streaming-lazy vs eager", entry.getKey()).isEqualTo(rows(eager));
         }
@@ -440,22 +440,22 @@ public class TestCompiledTpcdsQueries
         // A selective star query: store_sales JOIN date_dim (d_year = 2001), GROUP BY ss_item_sk, sum measure.
         // Streamed with a lazy probe source so join-driven late materialization converts ss_item_sk and the
         // measure only for fact rows that join a surviving date -- byte-identical to the eager run.
-        org.weakref.nitro.jit.QueryLowering joinQuery = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true))
+        org.weakref.nitro.legacy.pipeline.QueryLowering joinQuery = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_sold_date_sk", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_item_sk", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("d_year"));
-        joinQuery.where(new org.weakref.nitro.jit.Plan.Predicate("=", joinQuery.column("d_year"), new org.weakref.nitro.jit.Plan.Lit(2001)))
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("d_date_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("d_year"));
+        joinQuery.where(new org.weakref.nitro.legacy.pipeline.Plan.Predicate("=", joinQuery.column("d_year"), new org.weakref.nitro.legacy.pipeline.Plan.Lit(2001)))
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_ext_sales_price");
-        org.weakref.nitro.jit.QueryLowering.Lowered joinLowered = joinQuery.lower();
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered joinLowered = joinQuery.lower();
 
-        org.weakref.nitro.jit.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered).result();
-        org.weakref.nitro.jit.StreamingPipeline joinStreaming =
-                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
-        org.weakref.nitro.jit.CompiledPipeline.Result joinLazy =
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered).result();
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline joinStreaming =
+                new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result joinLazy =
                 CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered, joinStreaming, true);
 
         assertThat(rows(joinLazy)).isEqualTo(rows(joinEager));
@@ -472,25 +472,25 @@ public class TestCompiledTpcdsQueries
         // SELECT sum(ss_ext_sales_price) FROM store_sales WHERE ss_quantity < 50 AND ss_sales_price > 100.
         // Run streamed two ways -- an eager source (every column converted for every row) and a selection-driven
         // lazy source (staged: ss_sales_price converted only for ss_quantity survivors, the measure only for both).
-        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true));
+        org.weakref.nitro.legacy.pipeline.QueryLowering query = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_quantity", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true));
         query.where(
-                        new org.weakref.nitro.jit.Plan.Predicate("<", query.column("ss_quantity"), new org.weakref.nitro.jit.Plan.Lit(50)),
-                        new org.weakref.nitro.jit.Plan.Predicate(">", query.column("ss_sales_price"), new org.weakref.nitro.jit.Plan.Lit(100)))
+                        new org.weakref.nitro.legacy.pipeline.Plan.Predicate("<", query.column("ss_quantity"), new org.weakref.nitro.legacy.pipeline.Plan.Lit(50)),
+                        new org.weakref.nitro.legacy.pipeline.Plan.Predicate(">", query.column("ss_sales_price"), new org.weakref.nitro.legacy.pipeline.Plan.Lit(100)))
                 .aggregate("sum", "ss_ext_sales_price");
-        org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
-        org.weakref.nitro.jit.StreamingPipeline streaming =
-                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered = query.lower();
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
+                new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
 
         var probe = lowered.inputs().get(0);
-        org.weakref.nitro.jit.CompiledPipeline.Result eager = streaming.execute(
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result eager = streaming.execute(
                 CompiledQuerySupport.parquetFlatSource(new Allocator(EngineResources.createDefault()), tables, probe.table(), probe.columns()),
-                new org.weakref.nitro.jit.Column[0][], new int[0]);
-        org.weakref.nitro.jit.CompiledPipeline.Result lazy = streaming.execute(
+                new org.weakref.nitro.legacy.pipeline.Column[0][], new int[0]);
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result lazy = streaming.execute(
                 CompiledQuerySupport.parquetLazySource(new Allocator(EngineResources.createDefault()), tables, probe.table(), probe.columns(), lowered.pipeline()),
-                new org.weakref.nitro.jit.Column[0][], new int[0]);
+                new org.weakref.nitro.legacy.pipeline.Column[0][], new int[0]);
 
         assertThat(lazy.rowCount()).isEqualTo(1).isEqualTo(eager.rowCount());
         assertThat(lazy.columns()[0][0]).isEqualTo(eager.columns()[0][0]);
@@ -505,13 +505,13 @@ public class TestCompiledTpcdsQueries
         // The Q42 star query (2 joins, build-side string group key, decimal sum, top-100) run two ways: eager
         // (probe materialized) and streaming (dimensions built once, fact streamed batch-by-batch). The build-side
         // i_category dictionary is materialized once, so its group-key ids stay consistent across probe batches.
-        org.weakref.nitro.jit.QueryLowering.Lowered lowered = CompiledTpcdsQueries.query42().query().lower();
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered = CompiledTpcdsQueries.query42().query().lower();
 
-        org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
 
-        org.weakref.nitro.jit.StreamingPipeline streaming =
-                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
-        org.weakref.nitro.jit.CompiledPipeline.Result streamed =
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
+                new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result streamed =
                 CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming);
 
         assertThat(rows(streamed)).isEqualTo(rows(eager));
@@ -519,7 +519,7 @@ public class TestCompiledTpcdsQueries
     }
 
     /** A result as the set of its rows (each a list of the column slot values), order-insensitive. */
-    private static java.util.Set<List<Long>> rows(org.weakref.nitro.jit.CompiledPipeline.Result result)
+    private static java.util.Set<List<Long>> rows(org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result)
     {
         java.util.Set<List<Long>> set = new java.util.HashSet<>();
         for (int r = 0; r < result.rowCount(); r++) {
@@ -593,8 +593,8 @@ public class TestCompiledTpcdsQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        List<org.weakref.nitro.jit.QueryLowering.Lowered> branches = new ArrayList<>();
-        for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches = new ArrayList<>();
+        for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : union.branches()) {
             branches.add(branch.lower());
         }
         Allocator allocator = new Allocator(EngineResources.createDefault());
@@ -755,8 +755,8 @@ public class TestCompiledTpcdsQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
-        List<org.weakref.nitro.jit.QueryLowering.Lowered> branches = new ArrayList<>();
-        for (org.weakref.nitro.jit.QueryLowering branch : composite.branches()) {
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches = new ArrayList<>();
+        for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : composite.branches()) {
             branches.add(branch.lower());
         }
         java.util.Map<String, CompiledQuerySupport.Materialized> virtuals = new java.util.HashMap<>();
@@ -795,10 +795,10 @@ public class TestCompiledTpcdsQueries
         assertBridgedRowsMatch(run, query.stringColumns(), harness, tables);
     }
 
-    private static List<org.weakref.nitro.jit.QueryLowering.Lowered> lowerBranches(List<org.weakref.nitro.jit.QueryLowering> branches)
+    private static List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> lowerBranches(List<org.weakref.nitro.legacy.pipeline.QueryLowering> branches)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Lowered> lowered = new ArrayList<>();
-        for (org.weakref.nitro.jit.QueryLowering branch : branches) {
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> lowered = new ArrayList<>();
+        for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : branches) {
             lowered.add(branch.lower());
         }
         return lowered;
@@ -1053,7 +1053,7 @@ public class TestCompiledTpcdsQueries
         for (CompiledTpcdsQueries.DictRef ref : composite.stringColumns()) {
             dictionaries[ref.resultColumn()] = CompiledQuerySupport.dictionaryFor(run.inputs(), ref);
         }
-        org.weakref.nitro.jit.CompiledPipeline.Result result = run.result();
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result = run.result();
         List<Row> actual = new ArrayList<>();
         for (int r = 0; r < result.rowCount(); r++) {
             String id = new String(dictionaries[0][(int) result.columns()[0][r]], UTF_8);

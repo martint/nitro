@@ -128,17 +128,59 @@ class TestArchitectureDependencies
     {
         Pattern ambientCompilerResource = Pattern.compile(
                 "static\\s+final\\s+[^;\\n]*(?:REGISTRY|DOUBLE_RESULTS|CLASS_CACHE|\\bCOUNTER\\b)\\s*(?:=|;)");
+        Path legacyPipeline = MAIN_SOURCES.resolve("org/weakref/nitro/legacy/pipeline");
         List<Path> compilerSources = List.of(
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/Types.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/ScalarLibrary.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/AggregateLibrary.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/CompilerResources.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/PipelineCompiler.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/jit/BatchFunctionCompiler.java"));
+                legacyPipeline.resolve("Types.java"),
+                legacyPipeline.resolve("ScalarLibrary.java"),
+                legacyPipeline.resolve("AggregateLibrary.java"),
+                legacyPipeline.resolve("CompilerResources.java"),
+                legacyPipeline.resolve("PipelineCompiler.java"),
+                legacyPipeline.resolve("BatchFunctionCompiler.java"));
 
         assertThat(compilerSources)
                 .as("function/type registries and generated-class caches are integration-owned compiler dependencies")
                 .noneMatch(path -> matches(path, ambientCompilerResource));
+    }
+
+    @Test
+    void testLegacyPipelineIsIsolatedFromActiveEngine()
+            throws IOException
+    {
+        Path nitro = MAIN_SOURCES.resolve("org/weakref/nitro");
+        Path legacyPipeline = nitro.resolve("legacy/pipeline");
+        Pattern legacyReference = Pattern.compile("org\\.weakref\\.nitro\\.legacy\\.pipeline");
+        List<Path> violations;
+        try (var files = Files.walk(nitro)) {
+            violations = files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> !path.startsWith(legacyPipeline))
+                    .filter(path -> matches(path, legacyReference))
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("active engine code must not depend on the legacy whole-pipeline compiler")
+                .isEmpty();
+        assertThat(nitro.resolve("operator/CompiledOperator.java"))
+                .as("the legacy result bridge must not appear to be an active Nitro operator")
+                .doesNotExist();
+    }
+
+    @Test
+    void testActiveJitPackageContainsOnlyProjectionCompilerBackend()
+            throws IOException
+    {
+        Path jit = MAIN_SOURCES.resolve("org/weakref/nitro/jit");
+        Set<String> files;
+        try (var paths = Files.list(jit)) {
+            files = paths.filter(path -> path.toString().endsWith(".java"))
+                    .map(path -> path.getFileName().toString())
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+
+        assertThat(files).containsExactlyInAnyOrder(
+                "FusedMultiProjection.java",
+                "FusedProjectionCompiler.java",
+                "InMemoryCompiler.java");
     }
 
     @Test

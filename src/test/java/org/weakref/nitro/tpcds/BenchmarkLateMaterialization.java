@@ -28,11 +28,11 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
-import org.weakref.nitro.jit.Plan;
-import org.weakref.nitro.jit.QueryLowering;
-import org.weakref.nitro.jit.StreamingPipeline;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.Plan;
+import org.weakref.nitro.legacy.pipeline.QueryLowering;
+import org.weakref.nitro.legacy.pipeline.StreamingPipeline;
 
 import java.util.concurrent.TimeUnit;
 
@@ -66,13 +66,13 @@ public class BenchmarkLateMaterialization
     {
         tables = TpcdsParquetTables.requiredActual();
         QueryLowering query = QueryLowering.scan("store_sales",
-                new QueryLowering.Column("ss_sold_date_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_item_sk", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_quantity", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_wholesale_cost", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_list_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true))
+                new QueryLowering.Column("ss_sold_date_sk", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_item_sk", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_quantity", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_wholesale_cost", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_list_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
                         new QueryLowering.Column("d_date_sk"),
                         new QueryLowering.Column("d_year"));

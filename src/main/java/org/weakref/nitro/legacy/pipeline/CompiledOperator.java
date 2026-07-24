@@ -11,13 +11,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator;
+package org.weakref.nitro.legacy.pipeline;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.Type;
+import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.Streams;
 
 /**
  * Bridges a data-centric compiled pipeline back into the pull-based operator world: it runs the compiled routine
@@ -59,7 +61,7 @@ public final class CompiledOperator
             // A caller-supplied dictionary marks the column as id-encoded regardless of its declared type:
             // a string CASE folds to a LONG-typed id expression (value branch = dictionary id, else branch =
             // the -1 empty-string sentinel), and the supplied dictionary is what gives those ids their values.
-            Type type = dictionaries[column] != null ? org.weakref.nitro.jit.Types.STRING : types[column];
+            Type type = dictionaries[column] != null ? org.weakref.nitro.legacy.pipeline.Types.STRING : types[column];
             columns[column] = type.toVector(values[column], rowCount, dictionaries[column]);
             if (columnNulls != null && columnNulls[column] != null) {
                 nulls[column] = new BooleanVector(columnNulls[column]);

@@ -11,7 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
+
+import org.weakref.nitro.jit.InMemoryCompiler;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -33,7 +35,7 @@ import static java.util.stream.Collectors.joining;
  */
 public final class PipelineCompiler
 {
-    private static final String PACKAGE = "org.weakref.nitro.jit.generated";
+    private static final String PACKAGE = "org.weakref.nitro.legacy.pipeline.generated";
     private final CompilerResources resources;
     private final Types types;
     private final ScalarLibrary scalarFunctions;
@@ -149,7 +151,7 @@ public final class PipelineCompiler
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
-                .append(" implements org.weakref.nitro.jit.StreamingPipeline {\n");
+                .append(" implements org.weakref.nitro.legacy.pipeline.StreamingPipeline {\n");
         emitTypeResolverConstructor(out, simpleName);
         boolean needsMix = !pipeline.groupKeys().isEmpty() || !pipeline.joins().isEmpty();
         if (needsMix) {
@@ -178,8 +180,8 @@ public final class PipelineCompiler
         }
         emitOrderingDictionaryFields(out, orderingSources);
         ClassBody body = new ClassBody();
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute("
-                + "org.weakref.nitro.jit.StreamingPipeline.Source source, org.weakref.nitro.jit.Column[][] builds, int[] buildRowCounts) {\n");
+        out.append("  @Override public org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result execute("
+                + "org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source source, org.weakref.nitro.legacy.pipeline.Column[][] builds, int[] buildRowCounts) {\n");
         emitOrderingDictionaryCapture(out, buildOrderingSources, input -> "builds[" + (input - 1) + "]");
         List<Integer> winnersColumns = new ArrayList<>();
         for (int c = 0; c < pipeline.columnCount(); c++) {
@@ -190,7 +192,7 @@ public final class PipelineCompiler
         if (!winnersColumns.isEmpty()) {
             // Winners-mode min inputs: the source owns the winner dictionaries (the contract of routing such a
             // pipeline through a winners-capable source).
-            out.append("    org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners sWinnersSource = (org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners) source;\n");
+            out.append("    org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source.StringWinners sWinnersSource = (org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source.StringWinners) source;\n");
             for (int c : winnersColumns) {
                 out.append("    byte[][] sWinners").append(c).append(" = sWinnersSource.winners(").append(c).append(");\n");
             }
@@ -291,7 +293,7 @@ public final class PipelineCompiler
             out.append("    int[] selection = new int[0];\n");
             out.append("    while (source.advance()) {\n");
             out.append("      int rowCount = source.rows();\n");
-            out.append("      if (selection.length < rowCount) { selection = new int[org.weakref.nitro.jit.StreamingScratch.grow(selection.length, rowCount)]; }\n");
+            out.append("      if (selection.length < rowCount) { selection = new int[org.weakref.nitro.legacy.pipeline.StreamingScratch.grow(selection.length, rowCount)]; }\n");
             out.append("      int selected = rowCount;\n");
             for (int conjunctIndex = 0; conjunctIndex < conjuncts.size(); conjunctIndex++) {
                 Plan.Condition conjunct = conjuncts.get(conjunctIndex);
@@ -324,7 +326,7 @@ public final class PipelineCompiler
                     int dictColumn = columns.first();
                     body.field("boolean[]", "entryMask" + dictColumn);
                     body.field("long[]", "entryMaskDict" + dictColumn);
-                    out.append("        org.weakref.nitro.jit.Column.DictionaryColumn cDictCol").append(dictColumn)
+                    out.append("        org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn cDictCol").append(dictColumn)
                             .append(" = source.materializeDictionaryIds(").append(dictColumn).append(", selection, selected);\n");
                     out.append("        if (cDictCol").append(dictColumn).append(" != null) {\n");
                     out.append("          long[] cDict = cDictCol").append(dictColumn).append(".dictionary();\n");
@@ -348,7 +350,7 @@ public final class PipelineCompiler
                 // column arrive as a zero-copy view even when the column is globally interned elsewhere -- the
                 // payload stage then interns only the survivors.
                 String materializeCall = fusedColumn >= 0 ? "materializeFiltering" : "materialize";
-                out.append("        org.weakref.nitro.jit.Column[] in = source.").append(materializeCall).append("(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
+                out.append("        org.weakref.nitro.legacy.pipeline.Column[] in = source.").append(materializeCall).append("(").append(intArrayLiteral(columns)).append(", selection, selected);\n");
                 for (int column : columns) {
                     emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), rows, column == fusedColumn);
                 }
@@ -408,7 +410,7 @@ public final class PipelineCompiler
                 }
             }
             out.append("      if (selected > 0) {\n");
-            out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(").append(intArrayLiteral(payloadColumns)).append(", selection, selected);\n");
+            out.append("        org.weakref.nitro.legacy.pipeline.Column[] in = source.materialize(").append(intArrayLiteral(payloadColumns)).append(", selection, selected);\n");
             for (int column : payloadColumns) {
                 emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "selected");
             }
@@ -451,7 +453,7 @@ public final class PipelineCompiler
         else {
             out.append("    while (source.advance()) {\n");
             out.append("      int rowCount = source.rows();\n");
-            out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
+            out.append("      org.weakref.nitro.legacy.pipeline.Column[] in = source.columns();\n");
             for (int column : referencedColumns(pipeline)) {
                 emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column), "rowCount");
             }
@@ -744,7 +746,7 @@ public final class PipelineCompiler
     /** Load a join column from its input array into the encoding-appropriate generated variable(s), with its null mask when nullable. */
     private void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, boolean nullable, String source, ColumnVars vars)
     {
-        String type = "org.weakref.nitro.jit.Column.";
+        String type = "org.weakref.nitro.legacy.pipeline.Column.";
         String columnType = switch (encoding) {
             case FLAT, F64 -> "FlatColumn";
             case STRING -> "StringColumn";
@@ -788,7 +790,7 @@ public final class PipelineCompiler
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
-                .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
+                .append(" implements org.weakref.nitro.legacy.pipeline.CompiledPipeline {\n");
         emitTypeResolverConstructor(out, simpleName);
         // Any grouping needs mix() (array-mode grouping still keeps a hash table for the deopt fallback); so
         // does a join (its hash-table fallback branch).
@@ -810,7 +812,7 @@ public final class PipelineCompiler
         Map<Integer, int[]> orderingSources = orderingStringSources(pipeline, resultTypes);
         emitOrderingDictionaryFields(out, orderingSources);
         ClassBody body = new ClassBody();
-        out.append("  @Override public org.weakref.nitro.jit.CompiledPipeline.Result execute(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {\n");
+        out.append("  @Override public org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result execute(org.weakref.nitro.legacy.pipeline.Column[][] inputs, int[] rowCounts) {\n");
         emitOrderingDictionaryCapture(out, orderingSources, input -> "inputs[" + input + "]");
         if (pipeline.window() != null) {
             emitWindowBody(out, pipeline, encodings, nullable, resultTypes);
@@ -865,7 +867,7 @@ public final class PipelineCompiler
      */
     private void emitApplyHaving(StringBuilder out, Plan.Condition having, List<Type> types)
     {
-        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyHaving(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        out.append("  private static org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result applyHaving(org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result) {\n");
         if (having == null) {
             out.append("    return result;\n  }\n");
             return;
@@ -880,7 +882,7 @@ public final class PipelineCompiler
         out.append("    for (int i = 0; i < w; i++) { int s = keep[i]; for (int c = 0; c < cols.length; c++) { kept[c][i] = cols[c][s]; } }\n");
         out.append("    int outN = w;\n");
         emitGatherNulls(out, "keep[g]");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(w, kept, result.types(), outNulls);\n");
+        out.append("    return new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(w, kept, result.types(), outNulls);\n");
         out.append("  }\n");
     }
 
@@ -945,7 +947,7 @@ public final class PipelineCompiler
     {
         for (Map.Entry<Integer, int[]> entry : sources.entrySet()) {
             int[] source = entry.getValue();
-            out.append("    orderingDictionary").append(entry.getKey()).append(" = ((org.weakref.nitro.jit.Column.StringColumn) ")
+            out.append("    orderingDictionary").append(entry.getKey()).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) ")
                     .append(inputAccess.apply(source[0])).append("[").append(source[1]).append("]).dictionary();\n");
         }
     }
@@ -981,7 +983,7 @@ public final class PipelineCompiler
 
     private void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
     {
-        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyOrdering(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        out.append("  private static org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result applyOrdering(org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result) {\n");
         if (ordering == null) {
             out.append("    return result;\n  }\n");
             return;
@@ -1000,7 +1002,7 @@ public final class PipelineCompiler
         out.append("    long[][] sorted = new long[cols.length][outN];\n");
         out.append("    for (int w = 0; w < outN; w++) { int s = order[skip + w]; for (int c2 = 0; c2 < cols.length; c2++) { sorted[c2][w] = cols[c2][s]; } }\n");
         emitGatherNulls(out, "order[skip + g]");
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
+        out.append("    return new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(outN, sorted, result.types(), outNulls);\n");
         out.append("  }\n");
         emitCompareOrder(out, ordering, types, stringSources);
         emitOrderSort(out);
@@ -1113,7 +1115,7 @@ public final class PipelineCompiler
      */
     private void emitApplyProjection(StringBuilder out, List<Plan.Expr> projections, List<Type> inputTypes)
     {
-        out.append("  private org.weakref.nitro.jit.CompiledPipeline.Result applyProjection(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        out.append("  private org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result applyProjection(org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result) {\n");
         if (projections.isEmpty()) {
             out.append("    return result;\n  }\n");
             return;
@@ -1145,7 +1147,7 @@ public final class PipelineCompiler
             }
         }
         emitResultTypes(out, "    ", outputTypes);
-        out.append("    return new org.weakref.nitro.jit.CompiledPipeline.Result(n, proj, types, projNulls);\n");
+        out.append("    return new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(n, proj, types, projNulls);\n");
         out.append("  }\n");
     }
 
@@ -1391,8 +1393,8 @@ public final class PipelineCompiler
         boolean secondaryDescending = pipeline.ordering().keys().get(1).descending();
         int limit = pipeline.ordering().limit();
         out.append("      if (selected > 0) {\n");
-        out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(").append(intArrayLiteral(new TreeSet<>(List.of(primary, secondary)))).append(", selection, selected);\n");
-        out.append("        long[] c").append(primary).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(primary).append("]).values();\n");
+        out.append("        org.weakref.nitro.legacy.pipeline.Column[] in = source.materializeFiltering(").append(intArrayLiteral(new TreeSet<>(List.of(primary, secondary)))).append(", selection, selected);\n");
+        out.append("        long[] c").append(primary).append(" = ((org.weakref.nitro.legacy.pipeline.Column.FlatColumn) in[").append(primary).append("]).values();\n");
         emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, secondary, ColumnEncoding.STRING, false, "selected", true);
         // worse-than comparison between candidate (k0, bytes) and entry b of the kept set
         String entryWorse = pairCompare("btK0[b]", "btKeys[b], 0, btKeys[b].length", "btWorst0", "btWorst1, 0, btWorst1.length", primaryDescending, secondaryDescending);
@@ -1466,7 +1468,7 @@ public final class PipelineCompiler
         String better = descending ? "> 0" : "< 0";
         String worse = descending ? "< 0" : "> 0";
         out.append("      if (selected > 0) {\n");
-        out.append("        org.weakref.nitro.jit.Column[] in = source.materializeFiltering(new int[] {").append(keyColumn).append("}, selection, selected);\n");
+        out.append("        org.weakref.nitro.legacy.pipeline.Column[] in = source.materializeFiltering(new int[] {").append(keyColumn).append("}, selection, selected);\n");
         emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullable, keyColumn, ColumnEncoding.STRING, false, "selected", true);
         out.append("        int kept = 0;\n");
         out.append("        for (int i = 0; i < selected; i++) {\n");
@@ -1501,8 +1503,8 @@ public final class PipelineCompiler
         int limit = pipeline.ordering().limit();
         String better = descending ? ">" : "<";
         out.append("      if (selected > 0) {\n");
-        out.append("        org.weakref.nitro.jit.Column[] in = source.materialize(new int[] {").append(keyColumn).append("}, selection, selected);\n");
-        out.append("        long[] c").append(keyColumn).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(keyColumn).append("]).values();\n");
+        out.append("        org.weakref.nitro.legacy.pipeline.Column[] in = source.materialize(new int[] {").append(keyColumn).append("}, selection, selected);\n");
+        out.append("        long[] c").append(keyColumn).append(" = ((org.weakref.nitro.legacy.pipeline.Column.FlatColumn) in[").append(keyColumn).append("]).values();\n");
         out.append("        int kept = 0;\n");
         out.append("        for (int i = 0; i < selected; i++) {\n");
         out.append("          long btKey = c").append(keyColumn).append("[i];\n");
@@ -1592,17 +1594,17 @@ public final class PipelineCompiler
                     out.append("    resultNulls[").append(p).append("] = java.util.Arrays.copyOf(outN").append(p).append(", outRow);\n");
                 }
             }
-            out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(outRow, result, types, resultNulls));\n");
+            out.append("    return applyOrdering(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(outRow, result, types, resultNulls));\n");
             return;
         }
-        out.append("    return applyOrdering(new org.weakref.nitro.jit.CompiledPipeline.Result(outRow, result, types));\n");
+        out.append("    return applyOrdering(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(outRow, result, types));\n");
     }
 
     // ---- single-input scan -> filter -> aggregate ----
 
     private void emitScanBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
-        out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
+        out.append("    org.weakref.nitro.legacy.pipeline.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
         for (int column : referenced) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
@@ -1704,7 +1706,7 @@ public final class PipelineCompiler
         IntFunction<String> nullResolver = index -> nullAccess(index, encodingOf(encodings, 0, index), nullableOf(nullable, 0, index), "i");
 
         // Eager: the whole input is materialized up front, so load every column once and fill in a single pass.
-        out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
+        out.append("    org.weakref.nitro.legacy.pipeline.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         // Load every input column: all are output (matching the operator's "all source columns + rank").
         for (int column = 0; column < columnCount; column++) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
@@ -1732,7 +1734,7 @@ public final class PipelineCompiler
         // Drain the probe batch by batch; the materialization arrays persist across batches and grow as needed.
         out.append("    while (source.advance()) {\n");
         out.append("      int rowCount = source.rows();\n");
-        out.append("      org.weakref.nitro.jit.Column[] in = source.columns();\n");
+        out.append("      org.weakref.nitro.legacy.pipeline.Column[] in = source.columns();\n");
         for (int column = 0; column < columnCount; column++) {
             emitScanColumnLoad(out, column, encodingOf(encodings, 0, column), nullableOf(nullable, 0, column));
         }
@@ -1895,10 +1897,10 @@ public final class PipelineCompiler
                     out.append("    resultNulls[").append(column).append("] = rn").append(column).append(";\n");
                 }
             }
-            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
             return;
         }
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(kept, result, types))));\n");
     }
 
     /**
@@ -1992,7 +1994,7 @@ public final class PipelineCompiler
             }
         }
         out.append("    resultNulls[").append(columnCount).append("] = outAggNull;\n");
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(kept, result, types, resultNulls))));\n");
     }
 
     /**
@@ -2075,7 +2077,7 @@ public final class PipelineCompiler
         for (int a = 0; a < aggregates.size(); a++) {
             out.append("    resultNulls[").append(columnCount + a).append("] = outRunNull").append(a).append(";\n");
         }
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(rows, result, types, resultNulls))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(rows, result, types, resultNulls))));\n");
     }
 
     /** The running-aggregate combine of {@code accumulator} with {@code value}: the new value for the first row, else folded. */
@@ -2220,20 +2222,20 @@ public final class PipelineCompiler
         emitIdentityIdsHelper(body);
         out.append("    int[] cIds").append(column).append("; byte[][] cStr").append(column).append("; int cStrLen").append(column)
                 .append("; byte[] cView").append(column).append("; int[] cViewOff").append(column).append(";\n");
-        out.append("    if (in[").append(column).append("] instanceof org.weakref.nitro.jit.Column.BytesViewColumn view").append(column).append(") {\n");
+        out.append("    if (in[").append(column).append("] instanceof org.weakref.nitro.legacy.pipeline.Column.BytesViewColumn view").append(column).append(") {\n");
         out.append("      cView").append(column).append(" = view").append(column).append(".data(); cViewOff").append(column)
                 .append(" = view").append(column).append(".offsets();\n");
         out.append("      cIds").append(column).append(" = identityIds(").append(rowsVar).append("); cStr").append(column)
                 .append(" = NO_ENTRIES; cStrLen").append(column).append(" = 0;\n");
         out.append("    }\n");
         out.append("    else {\n");
-        out.append("      org.weakref.nitro.jit.Column.StringColumn s").append(column).append(" = (org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("];\n");
+        out.append("      org.weakref.nitro.legacy.pipeline.Column.StringColumn s").append(column).append(" = (org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("];\n");
         out.append("      cIds").append(column).append(" = s").append(column).append(".ids(); cStr").append(column)
                 .append(" = s").append(column).append(".dictionary(); cStrLen").append(column).append(" = s").append(column).append(".dictionarySize();\n");
         out.append("      cView").append(column).append(" = null; cViewOff").append(column).append(" = null;\n");
         out.append("    }\n");
         if (nullable) {
-            out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).nulls();\n");
+            out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("]).nulls();\n");
         }
     }
 
@@ -2260,30 +2262,30 @@ public final class PipelineCompiler
     {
         switch (encoding) {
             case FLAT, F64 -> {
-                out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).values();\n");
+                out.append("    long[] c").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.FlatColumn) in[").append(column).append("]).values();\n");
                 if (nullable) {
-                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.FlatColumn) in[").append(column).append("]).nulls();\n");
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.FlatColumn) in[").append(column).append("]).nulls();\n");
                 }
             }
             case DICTIONARY -> {
-                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).ids();\n");
-                out.append("    long[] cDict").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).dictionary();\n");
+                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn) in[").append(column).append("]).ids();\n");
+                out.append("    long[] cDict").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn) in[").append(column).append("]).dictionary();\n");
                 if (nullable) {
-                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.DictionaryColumn) in[").append(column).append("]).nulls();\n");
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn) in[").append(column).append("]).nulls();\n");
                 }
             }
             case CONSTANT -> {
-                out.append("    long cConst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).value();\n");
+                out.append("    long cConst").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.ConstantColumn) in[").append(column).append("]).value();\n");
                 if (nullable) {
-                    out.append("    boolean cNconst").append(column).append(" = ((org.weakref.nitro.jit.Column.ConstantColumn) in[").append(column).append("]).isNull();\n");
+                    out.append("    boolean cNconst").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.ConstantColumn) in[").append(column).append("]).isNull();\n");
                 }
             }
             case STRING -> {
-                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).ids();\n");
-                out.append("    byte[][] cStr").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).dictionary();\n");
-                out.append("    int cStrLen").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).dictionarySize();\n");
+                out.append("    int[] cIds").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("]).ids();\n");
+                out.append("    byte[][] cStr").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("]).dictionary();\n");
+                out.append("    int cStrLen").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("]).dictionarySize();\n");
                 if (nullable) {
-                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.jit.Column.StringColumn) in[").append(column).append("]).nulls();\n");
+                    out.append("    boolean[] cN").append(column).append(" = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) in[").append(column).append("]).nulls();\n");
                 }
             }
         }
@@ -2389,7 +2391,7 @@ public final class PipelineCompiler
      */
     /** Per-dictionary-entry numeric derivations: function name -> the java expression deriving one entry's value. */
     private static final Map<String, java.util.function.UnaryOperator<String>> STRING_DERIVATIONS = Map.of(
-            "length_utf8", entry -> "org.weakref.nitro.jit.StringMatching.codePointCount(" + entry + ")");
+            "length_utf8", entry -> "org.weakref.nitro.legacy.pipeline.StringMatching.codePointCount(" + entry + ")");
 
     /** The string column a per-entry derivation call reads, or -1 when the call is not a registered derivation over a plain column. */
     private int stringDerivationColumn(Plan.Call call)
@@ -2561,22 +2563,22 @@ public final class PipelineCompiler
                 out.append("    byte[] sLikeLit").append(id).append(" = ").append(javaStringLiteral(containsLiteral))
                         .append(".getBytes(java.nio.charset.StandardCharsets.UTF_8);\n");
                 out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
-                String matches = "org.weakref.nitro.jit.StringMatching.containsBytes(" + dictionaryVar + "[e], sLikeLit" + id + ")";
+                String matches = "org.weakref.nitro.legacy.pipeline.StringMatching.containsBytes(" + dictionaryVar + "[e], sLikeLit" + id + ")";
                 out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + matches + ")" : "(" + matches + ")").append(";\n");
                 out.append("    }\n");
                 return;
             }
             if (like.pattern().indexOf('_') < 0) {
                 // Any %-only pattern runs as anchored byte segments; the regex engine is reserved for _ wildcards.
-                out.append("    org.weakref.nitro.jit.StringMatching.LikeSegments sLikeSeg").append(id)
-                        .append(" = org.weakref.nitro.jit.StringMatching.likeSegments(").append(javaStringLiteral(like.pattern())).append(");\n");
+                out.append("    org.weakref.nitro.legacy.pipeline.StringMatching.LikeSegments sLikeSeg").append(id)
+                        .append(" = org.weakref.nitro.legacy.pipeline.StringMatching.likeSegments(").append(javaStringLiteral(like.pattern())).append(");\n");
                 out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
                 String segmentMatches = "sLikeSeg" + id + ".matches(" + dictionaryVar + "[e])";
                 out.append("      sMask").append(id).append("[e] = ").append(like.negated() ? "!(" + segmentMatches + ")" : "(" + segmentMatches + ")").append(";\n");
                 out.append("    }\n");
                 return;
             }
-            out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.jit.StringMatching.likePattern(")
+            out.append("    java.util.regex.Pattern sLikePat").append(id).append(" = org.weakref.nitro.legacy.pipeline.StringMatching.likePattern(")
                     .append(javaStringLiteral(like.pattern())).append(");\n");
             out.append("    for (int e = ").append(from).append("; e < ").append(to).append("; e++) {\n");
             String matches = "sLikePat" + id + ".matcher(new String(" + dictionaryVar + "[e], java.nio.charset.StandardCharsets.UTF_8)).matches()";
@@ -2851,13 +2853,13 @@ public final class PipelineCompiler
                     : "      if (selected > 0) { joinStage" + k + "(source, probeRows); }\n");
             StringBuilder out = body.methods();
             out.append("  private void joinStage").append(k)
-                    .append("(org.weakref.nitro.jit.StreamingPipeline.Source source, int probeRows) {\n");
+                    .append("(org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source source, int probeRows) {\n");
             if (!stageColumns.isEmpty()) {
                 if (first) {
-                    out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(");\n");
+                    out.append("        org.weakref.nitro.legacy.pipeline.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(");\n");
                 }
                 else {
-                    out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(", selection, selected);\n");
+                    out.append("        org.weakref.nitro.legacy.pipeline.Column[] probe = source.materialize(").append(intArrayLiteral(stageColumns)).append(", selection, selected);\n");
                 }
                 for (int column : stageColumns) {
                     emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
@@ -3095,7 +3097,7 @@ public final class PipelineCompiler
                 throw new IllegalArgumentException("join " + k + " key count mismatch: probe " + join.probeKeyColumns().length + " vs build " + keyCount);
             }
             body.field("int", "build" + k + "Rows");
-            out.append("    org.weakref.nitro.jit.Column[] build").append(k).append(" = ").append(buildsArray).append("[").append(k + buildBase)
+            out.append("    org.weakref.nitro.legacy.pipeline.Column[] build").append(k).append(" = ").append(buildsArray).append("[").append(k + buildBase)
                     .append("]; build").append(k).append("Rows = ").append(buildCounts).append("[").append(k + buildBase).append("];\n");
             out.append("    buildJoin").append(k).append("(build").append(k).append(", build").append(k).append("Rows);\n");
 
@@ -3153,7 +3155,7 @@ public final class PipelineCompiler
                 exports.add(new String[] {"int", "jMask" + k});
             }
             body.methods().append("  private void buildJoin").append(k)
-                    .append("(org.weakref.nitro.jit.Column[] build").append(k).append(", int build").append(k).append("Rows) {\n");
+                    .append("(org.weakref.nitro.legacy.pipeline.Column[] build").append(k).append(", int build").append(k).append("Rows) {\n");
             body.methods().append(buildCode);
             for (String[] export : exports) {
                 body.field(export[0], export[1]);
@@ -3271,7 +3273,7 @@ public final class PipelineCompiler
             out.append("    while (source.advance()) {\n");
             out.append("      int probeRows = source.rows();\n");
             out.append("      if (selection.length < probeRows) {\n");
-            out.append("        int grown = org.weakref.nitro.jit.StreamingScratch.grow(selection.length, probeRows);\n");
+            out.append("        int grown = org.weakref.nitro.legacy.pipeline.StreamingScratch.grow(selection.length, probeRows);\n");
             out.append("        selection = new int[grown]; selectionNext = new int[grown];\n");
             for (int k = 0; k < joinCount; k++) {
                 out.append("        bsel").append(k).append(" = new int[grown]; bsel").append(k).append("Next = new int[grown];\n");
@@ -3289,7 +3291,7 @@ public final class PipelineCompiler
             // over the batch for nothing. This is how an operator scan avoids decoding payload for batches a selective
             // join/filter fully prunes (e.g. a date-clustered fact where most batches contain no qualifying rows).
             out.append("      if (selected > 0) {\n");
-            out.append("        org.weakref.nitro.jit.Column[] probe = source.materialize(").append(intArrayLiteral(payloadProbe)).append(", selection, selected);\n");
+            out.append("        org.weakref.nitro.legacy.pipeline.Column[] probe = source.materialize(").append(intArrayLiteral(payloadProbe)).append(", selection, selected);\n");
             for (int column : payloadProbe) {
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
             }
@@ -3324,10 +3326,10 @@ public final class PipelineCompiler
             // Probe rows: one pass over the materialized probe (eager), or batch-by-batch from the source (streaming).
             if (streaming) {
                 out.append("    while (source.advance()) {\n");
-                out.append("      org.weakref.nitro.jit.Column[] probe = source.columns(); int probeRows = source.rows();\n");
+                out.append("      org.weakref.nitro.legacy.pipeline.Column[] probe = source.columns(); int probeRows = source.rows();\n");
             }
             else {
-                out.append("    org.weakref.nitro.jit.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
+                out.append("    org.weakref.nitro.legacy.pipeline.Column[] probe = inputs[0]; int probeRows = rowCounts[0];\n");
             }
             for (int column : probeReferenced) {
                 emitJoinColumnLoad(out, combinedEncoding(pipeline, encodings, column), combinedNullable(pipeline, nullable, column), "probe[" + column + "]", probeVars(column));
@@ -3938,10 +3940,10 @@ public final class PipelineCompiler
                     out.append("    resultNulls[").append(a).append("] = new boolean[] { ").append(resultNull).append(" };\n");
                 }
             }
-            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types, resultNulls))));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(1, result, types, resultNulls))));\n");
             return;
         }
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(1, result, types))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(1, result, types))));\n");
     }
 
     // ---- grouping sets / ROLLUP (single-pass EXPAND) ----
@@ -4147,7 +4149,7 @@ public final class PipelineCompiler
                 out.append("    resultNulls[").append(keyCount + a).append("] = aggNull").append(a).append(";\n");
             }
         }
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
     }
 
     /** Hash input over (setId, ck0, ..., ck{keyCount-1}) for the grouping-sets accumulate. */
@@ -4318,7 +4320,7 @@ public final class PipelineCompiler
             out.append("    result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
         }
         emitResultTypes(out, "    ", resultTypes);
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(sgCount, result, types))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(sgCount, result, types))));\n");
     }
 
     private void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
@@ -4530,13 +4532,13 @@ public final class PipelineCompiler
                 out.append("      result[").append(a + 1).append("] = outAgg").append(a).append(";\n");
             }
             emitResultTypes(out, "      ", resultTypes);
-            out.append("      return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(arrayGroupCount, result, types))));\n");
+            out.append("      return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(arrayGroupCount, result, types))));\n");
             out.append("    }\n");
             out.append("    long[][] result = new long[").append(1 + aggregateCount).append("][];\n");
             emitKeyResultColumn(out, "    ", 0, 0, reconstructDictColumn, "groupCount");
             emitAggregateResultColumns(out, "    ", 1, aggregates);
             emitResultTypes(out, "    ", resultTypes);
-            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types))));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(groupCount, result, types))));\n");
             return;
         }
         int keyCount = pipeline.groupKeys().size();
@@ -4563,10 +4565,10 @@ public final class PipelineCompiler
                     out.append("    resultNulls[").append(keyCount + a).append("] = aggNull").append(a).append(";\n");
                 }
             }
-            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
+            out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(groupCount, result, types, resultNulls))));\n");
             return;
         }
-        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(groupCount, result, types))));\n");
+        out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result(groupCount, result, types))));\n");
     }
 
     /** Finalize each aggregate's cells into one result column (over {@code groupCount} groups in {@code agg<cell>}). */
@@ -4758,9 +4760,9 @@ public final class PipelineCompiler
 
     private void emitTypeResolverConstructor(StringBuilder out, String simpleName)
     {
-        out.append("  private final java.util.function.Function<String, org.weakref.nitro.jit.Type> typeResolver;\n");
+        out.append("  private final java.util.function.Function<String, org.weakref.nitro.legacy.pipeline.Type> typeResolver;\n");
         out.append("  public ").append(simpleName)
-                .append("(java.util.function.Function<String, org.weakref.nitro.jit.Type> typeResolver) {\n")
+                .append("(java.util.function.Function<String, org.weakref.nitro.legacy.pipeline.Type> typeResolver) {\n")
                 .append("    if (typeResolver == null) { throw new NullPointerException(\"typeResolver is null\"); }\n")
                 .append("    this.typeResolver = typeResolver;\n")
                 .append("  }\n");
@@ -4773,7 +4775,7 @@ public final class PipelineCompiler
         for (Type type : resultTypes) {
             elements.append(elements.length() == 0 ? "" : ", ").append("typeResolver.apply(\"").append(type.name()).append("\")");
         }
-        out.append(indent).append("org.weakref.nitro.jit.Type[] types = new org.weakref.nitro.jit.Type[] { ").append(elements).append(" };\n");
+        out.append(indent).append("org.weakref.nitro.legacy.pipeline.Type[] types = new org.weakref.nitro.legacy.pipeline.Type[] { ").append(elements).append(" };\n");
     }
 
     /** Identity assignment for every aggregate's state cells at array index {@code index} in storage named {@code prefix<cell>}. */

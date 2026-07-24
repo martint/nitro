@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 import org.junit.jupiter.api.Test;
 
@@ -543,7 +543,7 @@ public class TestJitPipeline
         for (int g = 0; g < result.rowCount(); g++) {
             long[] sumCount = reference.get(keys[g]);
             assertThat(averages[g]).as("rounded average for k %d", keys[g])
-                    .isEqualTo(org.weakref.nitro.jit.DecimalMath.roundDivide(sumCount[0], sumCount[1]));
+                    .isEqualTo(org.weakref.nitro.legacy.pipeline.DecimalMath.roundDivide(sumCount[0], sumCount[1]));
         }
     }
 
@@ -570,7 +570,7 @@ public class TestJitPipeline
             p[i] = (i % 997) + 1;
             q[i] = (i % 13) + 1;
             expectedProduct += p[i] * q[i];
-            expectedScaled += org.weakref.nitro.jit.DecimalMath.roundScaledDivide(p[i], q[i], 100);
+            expectedScaled += org.weakref.nitro.legacy.pipeline.DecimalMath.roundScaledDivide(p[i], q[i], 100);
         }
 
         CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline);

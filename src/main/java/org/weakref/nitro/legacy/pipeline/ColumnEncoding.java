@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 /**
  * Compile-time declaration of how an input column is physically encoded, driving the accessor the compiler

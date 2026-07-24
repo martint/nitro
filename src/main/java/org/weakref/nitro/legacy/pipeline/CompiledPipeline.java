@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 /**
  * A pipeline compiled to a single fused routine. {@link #execute} runs the whole scan -> filter -> project

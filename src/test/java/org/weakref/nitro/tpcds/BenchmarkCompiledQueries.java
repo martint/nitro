@@ -28,7 +28,7 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
-import org.weakref.nitro.jit.QueryLowering.Lowered;
+import org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -43,7 +43,7 @@ import java.util.function.Supplier;
  * Trino operator-chain harnesses ({@code org.weakref.nitro.tpcds.BenchmarkQueries} and
  * {@code org.weakref.trino.tpcds.BenchmarkQueries}) on the same per-invocation read of sf10 Parquet. {@link #full}
  * runs the whole "Parquet to result" for one query; compilation is amortized like a query plan -- the
- * {@link org.weakref.nitro.jit.PipelineCompiler} caches compiled pipelines by source, so after warmup the measured
+ * {@link org.weakref.nitro.legacy.pipeline.PipelineCompiler} caches compiled pipelines by source, so after warmup the measured
  * iterations only execute. Each query dispatches to the execution shape it was ported as (single-stage star,
  * streamed single-stage, multi-stage pipeline-breaker, UNION ALL, or a tree of stages).
  */
@@ -204,7 +204,7 @@ public class BenchmarkCompiledQueries
             stages.add(new StagePlan(stage.plan().lower(), stage.virtualName(), stage.stringColumns()));
         }
         List<Lowered> branches = new ArrayList<>();
-        for (org.weakref.nitro.jit.QueryLowering branch : union.branches()) {
+        for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : union.branches()) {
             branches.add(branch.lower());
         }
         Lowered main = union.main().lower();
@@ -228,7 +228,7 @@ public class BenchmarkCompiledQueries
         record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
 
         List<Lowered> branches = new ArrayList<>();
-        for (org.weakref.nitro.jit.QueryLowering branch : composite.branches()) {
+        for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : composite.branches()) {
             branches.add(branch.lower());
         }
         String unionVirtualName = composite.unionVirtualName();
@@ -253,7 +253,7 @@ public class BenchmarkCompiledQueries
     {
         record StagePlan(Lowered plan, String virtualName, List<CompiledTpcdsQueries.DictRef> stringColumns) {}
 
-        List<org.weakref.nitro.jit.QueryLowering> branchPlans = query.branches();
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering> branchPlans = query.branches();
         String currentUnion = query.currentUnion();
         String previousUnion = query.previousUnion();
         Lowered currentGroup = query.currentGroup().lower();
@@ -272,7 +272,7 @@ public class BenchmarkCompiledQueries
         runners.put(name, () -> {
             Map<String, CompiledQuerySupport.Materialized> virtuals = new HashMap<>();
             List<Lowered> branchesCurrent = new ArrayList<>();
-            for (org.weakref.nitro.jit.QueryLowering branch : branchPlans) {
+            for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : branchPlans) {
                 branchesCurrent.add(branch.lower());
             }
             virtuals.put(currentUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesCurrent, List.of()));
@@ -281,7 +281,7 @@ public class BenchmarkCompiledQueries
                 virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan(), virtuals, stage.stringColumns()));
             }
             List<Lowered> branchesPrevious = new ArrayList<>();
-            for (org.weakref.nitro.jit.QueryLowering branch : branchPlans) {
+            for (org.weakref.nitro.legacy.pipeline.QueryLowering branch : branchPlans) {
                 branchesPrevious.add(branch.lower());
             }
             virtuals.put(previousUnion, CompiledQuerySupport.materializeUnion(allocator, tables, branchesPrevious, List.of()));

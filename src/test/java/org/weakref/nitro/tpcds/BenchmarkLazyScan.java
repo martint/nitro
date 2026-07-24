@@ -28,12 +28,12 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
-import org.weakref.nitro.jit.Column;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
-import org.weakref.nitro.jit.Plan;
-import org.weakref.nitro.jit.QueryLowering;
-import org.weakref.nitro.jit.StreamingPipeline;
+import org.weakref.nitro.legacy.pipeline.Column;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.Plan;
+import org.weakref.nitro.legacy.pipeline.QueryLowering;
+import org.weakref.nitro.legacy.pipeline.StreamingPipeline;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -72,11 +72,11 @@ public class BenchmarkLazyScan
     {
         tables = TpcdsParquetTables.requiredActual();
         QueryLowering query = QueryLowering.scan(TABLE,
-                new QueryLowering.Column("ss_quantity", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_wholesale_cost", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_list_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true),
-                new QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.jit.ColumnEncoding.FLAT, true));
+                new QueryLowering.Column("ss_quantity", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_wholesale_cost", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_list_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true),
+                new QueryLowering.Column("ss_ext_sales_price", org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT, true));
         query.where(new Plan.Predicate("<", query.column("ss_quantity"), new Plan.Lit(threshold)))
                 .aggregate("sum", "ss_wholesale_cost")
                 .aggregate("sum", "ss_list_price")

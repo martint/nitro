@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 import java.util.List;
 import java.util.Map;
@@ -73,9 +73,9 @@ public final class ScalarLibrary
         register("year_of_date", arguments ->
                 "org.weakref.nitro.function.scalar.builtin.YearOfDate.yearOfEpochDay(" + arguments.get(0) + ")");
         register("divide_scale_round_i64", arguments ->
-                "org.weakref.nitro.jit.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
+                "org.weakref.nitro.legacy.pipeline.DecimalMath.roundScaledDivide(" + arguments.get(0) + ", " + arguments.get(1) + ", " + arguments.get(2) + ")");
         register("divide_round_i64", arguments ->
-                "org.weakref.nitro.jit.DecimalMath.roundDivide(" + arguments.get(0) + ", " + arguments.get(1) + ")");
+                "org.weakref.nitro.legacy.pipeline.DecimalMath.roundDivide(" + arguments.get(0) + ", " + arguments.get(1) + ")");
         // True (non-rounded) average of two longs as a DOUBLE: sum / count in floating point. Unlike
         // divide_round_i64 (a rounded long quotient), the result is a real double, so it is registered as
         // double-returning -- the projection / sort machinery then encodes its slot via doubleToRawLongBits and

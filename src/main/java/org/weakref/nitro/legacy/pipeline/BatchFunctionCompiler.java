@@ -11,8 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
+import org.weakref.nitro.jit.InMemoryCompiler;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.util.TreeSet;
@@ -33,7 +34,7 @@ import static java.util.Objects.requireNonNull;
  */
 public final class BatchFunctionCompiler
 {
-    private static final String PACKAGE = "org.weakref.nitro.jit.generated";
+    private static final String PACKAGE = "org.weakref.nitro.legacy.pipeline.generated";
     private final CompilerResources resources;
     private final ScalarLibrary scalarFunctions;
 

@@ -11,11 +11,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.operator.CompiledOperator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;

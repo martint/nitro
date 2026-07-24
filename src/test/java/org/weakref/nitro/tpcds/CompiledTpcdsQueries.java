@@ -13,10 +13,10 @@
  */
 package org.weakref.nitro.tpcds;
 
-import org.weakref.nitro.jit.ColumnEncoding;
-import org.weakref.nitro.jit.Plan;
-import org.weakref.nitro.jit.QueryLowering;
-import org.weakref.nitro.jit.Types;
+import org.weakref.nitro.legacy.pipeline.ColumnEncoding;
+import org.weakref.nitro.legacy.pipeline.Plan;
+import org.weakref.nitro.legacy.pipeline.QueryLowering;
+import org.weakref.nitro.legacy.pipeline.Types;
 
 import java.time.LocalDate;
 import java.util.ArrayList;

@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 /**
  * A pipeline compiled to consume its source one batch at a time, folding into aggregation/grouping state that

@@ -23,8 +23,8 @@ class Q64Dump
     {
         CompiledTpcdsQueries.Composite composite = CompiledTpcdsQueries.query64();
         CompiledTpcdsQueries.Stage cross = composite.stages().get(1);
-        org.weakref.nitro.jit.QueryLowering.Lowered lowered = cross.plan().lower();
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered = cross.plan().lower();
         java.nio.file.Files.writeString(java.nio.file.Path.of("/tmp/q64_cross.java"),
-                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).renderStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable()));
+                new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).renderStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable()));
     }
 }

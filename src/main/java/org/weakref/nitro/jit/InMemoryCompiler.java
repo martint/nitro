@@ -32,15 +32,14 @@ import java.util.Map;
 
 /**
  * Compiles a single Java source string to a loaded {@link Class} in memory, via the JDK's {@code javac}
- * ({@link ToolProvider}). Shared by the generators of fused pipelines ({@link PipelineCompiler}) and bespoke
- * batch functions ({@link BatchFunctionCompiler}). The {@code jdk.incubator.vector} module is on the compile path
- * so generated kernels may use the Vector API (the running JVM already adds it at launch).
+ * ({@link ToolProvider}). The {@code jdk.incubator.vector} module is on the compile path so generated kernels may use
+ * the Vector API (the running JVM already adds it at launch).
  */
-final class InMemoryCompiler
+public final class InMemoryCompiler
 {
     private InMemoryCompiler() {}
 
-    static Class<?> compile(String className, String source)
+    public static Class<?> compile(String className, String source)
     {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {

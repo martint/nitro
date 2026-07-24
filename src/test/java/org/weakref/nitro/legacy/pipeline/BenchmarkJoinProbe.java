@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.jit;
+package org.weakref.nitro.legacy.pipeline;
 
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorMask;

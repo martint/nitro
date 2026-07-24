@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.tpch;
 
-import org.weakref.nitro.jit.ColumnEncoding;
-import org.weakref.nitro.jit.Plan;
-import org.weakref.nitro.jit.QueryLowering;
+import org.weakref.nitro.legacy.pipeline.ColumnEncoding;
+import org.weakref.nitro.legacy.pipeline.Plan;
+import org.weakref.nitro.legacy.pipeline.QueryLowering;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries;
 import org.weakref.nitro.tpcds.CompiledTpcdsQueries.Ported;
 

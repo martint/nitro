@@ -19,7 +19,7 @@ import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.operator.CompiledOperator;
+import org.weakref.nitro.legacy.pipeline.CompiledOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.tpcds.CompiledQuerySupport;
@@ -464,8 +464,8 @@ public class TestCompiledClickBenchQueries
             virtuals.put(stage.virtualName(), CompiledQuerySupport.materializeStage(allocator, tables, stage.plan().lower(), virtuals, stage.stringColumns()));
         }
         CompiledQuerySupport.Materialized top = virtuals.get(stageName);
-        long[] keys = ((org.weakref.nitro.jit.Column.FlatColumn) top.columns()[0]).values();
-        org.weakref.nitro.jit.Column.StringColumn phrases = (org.weakref.nitro.jit.Column.StringColumn) top.columns()[1];
+        long[] keys = ((org.weakref.nitro.legacy.pipeline.Column.FlatColumn) top.columns()[0]).values();
+        org.weakref.nitro.legacy.pipeline.Column.StringColumn phrases = (org.weakref.nitro.legacy.pipeline.Column.StringColumn) top.columns()[1];
         List<String> stageValues = new ArrayList<>();
         for (int r = 0; r < top.rows(); r++) {
             stageValues.add(new String(phrases.dictionary()[phrases.ids()[r]], UTF_8));

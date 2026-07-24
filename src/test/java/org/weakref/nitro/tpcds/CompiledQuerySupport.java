@@ -20,10 +20,10 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
-import org.weakref.nitro.jit.Plan;
+import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.Plan;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -137,9 +137,9 @@ public final class CompiledQuerySupport
         }
     }
 
-    /** Transparent {@link org.weakref.nitro.jit.StreamingPipeline.Source} decorator timing decode work into {@link ScanProfile}. */
-    private record TimingSource(org.weakref.nitro.jit.StreamingPipeline.Source inner)
-            implements org.weakref.nitro.jit.StreamingPipeline.Source
+    /** Transparent {@link org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source} decorator timing decode work into {@link ScanProfile}. */
+    private record TimingSource(org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source inner)
+            implements org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source
     {
         @Override
         public boolean advance()
@@ -160,7 +160,7 @@ public final class CompiledQuerySupport
         }
 
         @Override
-        public org.weakref.nitro.jit.Column[] columns()
+        public org.weakref.nitro.legacy.pipeline.Column[] columns()
         {
             long s = System.nanoTime();
             try {
@@ -172,7 +172,7 @@ public final class CompiledQuerySupport
         }
 
         @Override
-        public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+        public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns, int[] selection, int count)
         {
             long s = System.nanoTime();
             try {
@@ -184,7 +184,7 @@ public final class CompiledQuerySupport
         }
 
         @Override
-        public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+        public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns)
         {
             long s = System.nanoTime();
             try {
@@ -196,7 +196,7 @@ public final class CompiledQuerySupport
         }
 
         @Override
-        public org.weakref.nitro.jit.Column[] materializeFiltering(int[] columns, int[] selection, int count)
+        public org.weakref.nitro.legacy.pipeline.Column[] materializeFiltering(int[] columns, int[] selection, int count)
         {
             long s = System.nanoTime();
             try {
@@ -208,7 +208,7 @@ public final class CompiledQuerySupport
         }
 
         @Override
-        public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int column, int[] selection, int count)
+        public org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn materializeDictionaryIds(int column, int[] selection, int count)
         {
             long s = System.nanoTime();
             try {
@@ -352,20 +352,20 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * Zero-copy streaming {@link org.weakref.nitro.jit.StreamingPipeline.Source}: when a batch is the dense full
+     * Zero-copy streaming {@link org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source}: when a batch is the dense full
      * range ({@code mask.all()}) and a column is a non-null {@code I64} vector, its backing {@code long[]} is
      * wrapped directly with no copy; otherwise the column is copied (widened {@code I32}, gathered sparse mask, or
      * null-zeroed). To stay safe against the scan's pooled/recycled vectors, the current batch is held open while
      * the compiled routine processes it and closed only on the next {@code advance()}.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetColumnarSource(Allocator allocator, ParquetTables tables, String table, String... columns)
+    public static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetColumnarSource(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
         int width = columns.length;
         Operator operator = scan(allocator, tables, table, columns);
-        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        return new org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source()
         {
             private Batch open;   // current batch, kept alive until the next advance()
-            private org.weakref.nitro.jit.Column[] current;
+            private org.weakref.nitro.legacy.pipeline.Column[] current;
             private int currentRows;
 
             @Override
@@ -384,12 +384,12 @@ public final class CompiledQuerySupport
                         continue;
                     }
                     boolean dense = mask.all();
-                    org.weakref.nitro.jit.Column[] cols = new org.weakref.nitro.jit.Column[width];
+                    org.weakref.nitro.legacy.pipeline.Column[] cols = new org.weakref.nitro.legacy.pipeline.Column[width];
                     for (int c = 0; c < width; c++) {
                         Vector values = batch.output(c).borrow(Stream.VALUES);
                         Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
                         if (dense && nulls == null && values instanceof I64Vector i64) {
-                            cols[c] = new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
+                            cols[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(i64.values());   // no copy
                         }
                         else {
                             long[] copy = new long[count];
@@ -397,7 +397,7 @@ public final class CompiledQuerySupport
                                 int position = mask.position(index);
                                 copy[index] = nulls != null && isNull(nulls, position) ? 0 : longValue(values, position);
                             }
-                            cols[c] = new org.weakref.nitro.jit.Column.FlatColumn(copy);
+                            cols[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(copy);
                         }
                     }
                     current = cols;
@@ -416,7 +416,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] columns()
+            public org.weakref.nitro.legacy.pipeline.Column[] columns()
             {
                 return current;
             }
@@ -424,34 +424,34 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * A {@link org.weakref.nitro.jit.StreamingPipeline.Source} over {@code table}'s {@code columns}, scanned from
+     * A {@link org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source} over {@code table}'s {@code columns}, scanned from
      * Parquet one batch at a time and exposed as flat {@code long} columns (value-only; the same per-position read
      * the eager loader uses). The compiled streaming routine folds each batch without the whole table ever being
      * materialized.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, String... columns)
+    public static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, String... columns)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Column> specs = new ArrayList<>();
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs = new ArrayList<>();
         for (String column : columns) {
-            specs.add(new org.weakref.nitro.jit.QueryLowering.Column(column));   // FLAT, non-null
+            specs.add(new org.weakref.nitro.legacy.pipeline.QueryLowering.Column(column));   // FLAT, non-null
         }
         return parquetFlatSource(allocator, tables, table, specs);
     }
 
     /**
-     * Spec-aware flat streaming source: each batch produces one {@link org.weakref.nitro.jit.Column.FlatColumn}
+     * Spec-aware flat streaming source: each batch produces one {@link org.weakref.nitro.legacy.pipeline.Column.FlatColumn}
      * per column, value-only, plus a null mask exactly when the spec is nullable -- mirroring the eager loader so
      * the compiled routine's null handling matches. String probe columns are not supported (they would need a
      * dictionary consistent across batches).
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    public static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetFlatSource(Allocator allocator, ParquetTables tables, String table, List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
         int width = specs.size();
-        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+        String[] names = specs.stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
         Operator operator = scan(allocator, tables, table, names);
-        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        return new org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source()
         {
-            private org.weakref.nitro.jit.Column[] current;
+            private org.weakref.nitro.legacy.pipeline.Column[] current;
             private int currentRows;
 
             @Override
@@ -464,9 +464,9 @@ public final class CompiledQuerySupport
                         if (count == 0) {
                             continue;
                         }
-                        org.weakref.nitro.jit.Column[] columns = new org.weakref.nitro.jit.Column[width];
+                        org.weakref.nitro.legacy.pipeline.Column[] columns = new org.weakref.nitro.legacy.pipeline.Column[width];
                         for (int c = 0; c < width; c++) {
-                            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
+                            if (specs.get(c).encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING) {
                                 throw new UnsupportedOperationException("streaming string probe columns not supported: " + specs.get(c).name());
                             }
                             Vector vector = batch.output(c).borrow(Stream.VALUES);
@@ -481,7 +481,7 @@ public final class CompiledQuerySupport
                                 }
                                 values[index] = isNull ? 0 : longValue(vector, position);
                             }
-                            columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+                            columns[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nullMask);
                         }
                         current = columns;
                         currentRows = count;
@@ -499,7 +499,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] columns()
+            public org.weakref.nitro.legacy.pipeline.Column[] columns()
             {
                 return current;
             }
@@ -507,42 +507,42 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * A selection-driven lazy {@link org.weakref.nitro.jit.StreamingPipeline.Source}: nothing is converted on
+     * A selection-driven lazy {@link org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source}: nothing is converted on
      * {@code advance()}; each {@code materialize(columns, selection, count)} converts only the requested columns,
      * for only the selected rows. Staged filtering calls it once per conjunct (decoding that conjunct's column for
      * the rows that survived the earlier ones) and once for the payload -- so a column is converted only for the
      * rows that reach the stage that needs it. Flat columns only.
      */
-    public static org.weakref.nitro.jit.StreamingPipeline.Source parquetLazySource(Allocator allocator, ParquetTables tables,
-            String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs, org.weakref.nitro.jit.Plan.Pipeline pipeline)
+    public static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetLazySource(Allocator allocator, ParquetTables tables,
+            String table, List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs, org.weakref.nitro.legacy.pipeline.Plan.Pipeline pipeline)
     {
         int width = specs.size();
-        String[] names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+        String[] names = specs.stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
         // String columns whose ids land in cross-batch state (group keys, aggregate inputs, projected outputs)
         // are interned into a per-query global dictionary; filter-only strings keep cheap page-local dictionaries.
         GlobalStringDictionary[] globalDictionaries = new GlobalStringDictionary[width];
         boolean[] viewable = new boolean[width];
         // The probe's encoding/nullability arrays for the compiler-shared mode predicates (bounded pipelines
         // have no joins, so the probe is the whole combined space).
-        org.weakref.nitro.jit.ColumnEncoding[][] probeEncodings = new org.weakref.nitro.jit.ColumnEncoding[][] {
-                specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::encoding).toArray(org.weakref.nitro.jit.ColumnEncoding[]::new)};
+        org.weakref.nitro.legacy.pipeline.ColumnEncoding[][] probeEncodings = new org.weakref.nitro.legacy.pipeline.ColumnEncoding[][] {
+                specs.stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::encoding).toArray(org.weakref.nitro.legacy.pipeline.ColumnEncoding[]::new)};
         boolean[][] probeNullable = new boolean[1][width];
         for (int c = 0; c < width; c++) {
             probeNullable[0][c] = specs.get(c).nullable();
         }
         for (int c = 0; c < width; c++) {
-            org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
-            if (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec = specs.get(c);
+            if (spec.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING
                     && new PipelineCompiler(CompilerResources.createDefault()).stringIdsCrossBatches(pipeline, c)) {
                 globalDictionaries[c] = new GlobalStringDictionary(regexpTransform(spec));
             }
-            else if (spec.regexpPattern() != null || (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING && spec.substringLength() >= 0)) {
+            else if (spec.regexpPattern() != null || (spec.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING && spec.substringLength() >= 0)) {
                 throw new UnsupportedOperationException("derived column " + spec.name() + " requires a globally-interned streamed load");
             }
             // A maybe-view string column's plain pages pass through as a zero-copy bytes view (the generated
             // masks and winners-mode min compare per row in place); requires the full batch in page order and
             // no nulls.
-            viewable[c] = spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+            viewable[c] = spec.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING
                     && !spec.nullable()
                     && (new PipelineCompiler(CompilerResources.createDefault()).stringMaybeView(pipeline, c)
                             || new PipelineCompiler(CompilerResources.createDefault()).stringBoundedFilterViewable(pipeline, probeEncodings, probeNullable, c));
@@ -552,7 +552,7 @@ public final class CompiledQuerySupport
         // computes per surviving row in place -- and its dictionary pages stay page-local.
         boolean[] derivedView = new boolean[width];
         for (int c = 0; c < width; c++) {
-            derivedView[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+            derivedView[c] = specs.get(c).encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING
                     && !specs.get(c).nullable()
                     && new PipelineCompiler(CompilerResources.createDefault()).stringDerivedOnly(pipeline, c);
         }
@@ -562,7 +562,7 @@ public final class CompiledQuerySupport
         byte[][][] winners = new byte[width][][];
         int[] winnersSizes = new int[width];
         for (int c = 0; c < width; c++) {
-            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
+            if (specs.get(c).encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING
                     && new PipelineCompiler(CompilerResources.createDefault()).stringMinWinners(pipeline, c)) {
                 minWinners[c] = true;
                 winners[c] = new byte[16][];
@@ -579,7 +579,7 @@ public final class CompiledQuerySupport
             // wrapper array) is free to back the next batch -- this turns the per-batch widen/gather churn into a
             // bounded number of geometric growths. The zero-copy dense paths still wrap the decoder's array directly
             // and never touch these buffers.
-            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final org.weakref.nitro.legacy.pipeline.Column[] out = new org.weakref.nitro.legacy.pipeline.Column[width];
             private final long[][] valueBuffers = new long[width][];
             private final boolean[][] nullBuffers = new boolean[width][];
             private final java.util.IdentityHashMap<Object, byte[][]> pageDictionaries = new java.util.IdentityHashMap<>();
@@ -620,7 +620,7 @@ public final class CompiledQuerySupport
             // (the dense string path uses identity(count) over rows).
             private final int[] allColumns = java.util.stream.IntStream.range(0, width).toArray();
             @Override
-            public org.weakref.nitro.jit.Column[] columns()
+            public org.weakref.nitro.legacy.pipeline.Column[] columns()
             {
                 // Non-staged callers (a pipeline with no deferrable payload) get every column over the whole batch
                 // through the dense zero-copy path -- wrapping a non-null I64 column's array by reference -- not the
@@ -629,7 +629,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns, int[] selection, int count)
             {
                 for (int column : columns) {
                     out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column, false);
@@ -644,7 +644,7 @@ public final class CompiledQuerySupport
             private final long[][] dictionaryEntryLanes = new long[width][];
 
             @Override
-            public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
             {
                 if (specs.get(c).nullable()) {
                     return null;
@@ -693,7 +693,7 @@ public final class CompiledQuerySupport
                 int[] pageIds = dictionary.ids();
                 boolean allSelected = mask.all();
                 if (allSelected && count == currentRows) {
-                    return new org.weakref.nitro.jit.Column.DictionaryColumn(pageIds, entries);   // identity: no gather
+                    return new org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn(pageIds, entries);   // identity: no gather
                 }
                 int[] ids = dictionaryIdBuffers[c];
                 if (ids == null || ids.length < count) {
@@ -703,11 +703,11 @@ public final class CompiledQuerySupport
                 for (int j = 0; j < count; j++) {
                     ids[j] = pageIds[allSelected ? selection[j] : mask.position(selection[j])];
                 }
-                return new org.weakref.nitro.jit.Column.DictionaryColumn(ids, entries);
+                return new org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn(ids, entries);
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materializeFiltering(int[] columns, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column[] materializeFiltering(int[] columns, int[] selection, int count)
             {
                 for (int column : columns) {
                     out[column] = convertColumn(open, mask, column, count, selection, specs.get(column).nullable(), column, true);
@@ -716,7 +716,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns)
             {
                 // Full-batch materialize (the eager join-key/filter phase): when the batch is dense, convert with a
                 // type-dispatched bulk path (zero-copy for a non-null I64 column, else one tight loop) instead of the
@@ -734,7 +734,7 @@ public final class CompiledQuerySupport
             private int[] identity(int count)
             {
                 if (identityBuffer.length < count) {
-                    identityBuffer = new int[org.weakref.nitro.jit.StreamingScratch.grow(identityBuffer.length, count)];
+                    identityBuffer = new int[org.weakref.nitro.legacy.pipeline.StreamingScratch.grow(identityBuffer.length, count)];
                     for (int i = 0; i < identityBuffer.length; i++) {
                         identityBuffer[i] = i;
                     }
@@ -747,7 +747,7 @@ public final class CompiledQuerySupport
             {
                 long[] buffer = valueBuffers[column];
                 if (buffer == null || buffer.length < count) {
-                    buffer = new long[org.weakref.nitro.jit.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
+                    buffer = new long[org.weakref.nitro.legacy.pipeline.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
                     valueBuffers[column] = buffer;
                 }
                 return buffer;
@@ -758,7 +758,7 @@ public final class CompiledQuerySupport
             {
                 boolean[] buffer = nullBuffers[column];
                 if (buffer == null || buffer.length < count) {
-                    buffer = new boolean[org.weakref.nitro.jit.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
+                    buffer = new boolean[org.weakref.nitro.legacy.pipeline.StreamingScratch.grow(buffer == null ? 0 : buffer.length, count)];
                     nullBuffers[column] = buffer;
                 }
                 return buffer;
@@ -770,7 +770,7 @@ public final class CompiledQuerySupport
              * {@link BooleanVector} nulls stream) stays zero-copy by wrapping the decoder's array; every other shape
              * widens/null-zeroes into the column's reused value (and, when nullable, null) buffer.
              */
-            private org.weakref.nitro.jit.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable, int column)
+            private org.weakref.nitro.legacy.pipeline.Column denseColumn(Vector values, Vector nulls, int count, boolean nullable, int column)
             {
                 if (values instanceof org.weakref.nitro.data.F64Vector f64) {
                     // F64 lanes carry raw double bits in the long buffer.
@@ -784,14 +784,14 @@ public final class CompiledQuerySupport
                         }
                         copy[i] = isNull ? 0 : Double.doubleToRawLongBits(backing[i]);
                     }
-                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                    return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(copy, nullMask);
                 }
                 if (values instanceof I64Vector i64) {
                     if (nulls == null) {
-                        return new org.weakref.nitro.jit.Column.FlatColumn(i64.values());   // no copy
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(i64.values());   // no copy
                     }
                     if (nullable && nulls instanceof BooleanVector booleans) {
-                        return new org.weakref.nitro.jit.Column.FlatColumn(i64.values(), booleans.values());   // no copy
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(i64.values(), booleans.values());   // no copy
                     }
                     long[] backing = i64.values();
                     long[] copy = valueBuffer(column, count);
@@ -803,7 +803,7 @@ public final class CompiledQuerySupport
                         }
                         copy[i] = isNull ? 0 : backing[i];
                     }
-                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                    return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(copy, nullMask);
                 }
                 if (values instanceof I32Vector i32) {
                     int[] backing = i32.values();
@@ -816,7 +816,7 @@ public final class CompiledQuerySupport
                         }
                         copy[i] = isNull ? 0 : backing[i];
                     }
-                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                    return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(copy, nullMask);
                 }
                 if (values instanceof org.weakref.nitro.data.DictionaryVector dictionary
                         && !(dictionary.values() instanceof org.weakref.nitro.data.BinaryVector)) {
@@ -834,7 +834,7 @@ public final class CompiledQuerySupport
                                 : doubleEntries != null ? Double.doubleToRawLongBits(doubleEntries[ids[i]])
                                 : longValue(entries, ids[i]);
                     }
-                    return new org.weakref.nitro.jit.Column.FlatColumn(copy, nullMask);
+                    return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(copy, nullMask);
                 }
                 if (values instanceof org.weakref.nitro.data.BinaryVector || values instanceof org.weakref.nitro.data.DictionaryVector) {
                     return stringColumn(values, nulls, count, identity(count), null, nullable, column, false);
@@ -848,7 +848,7 @@ public final class CompiledQuerySupport
              * null vector's backing array, so the per-row work is tight typed array access -- per-row virtual
              * accessor calls dominated filtered global aggregates over wide facts.
              */
-            private org.weakref.nitro.jit.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column, boolean filterStage)
+            private org.weakref.nitro.legacy.pipeline.Column convertColumn(Batch batch, Mask batchMask, int c, int count, int[] selection, boolean nullable, int column, boolean filterStage)
             {
                 Vector vector = batch.output(c).borrow(Stream.VALUES);
                 Vector nulls = batch.output(c).borrowOrNull(Stream.NULLS);
@@ -925,7 +925,7 @@ public final class CompiledQuerySupport
                         values[j] = isNull ? 0 : longValue(vector, position);
                     }
                 }
-                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+                return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nullMask);
             }
 
             /**
@@ -934,7 +934,7 @@ public final class CompiledQuerySupport
              * dictionary-encoded page keeps its dictionary (ids gathered per row); a plain-encoded page interns
              * each selected row's bytes into a batch-local dictionary.
              */
-            private org.weakref.nitro.jit.Column stringColumn(Vector vector, Vector nulls, int count, int[] selection, Mask batchMask, boolean nullable, int column, boolean filterStage)
+            private org.weakref.nitro.legacy.pipeline.Column stringColumn(Vector vector, Vector nulls, int count, int[] selection, Mask batchMask, boolean nullable, int column, boolean filterStage)
             {
                 int[] ids = new int[count];
                 boolean[] nullMask = nullable ? new boolean[count] : null;
@@ -948,7 +948,7 @@ public final class CompiledQuerySupport
                         && batchMask == null && (count == currentRows || minWinners[column] || filterStage || derivedView[column])) {
                     // A winners-min consumer indexes the view through the stage's selection, so a partial
                     // payload selection can still take it (the view is selection-independent page positions).
-                    return new org.weakref.nitro.jit.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());
+                    return new org.weakref.nitro.legacy.pipeline.Column.BytesViewColumn(viewBinary.data(), viewBinary.offsets());
                 }
                 GlobalStringDictionary global = globalDictionaries[column];
                 if (global != null) {
@@ -987,7 +987,7 @@ public final class CompiledQuerySupport
                             ids[j] = isNull ? 0 : global.intern(bytes, 0, bytes.length);
                         }
                     }
-                    return new org.weakref.nitro.jit.Column.StringColumn(ids, global.backing(), nullMask, global.size());
+                    return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(ids, global.backing(), nullMask, global.size());
                 }
                 byte[][] dictionary;
                 if (vector instanceof org.weakref.nitro.data.DictionaryVector dictionaryVector
@@ -1017,7 +1017,7 @@ public final class CompiledQuerySupport
                         && batchMask == null && count == currentRows) {
                     // Zero-copy: the full batch in page order passes through as a bytes view; the generated
                     // mask evaluates the predicate per row in place (vectorized containment / byte equality).
-                    return new org.weakref.nitro.jit.Column.BytesViewColumn(binary.data(), binary.offsets());
+                    return new org.weakref.nitro.legacy.pipeline.Column.BytesViewColumn(binary.data(), binary.offsets());
                 }
                 else {
                     // A filter-only plain page: no cross-batch ids are needed, so skip interning entirely --
@@ -1034,7 +1034,7 @@ public final class CompiledQuerySupport
                         ids[j] = j;
                     }
                 }
-                return new org.weakref.nitro.jit.Column.StringColumn(ids, dictionary, nullMask);
+                return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(ids, dictionary, nullMask);
             }
 
             @Override
@@ -1178,20 +1178,20 @@ public final class CompiledQuerySupport
     }
 
     /** Loaded inputs plus the compiled result, so callers can reconstruct string columns from the dictionaries. */
-    public record LoweredResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] inputs) {}
+    public record LoweredResult(CompiledPipeline.Result result, org.weakref.nitro.legacy.pipeline.Column[][] inputs) {}
 
-    /** A lowered query's inputs loaded from Parquet: one {@link org.weakref.nitro.jit.Column}[] per relation, with row counts. */
-    public record LoadedInputs(org.weakref.nitro.jit.Column[][] inputs, int[] rowCounts) {}
+    /** A lowered query's inputs loaded from Parquet: one {@link org.weakref.nitro.legacy.pipeline.Column}[] per relation, with row counts. */
+    public record LoadedInputs(org.weakref.nitro.legacy.pipeline.Column[][] inputs, int[] rowCounts) {}
 
     /** Load a lowered query's inputs from Parquet (flat and dictionary-string columns, with null masks). */
-    public static LoadedInputs loadLoweredInputs(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoadedInputs loadLoweredInputs(Allocator allocator, ParquetTables tables, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
-        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.legacy.pipeline.Column[][] inputs = new org.weakref.nitro.legacy.pipeline.Column[sources.size()][];
         int[] rowCounts = new int[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
-            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Input source = sources.get(s);
+            String[] names = source.columns().stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
             DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
             inputs[s] = loaded.columns;
             rowCounts[s] = loaded.rows;
@@ -1200,12 +1200,12 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * Run a lowered star query through a compiled {@link org.weakref.nitro.jit.StreamingPipeline}: the build
+     * Run a lowered star query through a compiled {@link org.weakref.nitro.legacy.pipeline.StreamingPipeline}: the build
      * (dimension) inputs are materialized once into hash tables; the probe (fact) input is streamed from Parquet
      * batch-by-batch (flat columns). Returns the raw result.
      */
     public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming)
     {
         return runStreamingLowered(allocator, tables, lowered, streaming, false);
     }
@@ -1216,16 +1216,16 @@ public final class CompiledQuerySupport
      * for rows that survive the dimension joins.
      */
     public static CompiledPipeline.Result runStreamingLowered(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming, boolean lazyProbe)
     {
         return streamCapturingBuilds(allocator, tables, lowered, streaming, lazyProbe).result();
     }
 
     /** A streamed result together with its materialized build (dimension) inputs and the probe source, so a string output column can be resolved back to its dictionary. */
-    public record StreamedResult(CompiledPipeline.Result result, org.weakref.nitro.jit.Column[][] builds, org.weakref.nitro.jit.StreamingPipeline.Source probeSource) {}
+    public record StreamedResult(CompiledPipeline.Result result, org.weakref.nitro.legacy.pipeline.Column[][] builds, org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source probeSource) {}
 
-    /** A materialized relation (one {@link org.weakref.nitro.jit.Column} per output column, plus its row count) produced by an earlier pipeline stage. */
-    public record Materialized(org.weakref.nitro.jit.Column[] columns, int rows) {}
+    /** A materialized relation (one {@link org.weakref.nitro.legacy.pipeline.Column} per output column, plus its row count) produced by an earlier pipeline stage. */
+    public record Materialized(org.weakref.nitro.legacy.pipeline.Column[] columns, int rows) {}
 
     /**
      * Execute one pipeline stage of a multi-stage operator tree. Inputs named in {@code virtuals} are fed from the
@@ -1236,40 +1236,40 @@ public final class CompiledQuerySupport
      * Trino/Nitro operator trees use (recomputing a shared subtree rather than reusing it).
      */
     public static LoweredResult runStage(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
-        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Input probe = sources.get(0);
         boolean probeVirtual = virtuals.containsKey(probe.table());
         // A string-carrying probe drains eagerly by default: the eager load builds ORDERED dictionaries, the
         // contract id-comparing consumers (string ORDER BY, column compares) rely on. A stream-only probe (a
         // fact too large to drain) instead streams through the per-query global intern, whose dictionaries are
         // captured for DictRef reconstruction; its consumers must need id equality only.
-        boolean probeString = probe.columns().stream().anyMatch(column -> column.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING);
+        boolean probeString = probe.columns().stream().anyMatch(column -> column.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING);
 
         if (probeVirtual || (probeString && !tables.streamOnly(probe.table()))) {
             return runStageEager(allocator, tables, lowered, virtuals);
         }
 
-        org.weakref.nitro.jit.StreamingPipeline streaming =
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
                 new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         int buildCount = sources.size() - 1;
-        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
+        org.weakref.nitro.legacy.pipeline.Column[][] builds = new org.weakref.nitro.legacy.pipeline.Column[buildCount][];
         int[] buildRowCounts = new int[buildCount];
-        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[sources.size()][];
+        org.weakref.nitro.legacy.pipeline.Column[][] inputsForDictRef = new org.weakref.nitro.legacy.pipeline.Column[sources.size()][];
         for (int b = 0; b < buildCount; b++) {
             resolveInput(allocator, tables, sources.get(b + 1), virtuals, builds, buildRowCounts, b);
             inputsForDictRef[b + 1] = builds[b];
         }
         boolean useSkip = (buildCount >= 1 || !lowered.pipeline().filters().isEmpty())
                 && skipSourceEligible(tables, probe.table(), probe.columns());
-        org.weakref.nitro.jit.StreamingPipeline.Source source = useSkip
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source source = useSkip
                 ? parquetSkipSource(tables, probe.table(), probe.columns())
                 : usePageSource(probe, lowered)
                         ? parquetPageSource(tables, probe.table(), probe.columns())
                         : parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline());
         // Wrap only when profiling (keeps the instanceof StringInterningSource check below on the raw source).
-        org.weakref.nitro.jit.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
         CompiledPipeline.Result result = streaming.execute(executed, builds, buildRowCounts);
         inputsForDictRef[0] = internedProbeDictionaries(source, probe.columns().size());
         return new LoweredResult(result, inputsForDictRef);
@@ -1277,30 +1277,30 @@ public final class CompiledQuerySupport
 
     /**
      * The probe pseudo-input for {@link CompiledTpcdsQueries.DictRef} reconstruction after a streamed run: for each
-     * globally-interned string column, a value-less {@link org.weakref.nitro.jit.Column.StringColumn} carrying the
+     * globally-interned string column, a value-less {@link org.weakref.nitro.legacy.pipeline.Column.StringColumn} carrying the
      * final dictionary. Null when the source interned nothing (numeric or filter-only probes).
      */
-    private static org.weakref.nitro.jit.Column[] internedProbeDictionaries(org.weakref.nitro.jit.StreamingPipeline.Source source, int width)
+    private static org.weakref.nitro.legacy.pipeline.Column[] internedProbeDictionaries(org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source source, int width)
     {
         if (!(source instanceof StringInterningSource interning)) {
             return null;
         }
-        org.weakref.nitro.jit.Column[] dictionaries = null;
+        org.weakref.nitro.legacy.pipeline.Column[] dictionaries = null;
         for (int c = 0; c < width; c++) {
             byte[][] dictionary = interning.finalDictionary(c);
             if (dictionary != null) {
                 if (dictionaries == null) {
-                    dictionaries = new org.weakref.nitro.jit.Column[width];
+                    dictionaries = new org.weakref.nitro.legacy.pipeline.Column[width];
                 }
-                dictionaries[c] = new org.weakref.nitro.jit.Column.StringColumn(new int[0], dictionary);
+                dictionaries[c] = new org.weakref.nitro.legacy.pipeline.Column.StringColumn(new int[0], dictionary);
             }
         }
         return dictionaries;
     }
 
     /** Resolve input {@code slot} into {@code columns}/{@code rowCounts}[slot]: a materialized virtual relation if named in {@code virtuals}, else a Parquet drain. */
-    private static void resolveInput(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Input source,
-            java.util.Map<String, Materialized> virtuals, org.weakref.nitro.jit.Column[][] columns, int[] rowCounts, int slot)
+    private static void resolveInput(Allocator allocator, ParquetTables tables, org.weakref.nitro.legacy.pipeline.QueryLowering.Input source,
+            java.util.Map<String, Materialized> virtuals, org.weakref.nitro.legacy.pipeline.Column[][] columns, int[] rowCounts, int slot)
     {
         Materialized virtual = virtuals.get(source.table());
         if (virtual != null) {
@@ -1308,7 +1308,7 @@ public final class CompiledQuerySupport
             rowCounts[slot] = virtual.rows();
         }
         else {
-            String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+            String[] names = source.columns().stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
             DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
             columns[slot] = loaded.columns;
             rowCounts[slot] = loaded.rows;
@@ -1317,49 +1317,49 @@ public final class CompiledQuerySupport
 
     /**
      * Adapt loaded (or materialized virtual) string columns to their specs: a substring spec derives the truncated
-     * canonical column; otherwise the spec's {@link org.weakref.nitro.jit.QueryLowering.LoadMode} decides how much
+     * canonical column; otherwise the spec's {@link org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode} decides how much
      * dictionary canonicalization the consumer needs -- ORDERED re-canonicalizes (an upstream stage may have
      * materialized an unsorted or duplicate-laden dictionary), DEDUPED dedupes without sorting (id equality for
      * keys), VERBATIM passes through. Identity when nothing needs adapting (the columns are returned as-is).
      */
-    private static org.weakref.nitro.jit.Column[] withDerivedColumns(org.weakref.nitro.jit.Column[] columns,
-            List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    private static org.weakref.nitro.legacy.pipeline.Column[] withDerivedColumns(org.weakref.nitro.legacy.pipeline.Column[] columns,
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
-        org.weakref.nitro.jit.Column[] out = columns;
+        org.weakref.nitro.legacy.pipeline.Column[] out = columns;
         for (int c = 0; c < specs.size(); c++) {
-            org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec = specs.get(c);
             // A nullable-declared column must carry a null mask -- generated code reads it unconditionally -- but a
             // materialized virtual column that never saw a null has none (e.g. a non-null relation consumed through
             // a LEFT join, where only the JOIN introduces nulls). Synthesize the all-false mask.
             if (spec.nullable()) {
-                if (columns[c] instanceof org.weakref.nitro.jit.Column.FlatColumn flat && flat.nulls() == null) {
+                if (columns[c] instanceof org.weakref.nitro.legacy.pipeline.Column.FlatColumn flat && flat.nulls() == null) {
                     if (out == columns) {
                         out = columns.clone();
                     }
-                    out[c] = new org.weakref.nitro.jit.Column.FlatColumn(flat.values(), new boolean[flat.values().length]);
+                    out[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(flat.values(), new boolean[flat.values().length]);
                 }
-                else if (columns[c] instanceof org.weakref.nitro.jit.Column.StringColumn text && text.nulls() == null) {
+                else if (columns[c] instanceof org.weakref.nitro.legacy.pipeline.Column.StringColumn text && text.nulls() == null) {
                     if (out == columns) {
                         out = columns.clone();
                     }
-                    out[c] = new org.weakref.nitro.jit.Column.StringColumn(text.ids(), text.dictionary(), new boolean[text.ids().length]);
+                    out[c] = new org.weakref.nitro.legacy.pipeline.Column.StringColumn(text.ids(), text.dictionary(), new boolean[text.ids().length]);
                 }
             }
-            if (!(out[c] instanceof org.weakref.nitro.jit.Column.StringColumn source)) {
+            if (!(out[c] instanceof org.weakref.nitro.legacy.pipeline.Column.StringColumn source)) {
                 continue;
             }
-            org.weakref.nitro.jit.Column adapted;
+            org.weakref.nitro.legacy.pipeline.Column adapted;
             if (spec.substringLength() >= 0) {
                 adapted = substringColumn(source, spec.substringStart(), spec.substringLength());
             }
             else if (spec.upperCase()) {
                 adapted = upperColumn(source);
             }
-            else if (spec.loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM) {
+            else if (spec.loadMode() == org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode.VERBATIM) {
                 continue;
             }
             else {
-                adapted = canonicalStringColumn(source, spec.loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.ORDERED);
+                adapted = canonicalStringColumn(source, spec.loadMode() == org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode.ORDERED);
             }
             if (out == columns) {
                 out = columns.clone();
@@ -1391,7 +1391,7 @@ public final class CompiledQuerySupport
      * Dedupe (and for {@code sorted}, byte-order) a string column's dictionary, remapping the ids. Identity when the
      * dictionary is already canonical for the requested level, so repeated adaptation is cheap.
      */
-    private static org.weakref.nitro.jit.Column.StringColumn canonicalStringColumn(org.weakref.nitro.jit.Column.StringColumn source, boolean sorted)
+    private static org.weakref.nitro.legacy.pipeline.Column.StringColumn canonicalStringColumn(org.weakref.nitro.legacy.pipeline.Column.StringColumn source, boolean sorted)
     {
         byte[][] dictionary = source.dictionary();
         if (dictionary.length == 0) {
@@ -1449,15 +1449,15 @@ public final class CompiledQuerySupport
             ids[r] = remap[sourceIds[r]];
         }
         registerCanonical(canonical, sorted);
-        return new org.weakref.nitro.jit.Column.StringColumn(ids, canonical, source.nulls());
+        return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(ids, canonical, source.nulls());
     }
 
-    private static org.weakref.nitro.jit.Column.StringColumn substringColumn(org.weakref.nitro.jit.Column.StringColumn source, int start, int length)
+    private static org.weakref.nitro.legacy.pipeline.Column.StringColumn substringColumn(org.weakref.nitro.legacy.pipeline.Column.StringColumn source, int start, int length)
     {
         return derivedStringColumn(source, value -> utf8Substring(value, start, length));
     }
 
-    private static org.weakref.nitro.jit.Column.StringColumn upperColumn(org.weakref.nitro.jit.Column.StringColumn source)
+    private static org.weakref.nitro.legacy.pipeline.Column.StringColumn upperColumn(org.weakref.nitro.legacy.pipeline.Column.StringColumn source)
     {
         return derivedStringColumn(source, value -> org.weakref.nitro.function.scalar.builtin.Utf8Support.upper(value, 0, value.length));
     }
@@ -1466,7 +1466,7 @@ public final class CompiledQuerySupport
      * Apply a per-value transform to a string column's dictionary, then dedupe and re-sort the derived values into
      * an ordered dictionary (id order = value order), remapping each source id to its derived value's new id.
      */
-    private static org.weakref.nitro.jit.Column.StringColumn derivedStringColumn(org.weakref.nitro.jit.Column.StringColumn source,
+    private static org.weakref.nitro.legacy.pipeline.Column.StringColumn derivedStringColumn(org.weakref.nitro.legacy.pipeline.Column.StringColumn source,
             java.util.function.UnaryOperator<byte[]> transform)
     {
         byte[][] dictionary = source.dictionary();
@@ -1498,12 +1498,12 @@ public final class CompiledQuerySupport
         for (int r = 0; r < ids.length; r++) {
             ids[r] = remap[sourceIds[r]];
         }
-        return new org.weakref.nitro.jit.Column.StringColumn(ids, derived, source.nulls());
+        return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(ids, derived, source.nulls());
     }
 
     /** Run a pipeline stage (via {@link #runStage}) and materialize its result for use as a downstream stage's input. */
     public static Materialized materializeStage(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
         return materializeStage(allocator, tables, lowered, virtuals, List.of());
     }
@@ -1515,7 +1515,7 @@ public final class CompiledQuerySupport
      */
     public static Materialized concatenate(Materialized first, Materialized second)
     {
-        List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
+        List<org.weakref.nitro.legacy.pipeline.Column[]> parts = new ArrayList<>();
         parts.add(first.columns());
         parts.add(second.columns());
         int[] counts = {first.rows(), second.rows()};
@@ -1524,13 +1524,13 @@ public final class CompiledQuerySupport
     }
 
     /**
-     * As {@link #materializeStage(Allocator, TpcdsParquetTables, org.weakref.nitro.jit.QueryLowering.Lowered, Map)} but
+     * As {@link #materializeStage(Allocator, TpcdsParquetTables, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered, Map)} but
      * reconstructing the stage's STRING output columns (per {@code stringColumns}, resolved against the stage's own
      * loaded inputs) into dictionary columns, so the virtual relation carries their dictionaries for a downstream stage
      * that passes the string through rather than re-joining its base table.
      */
     public static Materialized materializeStage(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals,
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals,
             List<CompiledTpcdsQueries.DictRef> stringColumns)
     {
         LoweredResult result = runStage(allocator, tables, lowered, virtuals);
@@ -1543,10 +1543,10 @@ public final class CompiledQuerySupport
      * are captured in the returned inputs -- letting a probe-side string group key be reconstructed at materialization.
      */
     public static LoweredResult runStageEager(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, java.util.Map<String, Materialized> virtuals)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
-        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = lowered.inputs();
+        org.weakref.nitro.legacy.pipeline.Column[][] inputs = new org.weakref.nitro.legacy.pipeline.Column[sources.size()][];
         int[] rowCounts = new int[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
             resolveInput(allocator, tables, sources.get(s), virtuals, inputs, rowCounts, s);
@@ -1555,46 +1555,46 @@ public final class CompiledQuerySupport
     }
 
     private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming, boolean lazyProbe)
     {
         return streamCapturingBuilds(allocator, tables, lowered, streaming, lazyProbe, Map.of());
     }
 
     private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered lowered, org.weakref.nitro.jit.StreamingPipeline streaming, boolean lazyProbe,
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered, org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming, boolean lazyProbe,
             Map<String, Materialized> virtuals)
     {
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = lowered.inputs();
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = lowered.inputs();
         int buildCount = sources.size() - 1;
-        org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
+        org.weakref.nitro.legacy.pipeline.Column[][] builds = new org.weakref.nitro.legacy.pipeline.Column[buildCount][];
         int[] buildRowCounts = new int[buildCount];
         for (int b = 0; b < buildCount; b++) {
-            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(b + 1);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Input source = sources.get(b + 1);
             Materialized virtual = virtuals.get(source.table());
             if (virtual != null) {
                 builds[b] = virtual.columns();
                 buildRowCounts[b] = virtual.rows();
             }
             else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+                String[] names = source.columns().stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
                 DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
                 builds[b] = loaded.columns;
                 buildRowCounts[b] = loaded.rows;
             }
         }
-        org.weakref.nitro.jit.QueryLowering.Input probe = sources.get(0);
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Input probe = sources.get(0);
         // The skip-decode source only helps when something narrows the batch before payload columns decode (a join
         // build or a filter); without that every column is read in full, so leave those probes on the page source.
         boolean useSkip = (buildCount >= 1 || !lowered.pipeline().filters().isEmpty())
                 && skipSourceEligible(tables, probe.table(), probe.columns());
-        org.weakref.nitro.jit.StreamingPipeline.Source source = useSkip
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source source = useSkip
                 ? parquetSkipSource(tables, probe.table(), probe.columns())
                 : usePageSource(probe, lowered)
                         ? parquetPageSource(tables, probe.table(), probe.columns())
                         : lazyProbe
                                 ? parquetLazySource(allocator, tables, probe.table(), probe.columns(), lowered.pipeline())
                                 : parquetFlatSource(allocator, tables, probe.table(), probe.columns());
-        org.weakref.nitro.jit.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source executed = ScanProfile.enabled ? new TimingSource(source) : source;
         return new StreamedResult(streaming.execute(executed, builds, buildRowCounts), builds, source);
     }
 
@@ -1607,11 +1607,11 @@ public final class CompiledQuerySupport
      * adopts a dense page's lane zero-copy, so the page source's per-batch block handling is pure overhead (a
      * high-cardinality count-distinct over one column regressed ~14% through it). Keep the bridge there.
      */
-    private static boolean usePageSource(org.weakref.nitro.jit.QueryLowering.Input probe, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    private static boolean usePageSource(org.weakref.nitro.legacy.pipeline.QueryLowering.Input probe, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered)
     {
         boolean numeric = probe.columns().stream().allMatch(column ->
-                column.encoding() == org.weakref.nitro.jit.ColumnEncoding.FLAT
-                        || column.encoding() == org.weakref.nitro.jit.ColumnEncoding.F64);
+                column.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT
+                        || column.encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.F64);
         if (!numeric) {
             return false;
         }
@@ -1677,20 +1677,20 @@ public final class CompiledQuerySupport
         }
     }
 
-    private static org.weakref.nitro.jit.StreamingPipeline.Source parquetPageSource(ParquetTables tables, String table,
-            List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    private static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetPageSource(ParquetTables tables, String table,
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
-        List<String> names = specs.stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toList();
+        List<String> names = specs.stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toList();
         org.weakref.nitro.trino.TrinoClickBenchPageReader reader =
                 new org.weakref.nitro.trino.TrinoClickBenchPageReader(tables.tableFiles(table), names);
         int width = specs.size();
-        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        return new org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source()
         {
             private io.trino.spi.connector.SourcePage page;
             private final io.trino.spi.block.Block[] blocks = new io.trino.spi.block.Block[width];
             private boolean[] noNulls = new boolean[0];   // shared all-false mask for nullable specs over null-free blocks
             private int rows;
-            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final org.weakref.nitro.legacy.pipeline.Column[] out = new org.weakref.nitro.legacy.pipeline.Column[width];
             private final long[][] valueBuffers = new long[width][];
             private final boolean[][] nullBuffers = new boolean[width][];
             private final int[][] idBuffers = new int[width][];
@@ -1736,7 +1736,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] columns()
+            public org.weakref.nitro.legacy.pipeline.Column[] columns()
             {
                 return materialize(allColumns());
             }
@@ -1751,7 +1751,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns)
             {
                 for (int c : columns) {
                     out[c] = convert(c, identity(rows), rows, true);
@@ -1760,7 +1760,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns, int[] selection, int count)
             {
                 boolean full = count == rows;
                 for (int c : columns) {
@@ -1770,7 +1770,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn materializeDictionaryIds(int c, int[] selection, int count)
             {
                 if (specs.get(c).nullable()) {
                     return null;
@@ -1787,14 +1787,14 @@ public final class CompiledQuerySupport
                 int[] rawIds = dictionaryBlock.getRawIds();
                 int idsOffset = dictionaryBlock.getRawIdsOffset();
                 if (count == rows && idsOffset == 0 && rawIds.length == rows) {
-                    return new org.weakref.nitro.jit.Column.DictionaryColumn(rawIds, entries);   // identity: no gather
+                    return new org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn(rawIds, entries);   // identity: no gather
                 }
                 int[] ids = idBuffer(c, count);
                 boolean full = count == rows;
                 for (int j = 0; j < count; j++) {
                     ids[j] = rawIds[idsOffset + (full ? j : selection[j])];
                 }
-                return new org.weakref.nitro.jit.Column.DictionaryColumn(ids, entries);
+                return new org.weakref.nitro.legacy.pipeline.Column.DictionaryColumn(ids, entries);
             }
 
             /**
@@ -1867,7 +1867,7 @@ public final class CompiledQuerySupport
                 return ids;
             }
 
-            private org.weakref.nitro.jit.Column convert(int c, int[] selection, int count, boolean full)
+            private org.weakref.nitro.legacy.pipeline.Column convert(int c, int[] selection, int count, boolean full)
             {
                 io.trino.spi.block.Block block = block(c);
                 boolean nullable = specs.get(c).nullable();
@@ -1877,11 +1877,11 @@ public final class CompiledQuerySupport
                 if (full && block instanceof io.trino.spi.block.LongArrayBlock longBlock
                         && rawValuesOffset(longBlock) == 0 && rawValues(longBlock).length == rows) {
                     if (!nullable && !blockNulls) {
-                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock));
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(rawValues(longBlock));
                     }
                     if (nullable) {
                         boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
-                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
                     }
                 }
                 long[] values = valueBuffer(c, count);
@@ -1956,7 +1956,7 @@ public final class CompiledQuerySupport
                     }
                     default -> throw new IllegalArgumentException("Unsupported page block: " + block.getClass().getName());
                 }
-                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+                return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nullMask);
             }
 
             private long[] valueBuffer(int c, int count)
@@ -1994,7 +1994,7 @@ public final class CompiledQuerySupport
      * bits in a long lane, or {@code -1} when it is not a plain fixed-width numeric the skip source can read into a
      * long lane (strings, decimals, dates, timestamps -- anything with a logical annotation -- fall back).
      */
-    private static int skipKind(org.apache.parquet.schema.MessageType schema, org.weakref.nitro.jit.QueryLowering.Column spec)
+    private static int skipKind(org.apache.parquet.schema.MessageType schema, org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec)
     {
         org.apache.parquet.schema.Type type = schema.getType(spec.sourceName());
         if (!type.isPrimitive()) {
@@ -2010,21 +2010,21 @@ public final class CompiledQuerySupport
             return -1;
         }
         org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName name = primitive.getPrimitiveTypeName();
-        org.weakref.nitro.jit.ColumnEncoding encoding = spec.encoding();
-        if (encoding == org.weakref.nitro.jit.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64) {
+        org.weakref.nitro.legacy.pipeline.ColumnEncoding encoding = spec.encoding();
+        if (encoding == org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64) {
             return 0;
         }
-        if (encoding == org.weakref.nitro.jit.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32) {
+        if (encoding == org.weakref.nitro.legacy.pipeline.ColumnEncoding.FLAT && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32) {
             return 1;
         }
-        if (encoding == org.weakref.nitro.jit.ColumnEncoding.F64 && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE) {
+        if (encoding == org.weakref.nitro.legacy.pipeline.ColumnEncoding.F64 && name == org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE) {
             return 2;
         }
         return -1;
     }
 
     /** Whether every probe column is skip-eligible, so the owned-reader skip source can serve the whole probe. */
-    private static boolean skipSourceEligible(ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    private static boolean skipSourceEligible(ParquetTables tables, String table, List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
         if (!SKIP_DECODE_ENABLED) {
             return false;
@@ -2037,7 +2037,7 @@ public final class CompiledQuerySupport
             ParquetReaderFile probe = new ParquetReaderFile(files.get(0));
             try (probe) {
                 org.apache.parquet.schema.MessageType schema = probe.metadata.getFileMetaData().getSchema();
-                for (org.weakref.nitro.jit.QueryLowering.Column spec : specs) {
+                for (org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec : specs) {
                     if (skipKind(schema, spec) < 0) {
                         return false;
                     }
@@ -2065,13 +2065,13 @@ public final class CompiledQuerySupport
      * materialized in some batch lags behind; the next materialize fast-forwards it with a cheap decoder skip before
      * reading, so every column stays aligned without forcing eager decode of unused columns.
      */
-    private static org.weakref.nitro.jit.StreamingPipeline.Source parquetSkipSource(
-            ParquetTables tables, String table, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    private static org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source parquetSkipSource(
+            ParquetTables tables, String table, List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
         int width = specs.size();
         List<java.nio.file.Path> files = tables.tableFiles(table);
         int batchSize = 8192;
-        return new org.weakref.nitro.jit.StreamingPipeline.Source()
+        return new org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source()
         {
             private final io.trino.memory.context.AggregatedMemoryContext memoryContext = io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext();
             private final ParquetReaderFile[] openFiles = new ParquetReaderFile[files.size()];
@@ -2090,7 +2090,7 @@ public final class CompiledQuerySupport
             private int batchStart;     // first row (within row group) of the current batch
             private int batchRows;      // size of the current batch
             // Conversion buffers (reused across batches), mirroring parquetPageSource.
-            private final org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+            private final org.weakref.nitro.legacy.pipeline.Column[] out = new org.weakref.nitro.legacy.pipeline.Column[width];
             private final long[][] valueBuffers = new long[width][];
             private final boolean[][] nullBuffers = new boolean[width][];
             private boolean[] noNulls = new boolean[0];
@@ -2105,7 +2105,7 @@ public final class CompiledQuerySupport
             // to (null = identity over batchRows). Later materializes always request a subset (the pipeline narrows).
             private int batchGeneration;
             private final int[] columnGeneration = new int[width];
-            private final org.weakref.nitro.jit.Column[] cachedColumn = new org.weakref.nitro.jit.Column[width];
+            private final org.weakref.nitro.legacy.pipeline.Column[] cachedColumn = new org.weakref.nitro.legacy.pipeline.Column[width];
             private final int[][] cachedPositions = new int[width][];
 
             private void initialize()
@@ -2114,7 +2114,7 @@ public final class CompiledQuerySupport
                     ParquetReaderFile first = file(0);
                     org.apache.parquet.schema.MessageType schema = first.metadata.getFileMetaData().getSchema();
                     for (int c = 0; c < width; c++) {
-                        org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
+                        org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec = specs.get(c);
                         kinds[c] = skipKind(schema, spec);
                         org.apache.parquet.schema.MessageType requested = new org.apache.parquet.schema.MessageType(schema.getName(), schema.getType(spec.sourceName()));
                         descriptorMaps[c] = getDescriptors(schema, requested);
@@ -2227,7 +2227,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] columns()
+            public org.weakref.nitro.legacy.pipeline.Column[] columns()
             {
                 return materialize(allColumns());
             }
@@ -2242,7 +2242,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns)
             {
                 for (int c : columns) {
                     out[c] = materializeColumn(c, identity(batchRows), batchRows);
@@ -2251,7 +2251,7 @@ public final class CompiledQuerySupport
             }
 
             @Override
-            public org.weakref.nitro.jit.Column[] materialize(int[] columns, int[] selection, int count)
+            public org.weakref.nitro.legacy.pipeline.Column[] materialize(int[] columns, int[] selection, int count)
             {
                 for (int c : columns) {
                     out[c] = materializeColumn(c, selection, count);
@@ -2260,13 +2260,13 @@ public final class CompiledQuerySupport
             }
 
             /** Decode column {@code c} for this batch (cache miss) or re-gather it from the per-batch cache (cache hit). */
-            private org.weakref.nitro.jit.Column materializeColumn(int c, int[] selection, int count)
+            private org.weakref.nitro.legacy.pipeline.Column materializeColumn(int c, int[] selection, int count)
             {
                 if (columnGeneration[c] == batchGeneration) {
                     return regather(c, selection, count);
                 }
                 columnGeneration[c] = batchGeneration;
-                org.weakref.nitro.jit.Column column;
+                org.weakref.nitro.legacy.pipeline.Column column;
                 int[] positions;
                 if (count == batchRows) {
                     column = decodeFull(c);
@@ -2292,9 +2292,9 @@ public final class CompiledQuerySupport
              * subset) {@code selection} from the already-decoded values. {@code cachedPositions[c]} is the positions
              * the cache is aligned to (null = identity over batchRows); a two-pointer maps each requested position.
              */
-            private org.weakref.nitro.jit.Column regather(int c, int[] selection, int count)
+            private org.weakref.nitro.legacy.pipeline.Column regather(int c, int[] selection, int count)
             {
-                org.weakref.nitro.jit.Column.FlatColumn cached = (org.weakref.nitro.jit.Column.FlatColumn) cachedColumn[c];
+                org.weakref.nitro.legacy.pipeline.Column.FlatColumn cached = (org.weakref.nitro.legacy.pipeline.Column.FlatColumn) cachedColumn[c];
                 long[] cachedValues = cached.values();
                 boolean[] cachedNulls = cached.nulls();
                 int[] positions = cachedPositions[c];
@@ -2322,7 +2322,7 @@ public final class CompiledQuerySupport
                         }
                     }
                 }
-                return new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+                return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nulls);
             }
 
             /** Catch a lagging column up to the current batch start with a cheap decoder skip, then read {@code batchRows}. */
@@ -2342,7 +2342,7 @@ public final class CompiledQuerySupport
                 consumed[c] = batchStart + batchRows;
             }
 
-            private org.weakref.nitro.jit.Column decodeFull(int c)
+            private org.weakref.nitro.legacy.pipeline.Column decodeFull(int c)
             {
                 alignTo(c);
                 ScanProfile.recordFull(batchRows);
@@ -2350,7 +2350,7 @@ public final class CompiledQuerySupport
                 return convert(c, block, identity(batchRows), batchRows, true);
             }
 
-            private org.weakref.nitro.jit.Column decodeSelected(int c, int[] selection, int count)
+            private org.weakref.nitro.legacy.pipeline.Column decodeSelected(int c, int[] selection, int count)
             {
                 alignTo(c);
                 ScanProfile.recordSkip(count);
@@ -2359,7 +2359,7 @@ public final class CompiledQuerySupport
                 return convert(c, block, identity(count), count, true);
             }
 
-            private org.weakref.nitro.jit.Column decodeFullGather(int c, int[] selection, int count)
+            private org.weakref.nitro.legacy.pipeline.Column decodeFullGather(int c, int[] selection, int count)
             {
                 alignTo(c);
                 ScanProfile.recordFull(batchRows);
@@ -2367,18 +2367,18 @@ public final class CompiledQuerySupport
                 return convert(c, block, selection, count, false);
             }
 
-            private org.weakref.nitro.jit.Column convert(int c, io.trino.spi.block.Block block, int[] selection, int count, boolean full)
+            private org.weakref.nitro.legacy.pipeline.Column convert(int c, io.trino.spi.block.Block block, int[] selection, int count, boolean full)
             {
                 boolean nullable = specs.get(c).nullable();
                 boolean blockNulls = block.mayHaveNull();
                 if (full && block instanceof io.trino.spi.block.LongArrayBlock longBlock
                         && rawValuesOffset(longBlock) == 0 && rawValues(longBlock).length == count) {
                     if (!nullable && !blockNulls) {
-                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock));
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(rawValues(longBlock));
                     }
                     if (nullable) {
                         boolean[] nulls = blockNulls ? rawNulls(longBlock) : null;
-                        return new org.weakref.nitro.jit.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
+                        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(rawValues(longBlock), nulls != null ? nulls : noNulls);
                     }
                 }
                 long[] values = valueBuffer(c, count);
@@ -2453,7 +2453,7 @@ public final class CompiledQuerySupport
                     }
                     default -> throw new IllegalArgumentException("Unsupported page block: " + block.getClass().getName());
                 }
-                return new org.weakref.nitro.jit.Column.FlatColumn(values, nullMask);
+                return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nullMask);
             }
 
             private long[] entryLanes(int c, io.trino.spi.block.Block entriesBlock)
@@ -2573,7 +2573,7 @@ public final class CompiledQuerySupport
     }
 
     /** Load a lowered query's inputs from Parquet and run it. */
-    public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered)
     {
         LoadedInputs loaded = loadLoweredInputs(allocator, tables, lowered);
         return new LoweredResult(lowered.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
@@ -2584,12 +2584,12 @@ public final class CompiledQuerySupport
      * of drained), returning the result with the build inputs positioned for {@link CompiledTpcdsQueries.DictRef}
      * reconstruction. Needed when the probe is a huge fact (e.g. Q37/Q82 over inventory) that cannot be drained eagerly.
      */
-    public static LoweredResult runStreamingPorted(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
+    public static LoweredResult runStreamingPorted(Allocator allocator, ParquetTables tables, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered)
     {
-        org.weakref.nitro.jit.StreamingPipeline streaming =
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
                 new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         StreamedResult streamed = streamCapturingBuilds(allocator, tables, lowered, streaming, true);
-        org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[lowered.inputs().size()][];
+        org.weakref.nitro.legacy.pipeline.Column[][] inputsForDictRef = new org.weakref.nitro.legacy.pipeline.Column[lowered.inputs().size()][];
         for (int b = 0; b < streamed.builds().length; b++) {
             inputsForDictRef[b + 1] = streamed.builds()[b];
         }
@@ -2604,9 +2604,9 @@ public final class CompiledQuerySupport
      * the subquery's aggregate feeds {@code main} as a join build, exactly as the optimizer produces it.
      */
     public static LoweredResult runMultiStage(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered subquery, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered main, String virtualTable)
     {
-        org.weakref.nitro.jit.StreamingPipeline subStreaming =
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline subStreaming =
                 new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
         return runMultiStage(allocator, tables, subquery, subStreaming, main, main.compile(new PipelineCompiler(CompilerResources.createDefault())), virtualTable);
     }
@@ -2616,27 +2616,27 @@ public final class CompiledQuerySupport
      * compilation (like a query plan) and measures only the per-invocation Parquet read + execution.
      */
     public static LoweredResult runMultiStage(Allocator allocator, ParquetTables tables,
-            org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.StreamingPipeline subStreaming,
-            org.weakref.nitro.jit.QueryLowering.Lowered main, CompiledPipeline mainCompiled, String virtualTable)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered subquery, org.weakref.nitro.legacy.pipeline.StreamingPipeline subStreaming,
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered main, CompiledPipeline mainCompiled, String virtualTable)
     {
         // The subquery's fact side is read from Parquet, so run it through the lazy streaming path (decode only the
         // columns/rows that survive its joins and filters) rather than draining every fact column up front. The main
         // stage's probe is the in-memory subquery result, so it stays eager.
         CompiledPipeline.Result subResult = runStreamingLowered(allocator, tables, subquery, subStreaming, true);
-        org.weakref.nitro.jit.Column[] materialized = materialize(subResult);
+        org.weakref.nitro.legacy.pipeline.Column[] materialized = materialize(subResult);
         int subRows = subResult.rowCount();
 
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
-        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = main.inputs();
+        org.weakref.nitro.legacy.pipeline.Column[][] inputs = new org.weakref.nitro.legacy.pipeline.Column[sources.size()][];
         int[] rowCounts = new int[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
-            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Input source = sources.get(s);
             if (source.table().equals(virtualTable)) {
                 inputs[s] = materialized;
                 rowCounts[s] = subRows;
             }
             else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+                String[] names = source.columns().stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
                 DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
                 inputs[s] = loaded.columns;
                 rowCounts[s] = loaded.rows;
@@ -2651,7 +2651,7 @@ public final class CompiledQuerySupport
      * over the concatenation. Branches are computed once each (not replayed); concatenation is the union.
      */
     public static LoweredResult runUnion(Allocator allocator, ParquetTables tables,
-            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered main, String virtualTable)
     {
         return runUnion(allocator, tables, branches, main, virtualTable, List.of());
     }
@@ -2665,32 +2665,32 @@ public final class CompiledQuerySupport
      * union.
      */
     public static Materialized materializeUnion(Allocator allocator, ParquetTables tables,
-            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
         return materializeUnion(allocator, tables, branches, branchStringColumns, Map.of());
     }
 
     /** As {@link #materializeUnion(Allocator, ParquetTables, List, List)}, resolving branch build inputs from virtual pre-stages. */
     public static Materialized materializeUnion(Allocator allocator, ParquetTables tables,
-            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns,
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches, List<CompiledTpcdsQueries.DictRef> branchStringColumns,
             Map<String, Materialized> virtuals)
     {
-        List<org.weakref.nitro.jit.Column[]> parts = new ArrayList<>();
+        List<org.weakref.nitro.legacy.pipeline.Column[]> parts = new ArrayList<>();
         int[] counts = new int[branches.size()];
         int width = 0;
         for (int i = 0; i < branches.size(); i++) {
-            org.weakref.nitro.jit.QueryLowering.Lowered branch = branches.get(i);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered branch = branches.get(i);
             // Stream every branch (grouped or projection-only): streaming materializes only the branch's filtered
             // output, not its whole fact -- draining an ungrouped branch's fact eagerly was the dominant cost.
-            org.weakref.nitro.jit.StreamingPipeline streaming =
+            org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
                     new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
             StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true, virtuals);
             CompiledPipeline.Result result = streamed.result();
-            org.weakref.nitro.jit.Column[][] dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
+            org.weakref.nitro.legacy.pipeline.Column[][] dictInputs = new org.weakref.nitro.legacy.pipeline.Column[branch.inputs().size()][];
             for (int b = 0; b < streamed.builds().length; b++) {
                 dictInputs[b + 1] = streamed.builds()[b];   // probe (index 0) is streamed, has no materialized dictionary
             }
-            org.weakref.nitro.jit.Column[] materialized = materialize(result, dictInputs, branchLiteralColumns(branch, branchStringColumns));
+            org.weakref.nitro.legacy.pipeline.Column[] materialized = materialize(result, dictInputs, branchLiteralColumns(branch, branchStringColumns));
             parts.add(materialized);
             counts[i] = result.rowCount();
             width = materialized.length;
@@ -2705,14 +2705,14 @@ public final class CompiledQuerySupport
     /**
      * The string-output reconstruction refs for one union branch: the shared {@code branchStringColumns} (reconstructed
      * dictionary columns, identical in shape across branches) plus each branch's OWN constant-label columns, derived
-     * from its {@link org.weakref.nitro.jit.Plan.LitStr} projections. A {@code LitStr} carries its value in the plan, so
+     * from its {@link org.weakref.nitro.legacy.pipeline.Plan.LitStr} projections. A {@code LitStr} carries its value in the plan, so
      * the per-branch label (e.g. a channel name that differs by branch) is self-describing -- no per-branch ref list is
      * needed in the union spec. A shared ref already covering a column wins (it is not overridden by a derived literal).
      */
     private static List<CompiledTpcdsQueries.DictRef> branchLiteralColumns(
-            org.weakref.nitro.jit.QueryLowering.Lowered branch, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered branch, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
-        List<org.weakref.nitro.jit.Plan.Expr> projections = branch.pipeline().projections();
+        List<org.weakref.nitro.legacy.pipeline.Plan.Expr> projections = branch.pipeline().projections();
         if (projections.isEmpty()) {
             return branchStringColumns;
         }
@@ -2722,7 +2722,7 @@ public final class CompiledQuerySupport
         }
         List<CompiledTpcdsQueries.DictRef> refs = new ArrayList<>(branchStringColumns);
         for (int c = 0; c < projections.size(); c++) {
-            if (projections.get(c) instanceof org.weakref.nitro.jit.Plan.LitStr literal && covered.add(c)) {
+            if (projections.get(c) instanceof org.weakref.nitro.legacy.pipeline.Plan.LitStr literal && covered.add(c)) {
                 refs.add(CompiledTpcdsQueries.DictRef.literal(c, literal.value()));
             }
         }
@@ -2736,24 +2736,24 @@ public final class CompiledQuerySupport
      * dictionary during concatenation -- ids consistent across branches, and id order = value order for ORDER BY.
      */
     public static LoweredResult runUnion(Allocator allocator, ParquetTables tables,
-            List<org.weakref.nitro.jit.QueryLowering.Lowered> branches, org.weakref.nitro.jit.QueryLowering.Lowered main,
+            List<org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered> branches, org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered main,
             String virtualTable, List<CompiledTpcdsQueries.DictRef> branchStringColumns)
     {
         Materialized unionRelation = materializeUnion(allocator, tables, branches, branchStringColumns);
-        org.weakref.nitro.jit.Column[] union = unionRelation.columns();
+        org.weakref.nitro.legacy.pipeline.Column[] union = unionRelation.columns();
         int total = unionRelation.rows();
 
-        List<org.weakref.nitro.jit.QueryLowering.Input> sources = main.inputs();
-        org.weakref.nitro.jit.Column[][] inputs = new org.weakref.nitro.jit.Column[sources.size()][];
+        List<org.weakref.nitro.legacy.pipeline.QueryLowering.Input> sources = main.inputs();
+        org.weakref.nitro.legacy.pipeline.Column[][] inputs = new org.weakref.nitro.legacy.pipeline.Column[sources.size()][];
         int[] rowCounts = new int[sources.size()];
         for (int s = 0; s < sources.size(); s++) {
-            org.weakref.nitro.jit.QueryLowering.Input source = sources.get(s);
+            org.weakref.nitro.legacy.pipeline.QueryLowering.Input source = sources.get(s);
             if (source.table().equals(virtualTable)) {
                 inputs[s] = union;
                 rowCounts[s] = total;
             }
             else {
-                String[] names = source.columns().stream().map(org.weakref.nitro.jit.QueryLowering.Column::sourceName).toArray(String[]::new);
+                String[] names = source.columns().stream().map(org.weakref.nitro.legacy.pipeline.QueryLowering.Column::sourceName).toArray(String[]::new);
                 DrainedInput loaded = drainColumns(scan(allocator, tables, source.table(), names), source.columns());
                 inputs[s] = loaded.columns;
                 rowCounts[s] = loaded.rows;
@@ -2762,12 +2762,12 @@ public final class CompiledQuerySupport
         return new LoweredResult(main.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(inputs, rowCounts), inputs);
     }
 
-    /** Row-wise concatenation of same-schema branch results into one {@link org.weakref.nitro.jit.Column}[] (numeric and dictionary-string columns). */
-    private static org.weakref.nitro.jit.Column[] concatenateColumns(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int width)
+    /** Row-wise concatenation of same-schema branch results into one {@link org.weakref.nitro.legacy.pipeline.Column}[] (numeric and dictionary-string columns). */
+    private static org.weakref.nitro.legacy.pipeline.Column[] concatenateColumns(List<org.weakref.nitro.legacy.pipeline.Column[]> parts, int[] counts, int total, int width)
     {
-        org.weakref.nitro.jit.Column[] out = new org.weakref.nitro.jit.Column[width];
+        org.weakref.nitro.legacy.pipeline.Column[] out = new org.weakref.nitro.legacy.pipeline.Column[width];
         for (int c = 0; c < width; c++) {
-            if (parts.get(0)[c] instanceof org.weakref.nitro.jit.Column.StringColumn) {
+            if (parts.get(0)[c] instanceof org.weakref.nitro.legacy.pipeline.Column.StringColumn) {
                 out[c] = concatenateStringColumn(parts, counts, total, c);
             }
             else {
@@ -2777,13 +2777,13 @@ public final class CompiledQuerySupport
         return out;
     }
 
-    private static org.weakref.nitro.jit.Column concatenateNumericColumn(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int c)
+    private static org.weakref.nitro.legacy.pipeline.Column concatenateNumericColumn(List<org.weakref.nitro.legacy.pipeline.Column[]> parts, int[] counts, int total, int c)
     {
         long[] values = new long[total];
         boolean[] nulls = null;
         int offset = 0;
         for (int p = 0; p < parts.size(); p++) {
-            org.weakref.nitro.jit.Column.FlatColumn part = (org.weakref.nitro.jit.Column.FlatColumn) parts.get(p)[c];
+            org.weakref.nitro.legacy.pipeline.Column.FlatColumn part = (org.weakref.nitro.legacy.pipeline.Column.FlatColumn) parts.get(p)[c];
             System.arraycopy(part.values(), 0, values, offset, counts[p]);
             if (part.nulls() != null) {
                 if (nulls == null) {
@@ -2793,7 +2793,7 @@ public final class CompiledQuerySupport
             }
             offset += counts[p];
         }
-        return new org.weakref.nitro.jit.Column.FlatColumn(values, nulls);
+        return new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(values, nulls);
     }
 
     /**
@@ -2801,14 +2801,14 @@ public final class CompiledQuerySupport
      * point into its own (filtered) dictionary, so values are re-interned into a single dictionary and the resulting
      * ids are re-sorted into byte order -- consistent ids across branches, and id comparison = value comparison.
      */
-    private static org.weakref.nitro.jit.Column concatenateStringColumn(List<org.weakref.nitro.jit.Column[]> parts, int[] counts, int total, int c)
+    private static org.weakref.nitro.legacy.pipeline.Column concatenateStringColumn(List<org.weakref.nitro.legacy.pipeline.Column[]> parts, int[] counts, int total, int c)
     {
         BytesDictionary dictionary = new BytesDictionary();
         int[] ids = new int[total];
         boolean[] nulls = null;
         int offset = 0;
         for (int p = 0; p < parts.size(); p++) {
-            org.weakref.nitro.jit.Column.StringColumn part = (org.weakref.nitro.jit.Column.StringColumn) parts.get(p)[c];
+            org.weakref.nitro.legacy.pipeline.Column.StringColumn part = (org.weakref.nitro.legacy.pipeline.Column.StringColumn) parts.get(p)[c];
             for (int r = 0; r < counts[p]; r++) {
                 if (part.nulls() != null && part.nulls()[r]) {
                     if (nulls == null) {
@@ -2824,20 +2824,20 @@ public final class CompiledQuerySupport
         return orderedStringColumn(ids, dictionary.entries(), total, nulls);
     }
 
-    /** Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s so it can feed a downstream stage as a relation. */
-    private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result)
+    /** Materialize a pipeline result into {@link org.weakref.nitro.legacy.pipeline.Column}s so it can feed a downstream stage as a relation. */
+    private static org.weakref.nitro.legacy.pipeline.Column[] materialize(CompiledPipeline.Result result)
     {
         return materialize(result, null, List.of());
     }
 
     /**
-     * Materialize a pipeline result into {@link org.weakref.nitro.jit.Column}s, resolving each string result column
-     * named in {@code stringColumns} back to a {@link org.weakref.nitro.jit.Column.StringColumn}: the result stores a
+     * Materialize a pipeline result into {@link org.weakref.nitro.legacy.pipeline.Column}s, resolving each string result column
+     * named in {@code stringColumns} back to a {@link org.weakref.nitro.legacy.pipeline.Column.StringColumn}: the result stores a
      * string as a dictionary id into one of the stage's build (dimension) inputs, so the id maps back through that
      * build's dictionary. {@code builds} are the dimension inputs (probe excluded), as captured by the streaming run.
      */
-    private static org.weakref.nitro.jit.Column[] materialize(CompiledPipeline.Result result,
-            org.weakref.nitro.jit.Column[][] dictInputs, List<CompiledTpcdsQueries.DictRef> stringColumns)
+    private static org.weakref.nitro.legacy.pipeline.Column[] materialize(CompiledPipeline.Result result,
+            org.weakref.nitro.legacy.pipeline.Column[][] dictInputs, List<CompiledTpcdsQueries.DictRef> stringColumns)
     {
         long[][] columns = result.columns();
         boolean[][] nulls = result.nulls();
@@ -2846,10 +2846,10 @@ public final class CompiledQuerySupport
         for (CompiledTpcdsQueries.DictRef ref : stringColumns) {
             stringByColumn.put(ref.resultColumn(), ref);
         }
-        org.weakref.nitro.jit.Column[] materialized = new org.weakref.nitro.jit.Column[columns.length];
+        org.weakref.nitro.legacy.pipeline.Column[] materialized = new org.weakref.nitro.legacy.pipeline.Column[columns.length];
         for (int c = 0; c < columns.length; c++) {
-            org.weakref.nitro.jit.Type type = result.types()[c];
-            if (type == org.weakref.nitro.jit.Types.STRING) {
+            org.weakref.nitro.legacy.pipeline.Type type = result.types()[c];
+            if (type == org.weakref.nitro.legacy.pipeline.Types.STRING) {
                 CompiledTpcdsQueries.DictRef ref = stringByColumn.get(c);
                 // A constant-label (literal) column carries its own single-entry dictionary and needs no source input;
                 // every other string column reconstructs through a build/probe dictionary, which must be present.
@@ -2861,10 +2861,10 @@ public final class CompiledQuerySupport
                 for (int r = 0; r < rowCount; r++) {
                     ids[r] = (int) columns[c][r];
                 }
-                materialized[c] = new org.weakref.nitro.jit.Column.StringColumn(ids, dictionary, nulls == null ? null : nulls[c]);
+                materialized[c] = new org.weakref.nitro.legacy.pipeline.Column.StringColumn(ids, dictionary, nulls == null ? null : nulls[c]);
             }
             else {
-                materialized[c] = new org.weakref.nitro.jit.Column.FlatColumn(columns[c], nulls == null ? null : nulls[c]);
+                materialized[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(columns[c], nulls == null ? null : nulls[c]);
             }
         }
         return materialized;
@@ -2875,13 +2875,13 @@ public final class CompiledQuerySupport
      * every entry. Each entry is reconstructed with the query's trailing {@code substring(col, start, length)}
      * projection so the output strings match the harness exactly.
      */
-    public static byte[][] dictionaryFor(org.weakref.nitro.jit.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
+    public static byte[][] dictionaryFor(org.weakref.nitro.legacy.pipeline.Column[][] dictInputs, CompiledTpcdsQueries.DictRef ref)
     {
         if (ref.literal() != null) {
             // Constant string column: a single-entry dictionary the placeholder column's all-zero ids map onto.
             return new byte[][] {ref.literal().getBytes(java.nio.charset.StandardCharsets.UTF_8)};
         }
-        byte[][] dictionary = ((org.weakref.nitro.jit.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
+        byte[][] dictionary = ((org.weakref.nitro.legacy.pipeline.Column.StringColumn) dictInputs[ref.dictInput()][ref.dictColumn()]).dictionary();
         if (ref.substringLength() >= 0) {
             byte[][] truncated = new byte[dictionary.length][];
             for (int i = 0; i < dictionary.length; i++) {
@@ -2925,10 +2925,10 @@ public final class CompiledQuerySupport
         return offset;
     }
 
-    private record DrainedInput(org.weakref.nitro.jit.Column[] columns, int rows) {}
+    private record DrainedInput(org.weakref.nitro.legacy.pipeline.Column[] columns, int rows) {}
 
-    /** Drain a scan into one {@link org.weakref.nitro.jit.Column} per spec, preserving nulls; string columns build a dictionary. */
-    private static DrainedInput drainColumns(Operator operator, List<org.weakref.nitro.jit.QueryLowering.Column> specs)
+    /** Drain a scan into one {@link org.weakref.nitro.legacy.pipeline.Column} per spec, preserving nulls; string columns build a dictionary. */
+    private static DrainedInput drainColumns(Operator operator, List<org.weakref.nitro.legacy.pipeline.QueryLowering.Column> specs)
     {
         long scanStart = System.nanoTime();
         int width = specs.size();
@@ -2944,10 +2944,10 @@ public final class CompiledQuerySupport
         List<BytesDictionary> dictionaries = new ArrayList<>();
         boolean[] verbatim = new boolean[width];
         for (int c = 0; c < width; c++) {
-            string[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING;
+            string[c] = specs.get(c).encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING;
             // A verbatim column appends dictionary entries as they arrive (no interning): nothing observes its id
             // equality or order, so the per-entry hash lookups are pure overhead.
-            verbatim[c] = string[c] && specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.VERBATIM;
+            verbatim[c] = string[c] && specs.get(c).loadMode() == org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode.VERBATIM;
             values[c] = string[c] ? emptyLong : new long[16];
             ids[c] = string[c] ? new int[16] : emptyInt;
             dictionaries.add(new BytesDictionary());
@@ -3027,25 +3027,25 @@ public final class CompiledQuerySupport
                 }
             }
         }
-        org.weakref.nitro.jit.Column[] columns = new org.weakref.nitro.jit.Column[width];
+        org.weakref.nitro.legacy.pipeline.Column[] columns = new org.weakref.nitro.legacy.pipeline.Column[width];
         for (int c = 0; c < width; c++) {
             boolean nullable = specs.get(c).nullable();
             boolean[] nullMask = nullable ? java.util.Arrays.copyOf(nulls[c], size) : null;
-            if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING) {
-                if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.ORDERED) {
+            if (specs.get(c).encoding() == org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING) {
+                if (specs.get(c).loadMode() == org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode.ORDERED) {
                     columns[c] = orderedStringColumn(ids[c], dictionaries.get(c).entries(), size, nullMask);
                 }
                 else {
                     byte[][] dictionary = dictionaries.get(c).entries().toArray(new byte[0][]);
-                    if (specs.get(c).loadMode() == org.weakref.nitro.jit.QueryLowering.LoadMode.DEDUPED) {
+                    if (specs.get(c).loadMode() == org.weakref.nitro.legacy.pipeline.QueryLowering.LoadMode.DEDUPED) {
                         registerCanonical(dictionary, false);   // interned: duplicate-free by construction
                     }
-                    columns[c] = new org.weakref.nitro.jit.Column.StringColumn(
+                    columns[c] = new org.weakref.nitro.legacy.pipeline.Column.StringColumn(
                             java.util.Arrays.copyOf(ids[c], size), dictionary, nullMask);
                 }
             }
             else {
-                columns[c] = new org.weakref.nitro.jit.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
+                columns[c] = new org.weakref.nitro.legacy.pipeline.Column.FlatColumn(java.util.Arrays.copyOf(values[c], size), nullMask);
             }
         }
         ScanProfile.add(System.nanoTime() - scanStart);
@@ -3058,11 +3058,11 @@ public final class CompiledQuerySupport
      * engine's id comparison is value comparison, so ORDER BY on the string is correct while the sort stays a fast
      * integer compare. This is the encoding contract {@code Types.STRING} relies on.
      */
-    private static org.weakref.nitro.jit.Column.StringColumn orderedStringColumn(int[] ids, List<byte[]> dictionary, int size, boolean[] nullMask)
+    private static org.weakref.nitro.legacy.pipeline.Column.StringColumn orderedStringColumn(int[] ids, List<byte[]> dictionary, int size, boolean[] nullMask)
     {
         int entries = dictionary.size();
         if (entries == 0) {
-            return new org.weakref.nitro.jit.Column.StringColumn(java.util.Arrays.copyOf(ids, size), new byte[0][], nullMask);
+            return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(java.util.Arrays.copyOf(ids, size), new byte[0][], nullMask);
         }
         byte[][] dict = dictionary.toArray(new byte[0][]);
         int[] order = new int[entries];        // old ids in sorted (unsigned-byte) order
@@ -3087,7 +3087,7 @@ public final class CompiledQuerySupport
             remapped[r] = remap[ids[r]];
         }
         registerCanonical(sorted, true);
-        return new org.weakref.nitro.jit.Column.StringColumn(remapped, sorted, nullMask);
+        return new org.weakref.nitro.legacy.pipeline.Column.StringColumn(remapped, sorted, nullMask);
     }
 
     /** The byte at position {@code d} of {@code s} as an unsigned int, or -1 once the string has ended (sorts first). */
@@ -3186,7 +3186,7 @@ public final class CompiledQuerySupport
      * stay stable across batches (required for group keys, aggregate inputs, and projected string outputs).
      */
     public interface StringInterningSource
-            extends org.weakref.nitro.jit.StreamingPipeline.Source, org.weakref.nitro.jit.StreamingPipeline.Source.StringWinners
+            extends org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source, org.weakref.nitro.legacy.pipeline.StreamingPipeline.Source.StringWinners
     {
         /** The final reconstruction dictionary for {@code column} (global intern or winners), exact-sized; null when neither applies. */
         byte[][] finalDictionary(int column);
@@ -3195,7 +3195,7 @@ public final class CompiledQuerySupport
     /**
      * The per-query global intern for one streamed string column: entries only ever append (ids are stable), and
      * the growing backing array is handed to the pipeline directly (capacity-padded), with
-     * {@link org.weakref.nitro.jit.Column.StringColumn#dictionarySize} marking the valid prefix. A dictionary-encoded
+     * {@link org.weakref.nitro.legacy.pipeline.Column.StringColumn#dictionarySize} marking the valid prefix. A dictionary-encoded
      * page is folded in once per distinct page dictionary (identity-cached remap); plain pages intern per row
      * through a byte-keyed open-addressing table -- hashing the page's bytes in place and copying a value only on
      * first insertion, since a per-row String allocation dominated the string-heavy fact scans.
@@ -3401,7 +3401,7 @@ public final class CompiledQuerySupport
         byte[] apply(byte[] data, int offset, int length);
     }
 
-    private static ByteTransform regexpTransform(org.weakref.nitro.jit.QueryLowering.Column spec)
+    private static ByteTransform regexpTransform(org.weakref.nitro.legacy.pipeline.QueryLowering.Column spec)
     {
         if (spec.regexpPattern() != null) {
             io.airlift.joni.Regex pattern = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.compile(

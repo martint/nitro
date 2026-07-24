@@ -27,11 +27,11 @@ import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
-import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
-import org.weakref.nitro.jit.QueryLowering;
-import org.weakref.nitro.jit.StreamingPipeline;
+import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.QueryLowering;
+import org.weakref.nitro.legacy.pipeline.StreamingPipeline;
 
 import java.util.concurrent.TimeUnit;
 
@@ -53,7 +53,7 @@ public class BenchmarkStreamingScan
 {
     private static final String TABLE = "store_sales";
     private static final String[] COLUMNS = {"ss_item_sk", "ss_quantity", "ss_wholesale_cost", "ss_list_price", "ss_sales_price", "ss_ext_sales_price"};
-    private static final org.weakref.nitro.jit.Column[][] NO_BUILDS = new org.weakref.nitro.jit.Column[0][];
+    private static final org.weakref.nitro.legacy.pipeline.Column[][] NO_BUILDS = new org.weakref.nitro.legacy.pipeline.Column[0][];
     private static final int[] NO_BUILD_ROWS = new int[0];
 
     private Allocator allocator;

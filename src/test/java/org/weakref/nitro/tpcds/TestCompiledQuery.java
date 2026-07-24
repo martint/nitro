@@ -20,9 +20,9 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
-import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -68,15 +68,15 @@ public class TestCompiledQuery
 
         // SELECT count(*) FROM item WHERE i_category = 'Books' -- lowered by name, string filter over the
         // dictionary, loaded from real Parquet (dictionary built at load).
-        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("item",
-                new org.weakref.nitro.jit.QueryLowering.Column("i_category", org.weakref.nitro.jit.ColumnEncoding.STRING, true));
-        query.where(new org.weakref.nitro.jit.Plan.StringMatch(query.position("i_category"), List.of("Books"), false)).count();
+        org.weakref.nitro.legacy.pipeline.QueryLowering query = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("item",
+                new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("i_category", org.weakref.nitro.legacy.pipeline.ColumnEncoding.STRING, true));
+        query.where(new org.weakref.nitro.legacy.pipeline.Plan.StringMatch(query.position("i_category"), List.of("Books"), false)).count();
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, query.lower());
         long compiledCount = run.result().columns()[0][0];
 
         // Reference: count non-null 'Books' rows directly from the loaded dictionary column.
-        org.weakref.nitro.jit.Column.StringColumn category = (org.weakref.nitro.jit.Column.StringColumn) run.inputs()[0][0];
+        org.weakref.nitro.legacy.pipeline.Column.StringColumn category = (org.weakref.nitro.legacy.pipeline.Column.StringColumn) run.inputs()[0][0];
         byte[] books = "Books".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         long reference = 0;
         for (int i = 0; i < category.ids().length; i++) {
@@ -99,20 +99,20 @@ public class TestCompiledQuery
         // The lowered store_sales JOIN date_dim, sum(ss_quantity) GROUP BY ss_item_sk query, compiled and then
         // bridged back into the operator world, must produce the same rows as the interpreted Nitro operator chain
         // -- compared through the very same harness machinery (OperatorAssertions.toRows) used for operator trees.
-        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+        org.weakref.nitro.legacy.pipeline.QueryLowering query = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_sold_date_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_quantity"))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("d_year"));
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("d_date_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("d_year"));
         // Same d_year = 2001 predicate the interpreted reference pushes into the date_dim load.
-        query.where(new org.weakref.nitro.jit.Plan.Predicate("=", query.column("d_year"), new org.weakref.nitro.jit.Plan.Lit(2001)))
+        query.where(new org.weakref.nitro.legacy.pipeline.Plan.Predicate("=", query.column("d_year"), new org.weakref.nitro.legacy.pipeline.Plan.Lit(2001)))
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_quantity");
 
         CompiledQuerySupport.LoweredResult run = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, query.lower());
-        Operator bridged = new org.weakref.nitro.operator.CompiledOperator(run.result());
+        Operator bridged = new org.weakref.nitro.legacy.pipeline.CompiledOperator(run.result());
 
         List<Row> interpreted = OperatorAssertions.OperatorAssert.toRows(
                 CompiledQuerySupport.interpreted(new Allocator(EngineResources.createDefault()), CompiledQuerySupport.load(new Allocator(EngineResources.createDefault()), tables)));
@@ -129,23 +129,23 @@ public class TestCompiledQuery
 
         // SELECT ss_item_sk, sum(ss_quantity) FROM store_sales GROUP BY ss_item_sk -- run eagerly (whole columns
         // materialized) and by streaming the Parquet scan batch-by-batch; the two must agree.
-        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+        org.weakref.nitro.legacy.pipeline.QueryLowering query = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_quantity"))
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_quantity");
-        org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
+        org.weakref.nitro.legacy.pipeline.QueryLowering.Lowered lowered = query.lower();
 
         Map<Long, Long> eager = toMap(CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result());
 
-        org.weakref.nitro.jit.StreamingPipeline streaming =
-                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        org.weakref.nitro.legacy.pipeline.StreamingPipeline streaming =
+                new org.weakref.nitro.legacy.pipeline.PipelineCompiler(org.weakref.nitro.legacy.pipeline.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         Map<Long, Long> streamed = toMap(streaming.execute(
                 CompiledQuerySupport.parquetFlatSource(new Allocator(EngineResources.createDefault()), tables, "store_sales", "ss_item_sk", "ss_quantity"),
-                new org.weakref.nitro.jit.Column[0][], new int[0]));
+                new org.weakref.nitro.legacy.pipeline.Column[0][], new int[0]));
         Map<Long, Long> zeroCopy = toMap(streaming.execute(
                 CompiledQuerySupport.parquetColumnarSource(new Allocator(EngineResources.createDefault()), tables, "store_sales", "ss_item_sk", "ss_quantity"),
-                new org.weakref.nitro.jit.Column[0][], new int[0]));
+                new org.weakref.nitro.legacy.pipeline.Column[0][], new int[0]));
 
         assertThat(streamed).isEqualTo(eager);
         assertThat(zeroCopy).isEqualTo(eager);
@@ -163,15 +163,15 @@ public class TestCompiledQuery
 
     private static Map<Long, Long> runLowered(CompiledQuerySupport.Loaded data)
     {
-        org.weakref.nitro.jit.QueryLowering query = org.weakref.nitro.jit.QueryLowering.scan("store_sales",
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_sold_date_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_item_sk"),
-                        new org.weakref.nitro.jit.QueryLowering.Column("ss_quantity"))
+        org.weakref.nitro.legacy.pipeline.QueryLowering query = org.weakref.nitro.legacy.pipeline.QueryLowering.scan("store_sales",
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_sold_date_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_item_sk"),
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("ss_quantity"))
                 .join("date_dim", "ss_sold_date_sk", "d_date_sk",
-                        new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"))
+                        new org.weakref.nitro.legacy.pipeline.QueryLowering.Column("d_date_sk"))
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_quantity");
-        org.weakref.nitro.jit.CompiledPipeline.Result result = query.lower().compile(new PipelineCompiler(CompilerResources.createDefault())).execute(
+        org.weakref.nitro.legacy.pipeline.CompiledPipeline.Result result = query.lower().compile(new PipelineCompiler(CompilerResources.createDefault())).execute(
                 new long[][][] {{data.soldDateSk(), data.itemSk(), data.quantity()}, {data.dateSk()}},
                 new int[] {data.storeSalesRows(), data.dateDimRows()});
         Map<Long, Long> map = new HashMap<>();

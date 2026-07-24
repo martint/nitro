@@ -23,12 +23,12 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
-import org.weakref.nitro.jit.Column;
-import org.weakref.nitro.jit.ColumnEncoding;
-import org.weakref.nitro.jit.CompiledPipeline;
-import org.weakref.nitro.jit.CompilerResources;
-import org.weakref.nitro.jit.PipelineCompiler;
-import org.weakref.nitro.jit.Plan;
+import org.weakref.nitro.legacy.pipeline.Column;
+import org.weakref.nitro.legacy.pipeline.ColumnEncoding;
+import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
+import org.weakref.nitro.legacy.pipeline.CompilerResources;
+import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
+import org.weakref.nitro.legacy.pipeline.Plan;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
