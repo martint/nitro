@@ -274,6 +274,10 @@ class TestArchitectureDependencies
         assertThat(filter)
                 .doesNotContain("\"lt\"")
                 .doesNotContain("LessThanI64");
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanI64.java")))
+                .as("optional lowering capabilities must not alter the hot scalar implementation shape")
+                .doesNotContain("ProjectionCodeProvider")
+                .doesNotContain("RangeBoundProvider");
     }
 
     @Test

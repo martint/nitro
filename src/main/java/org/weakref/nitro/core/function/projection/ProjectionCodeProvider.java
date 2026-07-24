@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.core.function.projection;
 
+import org.weakref.nitro.core.function.FunctionCapability;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -23,6 +25,7 @@ import java.util.Optional;
  * only a low-level expression builder and may fall back to generic invocation when this capability declines a shape.
  */
 public interface ProjectionCodeProvider
+        extends FunctionCapability
 {
     Optional<ProjectionProgram> generate(
             ProjectionCodeBuilder builder,

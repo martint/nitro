@@ -98,6 +98,10 @@ public final class PrimitiveRegistry
 
     public Optional<ProjectionCodeProvider> projectionCodeProvider(String name)
     {
+        Optional<ProjectionCodeProvider> capability = capability(capabilities.get(name), ProjectionCodeProvider.class);
+        if (capability.isPresent()) {
+            return capability;
+        }
         PrimitiveFunction function = functions.get(name);
         return function instanceof ProjectionCodeProvider provider ? Optional.of(provider) : Optional.empty();
     }
@@ -108,6 +112,25 @@ public final class PrimitiveRegistry
         if (!(call.invocation() instanceof PrimitiveInvocationBinding binding)) {
             return Optional.empty();
         }
+        Optional<ProjectionCodeProvider> capability = capability(binding.capabilities(), ProjectionCodeProvider.class);
+        if (capability.isPresent()) {
+            return capability;
+        }
         return binding.function() instanceof ProjectionCodeProvider provider ? Optional.of(provider) : Optional.empty();
+    }
+
+    private static <T extends FunctionCapability> Optional<T> capability(
+            List<FunctionCapability> capabilities,
+            Class<T> capabilityType)
+    {
+        if (capabilities == null) {
+            return Optional.empty();
+        }
+        for (FunctionCapability capability : capabilities) {
+            if (capabilityType.isInstance(capability)) {
+                return Optional.of(capabilityType.cast(capability));
+            }
+        }
+        return Optional.empty();
     }
 }

@@ -725,7 +725,22 @@ public class TestOperators
     void testFusedProjectionUsesDynamicallyRegisteredProviderWithoutFunctionVocabulary()
     {
         class DynamicallyNamedFunction
-                implements PrimitiveFunction, ProjectionCodeProvider
+                implements PrimitiveFunction
+        {
+            @Override
+            public Streams apply(
+                    List<Streams> inputs,
+                    Mask mask,
+                    Set<Stream> requestedStreams,
+                    Streams output,
+                    PrimitiveExecutionContext context)
+            {
+                throw new UnsupportedOperationException();
+            }
+        }
+
+        class DynamicallyNamedProjection
+                implements ProjectionCodeProvider
         {
             @Override
             public Optional<ProjectionProgram> generate(
@@ -742,22 +757,11 @@ public class TestOperators
                         builder.add(left, right),
                         builder.or(builder.isNull(0), builder.isNull(1))));
             }
-
-            @Override
-            public Streams apply(
-                    List<Streams> inputs,
-                    Mask mask,
-                    Set<Stream> requestedStreams,
-                    Streams output,
-                    PrimitiveExecutionContext context)
-            {
-                throw new UnsupportedOperationException();
-            }
         }
 
         String dynamicName = "provider_name_unknown_to_engine";
         PrimitiveRegistry registry = new PrimitiveRegistry();
-        registry.register(dynamicName, new DynamicallyNamedFunction());
+        registry.register(dynamicName, new DynamicallyNamedFunction(), new DynamicallyNamedProjection());
         Variable one = new Variable(0);
         Variable first = new Variable(1);
         Variable second = new Variable(2);
