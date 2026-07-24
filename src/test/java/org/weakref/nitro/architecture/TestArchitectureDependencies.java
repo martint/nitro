@@ -274,13 +274,21 @@ class TestArchitectureDependencies
         assertThat(filter)
                 .doesNotContain("\"lt\"")
                 .doesNotContain("LessThanI64");
-        List<Path> migratedI64Scalars = List.of(
+        List<Path> migratedScalars = List.of(
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/AddF64.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/AddI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/EqualF64.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/EqualI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/GreaterThanF64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/GreaterThanOrEqualF64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanF64.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanOrEqualF64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/MultiplyF64.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/MultiplyI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/SubtractF64.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/SubtractI64.java"));
-        assertThat(migratedI64Scalars.stream().map(TestArchitectureDependencies::read))
+        assertThat(migratedScalars.stream().map(TestArchitectureDependencies::read))
                 .as("optional lowering capabilities must not alter the hot scalar implementation shape")
                 .allMatch(source ->
                         !source.contains("ProjectionCodeProvider") &&
