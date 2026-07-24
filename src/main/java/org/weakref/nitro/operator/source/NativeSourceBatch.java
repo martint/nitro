@@ -23,6 +23,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
 
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -33,7 +34,9 @@ final class NativeSourceBatch
     private final Schema schema;
     private final boolean retained;
     private final boolean stableBorrow;
+    private Supplier<Batch> batchSupplier;
     private Batch batch;
+    private boolean closed;
 
     NativeSourceBatch(Schema schema, boolean retained, boolean stableBorrow, Batch batch)
     {
@@ -43,11 +46,20 @@ final class NativeSourceBatch
         this.batch = requireNonNull(batch, "batch is null");
     }
 
+    NativeSourceBatch(Schema schema, boolean retained, boolean stableBorrow, Supplier<Batch> batchSupplier)
+    {
+        this.schema = requireNonNull(schema, "schema is null");
+        this.retained = retained;
+        this.stableBorrow = stableBorrow;
+        this.batchSupplier = requireNonNull(batchSupplier, "batchSupplier is null");
+    }
+
     Batch transfer()
     {
-        checkOpen();
-        Batch result = batch;
+        Batch result = batch();
         batch = null;
+        batchSupplier = null;
+        closed = true;
         return result;
     }
 
@@ -60,14 +72,13 @@ final class NativeSourceBatch
     @Override
     public Selection selection()
     {
-        checkOpen();
-        return new MaskSelection(batch.borrowMask());
+        return new MaskSelection(batch().borrowMask());
     }
 
     @Override
     public ColumnView column(int index)
     {
-        checkOpen();
+        Batch batch = batch();
         Mask mask = batch.borrowMask();
         return new NativeColumnView(
                 schema.field(index).type(),
@@ -79,7 +90,7 @@ final class NativeSourceBatch
     @Override
     public void select(Selection selection)
     {
-        checkOpen();
+        Batch batch = batch();
         requireNonNull(selection, "selection is null");
         if (selection instanceof MaskSelection maskSelection) {
             batch.constrain(maskSelection.mask());
@@ -109,12 +120,19 @@ final class NativeSourceBatch
             batch.close();
             batch = null;
         }
+        batchSupplier = null;
+        closed = true;
     }
 
-    private void checkOpen()
+    private Batch batch()
     {
-        if (batch == null) {
+        if (closed) {
             throw new IllegalStateException("source batch is closed or transferred");
         }
+        if (batch == null) {
+            batch = requireNonNull(batchSupplier.get(), "batchSupplier returned null");
+            batchSupplier = null;
+        }
+        return batch;
     }
 }

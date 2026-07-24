@@ -1,0 +1,175 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.operator.source;
+
+import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.DynamicFilter;
+import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class TestOperatorBatchSource
+{
+    @Test
+    void testAvailabilityPollDoesNotAdvanceDecoder()
+    {
+        AtomicInteger pulls = new AtomicInteger();
+        Operator decoder = new Operator()
+        {
+            private boolean emitted;
+
+            @Override
+            public int outputCount()
+            {
+                return 0;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return !emitted;
+            }
+
+            @Override
+            public Batch next()
+            {
+                emitted = true;
+                pulls.incrementAndGet();
+                return new Batch(Mask.all(0), new Output[0]);
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+        Operator source = new BatchSourceOperator(new OperatorBatchSource(decoder));
+
+        assertThat(source.hasNext()).isTrue();
+        assertThat(pulls).hasValue(0);
+        try (Batch _ = source.next()) {
+            assertThat(pulls).hasValue(1);
+        }
+        assertThat(source.hasNext()).isFalse();
+    }
+
+    @Test
+    void testLazyNativeBatchDoesNotPullUntilTransfer()
+    {
+        AtomicInteger pulls = new AtomicInteger();
+        NativeSourceBatch batch = new NativeSourceBatch(
+                Schema.unspecified(0),
+                false,
+                false,
+                () -> {
+                    pulls.incrementAndGet();
+                    return new Batch(Mask.all(0), new Output[0]);
+                });
+
+        NativeBatchAccess access = batch.capability(NativeBatchCapability.NATIVE_BATCH).orElseThrow();
+        assertThat(pulls).hasValue(0);
+        try (Batch _ = access.transfer()) {
+            assertThat(pulls).hasValue(1);
+        }
+        batch.close();
+        assertThat(pulls).hasValue(1);
+    }
+
+    @Test
+    void testSchemaAndRuntimeFilterCrossSourceBoundary()
+    {
+        Schema schema = Schema.unspecified(List.of("probe_key", "payload"));
+        CapturingSource decoder = new CapturingSource();
+        Operator source = new BatchSourceOperator(new OperatorBatchSource(decoder, schema));
+
+        assertThat(source.outputSchema()).isEqualTo(schema);
+        assertThat(source.exactOutputRows()).isEqualTo(123);
+        assertThat(source.supportsDynamicFilterPushdown(0)).isTrue();
+        assertThat(source.supportsDynamicFilterPushdown(1)).isFalse();
+        assertThat(source.supportsDynamicFilterPushdown(2)).isFalse();
+        assertThat(source.supportsConstrainedReborrow()).isFalse();
+
+        source.pushDynamicFilter(DynamicFilter.fromRange(0, 10, 20));
+
+        assertThat(source.supportsConstrainedReborrow()).isTrue();
+        assertThat(decoder.filter).isNotNull();
+        assertThat(decoder.filter.column()).isZero();
+        assertThat(decoder.filter.accepts(9)).isFalse();
+        assertThat(decoder.filter.accepts(10)).isTrue();
+        assertThat(decoder.filter.accepts(20)).isTrue();
+        assertThat(decoder.filter.accepts(21)).isFalse();
+    }
+
+    private static final class CapturingSource
+            implements Operator
+    {
+        private DynamicFilter filter;
+
+        @Override
+        public int outputCount()
+        {
+            return 2;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return false;
+        }
+
+        @Override
+        public Batch next()
+        {
+            throw new IllegalStateException("No rows");
+        }
+
+        @Override
+        public void constrain(Mask mask) {}
+
+        @Override
+        public void pushDynamicFilter(DynamicFilter filter)
+        {
+            this.filter = filter;
+        }
+
+        @Override
+        public boolean supportsDynamicFilterPushdown(int column)
+        {
+            return column == 0;
+        }
+
+        @Override
+        public long exactOutputRows()
+        {
+            return 123;
+        }
+
+        @Override
+        public boolean supportsConstrainedReborrow()
+        {
+            return filter != null;
+        }
+
+        @Override
+        public void close() {}
+    }
+}

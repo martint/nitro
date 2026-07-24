@@ -14,6 +14,7 @@
 package org.weakref.nitro.tpcds;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -63,6 +64,8 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.OperatorBatchSource;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -4334,7 +4337,12 @@ final class TpcdsParquetSupport
     private static Operator factScan(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
         SCAN_COUNT.incrementAndGet();
-        return new org.weakref.nitro.operator.NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        List<String> columnNames = List.of(columns);
+        Operator decoder = new org.weakref.nitro.operator.NitroParquetScanOperator(
+                allocator,
+                tables.tableFiles(tableName),
+                columnNames);
+        return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
     }
 
     private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)

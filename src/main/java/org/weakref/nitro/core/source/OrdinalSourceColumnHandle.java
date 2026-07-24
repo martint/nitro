@@ -15,25 +15,17 @@ package org.weakref.nitro.core.source;
 
 import org.weakref.nitro.core.type.TypeBinding;
 
-import java.util.Optional;
+import static java.util.Objects.requireNonNull;
 
-/// Typed logical domain accepted by a source without exposing a host engine's domain objects.
-public interface TypedDomain
+/// Default source-local handle for a field addressed by output ordinal.
+public record OrdinalSourceColumnHandle(int ordinal, TypeBinding type)
+        implements SourceColumnHandle
 {
-    TypeBinding type();
-
-    boolean includesNull();
-
-    boolean isAll();
-
-    boolean isNone();
-
-    /// Returns an optional representation-specific protocol.
-    ///
-    /// Callers must request a protocol by its typed key; they must not inspect the domain's
-    /// implementation class.
-    default <T> Optional<T> capability(DomainCapability<T> capability)
+    public OrdinalSourceColumnHandle
     {
-        return Optional.empty();
+        if (ordinal < 0) {
+            throw new IllegalArgumentException("ordinal is negative");
+        }
+        type = requireNonNull(type, "type is null");
     }
 }

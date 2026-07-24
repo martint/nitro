@@ -15,11 +15,13 @@ package org.weakref.nitro.operator.source;
 
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 
 import static java.util.Objects.requireNonNull;
@@ -33,6 +35,7 @@ public final class BatchSourceOperator
         implements Operator
 {
     private final BatchSource source;
+    private final Operator nativeSource;
     private SourceBatch staged;
     private NativeBatchAccess stagedNativeBatch;
     private Batch currentBatch;
@@ -41,6 +44,9 @@ public final class BatchSourceOperator
     public BatchSourceOperator(BatchSource source)
     {
         this.source = requireNonNull(source, "source is null");
+        this.nativeSource = source.protocol(NativeOperatorProtocol.NATIVE_OPERATOR)
+                .map(NativeOperatorAccess::operator)
+                .orElse(null);
     }
 
     @Override
@@ -58,6 +64,9 @@ public final class BatchSourceOperator
     @Override
     public boolean hasNext()
     {
+        if (nativeSource != null) {
+            return nativeSource.hasNext();
+        }
         if (staged != null) {
             return true;
         }
@@ -87,6 +96,9 @@ public final class BatchSourceOperator
     @Override
     public Batch next()
     {
+        if (nativeSource != null) {
+            return nativeSource.next();
+        }
         if (!hasNext()) {
             throw new IllegalStateException("No more rows");
         }
@@ -100,6 +112,10 @@ public final class BatchSourceOperator
     @Override
     public void constrain(Mask mask)
     {
+        if (nativeSource != null) {
+            nativeSource.constrain(mask);
+            return;
+        }
         if (staged != null) {
             staged.select(new MaskSelection(mask));
             return;
@@ -113,19 +129,55 @@ public final class BatchSourceOperator
     @Override
     public boolean supportsRetainedBatches()
     {
+        if (nativeSource != null) {
+            return nativeSource.supportsRetainedBatches();
+        }
         return source.capabilities().contains(SourceCapability.RETAINED_BATCHES);
     }
 
     @Override
     public boolean supportsStableBatchBorrow()
     {
+        if (nativeSource != null) {
+            return nativeSource.supportsStableBatchBorrow();
+        }
         return source.capabilities().contains(SourceCapability.STABLE_BATCH_BORROW);
     }
 
     @Override
     public boolean supportsConstrainedReborrow()
     {
+        if (nativeSource != null) {
+            return nativeSource.supportsConstrainedReborrow();
+        }
         return source.capabilities().contains(SourceCapability.CONSTRAINED_REBORROW);
+    }
+
+    @Override
+    public long exactOutputRows()
+    {
+        return source.exactRows().orElse(-1);
+    }
+
+    @Override
+    public void pushDynamicFilter(DynamicFilter filter)
+    {
+        requireNonNull(filter, "filter is null");
+        int column = filter.column();
+        if (!supportsDynamicFilterPushdown(column)) {
+            return;
+        }
+        var handle = source.column(column);
+        source.addRuntimeFilter(new RuntimeFilter(
+                handle,
+                new NativeRuntimeFilterDomain(handle.type(), filter),
+                false));
+    }
+
+    @Override
+    public boolean supportsDynamicFilterPushdown(int column)
+    {
+        return column >= 0 && column < outputCount() && source.supportsRuntimeFilter(source.column(column));
     }
 
     @Override

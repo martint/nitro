@@ -28,6 +28,11 @@ import org.apache.parquet.schema.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -70,6 +75,8 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 
@@ -91,8 +98,63 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 
 public class TestParquetOperator
 {
+    private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
+
     @TempDir
     java.nio.file.Path tempDirectory;
+
+    @Test
+    void testNitroParquetScanFilterProjectCrossesSourcePort()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-source-port.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, true, 200L),
+                new ParquetRow(10, false, 300L),
+                new ParquetRow(10, true, 400L)));
+
+        Allocator allocator = new Allocator();
+        Schema inputSchema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+        Operator ingress = new BatchSourceOperator(new OperatorBatchSource(
+                new NitroParquetScanOperator(allocator, List.of(file), List.of("x", "maybe")),
+                inputSchema));
+        assertThat(ingress.outputSchema()).isEqualTo(inputSchema);
+        assertThat(ingress.supportsDynamicFilterPushdown(0)).isTrue();
+        ingress.pushDynamicFilter(DynamicFilter.fromRange(0, 10, 10));
+
+        PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable squared = new Variable(0);
+        EvaluationPlan projectionPlan = new EvaluationPlan(
+                List.of(new Assignment(
+                        squared,
+                        new Call("multiply", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(squared, Stream.VALUES)));
+        Schema outputSchema = new Schema(List.of(new Field("squared", BIGINT, false)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                projectionPlan,
+                primitiveRegistry,
+                new FilterOperator(
+                        ingress,
+                        new EvaluationPlan(List.of(), List.of()),
+                        primitiveRegistry,
+                        AllMask.ALL,
+                        allocator),
+                outputSchema)) {
+            assertThat(operator.outputSchema()).isEqualTo(outputSchema);
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row(100L),
+                            Row.row(100L),
+                            Row.row(100L)));
+        }
+    }
 
     @Test
     void testNitroFilteredWindowDefersWidePayloadUntilConstrain()
@@ -2561,6 +2623,16 @@ public class TestParquetOperator
             }
         }
         return file;
+    }
+
+    private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)
+            implements TypeBinding
+    {
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
     }
 
     private static ColumnReader columnReader(List<ParquetFile> files, String columnName)

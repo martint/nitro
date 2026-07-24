@@ -14,12 +14,19 @@
 package org.weakref.nitro.operator.source;
 
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
+import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
+import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourcePoll;
+import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.operator.Operator;
 
 import java.util.EnumSet;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -29,35 +36,75 @@ public final class OperatorBatchSource
         implements BatchSource
 {
     private final Operator source;
+    private final Schema schema;
+    private final SourceColumnHandle[] columns;
     private final Set<SourceCapability> capabilities;
+    private final Set<SourceCapability> constrainedReborrowCapabilities;
     private boolean closed;
 
     public OperatorBatchSource(Operator source)
     {
+        this(source, source.outputSchema());
+    }
+
+    public OperatorBatchSource(Operator source, Schema schema)
+    {
         this.source = requireNonNull(source, "source is null");
+        this.schema = requireNonNull(schema, "schema is null");
+        if (schema.size() != source.outputCount()) {
+            throw new IllegalArgumentException("schema size does not match source output count");
+        }
+        this.columns = new SourceColumnHandle[schema.size()];
         EnumSet<SourceCapability> capabilities = EnumSet.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN);
+        for (int column = 0; column < columns.length; column++) {
+            columns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
+            if (source.supportsDynamicFilterPushdown(column)) {
+                capabilities.add(SourceCapability.RUNTIME_FILTER);
+            }
+        }
         if (source.supportsRetainedBatches()) {
             capabilities.add(SourceCapability.RETAINED_BATCHES);
         }
         if (source.supportsStableBatchBorrow()) {
             capabilities.add(SourceCapability.STABLE_BATCH_BORROW);
         }
-        if (source.supportsConstrainedReborrow()) {
-            capabilities.add(SourceCapability.CONSTRAINED_REBORROW);
-        }
         this.capabilities = Set.copyOf(capabilities);
+        capabilities.add(SourceCapability.CONSTRAINED_REBORROW);
+        this.constrainedReborrowCapabilities = Set.copyOf(capabilities);
     }
 
     @Override
     public Schema schema()
     {
-        return source.outputSchema();
+        return schema;
+    }
+
+    @Override
+    public SourceColumnHandle column(int outputIndex)
+    {
+        return columns[outputIndex];
     }
 
     @Override
     public Set<SourceCapability> capabilities()
     {
-        return capabilities;
+        return source.supportsConstrainedReborrow() ? constrainedReborrowCapabilities : capabilities;
+    }
+
+    @Override
+    public OptionalLong exactRows()
+    {
+        long rows = source.exactOutputRows();
+        return rows < 0 ? OptionalLong.empty() : OptionalLong.of(rows);
+    }
+
+    @Override
+    public <T> Optional<T> protocol(SourceProtocol<T> protocol)
+    {
+        if (protocol == NativeOperatorProtocol.NATIVE_OPERATOR) {
+            return Optional.of(protocol.valueType().cast((NativeOperatorAccess) () -> source));
+        }
+        return Optional.empty();
     }
 
     @Override
@@ -71,7 +118,33 @@ public final class OperatorBatchSource
                 schema(),
                 source.supportsRetainedBatches(),
                 source.supportsStableBatchBorrow(),
-                source.next()));
+                source::next));
+    }
+
+    @Override
+    public RuntimeFilterAcceptance addRuntimeFilter(RuntimeFilter filter)
+    {
+        checkOpen();
+        requireNonNull(filter, "filter is null");
+        int column = columnIndex(filter.column());
+        if (column < 0 || !source.supportsDynamicFilterPushdown(column)) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        NativeRuntimeFilterAccess nativeFilter = filter.domain()
+                .capability(NativeRuntimeFilterCapability.NATIVE_RUNTIME_FILTER)
+                .orElse(null);
+        if (nativeFilter == null) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        source.pushDynamicFilter(nativeFilter.retarget(column));
+        return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+    }
+
+    @Override
+    public boolean supportsRuntimeFilter(SourceColumnHandle column)
+    {
+        int index = columnIndex(requireNonNull(column, "column is null"));
+        return index >= 0 && source.supportsDynamicFilterPushdown(index);
     }
 
     @Override
@@ -88,5 +161,15 @@ public final class OperatorBatchSource
         if (closed) {
             throw new IllegalStateException("source is closed");
         }
+    }
+
+    private int columnIndex(SourceColumnHandle handle)
+    {
+        for (int index = 0; index < columns.length; index++) {
+            if (columns[index] == handle) {
+                return index;
+            }
+        }
+        return -1;
     }
 }

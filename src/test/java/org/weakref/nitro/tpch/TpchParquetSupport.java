@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.tpch;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.DistinctCount;
@@ -49,6 +50,8 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.time.LocalDate;
@@ -1708,7 +1711,9 @@ final class TpchParquetSupport
 
     private static Operator scannedTable(Allocator allocator, TpchParquetTables tables, String tableName, String... columns)
     {
-        return new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), List.of(columns));
+        List<String> columnNames = List.of(columns);
+        Operator decoder = new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), columnNames);
+        return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
     }
 
     private static Operator scannedTableWithLongRange(

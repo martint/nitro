@@ -62,6 +62,17 @@ public record Schema(List<Field> fields)
         return new Schema(fields);
     }
 
+    /// Transitional named schema for a source whose logical type registry has not yet been wired.
+    public static Schema unspecified(List<String> fieldNames)
+    {
+        requireNonNull(fieldNames, "fieldNames is null");
+        List<Field> fields = new ArrayList<>(fieldNames.size());
+        for (String fieldName : fieldNames) {
+            fields.add(new Field(requireNonNull(fieldName, "fieldName is null"), UNSPECIFIED_TYPE, true));
+        }
+        return new Schema(fields);
+    }
+
     public int size()
     {
         return fields.size();

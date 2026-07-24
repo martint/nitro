@@ -22,6 +22,7 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -60,6 +61,8 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.io.IOException;
@@ -756,7 +759,9 @@ public final class ClickBenchHitsSupport
         try {
             // The Nitro reader is multi-file aware, so it takes the whole directory's files directly.
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
-            return new NitroParquetScanOperator(allocator, paths, List.of(columns));
+            List<String> columnNames = List.of(columns);
+            Operator decoder = new NitroParquetScanOperator(allocator, paths, columnNames);
+            return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
