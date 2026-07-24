@@ -107,6 +107,7 @@ class TestArchitectureDependencies
     void testMigratedHarnessesCarryFilterStructureExplicitly()
     {
         String tpch = read(Path.of("src/test/java/org/weakref/nitro/tpch/TpchParquetSupport.java"));
+        String tpcds = read(Path.of("src/test/java/org/weakref/nitro/tpcds/TpcdsParquetSupport.java"));
         String clickBench = read(Path.of("src/test/java/org/weakref/nitro/clickbench/ClickBenchHitsSupport.java"));
 
         assertThat(tpch)
@@ -122,6 +123,13 @@ class TestArchitectureDependencies
         assertThat(clickBench)
                 .doesNotContain("LegacyLogicalMaskAdapter")
                 .doesNotContain("combineBoolean(");
+        assertThat(tpcds)
+                .doesNotContain("LegacyLogicalMaskAdapter")
+                .doesNotContain("combineBoolean(")
+                .doesNotContain("referenceFor(");
+        assertThat(Path.of("src/test/java/org/weakref/nitro/LegacyLogicalMaskAdapter.java"))
+                .as("all operator harnesses must carry logical filter structure explicitly")
+                .doesNotExist();
     }
 
     @Test

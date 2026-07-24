@@ -14,7 +14,6 @@
 package org.weakref.nitro.tpcds;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
-import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -63,6 +62,9 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
+import org.weakref.nitro.operator.evaluator.ir.OrMask;
+import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -4279,7 +4281,10 @@ final class TpcdsParquetSupport
         assignments.add(new Assignment(matches, new Call("or", List.of(
                 new Reference(zipMatch, Stream.VALUES),
                 new Reference(new Input(itemMatchIndex), Stream.VALUES))), AllMask.ALL));
-        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(matches, Stream.VALUES)));
+        return new FilterSpec(
+                new EvaluationPlan(assignments, List.of()),
+                orMask(zipMatch, new Input(itemMatchIndex)),
+                new Reference(matches, Stream.VALUES));
     }
 
     private static FilterSpec query15ZipStateOrPricePredicate(int zipIndex, int stateIndex, int salesPriceIndex)
@@ -4335,7 +4340,10 @@ final class TpcdsParquetSupport
         assignments.add(new Assignment(accepted, new Call("or", List.of(
                 new Reference(zipOrState, Stream.VALUES),
                 new Reference(priceMatch, Stream.VALUES))), AllMask.ALL));
-        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(accepted, Stream.VALUES)));
+        return new FilterSpec(
+                new EvaluationPlan(assignments, List.of()),
+                orMask(zipMatch, stateMatch, priceMatch),
+                new Reference(accepted, Stream.VALUES));
     }
 
     private static Operator factScan(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
@@ -6092,7 +6100,10 @@ final class TpcdsParquetSupport
                         new Reference(quantitySatisfied, Stream.VALUES),
                         new Reference(shipSatisfied, Stream.VALUES))), AllMask.ALL)),
                 List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                andMask(quantitySatisfied, shipSatisfied),
+                new Reference(accepted, Stream.VALUES));
     }
 
     private static FilterSpec query92DiscountThresholdPredicate(int discountIndex, int averageIndex)
@@ -6293,7 +6304,10 @@ final class TpcdsParquetSupport
         return and(
                 isNotNullI64(salesIndex),
                 isNotNullI64(averageIndex),
-                new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        orMask(lessThan, equal),
+                        new Reference(accepted, Stream.VALUES)));
     }
 
     private static FilterSpec query31GrowthPredicate(int storeQuarterOneIndex, int storeQuarterTwoIndex, int storeQuarterThreeIndex, int webQuarterOneIndex, int webQuarterTwoIndex, int webQuarterThreeIndex)
@@ -6339,7 +6353,10 @@ final class TpcdsParquetSupport
                 greaterThan(storeQuarterTwoIndex, 0),
                 greaterThan(webQuarterOneIndex, 0),
                 greaterThan(webQuarterTwoIndex, 0),
-                new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        andMask(firstGrowthAccepted, secondGrowthAccepted),
+                        new Reference(accepted, Stream.VALUES)));
     }
 
     private static FilterSpec query11GrowthPredicate(int storeFirstYearIndex, int storeSecondYearIndex, int webFirstYearIndex, int webSecondYearIndex)
@@ -6378,7 +6395,10 @@ final class TpcdsParquetSupport
                 isNotNullI64(storeSecondYearIndex),
                 isNotNullI64(webFirstYearIndex),
                 isNotNullI64(webSecondYearIndex),
-                new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        andMask(storePositive, webPositive, webGrowthAccepted),
+                        new Reference(accepted, Stream.VALUES)));
     }
 
     private static FilterSpec query04GrowthPredicate(int storeFirstYearIndex, int storeSecondYearIndex, int catalogFirstYearIndex, int catalogSecondYearIndex, int webFirstYearIndex, int webSecondYearIndex)
@@ -6437,7 +6457,10 @@ final class TpcdsParquetSupport
                 isNotNullI64(catalogSecondYearIndex),
                 isNotNullI64(webFirstYearIndex),
                 isNotNullI64(webSecondYearIndex),
-                new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        andMask(storePositive, catalogPositive, webPositive, catalogBeatsStore, catalogBeatsWeb),
+                        new Reference(accepted, Stream.VALUES)));
     }
 
     private static FilterSpec query21InventoryRatioPredicate(int beforeIndex, int afterIndex)
@@ -6486,7 +6509,10 @@ final class TpcdsParquetSupport
                 isNotNullI64(beforeIndex),
                 isNotNullI64(afterIndex),
                 greaterThan(beforeIndex, 0),
-                new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        new AndMask(List.of(notMask(lowerBoundMissing), notMask(upperBoundMissing))),
+                        new Reference(accepted, Stream.VALUES)));
     }
 
     private static FilterSpec query46DatePredicate()
@@ -7121,7 +7147,12 @@ final class TpcdsParquetSupport
                 isNotNullI64(monthSequenceIndex),
                 isNotNullI64(minimumIndex),
                 isNotNullI64(maximumIndex),
-                new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES))));
+                new FilterSpec(
+                        plan,
+                        new AndMask(List.of(
+                                orMask(greaterThanMinimum, equalsMinimum),
+                                orMask(lessThanMaximum, equalsMaximum))),
+                        new Reference(result, Stream.VALUES)));
     }
 
     private static Operator projectQuery54Segment(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -7489,7 +7520,12 @@ final class TpcdsParquetSupport
                 new Assignment(result, new Call("and", List.of(
                         new Reference(lowerSatisfied, Stream.VALUES),
                         new Reference(upperSatisfied, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                new AndMask(List.of(
+                        orMask(lowerLessThan, lowerEqual),
+                        orMask(upperLessThan, upperEqual))),
+                new Reference(result, Stream.VALUES));
     }
 
     private static Operator projectThreeChannelOutput(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, long averageScale)
@@ -9747,7 +9783,10 @@ final class TpcdsParquetSupport
                         new Reference(preliminarilyAccepted, Stream.VALUES),
                         new Reference(countSatisfied, Stream.VALUES))), AllMask.ALL)),
                 List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                andMask(firstYearSatisfied, secondYearSatisfied, countSatisfied),
+                new Reference(accepted, Stream.VALUES));
     }
 
     private static Operator projectQuery72GroupedRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int itemDescriptionIndex, int warehouseNameIndex, int weekSequenceIndex, int promotionMatchIndex)
@@ -10842,7 +10881,10 @@ final class TpcdsParquetSupport
                         new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL),
                 new Assignment(notEquals, new Call("not", List.of(
                         new Reference(equals, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(notEquals, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                notMask(equals),
+                new Reference(notEquals, Stream.VALUES));
     }
 
     private static Operator projectQuery87ChannelPresence(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int activeChannel)
@@ -11162,7 +11204,10 @@ final class TpcdsParquetSupport
                         new Reference(new Input(rightInputIndex), Stream.VALUES))), AllMask.ALL),
                 new Assignment(notEquals, new Call("not", List.of(
                         new Reference(equals, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(notEquals, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                notMask(equals),
+                new Reference(notEquals, Stream.VALUES));
     }
 
     private static FilterSpec isNull(int inputIndex)
@@ -11183,7 +11228,10 @@ final class TpcdsParquetSupport
                         new Reference(new Input(inputIndex), Stream.VALUES))), AllMask.ALL),
                 new Assignment(notNull, new Call("not", List.of(
                         new Reference(isNull, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(notNull, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                notMask(isNull),
+                new Reference(notNull, Stream.VALUES));
     }
 
     private static FilterSpec lessThan(int inputIndex, long constant)
@@ -11218,33 +11266,53 @@ final class TpcdsParquetSupport
 
     private static FilterSpec and(FilterSpec first, FilterSpec second, FilterSpec... rest)
     {
-        FilterSpec result = combineBoolean("and", first, second);
+        FilterSpec result = combineAnd(first, second);
         for (FilterSpec filterSpec : rest) {
-            result = combineBoolean("and", result, filterSpec);
+            result = combineAnd(result, filterSpec);
         }
         return result;
     }
 
     private static FilterSpec or(FilterSpec first, FilterSpec second, FilterSpec... rest)
     {
-        FilterSpec result = combineBoolean("or", first, second);
+        FilterSpec result = combineOr(first, second);
         for (FilterSpec filterSpec : rest) {
-            result = combineBoolean("or", result, filterSpec);
+            result = combineOr(result, filterSpec);
         }
         return result;
     }
 
-    private static FilterSpec combineBoolean(String functionName, FilterSpec left, FilterSpec right)
+    private static FilterSpec combineAnd(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, true);
+    }
+
+    private static FilterSpec combineOr(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, false);
+    }
+
+    private static FilterSpec combineMasks(FilterSpec left, FilterSpec right, boolean conjunction)
     {
         int rightOffset = maxVariableId(left.plan()) + 1;
         List<Assignment> assignments = new java.util.ArrayList<>(left.plan().assignments());
         assignments.addAll(remap(right.plan().assignments(), rightOffset));
 
         Variable result = new Variable(maxVariableId(assignments) + 1);
-        Reference leftReference = referenceFor(left.plan());
-        Reference rightReference = referenceFor(right.plan(), rightOffset);
-        assignments.add(new Assignment(result, new Call(functionName, List.of(leftReference, rightReference)), AllMask.ALL));
-        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(result, Stream.VALUES)));
+        Reference leftValue = left.requireMaterializedValue();
+        Reference rightValue = remap(right.requireMaterializedValue(), rightOffset);
+        assignments.add(new Assignment(
+                result,
+                new Call(conjunction ? "and" : "or", List.of(leftValue, rightValue)),
+                AllMask.ALL));
+        MaskExpression rightPredicate = remap(right.predicate(), rightOffset);
+        MaskExpression predicate = conjunction
+                ? new AndMask(List.of(left.predicate(), rightPredicate))
+                : new OrMask(List.of(left.predicate(), rightPredicate));
+        return new FilterSpec(
+                new EvaluationPlan(assignments, List.of()),
+                predicate,
+                new Reference(result, Stream.VALUES));
     }
 
     private static List<Assignment> remap(List<Assignment> assignments, int variableOffset)
@@ -11254,7 +11322,7 @@ final class TpcdsParquetSupport
             remapped.add(new Assignment(
                     new Variable(assignment.output().id() + variableOffset),
                     remap(assignment.operation(), variableOffset),
-                    assignment.mask()));
+                    remap(assignment.mask(), variableOffset)));
         }
         return List.copyOf(remapped);
     }
@@ -11297,15 +11365,46 @@ final class TpcdsParquetSupport
         };
     }
 
-    private static Reference referenceFor(EvaluationPlan plan)
+    private static MaskExpression remap(MaskExpression expression, int variableOffset)
     {
-        return new Reference(plan.assignments().getLast().output(), Stream.VALUES);
+        return switch (expression) {
+            case AllMask _ -> expression;
+            case ReferenceMask reference -> new ReferenceMask(remap(reference.reference(), variableOffset));
+            case NotMask not -> new NotMask(remap(not.source(), variableOffset));
+            case AndMask and -> new AndMask(and.terms().stream()
+                    .map(term -> remap(term, variableOffset))
+                    .toList());
+            case OrMask or -> new OrMask(or.terms().stream()
+                    .map(term -> remap(term, variableOffset))
+                    .toList());
+        };
     }
 
-    private static Reference referenceFor(EvaluationPlan plan, int variableOffset)
+    private static ReferenceMask valueMask(Producer producer)
     {
-        Variable variable = plan.assignments().getLast().output();
-        return new Reference(new Variable(variable.id() + variableOffset), Stream.VALUES);
+        return new ReferenceMask(new Reference(producer, Stream.VALUES));
+    }
+
+    private static AndMask andMask(Producer... producers)
+    {
+        return new AndMask(valueMasks(producers));
+    }
+
+    private static OrMask orMask(Producer... producers)
+    {
+        return new OrMask(valueMasks(producers));
+    }
+
+    private static NotMask notMask(Producer producer)
+    {
+        return new NotMask(valueMask(producer));
+    }
+
+    private static List<MaskExpression> valueMasks(Producer... producers)
+    {
+        return Arrays.stream(producers)
+                .<MaskExpression>map(TpcdsParquetSupport::valueMask)
+                .toList();
     }
 
     private static int maxVariableId(EvaluationPlan plan)
@@ -11322,11 +11421,27 @@ final class TpcdsParquetSupport
         return maxVariableId;
     }
 
-    private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
+    private record FilterSpec(EvaluationPlan plan, MaskExpression predicate, Reference materializedValue)
     {
-        FilterSpec
+        FilterSpec(EvaluationPlan plan, MaskExpression predicate)
         {
-            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
+            this(plan, predicate, materializedReference(predicate));
+        }
+
+        private static Reference materializedReference(MaskExpression predicate)
+        {
+            if (predicate instanceof ReferenceMask(Reference reference)) {
+                return reference;
+            }
+            return null;
+        }
+
+        private Reference requireMaterializedValue()
+        {
+            if (materializedValue == null) {
+                throw new IllegalArgumentException("Filter composition requires an explicit materialized value");
+            }
+            return materializedValue;
         }
     }
 
