@@ -172,7 +172,13 @@ public class TestEvaluationIr
                                 new ReferenceMask(new Reference(predicate, Stream.VALUES)),
                                 new Reference(new Input(2), Stream.VALUES),
                                 new Reference(new Input(3), Stream.VALUES)), AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
+                List.of(new Reference(result, Stream.VALUES)),
+                Map.of(),
+                Map.of(
+                        new Reference(predicate, Stream.VALUES),
+                        new OrMask(List.of(
+                                new ReferenceMask(new Reference(left, Stream.VALUES)),
+                                new ReferenceMask(new Reference(right, Stream.VALUES))))));
 
         EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
         Merge merge = (Merge) normalizedPlan.assignments().getLast().operation();
@@ -197,7 +203,9 @@ public class TestEvaluationIr
                                 new Reference(right, Stream.VALUES))), AllMask.ALL)),
                 List.of(),
                 Map.of(predicateValues, StreamPlan.MATERIALIZED),
-                Map.of(predicateValues, new ReferenceMask(predicateValues)));
+                Map.of(predicateValues, new OrMask(List.of(
+                        new ReferenceMask(new Reference(left, Stream.VALUES)),
+                        new ReferenceMask(new Reference(right, Stream.VALUES))))));
 
         EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
 
@@ -205,6 +213,24 @@ public class TestEvaluationIr
         assertThat(normalizedPlan.maskPlans().get(predicateValues)).isInstanceOf(OrMask.class);
         assertThat(((OrMask) normalizedPlan.maskPlans().get(predicateValues)).terms()).hasSize(2);
         assertThat(normalizedPlan.streamPlans()).containsEntry(predicateValues, StreamPlan.SCRATCH);
+    }
+
+    @Test
+    void testCallNameDoesNotDefineMaskStructure()
+    {
+        Variable predicate = new Variable(0);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        predicate,
+                        new Call("or", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(predicateValues));
+
+        assertThat(MaskExpressionResolver.resolve(plan, predicateValues))
+                .isEqualTo(new ReferenceMask(predicateValues));
     }
 
     @Test

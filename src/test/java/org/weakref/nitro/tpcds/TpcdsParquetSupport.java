@@ -14,6 +14,7 @@
 package org.weakref.nitro.tpcds;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
+import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -55,6 +56,7 @@ import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -9475,8 +9477,6 @@ final class TpcdsParquetSupport
         Variable meanPositive = new Variable(4);
         Variable coefficient = new Variable(5);
         Variable coefficientSatisfied = new Variable(6);
-        Variable preliminarilyAccepted = new Variable(7);
-        Variable accepted = new Variable(8);
         EvaluationPlan plan = new EvaluationPlan(List.of(
                 new Assignment(zero, new Literal(0.0), AllMask.ALL),
                 new Assignment(one, new Literal(1L), AllMask.ALL),
@@ -9492,15 +9492,12 @@ final class TpcdsParquetSupport
                         new Reference(new Input(averageIndex), Stream.VALUES))), AllMask.ALL),
                 new Assignment(coefficientSatisfied, new Call("gt_f64", List.of(
                         new Reference(coefficient, Stream.VALUES),
-                        new Reference(thresholdValue, Stream.VALUES))), AllMask.ALL),
-                new Assignment(preliminarilyAccepted, new Call("and", List.of(
-                        new Reference(countSatisfied, Stream.VALUES),
-                        new Reference(meanPositive, Stream.VALUES))), AllMask.ALL),
-                new Assignment(accepted, new Call("and", List.of(
-                        new Reference(preliminarilyAccepted, Stream.VALUES),
-                        new Reference(coefficientSatisfied, Stream.VALUES))), AllMask.ALL)),
+                        new Reference(thresholdValue, Stream.VALUES))), AllMask.ALL)),
                 List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(accepted, Stream.VALUES)));
+        return new FilterSpec(plan, new AndMask(List.of(
+                new ReferenceMask(new Reference(countSatisfied, Stream.VALUES)),
+                new ReferenceMask(new Reference(meanPositive, Stream.VALUES)),
+                new ReferenceMask(new Reference(coefficientSatisfied, Stream.VALUES)))));
     }
 
     private static Operator query64EligibleCatalogItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix)
@@ -11325,7 +11322,13 @@ final class TpcdsParquetSupport
         return maxVariableId;
     }
 
-    private record FilterSpec(EvaluationPlan plan, MaskExpression predicate) {}
+    private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
+    {
+        FilterSpec
+        {
+            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
+        }
+    }
 
     private static int integerField(Row row, int index)
     {

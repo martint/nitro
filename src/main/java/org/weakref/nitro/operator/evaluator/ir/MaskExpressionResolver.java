@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -22,11 +23,14 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class MaskExpressionResolver
 {
     private final Map<Variable, Assignment> assignments;
+    private final Map<Reference, MaskExpression> maskPlans;
+    private final Set<Reference> resolvingMaskPlans = new java.util.HashSet<>();
 
     private MaskExpressionResolver(EvaluationPlan plan)
     {
         this.assignments = plan.assignments().stream()
                 .collect(java.util.stream.Collectors.toMap(Assignment::output, Function.identity()));
+        this.maskPlans = plan.maskPlans();
     }
 
     public static MaskExpression resolve(EvaluationPlan plan, Reference reference)
@@ -43,6 +47,16 @@ public final class MaskExpressionResolver
     {
         checkArgument(reference.stream() == Stream.VALUES, "Mask references must use the VALUES stream: %s", reference);
 
+        MaskExpression maskPlan = maskPlans.get(reference);
+        if (maskPlan != null && resolvingMaskPlans.add(reference)) {
+            try {
+                return resolveExpression(maskPlan);
+            }
+            finally {
+                resolvingMaskPlans.remove(reference);
+            }
+        }
+
         return switch (reference.producer()) {
             case Input _ -> new ReferenceMask(reference);
             case Variable variable -> resolveVariable(variable, reference);
@@ -57,18 +71,6 @@ public final class MaskExpressionResolver
         }
 
         return switch (assignment.operation()) {
-            case Call(String name, List<Reference> arguments, _) when name.equals("and") ->
-                    new AndMask(arguments.stream()
-                            .map(this::resolve)
-                            .toList());
-            case Call(String name, List<Reference> arguments, _) when name.equals("or") ->
-                    new OrMask(arguments.stream()
-                            .map(this::resolve)
-                            .toList());
-            case Call(String name, List<Reference> arguments, _) when name.equals("not") -> {
-                checkArgument(arguments.size() == 1, "not requires 1 argument");
-                yield new NotMask(resolve(arguments.getFirst()));
-            }
             case Copy(Reference source) -> resolve(source);
             default -> new ReferenceMask(reference);
         };

@@ -22,6 +22,7 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
+import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -1380,5 +1381,9 @@ public final class ClickBenchHitsSupport
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
     {
+        FilterSpec
+        {
+            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
+        }
     }
 }

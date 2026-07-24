@@ -216,6 +216,12 @@ class TestArchitectureDependencies
                 .doesNotContain("SPECIAL_FORMS")
                 .doesNotContain("call.name()");
         assertThat(ir.resolve("IfNormalizationRule.java")).doesNotExist();
+        assertThat(read(ir.resolve("MaskExpressionResolver.java")))
+                .doesNotContain("case Call")
+                .doesNotContain("name.equals")
+                .doesNotContain("\"and\"")
+                .doesNotContain("\"or\"")
+                .doesNotContain("\"not\"");
     }
 
     @Test

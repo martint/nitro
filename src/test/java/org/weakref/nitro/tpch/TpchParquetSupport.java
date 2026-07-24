@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.tpch;
 
+import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -1737,7 +1738,13 @@ final class TpchParquetSupport
         return new FilterOperator(source, filterSpec.plan(), primitiveRegistry, filterSpec.predicate(), allocator);
     }
 
-    record FilterSpec(EvaluationPlan plan, MaskExpression predicate) {}
+    record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
+    {
+        FilterSpec
+        {
+            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
+        }
+    }
 
     private static FilterSpec greaterThan(int inputIndex, long constant)
     {

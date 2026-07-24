@@ -52,7 +52,7 @@ public class FilterOperator
 
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
     {
-        this(source, evaluationPlan, primitiveRegistry, evaluationPlan.maskPlans().getOrDefault(predicateReference, MaskExpressionResolver.resolve(evaluationPlan, predicateReference)), allocator);
+        this(source, evaluationPlan, primitiveRegistry, MaskExpressionResolver.resolve(evaluationPlan, predicateReference), allocator);
     }
 
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, MaskExpression predicateMask, Allocator allocator)

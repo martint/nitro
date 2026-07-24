@@ -1604,7 +1604,13 @@ public class TestPlanEvaluator
                                 new Reference(new Input(4), Stream.VALUES),
                                 new Reference(new Input(5), Stream.VALUES)),
                                 AllMask.ALL)),
-                List.of(new Reference(result, Stream.VALUES)));
+                List.of(new Reference(result, Stream.VALUES)),
+                Map.of(),
+                Map.of(
+                        new Reference(predicate, Stream.VALUES),
+                        new OrMask(List.of(
+                                new ReferenceMask(new Reference(leftOnly, Stream.VALUES)),
+                                new ReferenceMask(new Reference(rightOnly, Stream.VALUES))))));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 left, new I64Vector(new long[] {1, 5, 7, 3}),
