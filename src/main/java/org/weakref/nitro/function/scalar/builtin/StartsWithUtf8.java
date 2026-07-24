@@ -24,7 +24,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.List;
 import java.util.Set;
 
-@ScalarFunction(name = "starts_with_utf8")
+@ScalarFunction(name = "starts_with_utf8", capabilities = StartsWithUtf8Optimization.class)
 public final class StartsWithUtf8
         implements PrimitiveFunction
 {

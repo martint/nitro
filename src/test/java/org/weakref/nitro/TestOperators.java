@@ -1174,6 +1174,48 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionCompilesUtf8PrefixIntoFixedWidthConditional()
+    {
+        Variable prefix = new Variable(0);
+        Variable matches = new Variable(1);
+        Variable zero = new Variable(2);
+        Variable selected = new Variable(3);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(prefix, new Literal("PROMO"), AllMask.ALL),
+                        new Assignment(matches, new Call("starts_with_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(prefix, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(zero, new Literal(0.0), AllMask.ALL),
+                        new Assignment(selected, new Call("if_f64", List.of(
+                                new Reference(matches, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        PrimitiveRegistry registry = primitiveRegistry();
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, registry, List.of(result))).isPresent();
+        }
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row("PROMO LARGE", 11.5),
+                                row("STANDARD", 12.5),
+                                row(null, 13.5))));
+                Batch batch = operator.next()) {
+            assertThat(((F64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(11.5, 0.0, 0.0);
+        }
+    }
+
+    @Test
     void testLessThanPropagatesNulls()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

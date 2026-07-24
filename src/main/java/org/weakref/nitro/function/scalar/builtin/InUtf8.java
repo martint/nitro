@@ -13,10 +13,6 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.core.function.projection.ProjectionArgument;
-import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
-import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarFunction;
@@ -26,46 +22,16 @@ import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "in_utf8")
+@ScalarFunction(name = "in_utf8", capabilities = InUtf8ProjectionOptimization.class)
 public final class InUtf8
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction, ProjectionCodeProvider
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("InUtf8");
-
-    @Override
-    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
-    {
-        if (arguments.size() < 2 ||
-                arguments.getFirst().kind() != ProjectionArgument.Kind.INPUT) {
-            return Optional.empty();
-        }
-        for (int index = 1; index < arguments.size(); index++) {
-            if (arguments.get(index).kind() != ProjectionArgument.Kind.LITERAL ||
-                    !(arguments.get(index).literal() instanceof String)) {
-                return Optional.empty();
-            }
-        }
-
-        List<ProjectionCodeBuilder.ValueType> argumentTypes = new ArrayList<>(arguments.size());
-        var input = builder.argument(0, ProjectionCodeBuilder.ValueType.UTF8);
-        var matches = builder.utf8Equal(input, builder.argument(1, ProjectionCodeBuilder.ValueType.UTF8));
-        argumentTypes.add(ProjectionCodeBuilder.ValueType.UTF8);
-        argumentTypes.add(ProjectionCodeBuilder.ValueType.UTF8);
-        for (int index = 2; index < arguments.size(); index++) {
-            argumentTypes.add(ProjectionCodeBuilder.ValueType.UTF8);
-            matches = builder.or(
-                    matches,
-                    builder.utf8Equal(input, builder.argument(index, ProjectionCodeBuilder.ValueType.UTF8)));
-        }
-        return Optional.of(builder.program(argumentTypes, matches, builder.isNull(0)));
-    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()

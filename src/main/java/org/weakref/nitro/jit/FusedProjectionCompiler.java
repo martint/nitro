@@ -26,6 +26,7 @@ import org.weakref.nitro.jit.ProjectionProgramBuilder.Conditional;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Expression;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8StartsWith;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
@@ -450,6 +451,7 @@ public final class FusedProjectionCompiler
                                 (condition.canBeFalse() && whenFalse.canBeFalse()));
             }
             case Utf8Equal _ -> TruthPossibilities.BOTH;
+            case Utf8StartsWith _ -> TruthPossibilities.BOTH;
         };
     }
 
@@ -521,6 +523,7 @@ public final class FusedProjectionCompiler
         }
         if (!utf8Constants.isEmpty()) {
             out.append("  private static boolean eqUtf8(byte[] data, int start, int length, byte[] expected) { return length == expected.length && java.util.Arrays.equals(data, start, start + length, expected, 0, length); }\n");
+            out.append("  private static boolean startsWithUtf8(byte[] data, int start, int length, byte[] prefix) { return length >= prefix.length && java.util.Arrays.equals(data, start, start + prefix.length, prefix, 0, prefix.length); }\n");
         }
         out.append("  private static final Stream V = Stream.VALUES;\n");
         out.append("  private static final Stream N = Stream.NULLS;\n");
@@ -889,6 +892,10 @@ public final class FusedProjectionCompiler
                     resolveOperand(equal.left(), operands),
                     resolveOperand(equal.right(), operands),
                     utf8Constants);
+            case Utf8StartsWith startsWith -> utf8StartsWith(
+                    resolveOperand(startsWith.value(), operands),
+                    resolveOperand(startsWith.prefix(), operands),
+                    utf8Constants);
         };
     }
 
@@ -995,6 +1002,15 @@ public final class FusedProjectionCompiler
         throw new Unsupported();
     }
 
+    private static String utf8StartsWith(Operand value, Operand prefix, Map<String, Integer> constants)
+    {
+        if (value instanceof ColumnOperand column && prefix instanceof Utf8Constant constant) {
+            return "startsWithUtf8(bd" + column.slot() + ", bs" + column.slot() + ", bl" + column.slot() +
+                    ", U" + constants.get(constant.value()) + ")";
+        }
+        throw new Unsupported();
+    }
+
     private static Map<String, Integer> utf8Constants(Slice slice)
     {
         Map<String, Integer> constants = new LinkedHashMap<>();
@@ -1057,6 +1073,9 @@ public final class FusedProjectionCompiler
                 if (!columnCategories.contains(category)) {
                     columnCategories.add(category);
                 }
+            }
+            case Utf8StartsWith _ -> {
+                // Prefix predicates consume bytes directly and do not participate in equality category precomputation.
             }
         }
     }

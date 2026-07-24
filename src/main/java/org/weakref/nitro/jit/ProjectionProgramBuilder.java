@@ -118,6 +118,16 @@ final class ProjectionProgramBuilder
     }
 
     @Override
+    public Value utf8StartsWith(Value value, Value prefix)
+    {
+        Expression valueExpression = expression(value);
+        Expression prefixExpression = expression(prefix);
+        requireType(valueExpression, ValueType.UTF8);
+        requireType(prefixExpression, ValueType.UTF8);
+        return new Utf8StartsWith(valueExpression, prefixExpression);
+    }
+
+    @Override
     public Value and(Value left, Value right)
     {
         return booleanBinary(BinaryOperation.BOOLEAN_AND, left, right);
@@ -248,12 +258,16 @@ final class ProjectionProgramBuilder
                 validateArguments(equal.left(), argumentTypes);
                 validateArguments(equal.right(), argumentTypes);
             }
+            case Utf8StartsWith startsWith -> {
+                validateArguments(startsWith.value(), argumentTypes);
+                validateArguments(startsWith.prefix(), argumentTypes);
+            }
         }
     }
 
     sealed interface Expression
             extends Value
-            permits ArgumentValue, ArgumentNull, BooleanConstant, Binary, BooleanNot, Conditional, Utf8Equal {}
+            permits ArgumentValue, ArgumentNull, BooleanConstant, Binary, BooleanNot, Conditional, Utf8Equal, Utf8StartsWith {}
 
     record ArgumentValue(int index, ValueType type)
             implements Expression {}
@@ -303,6 +317,16 @@ final class ProjectionProgramBuilder
             implements Expression {}
 
     record Utf8Equal(Expression left, Expression right)
+            implements Expression
+    {
+        @Override
+        public ValueType type()
+        {
+            return ValueType.BOOLEAN;
+        }
+    }
+
+    record Utf8StartsWith(Expression value, Expression prefix)
             implements Expression
     {
         @Override

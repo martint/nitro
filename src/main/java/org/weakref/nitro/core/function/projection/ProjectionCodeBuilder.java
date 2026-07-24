@@ -47,6 +47,8 @@ public interface ProjectionCodeBuilder
 
     Value utf8Equal(Value left, Value right);
 
+    Value utf8StartsWith(Value value, Value prefix);
+
     Value and(Value left, Value right);
 
     Value or(Value left, Value right);
