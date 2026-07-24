@@ -108,6 +108,7 @@ public final class PlanEvaluator
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
+    private final Map<Variable, Reference> directMaskInputs;
     private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Producer, Set<Stream>> explicitProjectedStreamsByProducer;
@@ -172,6 +173,7 @@ public final class PlanEvaluator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
+        this.directMaskInputs = bindDirectMaskInputs(plan, primitiveRegistry);
         this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
         this.explicitProjectedStreamsByProducer = streamsByProducer(plan.outputs());
@@ -975,6 +977,38 @@ public final class PlanEvaluator
         return indexedAssignments;
     }
 
+    private static Map<Variable, Reference> bindDirectMaskInputs(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
+    {
+        Map<Variable, Reference> directInputs = new HashMap<>();
+        for (Assignment assignment : plan.assignments()) {
+            if (!(assignment.operation() instanceof Call call)) {
+                continue;
+            }
+            DirectMaskInputProvider provider =
+                    primitiveRegistry.capabilityOrNull(call, DirectMaskInputProvider.class);
+            if (provider == null ||
+                    call.arguments().size() != provider.argumentCount() ||
+                    provider.argumentIndex() < 0 ||
+                    provider.argumentIndex() >= call.arguments().size()) {
+                continue;
+            }
+            Reference argument = call.arguments().get(provider.argumentIndex());
+            Reference directInput = new Reference(
+                    argument.producer(),
+                    switch (provider.inputComponent()) {
+                        case VALUES -> Stream.VALUES;
+                        case NULLS -> Stream.NULLS;
+                        case ERRORS -> Stream.ERRORS;
+                    });
+            // An InputResolver can delegate only physical input streams to its source Output. A variable alias
+            // remains inside this evaluator and follows the ordinary primitive path.
+            if (directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+                directInputs.put(assignment.output(), directInput);
+            }
+        }
+        return Map.copyOf(directInputs);
+    }
+
     private static Set<Allocator.Context> primitiveAllocationContexts(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
     {
         Set<Allocator.Context> contexts = new HashSet<>();
@@ -1366,29 +1400,8 @@ public final class PlanEvaluator
                 !(reference.producer() instanceof Variable variable)) {
             return null;
         }
-        Assignment assignment = assignments.get(variable);
-        if (assignment == null || !(assignment.operation() instanceof Call call)) {
-            return null;
-        }
-        DirectMaskInputProvider directInputProvider =
-                primitiveRegistry.capabilityOrNull(call, DirectMaskInputProvider.class);
-        if (directInputProvider == null ||
-                call.arguments().size() != directInputProvider.argumentCount() ||
-                directInputProvider.argumentIndex() < 0 ||
-                directInputProvider.argumentIndex() >= call.arguments().size()) {
-            return null;
-        }
-        Reference argument = call.arguments().get(directInputProvider.argumentIndex());
-        Reference directInput = new Reference(
-                argument.producer(),
-                switch (directInputProvider.inputComponent()) {
-                    case VALUES -> Stream.VALUES;
-                    case NULLS -> Stream.NULLS;
-                    case ERRORS -> Stream.ERRORS;
-                });
-        // The Filter input resolver can delegate only physical input streams to its source Output. A variable alias
-        // remains inside this evaluator and follows the ordinary primitive path.
-        if (!(directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input)) {
+        Reference directInput = directMaskInputs.get(variable);
+        if (directInput == null) {
             return null;
         }
         return tryResolveInputMask(directInput, mask, selectTrue);
