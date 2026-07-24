@@ -24,6 +24,7 @@ import org.weakref.nitro.core.function.FunctionRegistry;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.InvocationConvention;
 import org.weakref.nitro.core.function.ResolvedCall;
+import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -36,6 +37,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.execution.DriverResult;
 import org.weakref.nitro.execution.OperatorExecutionDriver;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
@@ -239,6 +241,33 @@ class TestCoreIntegrationSlice
         assertThat(memory.reservedBytes()).isZero();
     }
 
+    @Test
+    void testResolvedFunctionCapabilityCrossesIsolatedClassLoader()
+            throws ReflectiveOperationException, IOException
+    {
+        DirectMaskInputProvider isolatedCapability = isolatedDirectMaskInput();
+        assertThat(isolatedCapability.getClass().getClassLoader()).isNotSameAs(getClass().getClassLoader());
+
+        PrimitiveFunction implementation = new IsNullI64();
+        ResolvedCall resolvedCall = new ResolvedCall(
+                new FunctionIdentity("isolated:direct-mask-input"),
+                new BoundSignature(BOOLEAN, List.of(BIGINT)),
+                new FunctionSemantics(
+                        implementation.deterministic(),
+                        List.of(FunctionSemantics.ArgumentNullConvention.CALLED_ON_NULL),
+                        false,
+                        FunctionSemantics.FailureConvention.NEVER_FAILS),
+                List.of(),
+                new PrimitiveInvocationBinding(implementation, List.of(isolatedCapability)));
+        Call call = new Call(resolvedCall, List.of(new Reference(new Input(0), Stream.VALUES)));
+
+        assertThat(new PrimitiveRegistry().capabilityOrNull(call, DirectMaskInputProvider.class))
+                .isSameAs(isolatedCapability);
+        assertThat(isolatedCapability.argumentCount()).isEqualTo(1);
+        assertThat(isolatedCapability.argumentIndex()).isZero();
+        assertThat(isolatedCapability.inputComponent()).isEqualTo(DirectMaskInputProvider.InputComponent.NULLS);
+    }
+
     private static ResolvedCall resolvedCall(
             FunctionIdentity identity,
             TypeBinding result,
@@ -294,6 +323,42 @@ class TestCoreIntegrationSlice
         return (PrimitiveFunction) loader.loadClass(name).getConstructor().newInstance();
     }
 
+    private static DirectMaskInputProvider isolatedDirectMaskInput()
+            throws IOException, ReflectiveOperationException
+    {
+        String name = IsolatedDirectMaskInput.class.getName();
+        String resource = "/" + name.replace('.', '/') + ".class";
+        byte[] bytes;
+        try (var input = TestCoreIntegrationSlice.class.getResourceAsStream(resource)) {
+            if (input == null) {
+                throw new IllegalStateException("Missing class bytes: " + resource);
+            }
+            bytes = input.readAllBytes();
+        }
+        ClassLoader loader = new ClassLoader(TestCoreIntegrationSlice.class.getClassLoader())
+        {
+            @Override
+            protected Class<?> loadClass(String requestedName, boolean resolve)
+                    throws ClassNotFoundException
+            {
+                synchronized (getClassLoadingLock(requestedName)) {
+                    if (!requestedName.equals(name)) {
+                        return super.loadClass(requestedName, resolve);
+                    }
+                    Class<?> loaded = findLoadedClass(requestedName);
+                    if (loaded == null) {
+                        loaded = defineClass(requestedName, bytes, 0, bytes.length);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+        };
+        return (DirectMaskInputProvider) loader.loadClass(name).getConstructor().newInstance();
+    }
+
     public static final class IsolatedAdd
             implements PrimitiveFunction
     {
@@ -320,6 +385,28 @@ class TestCoreIntegrationSlice
                 PrimitiveExecutionContext context)
         {
             return delegate.apply(inputs, mask, requestedStreams, output, context);
+        }
+    }
+
+    public static final class IsolatedDirectMaskInput
+            implements DirectMaskInputProvider
+    {
+        @Override
+        public int argumentCount()
+        {
+            return 1;
+        }
+
+        @Override
+        public int argumentIndex()
+        {
+            return 0;
+        }
+
+        @Override
+        public InputComponent inputComponent()
+        {
+            return InputComponent.NULLS;
         }
     }
 

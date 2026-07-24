@@ -14,11 +14,14 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
+import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
@@ -55,6 +58,26 @@ public class TestScalarRegistry
 
         assertThat(descriptor.implementation()).isInstanceOf(AddI64.class);
         assertThat(primitiveRegistry.get("add")).isInstanceOf(AddI64.class);
+    }
+
+    @Test
+    void testRegistersDirectMaskInputAsCapabilityMetadata()
+    {
+        ScalarRegistry scalarRegistry = new ScalarRegistry();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+
+        ScalarDescriptor descriptor = scalarRegistry.register(IsNullI64.class);
+        primitiveRegistry.register(descriptor);
+
+        DirectMaskInputProvider provider = descriptor.capabilities().stream()
+                .filter(DirectMaskInputProvider.class::isInstance)
+                .map(DirectMaskInputProvider.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(provider).isInstanceOf(IsNullDirectMaskOptimization.class);
+        assertThat(provider.argumentCount()).isEqualTo(1);
+        assertThat(provider.argumentIndex()).isZero();
+        assertThat(provider.inputComponent()).isEqualTo(DirectMaskInputProvider.InputComponent.NULLS);
     }
 
     @ScalarFunction(name = "add")

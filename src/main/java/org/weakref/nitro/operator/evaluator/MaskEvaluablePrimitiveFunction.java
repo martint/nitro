@@ -15,23 +15,12 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 
 public interface MaskEvaluablePrimitiveFunction
         extends PrimitiveFunction
 {
-    /**
-     * Returns an input stream whose Boolean values are exactly this function's Boolean result, or {@code null} when
-     * the function must execute. The evaluator can pass this alias to an upstream direct-mask resolver without
-     * materializing either stream. Implementations must not use value- or query-dependent logic here.
-     */
-    default Reference directMaskInput(List<Reference> arguments)
-    {
-        return null;
-    }
-
     default MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return null;

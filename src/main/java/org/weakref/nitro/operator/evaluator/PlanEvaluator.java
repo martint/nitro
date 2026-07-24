@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
+import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -1369,20 +1370,25 @@ public final class PlanEvaluator
         if (assignment == null || !(assignment.operation() instanceof Call call)) {
             return null;
         }
-        PrimitiveFunction function;
-        try {
-            function = primitiveRegistry.get(call.name());
-        }
-        catch (IllegalArgumentException _) {
+        DirectMaskInputProvider directInputProvider =
+                primitiveRegistry.capabilityOrNull(call, DirectMaskInputProvider.class);
+        if (directInputProvider == null ||
+                call.arguments().size() != directInputProvider.argumentCount() ||
+                directInputProvider.argumentIndex() < 0 ||
+                directInputProvider.argumentIndex() >= call.arguments().size()) {
             return null;
         }
-        if (!(function instanceof MaskEvaluablePrimitiveFunction maskFunction)) {
-            return null;
-        }
-        Reference directInput = maskFunction.directMaskInput(call.arguments());
+        Reference argument = call.arguments().get(directInputProvider.argumentIndex());
+        Reference directInput = new Reference(
+                argument.producer(),
+                switch (directInputProvider.inputComponent()) {
+                    case VALUES -> Stream.VALUES;
+                    case NULLS -> Stream.NULLS;
+                    case ERRORS -> Stream.ERRORS;
+                });
         // The Filter input resolver can delegate only physical input streams to its source Output. A variable alias
         // remains inside this evaluator and follows the ordinary primitive path.
-        if (directInput == null || !(directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input)) {
+        if (!(directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input)) {
             return null;
         }
         return tryResolveInputMask(directInput, mask, selectTrue);

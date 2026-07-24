@@ -76,6 +76,11 @@ public final class PrimitiveRegistry
 
     public <T extends FunctionCapability> Optional<T> capability(Call call, Class<T> capabilityType)
     {
+        return Optional.ofNullable(capabilityOrNull(call, capabilityType));
+    }
+
+    public <T extends FunctionCapability> T capabilityOrNull(Call call, Class<T> capabilityType)
+    {
         requireNonNull(capabilityType, "capabilityType is null");
         List<FunctionCapability> callCapabilities;
         if (call.resolvedCall() != null &&
@@ -85,15 +90,15 @@ public final class PrimitiveRegistry
         else {
             callCapabilities = capabilities.get(call.name());
             if (callCapabilities == null) {
-                return Optional.empty();
+                return null;
             }
         }
         for (FunctionCapability capability : callCapabilities) {
             if (capabilityType.isInstance(capability)) {
-                return Optional.of(capabilityType.cast(capability));
+                return capabilityType.cast(capability);
             }
         }
-        return Optional.empty();
+        return null;
     }
 
     public Optional<ProjectionCodeProvider> projectionCodeProvider(String name)

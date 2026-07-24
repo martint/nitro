@@ -23,7 +23,6 @@ import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
@@ -31,7 +30,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "is_null_i32", capabilities = IsNullProjectionOptimization.class)
+@ScalarFunction(name = "is_null_i32", capabilities = {IsNullProjectionOptimization.class, IsNullDirectMaskOptimization.class})
 public final class IsNullI32
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
@@ -53,13 +52,6 @@ public final class IsNullI32
     public Set<Stream> requiredMaskInputStreams(int inputIndex)
     {
         return PrimitiveFunction.NULLS_INPUT_STREAMS;
-    }
-
-    @Override
-    public Reference directMaskInput(List<Reference> arguments)
-    {
-        checkArgument(arguments.size() == 1, "Unexpected argument count for is_null_i32");
-        return new Reference(arguments.getFirst().producer(), Stream.NULLS);
     }
 
     @Override
