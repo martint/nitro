@@ -13,10 +13,6 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.core.function.projection.ProjectionArgument;
-import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
-import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
@@ -30,35 +26,15 @@ import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "or")
+@ScalarFunction(name = "or", capabilities = OrBooleanOptimization.class)
 public final class OrBoolean
-        implements PrimitiveFunction, ProjectionCodeProvider
+        implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OrBoolean");
-
-    @Override
-    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
-    {
-        if (arguments.size() != 2) {
-            return Optional.empty();
-        }
-        var left = builder.argument(0, ProjectionCodeBuilder.ValueType.BOOLEAN);
-        var right = builder.argument(1, ProjectionCodeBuilder.ValueType.BOOLEAN);
-        var leftNull = builder.isNull(0);
-        var rightNull = builder.isNull(1);
-        var knownTrue = builder.or(
-                builder.and(builder.not(leftNull), left),
-                builder.and(builder.not(rightNull), right));
-        return Optional.of(builder.program(
-                List.of(ProjectionCodeBuilder.ValueType.BOOLEAN, ProjectionCodeBuilder.ValueType.BOOLEAN),
-                builder.or(left, right),
-                builder.and(builder.not(knownTrue), builder.or(leftNull, rightNull))));
-    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()

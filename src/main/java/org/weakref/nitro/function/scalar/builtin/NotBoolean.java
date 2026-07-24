@@ -13,10 +13,6 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.core.function.projection.ProjectionArgument;
-import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
-import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
@@ -29,28 +25,15 @@ import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "not")
+@ScalarFunction(name = "not", capabilities = NotBooleanOptimization.class)
 public final class NotBoolean
-        implements PrimitiveFunction, ProjectionCodeProvider
+        implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NotBoolean");
-
-    @Override
-    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
-    {
-        if (arguments.size() != 1) {
-            return Optional.empty();
-        }
-        return Optional.of(builder.program(
-                List.of(ProjectionCodeBuilder.ValueType.BOOLEAN),
-                builder.not(builder.argument(0, ProjectionCodeBuilder.ValueType.BOOLEAN)),
-                builder.isNull(0)));
-    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
