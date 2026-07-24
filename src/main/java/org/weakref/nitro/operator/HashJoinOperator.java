@@ -1983,7 +1983,10 @@ public class HashJoinOperator
         if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
             return new LongTripleJoinIndex(arrayPool, expectedSize);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(joinValues, arrayPool);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                joinValues,
+                arrayPool,
+                allocator.engineResources().operatorCodeGeneration());
         if (layout != null) {
             return new FlatJoinIndex(layout, expectedSize);
         }

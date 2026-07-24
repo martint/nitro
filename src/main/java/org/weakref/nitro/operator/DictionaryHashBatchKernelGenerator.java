@@ -28,6 +28,7 @@ import static java.lang.constant.ConstantDescs.CD_void;
 
 /** Emits an unrolled logical hash pass for a concrete dictionary-assisted physical key and null shape. */
 final class DictionaryHashBatchKernelGenerator
+        implements AutoCloseable
 {
     static final int NULL_FREE = 0;
     static final int ALL_NULL = 1;
@@ -84,13 +85,27 @@ final class DictionaryHashBatchKernelGenerator
     private static final int ASSIGN_TILE_END = 17;
     private static final int ASSIGN_TILE_START = 18;
 
-    private static final ConcurrentHashMap<Integer, DictionaryHashBatchKernel> KERNELS = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
+    private boolean closed;
 
-    private DictionaryHashBatchKernelGenerator() {}
-
-    static DictionaryHashBatchKernel create(int shape)
+    DictionaryHashBatchKernel create(int shape)
     {
-        return KERNELS.computeIfAbsent(shape, DictionaryHashBatchKernelGenerator::generate);
+        checkOpen();
+        return kernels.computeIfAbsent(shape, DictionaryHashBatchKernelGenerator::generate);
+    }
+
+    @Override
+    public void close()
+    {
+        closed = true;
+        kernels.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Dictionary hash batch kernel generator is closed");
+        }
     }
 
     private static DictionaryHashBatchKernel generate(int shape)

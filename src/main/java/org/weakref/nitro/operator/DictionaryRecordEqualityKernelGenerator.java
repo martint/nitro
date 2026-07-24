@@ -29,6 +29,7 @@ import static java.lang.constant.ConstantDescs.CD_void;
 
 /** Emits an unrolled exact record comparator for a dictionary-assisted physical key shape. */
 final class DictionaryRecordEqualityKernelGenerator
+        implements AutoCloseable
 {
     static final int NULL_FREE = 0;
     static final int ALL_NULL = 1;
@@ -51,19 +52,19 @@ final class DictionaryRecordEqualityKernelGenerator
     private static final int INPUT_NULL = 5;
     private static final int INPUT_GLOBAL_ID = 6;
 
-    private static final ConcurrentHashMap<Shape, DictionaryRecordEqualityKernel> KERNELS = new ConcurrentHashMap<>();
-    private static final AtomicInteger NEXT_CLASS_ID = new AtomicInteger();
+    private final ConcurrentHashMap<Shape, DictionaryRecordEqualityKernel> kernels = new ConcurrentHashMap<>();
+    private final AtomicInteger nextClassId = new AtomicInteger();
+    private boolean closed;
 
-    private DictionaryRecordEqualityKernelGenerator() {}
-
-    static DictionaryRecordEqualityKernel create(Shape shape)
+    DictionaryRecordEqualityKernel create(Shape shape)
     {
-        return KERNELS.computeIfAbsent(shape, DictionaryRecordEqualityKernelGenerator::generate);
+        checkOpen();
+        return kernels.computeIfAbsent(shape, this::generate);
     }
 
-    private static DictionaryRecordEqualityKernel generate(Shape shape)
+    private DictionaryRecordEqualityKernel generate(Shape shape)
     {
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryRecordEqualityKernel" + NEXT_CLASS_ID.incrementAndGet());
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryRecordEqualityKernel" + nextClassId.incrementAndGet());
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(ClassDesc.of("java.lang.Object"));
             builder.withInterfaceSymbols(CD_KERNEL);
@@ -81,6 +82,20 @@ final class DictionaryRecordEqualityKernelGenerator
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to generate dictionary record equality kernel for " + shape, e);
+        }
+    }
+
+    @Override
+    public void close()
+    {
+        closed = true;
+        kernels.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Dictionary record equality kernel generator is closed");
         }
     }
 

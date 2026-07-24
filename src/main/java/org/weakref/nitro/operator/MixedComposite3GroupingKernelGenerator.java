@@ -28,9 +28,8 @@ import static java.lang.constant.ConstantDescs.CD_void;
 
 /** Emits the concrete mixed-composite grouping loop for one three-field physical null shape. */
 final class MixedComposite3GroupingKernelGenerator
+        implements AutoCloseable
 {
-    private MixedComposite3GroupingKernelGenerator() {}
-
     static final int NULL_FREE = 0;
     static final int ALL_NULL = 1;
     static final int MIXED = 2;
@@ -81,11 +80,27 @@ final class MixedComposite3GroupingKernelGenerator
     private static final int COMPOSITE = 30;
     private static final int GROUP = 31;
 
-    private static final ConcurrentHashMap<Integer, MixedComposite3GroupingKernel> KERNELS = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, MixedComposite3GroupingKernel> kernels = new ConcurrentHashMap<>();
+    private boolean closed;
 
-    static MixedComposite3GroupingKernel create(int shape)
+    MixedComposite3GroupingKernel create(int shape)
     {
-        return KERNELS.computeIfAbsent(shape, MixedComposite3GroupingKernelGenerator::generate);
+        checkOpen();
+        return kernels.computeIfAbsent(shape, MixedComposite3GroupingKernelGenerator::generate);
+    }
+
+    @Override
+    public void close()
+    {
+        closed = true;
+        kernels.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Mixed-composite grouping kernel generator is closed");
+        }
     }
 
     static int shape(int longNullShape, int firstNullShape, int secondNullShape)

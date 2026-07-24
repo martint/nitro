@@ -43,7 +43,7 @@ public class GroupOperator
     public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source)
     {
         this.allocator = allocator;
-        this.groupingState = new GroupingState(allocator.primitiveArrays());
+        this.groupingState = new GroupingState(allocator.primitiveArrays(), allocator.engineResources().operatorCodeGeneration());
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.groupValues = new Vector[groupByColumns.length];

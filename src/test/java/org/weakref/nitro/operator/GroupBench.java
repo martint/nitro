@@ -48,7 +48,9 @@ public final class GroupBench
     public static void main(String[] args)
             throws Throwable
     {
-        PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
+        EngineResources engineResources = EngineResources.createDefault();
+        PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
+        OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
         int rows = args.length > 0 ? Integer.parseInt(args[0]) : 10_000_000;
         int distinct = args.length > 1 ? Integer.parseInt(args[1]) : 2_000_000;
 
@@ -114,7 +116,7 @@ public final class GroupBench
         Native.load();
         for (int iter = 0; iter < 6; iter++) {
             long t0 = System.nanoTime();
-            long jg = runJava(nitro, distinct, arrayPool);
+            long jg = runJava(nitro, distinct, arrayPool, codeGeneration);
             long t1 = System.nanoTime();
             long ng = runNative(nitro, distinct, 0);
             long t2 = System.nanoTime();
@@ -126,10 +128,14 @@ public final class GroupBench
         }
     }
 
-    private static long runJava(Vector[][] batches, int expectedDistinct, PrimitiveArrayPool arrayPool)
+    private static long runJava(
+            Vector[][] batches,
+            int expectedDistinct,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
         Vector[] nulls = new Vector[] {null, null, null, null, null};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(batches[0], false, arrayPool);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(batches[0], false, arrayPool, codeGeneration);
         FlatGroupingTable table = new FlatGroupingTable(layout, expectedDistinct);
         long nextGroupId = 0;
         for (Vector[] values : batches) {

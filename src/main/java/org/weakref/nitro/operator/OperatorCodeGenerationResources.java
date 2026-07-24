@@ -23,12 +23,47 @@ public final class OperatorCodeGenerationResources
         implements AutoCloseable
 {
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
+    private final MultiLongGroupingTableGenerator multiLongGrouping = new MultiLongGroupingTableGenerator();
+    private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
+    private final DictionaryHashBatchKernelGenerator dictionaryHash = new DictionaryHashBatchKernelGenerator();
+    private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
+    private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
     private boolean closed;
 
     FusedGroupingAggregationKernelGenerator fusedGrouping()
     {
         checkOpen();
         return fusedGrouping;
+    }
+
+    MultiLongGroupingTableGenerator multiLongGrouping()
+    {
+        checkOpen();
+        return multiLongGrouping;
+    }
+
+    AdaptiveLongGroupingTableGenerator adaptiveLongGrouping()
+    {
+        checkOpen();
+        return adaptiveLongGrouping;
+    }
+
+    DictionaryHashBatchKernelGenerator dictionaryHash()
+    {
+        checkOpen();
+        return dictionaryHash;
+    }
+
+    MixedComposite3GroupingKernelGenerator mixedComposite3Grouping()
+    {
+        checkOpen();
+        return mixedComposite3Grouping;
+    }
+
+    DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality()
+    {
+        checkOpen();
+        return dictionaryRecordEquality;
     }
 
     @Override
@@ -39,6 +74,11 @@ public final class OperatorCodeGenerationResources
         }
         closed = true;
         fusedGrouping.close();
+        multiLongGrouping.close();
+        adaptiveLongGrouping.close();
+        dictionaryHash.close();
+        mixedComposite3Grouping.close();
+        dictionaryRecordEquality.close();
     }
 
     private void checkOpen()

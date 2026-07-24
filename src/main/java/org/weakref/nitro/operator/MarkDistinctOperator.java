@@ -160,7 +160,11 @@ public class MarkDistinctOperator
                 nulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             if (distinctKeySet == null) {
-                distinctKeySet = DistinctKeySet.create(values, retainNulls, arrayPool);
+                distinctKeySet = DistinctKeySet.create(
+                        values,
+                        retainNulls,
+                        arrayPool,
+                        allocator.engineResources().operatorCodeGeneration());
             }
             distinctKeySet.reserveAdditional(sourceMask.selectedCount());
             selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);

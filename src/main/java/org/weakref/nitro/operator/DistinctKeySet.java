@@ -59,9 +59,12 @@ final class DistinctKeySet
      * Creates a distinct-key set that drops rows with any NULL key column. This matches the SQL semantics of
      * {@code count(distinct ...)} and distinct aggregation, where NULL keys are ignored.
      */
-    public static DistinctKeySet create(Vector[] samples, PrimitiveArrayPool arrayPool)
+    public static DistinctKeySet create(
+            Vector[] samples,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
-        return create(samples, false, arrayPool);
+        return create(samples, false, arrayPool, codeGeneration);
     }
 
     /**
@@ -69,10 +72,13 @@ final class DistinctKeySet
      * vector is a dense non-null group id and the second is the nullable value. Partitioning by group avoids
      * repeating the group id in every hash slot and keeps each probe table smaller.
      */
-    public static DistinctKeySet createGroupedLong(Vector[] samples, PrimitiveArrayPool arrayPool)
+    public static DistinctKeySet createGroupedLong(
+            Vector[] samples,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
-            return create(samples, arrayPool);
+            return create(samples, arrayPool, codeGeneration);
         }
         return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool));
     }
@@ -85,16 +91,23 @@ final class DistinctKeySet
      * from any concrete value), so a single representative null-keyed row survives. When {@code false}, any row
      * with a NULL key column is dropped (the {@code count(distinct ...)} semantics).
      */
-    public static DistinctKeySet create(Vector[] samples, boolean retainNulls, PrimitiveArrayPool arrayPool)
+    public static DistinctKeySet create(
+            Vector[] samples,
+            boolean retainNulls,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
-        DistinctIndex index = createIndex(samples, arrayPool);
+        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration);
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool);
         }
         return new DistinctKeySet(index);
     }
 
-    private static DistinctIndex createIndex(Vector[] samples, PrimitiveArrayPool arrayPool)
+    private static DistinctIndex createIndex(
+            Vector[] samples,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
             return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool);
@@ -103,13 +116,14 @@ final class DistinctKeySet
             return new LongPairDistinctIndex(
                     Math.max(16, samples[0].length()),
                     ADAPTIVE_COMPACT_LONG_PAIR && admitsAdaptiveCompactLongPair(samples),
-                    arrayPool);
+                    arrayPool,
+                    codeGeneration);
         }
         if (ADAPTIVE_COMPACT_MULTI_LONG &&
                 samples.length >= ADAPTIVE_COMPACT_MULTI_LONG_MIN_ARITY &&
                 samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY &&
                 allIntegerVectors(samples)) {
-            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool);
+            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration);
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
             return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
@@ -118,9 +132,9 @@ final class DistinctKeySet
             return new LongQuadDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
-            return new MultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool);
+            return new MultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration);
         if (layout != null) {
             return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool);
         }
@@ -781,9 +795,13 @@ final class DistinctKeySet
         private final int[] singlePosition = new int[1];
         private final int[] singleDistinctPosition = new int[1];
 
-        private MultiLongDistinctIndex(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
+        private MultiLongDistinctIndex(
+                int arity,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration)
         {
-            table = MultiLongGroupingTableGenerator.createDistinct(arity, expectedSize, arrayPool);
+            table = codeGeneration.multiLongGrouping().createDistinct(arity, expectedSize, arrayPool);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
         }
@@ -905,10 +923,14 @@ final class DistinctKeySet
         private boolean debugSharedDictionaryNullResolverPrinted;
         private boolean debugSharedDictionaryBaseCachePrinted;
 
-        private AdaptiveMultiLongDistinctIndex(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
+        private AdaptiveMultiLongDistinctIndex(
+                int arity,
+                int expectedSize,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration)
         {
             this.arrayPool = arrayPool;
-            table = AdaptiveLongGroupingTable.createDistinct(arity, expectedSize, arrayPool);
+            table = AdaptiveLongGroupingTable.createDistinct(arity, expectedSize, arrayPool, codeGeneration);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
             sharedDictionaryGenerationScratch = new long[arity];
@@ -1353,6 +1375,7 @@ final class DistinctKeySet
         private static final int ADAPTIVE_COMPACT_START_BATCH =
                 Integer.getInteger("nitro.distinct.adaptiveCompactLongPairStartBatch", 4);
         private final PrimitiveArrayPool arrayPool;
+        private final OperatorCodeGenerationResources codeGeneration;
 
         private long[] firstKeys;
         private long[] secondKeys;
@@ -1366,9 +1389,14 @@ final class DistinctKeySet
         private int pendingAdditional;
         private AdaptiveMultiLongDistinctIndex adaptiveDelegate;
 
-        private LongPairDistinctIndex(int expectedSize, boolean adaptiveCompactCandidate, PrimitiveArrayPool arrayPool)
+        private LongPairDistinctIndex(
+                int expectedSize,
+                boolean adaptiveCompactCandidate,
+                PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration)
         {
             this.arrayPool = arrayPool;
+            this.codeGeneration = codeGeneration;
             this.adaptiveCompactCandidate = adaptiveCompactCandidate;
             int capacity = DistinctKeySet.capacity(expectedSize);
             allocate(capacity);
@@ -1518,7 +1546,11 @@ final class DistinctKeySet
                 pendingAdditional = 0;
                 return false;
             }
-            adaptiveDelegate = new AdaptiveMultiLongDistinctIndex(2, Math.max(16, size + pendingAdditional), arrayPool);
+            adaptiveDelegate = new AdaptiveMultiLongDistinctIndex(
+                    2,
+                    Math.max(16, size + pendingAdditional),
+                    arrayPool,
+                    codeGeneration);
             adaptiveDelegate.importPairs(this);
             releaseTableBuffers();
             pendingAdditional = 0;

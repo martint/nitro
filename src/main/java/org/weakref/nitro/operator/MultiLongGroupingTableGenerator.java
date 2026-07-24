@@ -42,9 +42,8 @@ import static java.lang.constant.ConstantDescs.CD_void;
  * registers and there is no per-row type dispatch. One mechanism covers any number of long keys.
  */
 final class MultiLongGroupingTableGenerator
+        implements AutoCloseable
 {
-    private MultiLongGroupingTableGenerator() {}
-
     private static final ClassDesc CD_BASE = ClassDesc.of("org.weakref.nitro.operator.AbstractMultiLongGroupingTable");
     private static final ClassDesc CD_PRIMITIVE_ARRAY_POOL = ClassDesc.of("org.weakref.nitro.data.PrimitiveArrayPool");
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
@@ -60,33 +59,49 @@ final class MultiLongGroupingTableGenerator
     private static final long MURMUR_C1 = 0xFF51AFD7ED558CCDL;
     private static final long MURMUR_C2 = 0xC4CEB9FE1A85EC53L;
 
-    private static final ConcurrentHashMap<Integer, MethodHandle> CONSTRUCTORS = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, MethodHandle> constructors = new ConcurrentHashMap<>();
+    private boolean closed;
 
-    static AbstractMultiLongGroupingTable create(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
+    AbstractMultiLongGroupingTable create(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
         return create(arity, expectedSize, true, arrayPool);
     }
 
-    static AbstractMultiLongGroupingTable createDistinct(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
+    AbstractMultiLongGroupingTable createDistinct(int arity, int expectedSize, PrimitiveArrayPool arrayPool)
     {
         return create(arity, expectedSize, false, arrayPool);
     }
 
-    private static AbstractMultiLongGroupingTable create(
+    private AbstractMultiLongGroupingTable create(
             int arity,
             int expectedSize,
             boolean retainGroupKeys,
             PrimitiveArrayPool arrayPool)
     {
+        checkOpen();
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
-        MethodHandle constructor = CONSTRUCTORS.computeIfAbsent(arity, MultiLongGroupingTableGenerator::generate);
+        MethodHandle constructor = constructors.computeIfAbsent(arity, MultiLongGroupingTableGenerator::generate);
         try {
             return (AbstractMultiLongGroupingTable) constructor.invoke(arrayPool, expectedSize, retainGroupKeys);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated grouping table for arity " + arity, e);
+        }
+    }
+
+    @Override
+    public void close()
+    {
+        closed = true;
+        constructors.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Multi-long grouping table generator is closed");
         }
     }
 

@@ -126,6 +126,7 @@ final class GroupingState
             Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinNewPercent", 20);
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
     private final PrimitiveArrayPool arrayPool;
+    private final OperatorCodeGenerationResources codeGeneration;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
     // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
     // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
@@ -233,9 +234,10 @@ final class GroupingState
     private boolean initialized;
     private LongGroupingTable multiLongTable;
 
-    GroupingState(PrimitiveArrayPool arrayPool)
+    GroupingState(PrimitiveArrayPool arrayPool, OperatorCodeGenerationResources codeGeneration)
     {
         this.arrayPool = arrayPool;
+        this.codeGeneration = codeGeneration;
         groups.defaultReturnValue(-1);
     }
 
@@ -728,7 +730,7 @@ final class GroupingState
             useMultiLongGrouping = false;
             useFlatGrouping = true;
             useFullWidthPairPackedIdentity = true;
-            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool);
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool, codeGeneration);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -1014,7 +1016,7 @@ final class GroupingState
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
         if (useFullWidthPairPackedIdentity) {
             useFlatGrouping = true;
-            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool);
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool, codeGeneration);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -1032,7 +1034,7 @@ final class GroupingState
                     values.length >= GENERATED_COMPACT_LONG_MIN_ARITY) {
                 useMultiLongGrouping = true;
                 multiLongArity = values.length;
-                multiLongTable = AdaptiveLongGroupingTable.create(values.length, Math.max(16, values[0].length()), arrayPool);
+                multiLongTable = AdaptiveLongGroupingTable.create(values.length, Math.max(16, values[0].length()), arrayPool, codeGeneration);
                 return;
             }
             if (values.length == 2 && PACKED_INT_PAIR_GROUPING) {
@@ -1050,7 +1052,7 @@ final class GroupingState
             if (values.length == 2 && Boolean.getBoolean("nitro.experiment.useFlatBigintPairStrategy")) {
                 useFlatGrouping = true;
                 flatGroupingTable = new FlatGroupingTable(
-                        BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool),
+                        BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool, codeGeneration),
                         Math.max(16, values[0].length()),
                         true);
                 return;
@@ -1059,11 +1061,11 @@ final class GroupingState
             // is emitted as bytecode so the keys live in registers exactly like the former 2/3/4-key tables.
             useMultiLongGrouping = true;
             multiLongArity = values.length;
-            multiLongTable = MultiLongGroupingTableGenerator.create(values.length, Math.max(16, values[0].length()), arrayPool);
+            multiLongTable = codeGeneration.multiLongGrouping().create(values.length, Math.max(16, values[0].length()), arrayPool);
             return;
         }
 
-        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys, arrayPool);
+        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys, arrayPool, codeGeneration);
         if (SHARED_DICTIONARY_COMPOSITE_GROUPING &&
                 values.length > 1 &&
                 values.length <= SHARED_DICTIONARY_MAX_FIELDS &&
@@ -1115,7 +1117,7 @@ final class GroupingState
             return false;
         }
         int sampled = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
-        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool);
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool, codeGeneration);
         int distinct = sampledDistinctFlatKeys(layout, values, nulls, mask);
         return (long) distinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT;
     }
@@ -1288,7 +1290,7 @@ final class GroupingState
         // A later NULL becomes an ordinary record and cannot introduce a logical-id hole or a steady-state mode
         // branch.
         boolean largeBatch = mask.count() >= FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_BATCH_ROWS;
-        FlatKeyLayout identityLayout = largeBatch ? FlatKeyLayout.tryCreate(values, true, arrayPool) : null;
+        FlatKeyLayout identityLayout = largeBatch ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration) : null;
         int sampledDistinct = largeBatch
                 ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
                 : 0;
@@ -1779,7 +1781,7 @@ final class GroupingState
     private void promotePackedIntGrouping(int upcomingRows)
     {
         multiLongArity = packedIntGroupingArity;
-        multiLongTable = MultiLongGroupingTableGenerator.create(
+        multiLongTable = codeGeneration.multiLongGrouping().create(
                 multiLongArity,
                 Math.max(16, toIntExact(Math.min(Integer.MAX_VALUE, nextGroupId + upcomingRows))),
                 arrayPool);

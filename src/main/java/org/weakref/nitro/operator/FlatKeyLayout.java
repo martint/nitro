@@ -136,6 +136,7 @@ class FlatKeyLayout
     private static final int DISCRIMINATING_FIELD_HASH_MIN_DISTINCT_PERCENT =
             Integer.getInteger("nitro.group.discriminatingFieldHashMinDistinctPercent", 90);
     private final PrimitiveArrayPool arrayPool;
+    private final OperatorCodeGenerationResources codeGeneration;
     private final Field[] fields;
     private final int[] inputChannels;
     private final FlatTypeHandler[] handlers;
@@ -319,6 +320,7 @@ class FlatKeyLayout
 
     FlatKeyLayout(
             PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
             Field[] fields,
             int[] inputChannels,
             FlatTypeHandler[] handlers,
@@ -330,6 +332,7 @@ class FlatKeyLayout
             boolean compactEmbeddedBinaryRecords)
     {
         this.arrayPool = arrayPool;
+        this.codeGeneration = codeGeneration;
         this.fields = fields;
         this.inputChannels = inputChannels;
         this.handlers = handlers;
@@ -367,7 +370,11 @@ class FlatKeyLayout
         this.fieldUsesIdOnlyRecords = new boolean[handlers.length];
     }
 
-    public static FlatKeyLayout tryCreate(Vector[] values, boolean nullable, PrimitiveArrayPool arrayPool)
+    public static FlatKeyLayout tryCreate(
+            Vector[] values,
+            boolean nullable,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
         Field[] fields = new Field[values.length];
         int[] inputChannels = new int[values.length];
@@ -410,6 +417,7 @@ class FlatKeyLayout
         if (PRECOMPUTE_COMPACT_BINARY_POSITION_IDS && compactEmbeddedBinaryRecords) {
             return new PositionIdFlatKeyLayout(
                     arrayPool,
+                    codeGeneration,
                     fields,
                     inputChannels,
                     handlers,
@@ -419,7 +427,7 @@ class FlatKeyLayout
                     fixedOffset,
                     anyVariableWidth);
         }
-        return new FlatKeyLayout(arrayPool, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
+        return new FlatKeyLayout(arrayPool, codeGeneration, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
     }
 
     private static boolean admitsCompactBinaryRecords(Vector[] values, FlatTypeHandler[] handlers)
@@ -461,9 +469,12 @@ class FlatKeyLayout
         return distinct;
     }
 
-    public static FlatKeyLayout tryCreate(Vector[] values, PrimitiveArrayPool arrayPool)
+    public static FlatKeyLayout tryCreate(
+            Vector[] values,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration)
     {
-        return tryCreate(values, false, arrayPool);
+        return tryCreate(values, false, arrayPool, codeGeneration);
     }
 
     PrimitiveArrayPool primitiveArrays()
@@ -1015,7 +1026,7 @@ class FlatKeyLayout
         for (int index = 0; index < comparisonOrder.length; index++) {
             order |= comparisonOrder[index] << (index * 3);
         }
-        generatedRecordEqualityKernel = DictionaryRecordEqualityKernelGenerator.create(
+        generatedRecordEqualityKernel = codeGeneration.dictionaryRecordEquality().create(
                 new DictionaryRecordEqualityKernelGenerator.Shape(
                         handlers.length,
                         nullByteCount != 0,
@@ -1507,7 +1518,7 @@ class FlatKeyLayout
                 batchNullShape(longIndex),
                 batchNullShape(firstBinary),
                 batchNullShape(secondBinary));
-        MixedComposite3GroupingKernel kernel = MixedComposite3GroupingKernelGenerator.create(shape);
+        MixedComposite3GroupingKernel kernel = codeGeneration.mixedComposite3Grouping().create(shape);
         int[] compositeCache = table.prepareCompositeCache(Math.multiplyExact(
                 LONG_COMPOSITE_RADIX,
                 Math.multiplyExact(firstRadix, secondRadix)));
@@ -2051,7 +2062,7 @@ class FlatKeyLayout
                 count < GENERATED_DICTIONARY_HASH_BATCH_NULL_FREE_PAIR_MIN_ROWS) {
             return null;
         }
-        DictionaryHashBatchKernel kernel = DictionaryHashBatchKernelGenerator.create(shape);
+        DictionaryHashBatchKernel kernel = codeGeneration.dictionaryHash().create(shape);
         if (DEBUG_GENERATED_DICTIONARY_HASH_BATCH && !debugGeneratedDictionaryHashBatchPrinted) {
             debugGeneratedDictionaryHashBatchPrinted = true;
             System.err.printf("[generated-dictionary-hash-batch] fields=%d shape=%d rows=%d compact=%s kinds=%s ids=%s offsets=%s order=%s%n",
@@ -2873,6 +2884,7 @@ class FlatKeyLayout
     {
         private PositionIdFlatKeyLayout(
                 PrimitiveArrayPool arrayPool,
+                OperatorCodeGenerationResources codeGeneration,
                 Field[] fields,
                 int[] inputChannels,
                 FlatTypeHandler[] handlers,
@@ -2884,6 +2896,7 @@ class FlatKeyLayout
         {
             super(
                     arrayPool,
+                    codeGeneration,
                     fields,
                     inputChannels,
                     handlers,

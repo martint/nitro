@@ -151,7 +151,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState(allocator.primitiveArrays()));
+        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState(allocator.primitiveArrays(), allocator.engineResources().operatorCodeGeneration()));
     }
 
     private GroupedAggregationOperator(
@@ -1176,8 +1176,8 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = GROUP_PARTITIONED_LONG_DISTINCT && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values, arrayPool)
-                            : DistinctKeySet.create(values, arrayPool);
+                            ? DistinctKeySet.createGroupedLong(values, arrayPool, allocator.engineResources().operatorCodeGeneration())
+                            : DistinctKeySet.create(values, arrayPool, allocator.engineResources().operatorCodeGeneration());
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());

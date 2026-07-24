@@ -34,6 +34,7 @@ public class DistinctCount
 {
     private final int inputColumn;
     private PrimitiveArrayPool arrayPool;
+    private OperatorCodeGenerationResources codeGeneration;
 
     public DistinctCount(int inputColumn)
     {
@@ -50,6 +51,7 @@ public class DistinctCount
     public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
     {
         arrayPool = allocator.primitiveArrays();
+        codeGeneration = allocator.engineResources().operatorCodeGeneration();
         DistinctCountStateVector stateVector = new DistinctCountStateVector();
         stateVector.ensureGroupCapacity(size);
         return Streams.ofValues(allocator.adopt(allocationContext, stateVector));
@@ -162,7 +164,7 @@ public class DistinctCount
         if (implementation != null) {
             return (DistinctIndex) implementation;
         }
-        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues, arrayPool));
+        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues, arrayPool, codeGeneration));
         stateVector.setImplementation(index);
         return index;
     }

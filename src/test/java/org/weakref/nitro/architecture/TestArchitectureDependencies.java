@@ -177,9 +177,19 @@ class TestArchitectureDependencies
     @Test
     void testOperatorKernelCachesAreExplicitlyOwned()
     {
-        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/FusedGroupingAggregationKernelGenerator.java")))
+        List<Path> generators = List.of(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/FusedGroupingAggregationKernelGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/MultiLongGroupingTableGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/AdaptiveLongGroupingTableGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/DictionaryHashBatchKernelGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/MixedComposite3GroupingKernelGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/DictionaryRecordEqualityKernelGenerator.java"));
+
+        assertThat(generators.stream().map(TestArchitectureDependencies::read))
                 .as("generated operator kernels belong to OperatorCodeGenerationResources")
-                .doesNotContain("static final ConcurrentHashMap", "static final AtomicInteger");
+                .allMatch(source ->
+                        !source.contains("static final ConcurrentHashMap") &&
+                                !source.contains("static final AtomicInteger"));
     }
 
     private static boolean matches(Path path, Pattern pattern)
