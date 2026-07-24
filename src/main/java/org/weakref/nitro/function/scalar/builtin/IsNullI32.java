@@ -20,7 +20,6 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -32,7 +31,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "is_null_i32", capabilities = {IsNullProjectionOptimization.class, IsNullDirectMaskOptimization.class})
 public final class IsNullI32
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
+        implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IsNullI32");
 
@@ -46,30 +45,6 @@ public final class IsNullI32
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
         return PrimitiveFunction.nullsOnlyWhenRequested(requestedOutputStreams);
-    }
-
-    @Override
-    public Set<Stream> requiredMaskInputStreams(int inputIndex)
-    {
-        return PrimitiveFunction.NULLS_INPUT_STREAMS;
-    }
-
-    @Override
-    public boolean requiresCompletedInputCompanionStreamsForMask()
-    {
-        return false;
-    }
-
-    @Override
-    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return IsNullMaskSupport.evaluateInPlace(inputs, mask, true);
-    }
-
-    @Override
-    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return IsNullMaskSupport.evaluateInPlace(inputs, mask, false);
     }
 
     @Override

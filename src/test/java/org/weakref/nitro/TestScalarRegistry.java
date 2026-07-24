@@ -23,6 +23,7 @@ import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -69,6 +70,7 @@ public class TestScalarRegistry
         ScalarDescriptor descriptor = scalarRegistry.register(IsNullI64.class);
         primitiveRegistry.register(descriptor);
 
+        assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
         DirectMaskInputProvider provider = descriptor.capabilities().stream()
                 .filter(DirectMaskInputProvider.class::isInstance)
                 .map(DirectMaskInputProvider.class::cast)

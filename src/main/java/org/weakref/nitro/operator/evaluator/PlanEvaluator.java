@@ -1000,11 +1000,7 @@ public final class PlanEvaluator
                         case NULLS -> Stream.NULLS;
                         case ERRORS -> Stream.ERRORS;
                     });
-            // An InputResolver can delegate only physical input streams to its source Output. A variable alias
-            // remains inside this evaluator and follows the ordinary primitive path.
-            if (directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
-                directInputs.put(assignment.output(), directInput);
-            }
+            directInputs.put(assignment.output(), directInput);
         }
         return Map.copyOf(directInputs);
     }
@@ -1404,7 +1400,21 @@ public final class PlanEvaluator
         if (directInput == null) {
             return null;
         }
-        return tryResolveInputMask(directInput, mask, selectTrue);
+        if (directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+            Mask inputMask = tryResolveInputMask(directInput, mask, selectTrue);
+            if (inputMask != null) {
+                return inputMask;
+            }
+        }
+
+        Vector values = evaluate(directInput, mask).get(directInput.stream());
+        if (IN_PLACE_FLAT_BOOLEAN_CLASSIFIER && values instanceof BooleanVector booleanValues) {
+            mask.retainBooleans(booleanValues.values(), selectTrue);
+            return mask;
+        }
+        return selectTrue
+                ? classifyTrueBooleanMask(values, null, null, mask)
+                : classifyFalseBooleanMask(values, null, null, mask);
     }
 
     private Mask tryEvaluateSubstringInSetMask(Reference reference, Mask mask, boolean selectMatches)
