@@ -23,6 +23,15 @@ and +3.97% cycles. Moving bound decoding to evaluator construction restored a
 123.225 ms and retained adverse counters. All rejected artifacts are preserved
 here; the range change is fully backed out.
 
+The rollback is diagnostic, not an exception to the architecture. The
+remaining `lt` recognition in `PlanEvaluator` is forbidden debt. A follow-up
+must compare the fast and slow compiled modes and isolate interface shape,
+descriptor metadata, lookup, per-batch allocation, construction-time decoding,
+and generated-plan binding effects. The endpoint remains registry-owned
+semantics lowered before execution with no function identity in the evaluator;
+preserving incidental source shape without explaining the compiler behavior is
+not an acceptable solution.
+
 The retained equality-only slice is qualified by
 `candidate-metadata-q20-3fork.json` against
 `parent-q20-reverse-3fork.json`. Both exhibit the same one-fast/two-slow
