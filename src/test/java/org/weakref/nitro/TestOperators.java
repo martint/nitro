@@ -783,6 +783,82 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionCompilesMixedWidthNullTests()
+    {
+        Variable zero = new Variable(0);
+        Variable i32Null = new Variable(1);
+        Variable i64Null = new Variable(2);
+        Variable anyNull = new Variable(3);
+        Variable product = new Variable(4);
+        Variable selected = new Variable(5);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(i32Null, new Call("is_null_i32", List.of(
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(i64Null, new Call("is_null_i64", List.of(
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(anyNull, new Call("or", List.of(
+                                new Reference(i32Null, Stream.VALUES),
+                                new Reference(i64Null, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(product, new Call("multiply", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(selected, new Call("if_i64", List.of(
+                                new Reference(anyNull, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(product, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        PrimitiveRegistry registry = primitiveRegistry();
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, registry, List.of(result))).isPresent();
+        }
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(
+                                row(3, 7L),
+                                row(null, 11L),
+                                row(5, null),
+                                row(null, null))));
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(21L, 0L, 0L, 0L);
+        }
+    }
+
+    @Test
+    void testFusedProjectionLeavesShortNullOnlySliceToInterpreter()
+    {
+        Variable zero = new Variable(0);
+        Variable one = new Variable(1);
+        Variable isNull = new Variable(2);
+        Variable selected = new Variable(3);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(isNull, new Call("is_null_i64", List.of(
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(selected, new Call("if_i64", List.of(
+                                new Reference(isNull, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, primitiveRegistry(), List.of(result))).isEmpty();
+        }
+    }
+
+    @Test
     void testIfI64KeepsConstantBranchesEncoded()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();

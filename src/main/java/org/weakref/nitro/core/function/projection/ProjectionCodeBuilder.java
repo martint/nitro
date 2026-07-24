@@ -67,6 +67,13 @@ public interface ProjectionCodeBuilder
         I64,
         F64,
         BOOLEAN,
-        UTF8
+        UTF8,
+        /**
+         * An argument whose projection program reads only {@link ProjectionCodeBuilder#isNull(int)}.
+         *
+         * <p>This is an input access shape rather than a value type. It lets a provider describe null-only behavior
+         * without inventing a value carrier or making the engine aware of the function's logical type.
+         */
+        NULLS_ONLY
     }
 }

@@ -75,7 +75,7 @@ public final class FusedProjectionCompiler
 
     public FusedProjectionCompiler() {}
 
-    private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8 }
+    private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8, NULLS_ONLY }
 
     private sealed interface Operand
             permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant, Utf8Constant {}
@@ -129,7 +129,8 @@ public final class FusedProjectionCompiler
                 SliceBuilder trial = new SliceBuilder(assignments, primitiveRegistry);
                 Operand root = trial.operand(candidate, null);
                 PhysicalType rootType = operandType(root);
-                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE) && worthFusing(trial.steps())) {
+                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE) &&
+                        worthFusing(trial.steps(), trial.columnTypes())) {
                     fusible.add(candidate);
                 }
             }
@@ -172,12 +173,18 @@ public final class FusedProjectionCompiler
         cache.clear();
     }
 
-    private static boolean worthFusing(List<Step> steps)
+    private static boolean worthFusing(List<Step> steps, List<PhysicalType> columnTypes)
     {
         // A slice with a single operation writes one output from one primitive; the interpreter already does that with
         // no intermediate vector, so fusing only adds javac + call overhead. Two or more operations means the
         // interpreter materializes at least one intermediate vector that fusion keeps in a register.
-        return steps.size() >= 2;
+        if (steps.size() < 2) {
+            return false;
+        }
+        // A two-step slice that reads only null streams saves one small boolean intermediate but pays for a generated
+        // dense value loop. The interpreter's mask/null-stream path is cheaper at that size. Longer null-only slices
+        // amortize the loop, and any value-consuming slice retains the existing two-step threshold.
+        return steps.size() >= 3 || columnTypes.stream().anyMatch(type -> type != PhysicalType.NULLS_ONLY);
     }
 
     private static final class Unsupported
@@ -246,8 +253,14 @@ public final class FusedProjectionCompiler
                     columns.add(index);
                     return columns.size() - 1;
                 });
-                PhysicalType existing = columnTypeBySlot.putIfAbsent(slot, expected);
-                if (existing != null && existing != expected) {
+                PhysicalType existing = columnTypeBySlot.get(slot);
+                if (existing == null) {
+                    columnTypeBySlot.put(slot, expected);
+                }
+                else if (existing == PhysicalType.NULLS_ONLY) {
+                    columnTypeBySlot.put(slot, expected);
+                }
+                else if (expected != PhysicalType.NULLS_ONLY && existing != expected) {
                     throw new Unsupported();
                 }
                 return new ColumnOperand(slot, expected);
@@ -351,6 +364,7 @@ public final class FusedProjectionCompiler
             case F64 -> PhysicalType.DOUBLE;
             case BOOLEAN -> PhysicalType.BOOL;
             case UTF8 -> PhysicalType.UTF8;
+            case NULLS_ONLY -> PhysicalType.NULLS_ONLY;
         };
     }
 
@@ -512,7 +526,8 @@ public final class FusedProjectionCompiler
                         out.append("    F64Vector scratchValues").append(slot).append(" = null;\n");
                     }
                 }
-                else if (slice.columnTypes().get(slot) != PhysicalType.UTF8) {
+                else if (slice.columnTypes().get(slot) != PhysicalType.UTF8 &&
+                        slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                     out.append("    I64Vector scratchValues").append(slot).append(" = null;\n");
                 }
                 out.append("    BooleanVector scratchNulls").append(slot).append(" = null;\n");
@@ -529,7 +544,7 @@ public final class FusedProjectionCompiler
             else if (slice.columnTypes().get(slot) == PhysicalType.UTF8) {
                 appendUtf8Column(out, slot);
             }
-            else {
+            else if (slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                 appendLongColumn(out, slot);
             }
             // NULLS may arrive flat (BooleanVector) or, on a column carried through joins, dictionary-wrapped over a
@@ -602,7 +617,8 @@ public final class FusedProjectionCompiler
         if (POOLED_DICTIONARY_SCRATCH) {
             out.append("    } finally {\n");
             for (int slot = 0; slot < slice.columns().size(); slot++) {
-                if (slice.columnTypes().get(slot) != PhysicalType.UTF8) {
+                if (slice.columnTypes().get(slot) != PhysicalType.UTF8 &&
+                        slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                     if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE && MAPPED_DICTIONARY_DOUBLE_INPUTS) {
                         out.append("      if (scratchIds").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchIds").append(slot).append("); }\n");
                     }
@@ -715,7 +731,7 @@ public final class FusedProjectionCompiler
                 case LONG -> "long";
                 case DOUBLE -> "double";
                 case BOOL -> "boolean";
-                case UTF8 -> throw new Unsupported();
+                case UTF8, NULLS_ONLY -> throw new Unsupported();
             };
             body.append("        ").append(javaType).append(" sv").append(step.id()).append(" = ").append(valueExpr(step, utf8Constants)).append(";\n");
             // A step's is-null local is only needed when some output (or a downstream step) reads it; the null-free

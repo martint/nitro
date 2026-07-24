@@ -37,7 +37,11 @@ final class ProjectionProgramBuilder
         if (index < 0) {
             throw new IllegalArgumentException("argument index is negative");
         }
-        return new ArgumentValue(index, requireNonNull(type, "type is null"));
+        ValueType valueType = requireNonNull(type, "type is null");
+        if (valueType == ValueType.NULLS_ONLY) {
+            throw new IllegalArgumentException("NULLS_ONLY argument has no value");
+        }
+        return new ArgumentValue(index, valueType);
     }
 
     @Override

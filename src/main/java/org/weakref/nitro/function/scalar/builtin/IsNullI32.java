@@ -31,7 +31,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "is_null_i32")
+@ScalarFunction(name = "is_null_i32", capabilities = IsNullProjectionOptimization.class)
 public final class IsNullI32
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
