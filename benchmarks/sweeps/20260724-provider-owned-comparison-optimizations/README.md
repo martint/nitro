@@ -40,3 +40,64 @@ allocation, +0.10% instructions, +0.73% cycles, +0.19% L1D misses, +0.46%
 L1D loads, +0.28% dTLB misses, +0.62% dTLB loads, -0.18% branch misses, and
 +0.57% branches. The confidence intervals overlap; no stable high-volume
 counter moves by 1%.
+
+## Follow-up: structural provider-owned range lowering
+
+The rejected variants above were diagnostics, not the final result. A
+subsequent implementation lowers registry-provided range metadata into a
+structural physical mask before execution. `PlanEvaluator` now sees an opaque
+input, bounds, and kernel; it does not recognize `lt`, comparison arity,
+operand roles, literal placement, or integer vector carriers. Those details
+belong to `LessThanI64RangeOptimization`, which is registered as a function
+capability separately from the hot scalar implementation. Merely naming a
+function `lt` grants no range semantics, and an aliased function with the
+capability is lowered.
+
+This investigation also invalidated the earlier causal interpretation of
+q20's approximately 105 ms mode. In the final candidate, a single JVM moved
+from roughly 135 ms to 110 ms during measurement; another stayed near 109 ms,
+and another stayed near 133--139 ms. In earlier warmups the direction was
+reversed: roughly 110 ms iterations were followed by roughly 135 ms
+iterations. Allocation was stable within those transitions. The exact parent
+also alternates between these modes across otherwise identical invocations.
+Full `LogCompilation` and lightweight compilation logging perturb or delay the
+transition and produced only the slower mode. Therefore, whether one of three
+forks happens to capture 105--110 ms cannot be attributed to provider
+placement or evaluator function knowledge.
+
+The final paired artifacts are:
+
+- `candidate-structural-provider-range-final-q20-q43-3fork.json`
+- `parent-structural-provider-range-reverse-q20-q43-3fork.json`
+- `candidate-structural-provider-range-q43-confirmation-3fork.json`
+
+Candidate q20 averages 124.391 ms versus the exact `e3152da7` parent at
+133.764 ms, but the mixed compiler modes make the aggregate descriptive, not
+a stable source delta. The first q43 candidate invocation averages 122.386 ms
+versus the parent at 119.815 ms. The immediate three-fork confirmation averages
+119.586 ms, with 2.311B instructions, 0.668B cycles, 44.852M L1D misses,
+22.398K dTLB misses, 1.347M branch misses, and 0.541B branches. This overlaps
+the parent duration and slightly improves instructions, cycles, branch misses,
+and branches; L1D/dTLB load estimates remain somewhat adverse and noisy.
+
+Q43 allocation is also multimodal. The parent produced both approximately
+89--90 MB/op and 98 MB/op forks, while earlier equality-only candidate forks
+produced approximately 87--89 MB/op and 101 MB/op. The final structural
+candidate samples happened to remain near 98--100 MB/op. This must not be
+reported as a board improvement, filtered, or explained as an abstraction
+cost without compiler evidence. It is a follow-up compiler/escape-analysis
+target.
+
+The retained architectural conclusion is nevertheless firm: the evaluator
+cannot recover semantics from a function name. An architecture test now
+prevents `"lt"`, `LessThanI64`, `constantBound`, and the old `RangeFusion`
+recognizer from returning to `PlanEvaluator` or `FilterOperator`. Provider
+kernels may ultimately be generated through the Classfile API, but their
+semantic contract and lifecycle remain registry-owned; the evaluator invokes
+only the generic structural protocol.
+
+The final JDK 26 gate passed 1,336 tests with zero failures/errors and 566
+skips. No JFR artifacts were created. The large raw `LogCompilation` XML files
+were removed after their findings were summarized here; the compact JMH JSON,
+unified compilation logs, negative controls, and paired qualification
+artifacts remain.

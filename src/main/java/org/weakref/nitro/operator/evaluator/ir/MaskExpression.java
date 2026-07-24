@@ -14,6 +14,6 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 public sealed interface MaskExpression
-        permits AllMask, AndMask, NotMask, OrMask, ReferenceMask
+        permits AllMask, AndMask, NotMask, OrMask, RangeConstrainedAndMask, ReferenceMask
 {
 }

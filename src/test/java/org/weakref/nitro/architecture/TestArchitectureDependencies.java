@@ -261,6 +261,22 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testEvaluatorDoesNotRecognizeRangeFunctionIdentity()
+    {
+        String evaluator = read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/evaluator/PlanEvaluator.java"));
+        String filter = read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/FilterOperator.java"));
+
+        assertThat(evaluator)
+                .doesNotContain("\"lt\"")
+                .doesNotContain("LessThanI64")
+                .doesNotContain("constantBound(")
+                .doesNotContain("RangeFusion");
+        assertThat(filter)
+                .doesNotContain("\"lt\"")
+                .doesNotContain("LessThanI64");
+    }
+
+    @Test
     void testFunctionImplementationsDoNotOwnStaticCaches()
     {
         Pattern ambientFunctionCache = Pattern.compile(

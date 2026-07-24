@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
+import org.weakref.nitro.operator.evaluator.ir.RangeConstraintLowerer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -81,7 +82,7 @@ public class FilterOperator
                 };
             }
         }, allocator);
-        this.predicateMask = predicateMask;
+        this.predicateMask = RangeConstraintLowerer.lower(evaluationPlan, primitiveRegistry, predicateMask);
         if (PUSH_STATIC_LONG_EQUALITY) {
             staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
         }

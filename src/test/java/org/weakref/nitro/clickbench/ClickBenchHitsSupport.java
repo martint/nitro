@@ -1291,6 +1291,13 @@ public final class ClickBenchHitsSupport
     {
         return switch (maskExpression) {
             case AllMask allMask -> allMask;
+            case org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask range -> new org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask(
+                    remapReference(range.input(), variableOffset),
+                    range.lowerExclusive(),
+                    range.upperExclusive(),
+                    range.kernel(),
+                    range.remainingTerms().stream().map(term -> remapMaskExpression(term, variableOffset)).toList(),
+                    (AndMask) remapMaskExpression(range.fallback(), variableOffset));
             case ReferenceMask referenceMask -> new ReferenceMask(remapReference(referenceMask.reference(), variableOffset));
             case NotMask notMask -> new NotMask(remapMaskExpression(notMask.source(), variableOffset));
             case AndMask andMask -> new AndMask(andMask.terms().stream()

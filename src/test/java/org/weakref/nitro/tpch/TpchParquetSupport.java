@@ -1874,6 +1874,13 @@ final class TpchParquetSupport
     {
         return switch (expression) {
             case AllMask _ -> expression;
+            case org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask range -> new org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask(
+                    remap(range.input(), variableOffset),
+                    range.lowerExclusive(),
+                    range.upperExclusive(),
+                    range.kernel(),
+                    range.remainingTerms().stream().map(term -> remap(term, variableOffset)).toList(),
+                    (AndMask) remap(range.fallback(), variableOffset));
             case ReferenceMask reference -> new ReferenceMask(remap(reference.reference(), variableOffset));
             case NotMask not -> new NotMask(remap(not.source(), variableOffset));
             case AndMask and -> new AndMask(and.terms().stream()

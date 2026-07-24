@@ -42,6 +42,8 @@ import org.weakref.nitro.operator.evaluator.ir.Merge;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
+import org.weakref.nitro.operator.evaluator.ir.RangeConstraint;
+import org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -85,8 +87,6 @@ public final class PlanEvaluator
             Boolean.parseBoolean(System.getProperty("nitro.expression.fastBooleanMaskClassifier", "true"));
     private static final boolean IN_PLACE_FLAT_BOOLEAN_CLASSIFIER =
             Boolean.parseBoolean(System.getProperty("nitro.expression.inPlaceFlatBooleanClassifier", "true"));
-    private static final boolean FUSE_LONG_CONSTANT_RANGES =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true"));
     private static final boolean INPUT_MASK_RESOLVER =
             Boolean.parseBoolean(System.getProperty("nitro.expression.inputMaskResolver", "true"));
     private static final boolean DIRECT_PRIMITIVE_INPUT_MASK =
@@ -838,6 +838,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateTrueMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
@@ -849,6 +850,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> emptyMask(mask.size());
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateFalseMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateFalseReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateTrueMask(source, mask);
             case AndMask _, OrMask _ -> evaluateMaskOutcome(expression, mask).falseMask(allocator, allocationContext, mask);
@@ -1127,6 +1129,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskOutcome(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> {
                 MaskOutcome sourceOutcome = evaluateMaskOutcome(source, mask);
@@ -2519,6 +2522,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> new MaskOutcome(mask, emptyMask(mask.size()), emptyMask(mask.size()));
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskOutcome(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> {
                 MaskOutcome sourceOutcome = evaluateMaskOutcome(source, mask);
@@ -2536,6 +2540,7 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateTrueMask(fallback, mask);
             case ReferenceMask(Reference reference) -> evaluateTrueReferenceMask(reference, mask);
             case NotMask(MaskExpression source) -> evaluateFalseMask(source, mask);
             case AndMask(List<MaskExpression> terms) -> evaluateAdaptiveAndTrueMask(terms, mask);
@@ -2547,6 +2552,20 @@ public final class PlanEvaluator
     {
         return switch (expression) {
             case AllMask _ -> mask;
+            case RangeConstrainedAndMask(
+                    Reference input,
+                    Object lowerExclusive,
+                    Object upperExclusive,
+                    RangeConstraint.Kernel kernel,
+                    List<MaskExpression> remainingTerms,
+                    AndMask fallback) -> evaluateRangeConstrainedAndMaskInPlace(
+                    input,
+                    lowerExclusive,
+                    upperExclusive,
+                    kernel,
+                    remainingTerms,
+                    fallback,
+                    mask);
             case ReferenceMask(Reference reference) -> {
                 if (!tryEvaluatePrimitiveTrueMaskInPlace(reference, mask)) {
                     MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
@@ -2633,11 +2652,6 @@ public final class PlanEvaluator
 
     private Mask evaluateAdaptiveAndTrueMaskInPlace(List<MaskExpression> terms, Mask mask)
     {
-        RangeFusion rangeFusion = FUSE_LONG_CONSTANT_RANGES ? findLongConstantRange(terms, mask) : null;
-        if (rangeFusion != null) {
-            rangeFusion.apply(mask);
-            terms = rangeFusion.remainingTerms();
-        }
         terms = orderTerms(terms, BooleanOperator.AND);
         try {
             for (MaskExpression term : terms) {
@@ -2653,66 +2667,32 @@ public final class PlanEvaluator
         }
     }
 
-    private RangeFusion findLongConstantRange(List<MaskExpression> terms, Mask mask)
+    private Mask evaluateRangeConstrainedAndMaskInPlace(
+            Reference inputReference,
+            Object lowerExclusive,
+            Object upperExclusive,
+            RangeConstraint.Kernel kernel,
+            List<MaskExpression> remainingTerms,
+            AndMask fallback,
+            Mask mask)
     {
-        for (int lowerIndex = 0; lowerIndex < terms.size(); lowerIndex++) {
-            ConstantBound lower = constantBound(terms.get(lowerIndex));
-            if (lower == null || !lower.lower()) {
-                continue;
+        Streams input = evaluateArgument(inputReference, mask, PrimitiveFunction.ALL_INPUT_STREAMS, true);
+        if (!kernel.apply(input, lowerExclusive, upperExclusive, mask)) {
+            return evaluateTrueMaskInPlace(fallback, mask);
+        }
+        List<MaskExpression> terms = orderTerms(remainingTerms, BooleanOperator.AND);
+        try {
+            for (MaskExpression term : terms) {
+                if (mask.none()) {
+                    break;
+                }
+                evaluateMeasuredTrueMaskInPlace(term, mask, BooleanOperator.AND);
             }
-            for (int upperIndex = 0; upperIndex < terms.size(); upperIndex++) {
-                ConstantBound upper = constantBound(terms.get(upperIndex));
-                if (upper == null || upper.lower() || !upper.column().equals(lower.column())) {
-                    continue;
-                }
-                Streams column = evaluateArgument(lower.column(), mask, PrimitiveFunction.ALL_INPUT_STREAMS, true);
-                if (!VectorAccess.isAllFalseNulls(column.getOrNull(Stream.ERRORS))) {
-                    return null;
-                }
-                boolean[] nulls = null;
-                Vector nullVector = column.getOrNull(Stream.NULLS);
-                if (!VectorAccess.isAllFalseNulls(nullVector)) {
-                    nulls = VectorAccess.flatBooleans(nullVector);
-                    if (nulls == null) {
-                        return null;
-                    }
-                }
-                Vector values = column.values();
-                if (!(values instanceof I64Vector) && !(values instanceof I32Vector)) {
-                    return null;
-                }
-                ArrayList<MaskExpression> remaining = new ArrayList<>(terms.size() - 2);
-                for (int index = 0; index < terms.size(); index++) {
-                    if (index != lowerIndex && index != upperIndex) {
-                        remaining.add(terms.get(index));
-                    }
-                }
-                return new RangeFusion(values, nulls, lower.literal(), upper.literal(), List.copyOf(remaining));
-            }
+            return mask;
         }
-        return null;
-    }
-
-    private ConstantBound constantBound(MaskExpression expression)
-    {
-        if (!(expression instanceof ReferenceMask(Reference reference)) || reference.stream() != Stream.VALUES ||
-                !(reference.producer() instanceof Variable variable)) {
-            return null;
+        finally {
+            releaseOrderedTerms();
         }
-        Assignment assignment = assignments.get(variable);
-        if (assignment == null || !(assignment.operation() instanceof Call(String name, List<Reference> arguments, _)) ||
-                !name.equals("lt") || arguments.size() != 2) {
-            return null;
-        }
-        OptionalLong leftLiteral = literalLong(arguments.get(0));
-        OptionalLong rightLiteral = literalLong(arguments.get(1));
-        if (leftLiteral.isPresent() && rightLiteral.isEmpty()) {
-            return new ConstantBound(arguments.get(1), leftLiteral.getAsLong(), true);
-        }
-        if (rightLiteral.isPresent() && leftLiteral.isEmpty()) {
-            return new ConstantBound(arguments.get(0), rightLiteral.getAsLong(), false);
-        }
-        return null;
     }
 
     private Mask evaluateMeasuredTrueMaskInPlace(MaskExpression term, Mask mask, BooleanOperator operator)
@@ -2814,21 +2794,6 @@ public final class PlanEvaluator
     }
 
     private record IndexedTerm(int index, MaskExpression term) {}
-
-    private record ConstantBound(Reference column, long literal, boolean lower) {}
-
-    private record RangeFusion(Vector values, boolean[] nulls, long lowerExclusive, long upperExclusive, List<MaskExpression> remainingTerms)
-    {
-        private void apply(Mask mask)
-        {
-            if (values instanceof I64Vector longs) {
-                mask.retainConstantRange(longs.values(), lowerExclusive, upperExclusive, nulls);
-            }
-            else {
-                mask.retainConstantRange(((I32Vector) values).values(), lowerExclusive, upperExclusive, nulls);
-            }
-        }
-    }
 
     private static final class TermOrderFrames
     {
