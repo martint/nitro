@@ -14,7 +14,8 @@
 package org.weakref.nitro.tpcds;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
-import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
+import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -77,6 +78,7 @@ import java.util.function.Supplier;
 
 final class TpcdsParquetSupport
 {
+    private static final BenchmarkSchemaRegistry SCHEMAS = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private static final String NULLS_LAST_SENTINEL_STRING = "\uFFFF";
     private static final boolean QUERY22_COMPACT_JOIN_LAYOUTS =
             Boolean.parseBoolean(System.getProperty("nitro.tpcds.query22CompactJoinLayouts", "true"));
@@ -4342,7 +4344,7 @@ final class TpcdsParquetSupport
                 allocator,
                 tables.tableFiles(tableName),
                 columnNames);
-        return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
+        return new BatchSourceOperator(new OperatorBatchSource(decoder, SCHEMAS.tpcds(tableName, columnNames)));
     }
 
     private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)

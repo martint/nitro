@@ -91,6 +91,18 @@ class TestArchitectureDependencies
                 .isLessThanOrEqualTo(104);
     }
 
+    @Test
+    void testPublishedBenchmarkScansCarryLogicalSchemas()
+    {
+        List<Path> scanHarnesses = List.of(
+                Path.of("src/test/java/org/weakref/nitro/tpch/TpchParquetSupport.java"),
+                Path.of("src/test/java/org/weakref/nitro/tpcds/TpcdsParquetSupport.java"),
+                Path.of("src/test/java/org/weakref/nitro/clickbench/ClickBenchHitsSupport.java"));
+
+        assertThat(scanHarnesses)
+                .noneMatch(path -> read(path).contains("Schema.unspecified"));
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();

@@ -13,7 +13,8 @@
  */
 package org.weakref.nitro.tpch;
 
-import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
+import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.DistinctCount;
@@ -66,6 +67,7 @@ import java.util.function.Supplier;
  */
 final class TpchParquetSupport
 {
+    private static final BenchmarkSchemaRegistry SCHEMAS = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private static final boolean QUERY08_VELOX_JOIN_SHAPE =
             Boolean.parseBoolean(System.getProperty("nitro.tpch.query08VeloxJoinShape", "true"));
     private static final ThreadLocal<OperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
@@ -1713,7 +1715,7 @@ final class TpchParquetSupport
     {
         List<String> columnNames = List.of(columns);
         Operator decoder = new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), columnNames);
-        return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
+        return new BatchSourceOperator(new OperatorBatchSource(decoder, SCHEMAS.tpch(tableName, columnNames)));
     }
 
     private static Operator scannedTableWithLongRange(

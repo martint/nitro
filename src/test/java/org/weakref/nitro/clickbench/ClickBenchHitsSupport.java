@@ -22,7 +22,8 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
-import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
+import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
@@ -83,6 +84,7 @@ import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 
 public final class ClickBenchHitsSupport
 {
+    private static final BenchmarkSchemaRegistry SCHEMAS = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private static final ThreadLocal<OperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
@@ -761,7 +763,9 @@ public final class ClickBenchHitsSupport
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<String> columnNames = List.of(columns);
             Operator decoder = new NitroParquetScanOperator(allocator, paths, columnNames);
-            return new BatchSourceOperator(new OperatorBatchSource(decoder, Schema.unspecified(columnNames)));
+            return new BatchSourceOperator(new OperatorBatchSource(
+                    decoder,
+                    SCHEMAS.parquet(paths.getFirst(), columnNames)));
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);
