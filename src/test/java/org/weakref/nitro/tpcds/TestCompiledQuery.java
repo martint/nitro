@@ -21,6 +21,8 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
+import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -137,7 +139,7 @@ public class TestCompiledQuery
         Map<Long, Long> eager = toMap(CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result());
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
-                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         Map<Long, Long> streamed = toMap(streaming.execute(
                 CompiledQuerySupport.parquetFlatSource(new Allocator(EngineResources.createDefault()), tables, "store_sales", "ss_item_sk", "ss_quantity"),
                 new org.weakref.nitro.jit.Column[0][], new int[0]));
@@ -169,7 +171,7 @@ public class TestCompiledQuery
                         new org.weakref.nitro.jit.QueryLowering.Column("d_date_sk"))
                 .groupBy("ss_item_sk")
                 .aggregate("sum", "ss_quantity");
-        org.weakref.nitro.jit.CompiledPipeline.Result result = query.lower().compile().execute(
+        org.weakref.nitro.jit.CompiledPipeline.Result result = query.lower().compile(new PipelineCompiler(CompilerResources.createDefault())).execute(
                 new long[][][] {{data.soldDateSk(), data.itemSk(), data.quantity()}, {data.dateSk()}},
                 new int[] {data.storeSalesRows(), data.dateDimRows()});
         Map<Long, Long> map = new HashMap<>();

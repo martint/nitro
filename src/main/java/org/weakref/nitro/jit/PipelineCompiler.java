@@ -20,9 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 
 /**
@@ -34,18 +34,28 @@ import static java.util.stream.Collectors.joining;
 public final class PipelineCompiler
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
-    private static final AtomicInteger COUNTER = new AtomicInteger();
+    private final CompilerResources resources;
+    private final Types types;
+    private final ScalarLibrary scalarFunctions;
+    private final AggregateLibrary aggregateFunctions;
     // Compiled pipelines are cached by their generated source (a query engine compiles a plan once and executes it
     // many times). The key renders with a fixed class name so two structurally identical pipelines -- e.g. a subtree
     // assembled twice in a multi-stage query -- share one compiled, stateless class. A miss mints a uniquely-named
     // class and compiles it.
     private static final String CACHE_NAME = "Cached";
-    private static final java.util.concurrent.ConcurrentHashMap<String, Class<?>> CLASS_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static Class<?> cachedClass(String cacheKey, String prefix, java.util.function.Function<String, String> renderWithName)
+    public PipelineCompiler(CompilerResources resources)
     {
-        return CLASS_CACHE.computeIfAbsent(cacheKey, key -> {
-            String simpleName = prefix + COUNTER.incrementAndGet();
+        this.resources = requireNonNull(resources, "resources is null");
+        this.types = resources.types();
+        this.scalarFunctions = resources.scalarFunctions();
+        this.aggregateFunctions = resources.aggregateFunctions();
+    }
+
+    private Class<?> cachedClass(String cacheKey, String prefix, java.util.function.Function<String, String> renderWithName)
+    {
+        return resources.pipelineClasses().computeIfAbsent(cacheKey, key -> {
+            String simpleName = prefix + resources.nextClassName();
             return InMemoryCompiler.compile(PACKAGE + "." + simpleName, renderWithName.apply(simpleName));
         });
     }
@@ -59,9 +69,7 @@ public final class PipelineCompiler
     // Null resolver for non-null contexts (group keys, join inputs): nothing is ever null.
     private static final IntFunction<String> NEVER_NULL = index -> "false";
 
-    private PipelineCompiler() {}
-
-    public static CompiledPipeline compile(Plan.Pipeline pipeline)
+    public CompiledPipeline compile(Plan.Pipeline pipeline)
     {
         return compile(pipeline, null);
     }
@@ -71,7 +79,7 @@ public final class PipelineCompiler
      * declares each scan column's {@link ColumnEncoding}; {@code null} (or any unlisted column) means
      * {@link ColumnEncoding#FLAT}. Build (join) inputs are read as flat.
      */
-    public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    public CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         return compile(pipeline, encodings, null);
     }
@@ -82,12 +90,13 @@ public final class PipelineCompiler
      * null-aware); false (the default for any unlisted column) takes the branch-free null-free fast path.
      * Group keys and join keys are assumed non-null.
      */
-    public static CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    public CompiledPipeline compile(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         Class<?> compiled = cachedClass("P|" + render(pipeline, encodings, nullable, CACHE_NAME), "Pipeline_",
                 name -> render(pipeline, encodings, nullable, name));
         try {
-            return (CompiledPipeline) compiled.getDeclaredConstructor().newInstance();
+            return (CompiledPipeline) compiled.getDeclaredConstructor(java.util.function.Function.class).newInstance(
+                    types.snapshotResolver());
         }
         catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to instantiate compiled pipeline", e);
@@ -102,7 +111,7 @@ public final class PipelineCompiler
      * dictionary consistent across batches (a later step); build-side string keys (the usual dimension case)
      * stream correctly since their dictionary is materialized once.
      */
-    public static StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    public StreamingPipeline compileStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         if (System.getenv("NITRO_JIT_DUMP") != null) {
             String source = renderStreaming(pipeline, encodings, nullable, "Streaming_dump");
@@ -121,7 +130,8 @@ public final class PipelineCompiler
         Class<?> compiled = cachedClass("S|" + renderStreaming(pipeline, encodings, nullable, CACHE_NAME), "Streaming_",
                 name -> renderStreaming(pipeline, encodings, nullable, name));
         try {
-            return (StreamingPipeline) compiled.getDeclaredConstructor().newInstance();
+            return (StreamingPipeline) compiled.getDeclaredConstructor(java.util.function.Function.class).newInstance(
+                    types.snapshotResolver());
         }
         catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to instantiate compiled streaming pipeline", e);
@@ -129,17 +139,18 @@ public final class PipelineCompiler
     }
 
     /** Exposed for inspection/tests: the streaming Java source that would be compiled. */
-    public static String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    public String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         return renderStreaming(pipeline, encodings, nullable, "Streaming_preview");
     }
 
-    private static String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
+    private String renderStreaming(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
     {
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.StreamingPipeline {\n");
+        emitTypeResolverConstructor(out, simpleName);
         boolean needsMix = !pipeline.groupKeys().isEmpty() || !pipeline.joins().isEmpty();
         if (needsMix) {
             emitMix(out);
@@ -523,22 +534,22 @@ public final class PipelineCompiler
     }
 
     /** Exposed for inspection/tests: the Java source that would be compiled. */
-    public static String render(Plan.Pipeline pipeline)
+    public String render(Plan.Pipeline pipeline)
     {
         return render(pipeline, null, null, "Pipeline_preview");
     }
 
-    public static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    public String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         return render(pipeline, encodings, null, "Pipeline_preview");
     }
 
-    public static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    public String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         return render(pipeline, encodings, nullable, "Pipeline_preview");
     }
 
-    private static ColumnEncoding encodingOf(ColumnEncoding[][] encodings, int input, int column)
+    private ColumnEncoding encodingOf(ColumnEncoding[][] encodings, int input, int column)
     {
         if (encodings == null || input >= encodings.length || encodings[input] == null
                 || column >= encodings[input].length || encodings[input][column] == null) {
@@ -548,7 +559,7 @@ public final class PipelineCompiler
     }
 
     /** The logical result type a scan column's encoding implies (F64 lanes are DOUBLE, STRING ids reconstruct, else LONG). */
-    private static Type typeOf(ColumnEncoding encoding)
+    private Type typeOf(ColumnEncoding encoding)
     {
         return switch (encoding) {
             case STRING -> Types.STRING;
@@ -557,7 +568,7 @@ public final class PipelineCompiler
         };
     }
 
-    private static boolean nullableOf(boolean[][] nullable, int input, int column)
+    private boolean nullableOf(boolean[][] nullable, int input, int column)
     {
         return nullable != null && input < nullable.length && nullable[input] != null
                 && column < nullable[input].length && nullable[input][column];
@@ -568,7 +579,7 @@ public final class PipelineCompiler
      * Resolves the combined index back to its (input, local) coordinates so build-side columns keep their own
      * encoding.
      */
-    private static ColumnEncoding combinedEncoding(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int combined)
+    private ColumnEncoding combinedEncoding(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int combined)
     {
         int probeColumns = pipeline.columnCount();
         if (combined < probeColumns) {
@@ -587,7 +598,7 @@ public final class PipelineCompiler
     }
 
     /** Whether a combined-space column is nullable; resolves the index back to its (input, local) coordinates. */
-    private static boolean combinedNullable(Plan.Pipeline pipeline, boolean[][] nullable, int combined)
+    private boolean combinedNullable(Plan.Pipeline pipeline, boolean[][] nullable, int combined)
     {
         int probeColumns = pipeline.columnCount();
         if (combined < probeColumns) {
@@ -612,7 +623,7 @@ public final class PipelineCompiler
      * compare every probe + 8 bytes/slot of cache), so the slot drops it and keys start one word earlier. The plain
      * (non-grouping-sets) path only; grouping sets pack a set id into gMeta and always keep it.
      */
-    private static int groupMetaWords(Plan.Pipeline pipeline, boolean[][] nullable)
+    private int groupMetaWords(Plan.Pipeline pipeline, boolean[][] nullable)
     {
         for (int kx = 0; kx < pipeline.groupKeys().size(); kx++) {
             if (keyNullable(pipeline, nullable, kx)) {
@@ -622,13 +633,13 @@ public final class PipelineCompiler
         return 0;
     }
 
-    private static boolean keyNullable(Plan.Pipeline pipeline, boolean[][] nullable, int kx)
+    private boolean keyNullable(Plan.Pipeline pipeline, boolean[][] nullable, int kx)
     {
         Plan.Expr key = pipeline.groupKeys().get(kx);
         return key instanceof Plan.Col col && combinedNullable(pipeline, nullable, col.index());
     }
 
-    private static boolean anyGroupKeyNullable(Plan.Pipeline pipeline, boolean[][] nullable)
+    private boolean anyGroupKeyNullable(Plan.Pipeline pipeline, boolean[][] nullable)
     {
         for (int kx = 0; kx < pipeline.groupKeys().size(); kx++) {
             if (keyNullable(pipeline, nullable, kx)) {
@@ -639,7 +650,7 @@ public final class PipelineCompiler
     }
 
     /** Whether any aggregate can finalize to SQL NULL (e.g. an average over zero non-null inputs). */
-    private static boolean anyAggregateNullable(Plan.Pipeline pipeline)
+    private boolean anyAggregateNullable(Plan.Pipeline pipeline)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         for (int a = 0; a < aggregates.size(); a++) {
@@ -676,19 +687,19 @@ public final class PipelineCompiler
 
     private record ColumnVars(String flat, String ids, String dict, String stringDict, String constant, String nulls) {}
 
-    private static ColumnVars probeVars(int column)
+    private ColumnVars probeVars(int column)
     {
         return new ColumnVars("p" + column, "pIds" + column, "pDict" + column, "pStr" + column, "pConst" + column, "pN" + column);
     }
 
-    private static ColumnVars buildVars(int build, int local)
+    private ColumnVars buildVars(int build, int local)
     {
         String suffix = build + "_" + local;
         return new ColumnVars("b" + suffix, "bIds" + suffix, "bDict" + suffix, "bStr" + suffix, "bConst" + suffix, "bN" + suffix);
     }
 
     /** Access expression for a join column at {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
-    private static String joinAccess(ColumnEncoding encoding, ColumnVars vars, String row)
+    private String joinAccess(ColumnEncoding encoding, ColumnVars vars, String row)
     {
         return switch (encoding) {
             case FLAT, F64 -> vars.flat() + "[" + row + "]";
@@ -707,7 +718,7 @@ public final class PipelineCompiler
      * stays branchy. Later (gather) stages are memory-latency-bound -- the branch hides behind the cache miss --
      * so they keep the plain branchy form. The threshold is 1/50 = 2% (the measured crossover).
      */
-    private static void emitFilterCompaction(StringBuilder out, ClassBody body, boolean identity, String stageField, String rowsExpr, String rowExpr, String predExpr)
+    private void emitFilterCompaction(StringBuilder out, ClassBody body, boolean identity, String stageField, String rowsExpr, String rowExpr, String predExpr)
     {
         if (identity) {
             body.field("boolean", stageField);
@@ -731,7 +742,7 @@ public final class PipelineCompiler
     }
 
     /** Load a join column from its input array into the encoding-appropriate generated variable(s), with its null mask when nullable. */
-    private static void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, boolean nullable, String source, ColumnVars vars)
+    private void emitJoinColumnLoad(StringBuilder out, ColumnEncoding encoding, boolean nullable, String source, ColumnVars vars)
     {
         String type = "org.weakref.nitro.jit.Column.";
         String columnType = switch (encoding) {
@@ -764,7 +775,7 @@ public final class PipelineCompiler
     }
 
     /** Is-null expression for a join column at {@code row}; {@code "false"} (fast path) when not nullable. */
-    private static String joinNullAccess(ColumnEncoding encoding, boolean nullable, ColumnVars vars, String row)
+    private String joinNullAccess(ColumnEncoding encoding, boolean nullable, ColumnVars vars, String row)
     {
         if (!nullable) {
             return "false";
@@ -772,12 +783,13 @@ public final class PipelineCompiler
         return encoding == ColumnEncoding.CONSTANT ? vars.nulls() : vars.nulls() + "[" + row + "]";
     }
 
-    private static String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
+    private String render(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, String simpleName)
     {
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.jit.CompiledPipeline {\n");
+        emitTypeResolverConstructor(out, simpleName);
         // Any grouping needs mix() (array-mode grouping still keeps a hash table for the deopt fallback); so
         // does a join (its hash-table fallback branch).
         boolean needsMix = !pipeline.groupKeys().isEmpty() || !pipeline.joins().isEmpty();
@@ -825,7 +837,7 @@ public final class PipelineCompiler
      * Logical types of the result columns: each group-key column (STRING when it is a string-encoded column,
      * else LONG) then each aggregate's output type.
      */
-    private static List<Type> outputColumnTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private List<Type> outputColumnTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         List<Type> types = new ArrayList<>();
         for (Plan.Expr groupKey : pipeline.groupKeys()) {
@@ -842,7 +854,7 @@ public final class PipelineCompiler
     }
 
     /** Read a result column at {@code row}, decoding a DOUBLE column from its bits. */
-    private static String resultColumnAccess(int column, List<Type> types, String row)
+    private String resultColumnAccess(int column, List<Type> types, String row)
     {
         return types.get(column).decode("cols[" + column + "][" + row + "]");
     }
@@ -851,7 +863,7 @@ public final class PipelineCompiler
      * Post-aggregation HAVING applied to the materialized result. Identity when no HAVING; otherwise keeps the
      * rows whose condition (over result columns: group keys then aggregates) holds and compacts.
      */
-    private static void emitApplyHaving(StringBuilder out, Plan.Condition having, List<Type> types)
+    private void emitApplyHaving(StringBuilder out, Plan.Condition having, List<Type> types)
     {
         out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyHaving(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (having == null) {
@@ -880,7 +892,7 @@ public final class PipelineCompiler
      * whose source the execution path cannot reach (a streamed probe carries no dictionaries) are skipped by the
      * caller.
      */
-    private static Map<Integer, int[]> orderingStringSources(Plan.Pipeline pipeline, List<Type> resultTypes)
+    private Map<Integer, int[]> orderingStringSources(Plan.Pipeline pipeline, List<Type> resultTypes)
     {
         Map<Integer, int[]> sources = new java.util.HashMap<>();
         if (pipeline.ordering() == null) {
@@ -929,7 +941,7 @@ public final class PipelineCompiler
     }
 
     /** Emit the per-sort-key dictionary fields and their capture assignments (at the top of {@code execute}). */
-    private static void emitOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> sources, java.util.function.IntFunction<String> inputAccess)
+    private void emitOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> sources, java.util.function.IntFunction<String> inputAccess)
     {
         for (Map.Entry<Integer, int[]> entry : sources.entrySet()) {
             int[] source = entry.getValue();
@@ -939,7 +951,7 @@ public final class PipelineCompiler
     }
 
     /** Per-batch re-capture of a globally-interned streamed probe column's dictionary for a string sort key. */
-    private static void emitProbeOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> probeSources, java.util.Set<Integer> loadedColumns)
+    private void emitProbeOrderingDictionaryCapture(StringBuilder out, Map<Integer, int[]> probeSources, java.util.Set<Integer> loadedColumns)
     {
         for (Map.Entry<Integer, int[]> entry : probeSources.entrySet()) {
             int column = entry.getValue()[1];
@@ -949,7 +961,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitOrderingDictionaryFields(StringBuilder out, Map<Integer, int[]> sources)
+    private void emitOrderingDictionaryFields(StringBuilder out, Map<Integer, int[]> sources)
     {
         for (int column : sources.keySet()) {
             out.append("  private static byte[][] orderingDictionary").append(column).append(";\n");
@@ -962,12 +974,12 @@ public final class PipelineCompiler
      * sort for now; a bounded top-N heap is the perf refinement. A string sort key with a captured source dictionary
      * compares the entries' bytes (value order without depending on dictionary order); other keys compare slots.
      */
-    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types)
+    private void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types)
     {
         emitApplyOrdering(out, ordering, types, Map.of());
     }
 
-    private static void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
+    private void emitApplyOrdering(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
     {
         out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyOrdering(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (ordering == null) {
@@ -995,7 +1007,7 @@ public final class PipelineCompiler
     }
 
     /** The ordering's key-comparison chain as a primitive method (ties break by index, matching a stable sort). */
-    private static void emitCompareOrder(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
+    private void emitCompareOrder(StringBuilder out, Plan.Ordering ordering, List<Type> types, Map<Integer, int[]> stringSources)
     {
         out.append("  private static int compareOrder(int a, int b, long[][] cols, boolean[][] on) {\n");
         out.append("      int c;\n");
@@ -1044,7 +1056,7 @@ public final class PipelineCompiler
      * TimSort's comparator dispatch; the index tie-break in compareOrder makes the comparison total, so the
      * emitted prefix is identical to the stable sort's.
      */
-    private static void emitOrderSort(StringBuilder out)
+    private void emitOrderSort(StringBuilder out)
     {
         out.append("  private static void sortOrder(int[] order, int lo, int hi, int bound, long[][] cols, boolean[][] on) {\n");
         out.append("    while (lo < bound) {\n");
@@ -1077,7 +1089,7 @@ public final class PipelineCompiler
     }
 
     /** Gather the result's per-column null masks through a row permutation ({@code sourceRow}, in terms of output index {@code g}, maps to the source row). Leaves {@code boolean[][] outNulls} (length {@code outN}) in scope. */
-    private static void emitGatherNulls(StringBuilder out, String sourceRow)
+    private void emitGatherNulls(StringBuilder out, String sourceRow)
     {
         out.append("    boolean[][] srcNulls = result.nulls();\n");
         out.append("    boolean[][] outNulls = null;\n");
@@ -1099,9 +1111,9 @@ public final class PipelineCompiler
      * decoded by their type, the expression evaluated, and the result re-encoded into its slot. A plain column
      * reference carries the source column's null mask through; computed projections are produced non-null.
      */
-    private static void emitApplyProjection(StringBuilder out, List<Plan.Expr> projections, List<Type> inputTypes)
+    private void emitApplyProjection(StringBuilder out, List<Plan.Expr> projections, List<Type> inputTypes)
     {
-        out.append("  private static org.weakref.nitro.jit.CompiledPipeline.Result applyProjection(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
+        out.append("  private org.weakref.nitro.jit.CompiledPipeline.Result applyProjection(org.weakref.nitro.jit.CompiledPipeline.Result result) {\n");
         if (projections.isEmpty()) {
             out.append("    return result;\n  }\n");
             return;
@@ -1150,7 +1162,7 @@ public final class PipelineCompiler
      * computed null. A rounding divide is NULL when its denominator is zero or any operand is null (matching the
      * interpreted kernel); {@code columnNull} renders a column operand's per-row null test in the caller's scope.
      */
-    private static String computedProjectionNull(Plan.Expr projection, IntFunction<String> decode, IntFunction<String> columnNull)
+    private String computedProjectionNull(Plan.Expr projection, IntFunction<String> decode, IntFunction<String> columnNull)
     {
         // The value expression is evaluated into a placeholder slot even when SQL NULL; preserve the recursively
         // derived nullness for arithmetic, scalar calls, CASE, and COALESCE. This is especially important after an
@@ -1161,7 +1173,7 @@ public final class PipelineCompiler
     }
 
     /** Inferred type of a projection expression: a column reference keeps its source type; arithmetic is DOUBLE when any operand is DOUBLE, else LONG. */
-    private static Type projectionType(Plan.Expr expr, List<Type> inputTypes)
+    private Type projectionType(Plan.Expr expr, List<Type> inputTypes)
     {
         return switch (expr) {
             case Plan.Col col -> inputTypes.get(col.index());
@@ -1170,14 +1182,14 @@ public final class PipelineCompiler
             case Plan.LitStr ignored -> Types.STRING;
             case Plan.NullLit ignored -> Types.LONG;
             case Plan.Bin bin -> projectionType(bin.left(), inputTypes) == Types.DOUBLE || projectionType(bin.right(), inputTypes) == Types.DOUBLE ? Types.DOUBLE : Types.LONG;
-            case Plan.Call call -> ScalarLibrary.isDoubleResult(call.name()) || call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
+            case Plan.Call call -> scalarFunctions.isDoubleResult(call.name()) || call.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Coalesce coalesce -> coalesce.arguments().stream().anyMatch(a -> projectionType(a, inputTypes) == Types.DOUBLE) ? Types.DOUBLE : Types.LONG;
             case Plan.Case caseExpr -> projectionType(caseExpr.defaultValue(), inputTypes);
         };
     }
 
     /** Encode a decoded projection value back into its long result slot, per the output type. */
-    private static String encodeSlot(Type type, String value)
+    private String encodeSlot(Type type, String value)
     {
         return type == Types.DOUBLE ? "Double.doubleToRawLongBits(" + value + ")" : value;
     }
@@ -1185,7 +1197,7 @@ public final class PipelineCompiler
     // ---- projection-only (no GROUP BY, no aggregates): one output row per surviving input row ----
 
     /** A pipeline that selects/computes columns over its (joined, filtered) rows without aggregating -- a SELECT ... LIMIT shape. */
-    private static boolean projectionOnly(Plan.Pipeline pipeline)
+    private boolean projectionOnly(Plan.Pipeline pipeline)
     {
         // A window pipeline is never projection-only: its projections are a post-window SELECT applied after the
         // window appends its column, not the inline output of a bare scan/project.
@@ -1193,7 +1205,7 @@ public final class PipelineCompiler
     }
 
     /** Logical types of every combined input column (probe then each build): STRING for a dictionary column, DOUBLE for an F64 lane, else LONG. */
-    private static List<Type> combinedInputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private List<Type> combinedInputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         int total = pipeline.columnCount();
         for (Plan.Join join : pipeline.joins()) {
@@ -1207,7 +1219,7 @@ public final class PipelineCompiler
     }
 
     /** Output types of a projection-only pipeline: each projection's type over the combined input columns. */
-    private static List<Type> projectionOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private List<Type> projectionOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         List<Type> inputTypes = combinedInputTypes(pipeline, encodings);
         List<Type> types = new ArrayList<>();
@@ -1221,7 +1233,7 @@ public final class PipelineCompiler
      * Whether projection {@code p} carries a null mask: a column reference to a nullable source column, or a rounding
      * divide (NULL on a zero denominator). Other computed projections are produced non-null.
      */
-    private static boolean projectionCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, int p)
+    private boolean projectionCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, int p)
     {
         return exprCarriesNull(pipeline, nullable, pipeline.projections().get(p));
     }
@@ -1232,7 +1244,7 @@ public final class PipelineCompiler
      * null-bearing operand (for CASE, a null-bearing branch value or default; for COALESCE, only when every argument
      * is null-bearing). Drives whether a projection emits a null mask, so the value and null paths stay in lockstep.
      */
-    private static boolean exprCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, Plan.Expr expr)
+    private boolean exprCarriesNull(Plan.Pipeline pipeline, boolean[][] nullable, Plan.Expr expr)
     {
         return switch (expr) {
             case Plan.Col col -> combinedNullable(pipeline, nullable, col.index());
@@ -1256,7 +1268,7 @@ public final class PipelineCompiler
      * every row after warmup, the compiled twin of the operator harness's bounded TopN state. The appended rows
      * slightly over-collect (no eviction); the ordinary ordering pass sorts and limits them at the end.
      */
-    private static int boundedTopKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private int boundedTopKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
                 || pipeline.ordering() == null || pipeline.ordering().offset() != 0
@@ -1280,7 +1292,7 @@ public final class PipelineCompiler
      * predicate in place per surviving row -- one pass, no mask array -- where the mask form pays a fill pass
      * plus a lookup pass. Dictionary-page batches keep the (cheaper) entry-mask path at runtime.
      */
-    private static int fusedViewConjunctColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition conjunct)
+    private int fusedViewConjunctColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition conjunct)
     {
         boolean supported = conjunct instanceof Plan.StringMatch
                 || (conjunct instanceof Plan.LikeMatch like && likeContainsLiteral(like.pattern()) != null);
@@ -1299,7 +1311,7 @@ public final class PipelineCompiler
     }
 
     /** The fused view evaluation of a single string leaf at page position {@code row} (no mask indirection). */
-    private static String fusedViewPredicate(Plan.Condition conjunct, int id, int column, String row)
+    private String fusedViewPredicate(Plan.Condition conjunct, int id, int column, String row)
     {
         if (conjunct instanceof Plan.LikeMatch like) {
             String matches = "org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.contains(cView" + column
@@ -1319,7 +1331,7 @@ public final class PipelineCompiler
     }
 
     /** The fused-leaf literal/needle declarations (shared by the fused loop and the entry-mask fallback). */
-    private static void emitFusedViewLiterals(StringBuilder out, ClassBody body, Plan.Condition conjunct, int id)
+    private void emitFusedViewLiterals(StringBuilder out, ClassBody body, Plan.Condition conjunct, int id)
     {
         if (conjunct instanceof Plan.LikeMatch like) {
             body.field("org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatch.ContainsNeedle", "sNeedle" + id);
@@ -1344,7 +1356,7 @@ public final class PipelineCompiler
      * The two-key twin of {@link #boundedTopKeyColumn}: a non-null FLAT primary and a non-null STRING secondary
      * sort key. Returns {primary, secondary} scan columns, or null.
      */
-    private static int[] boundedTopLongStringKeyColumns(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private int[] boundedTopLongStringKeyColumns(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
                 || pipeline.ordering() == null || pipeline.ordering().offset() != 0
@@ -1371,7 +1383,7 @@ public final class PipelineCompiler
      * The (long, string) bounded top-N key stage: the threshold is the k-th best (primary, secondary) pair,
      * compared lexicographically with the secondary's bytes read in place.
      */
-    private static void emitBoundedTopLongStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] keyColumns)
+    private void emitBoundedTopLongStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] keyColumns)
     {
         int primary = keyColumns[0];
         int secondary = keyColumns[1];
@@ -1409,7 +1421,7 @@ public final class PipelineCompiler
     }
 
     /** "left pair sorts strictly after right pair" under per-key directions (after = worse for ascending). */
-    private static String pairCompare(String leftPrimary, String leftSecondaryRange, String rightPrimary, String rightSecondaryRange, boolean primaryDescending, boolean secondaryDescending)
+    private String pairCompare(String leftPrimary, String leftSecondaryRange, String rightPrimary, String rightSecondaryRange, boolean primaryDescending, boolean secondaryDescending)
     {
         String primaryAfter = primaryDescending ? "<" : ">";
         String secondaryAfter = secondaryDescending ? "< 0" : "> 0";
@@ -1417,13 +1429,13 @@ public final class PipelineCompiler
                 + " && java.util.Arrays.compareUnsigned(" + leftSecondaryRange + ", " + rightSecondaryRange + ") " + secondaryAfter + "))";
     }
 
-    private static String recomputeWorstPair(String entryWorse)
+    private String recomputeWorstPair(String entryWorse)
     {
         return "btWorst0 = btK0[0]; btWorst1 = btKeys[0]; for (int b = 1; b < btCount; b++) { if (" + entryWorse + ") { btWorst0 = btK0[b]; btWorst1 = btKeys[b]; } }";
     }
 
     /** The string-key twin of {@link #boundedTopKeyColumn}: a single non-null STRING value sort key. */
-    private static int boundedTopStringKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private int boundedTopStringKeyColumn(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         if (!projectionOnly(pipeline) || !pipeline.joins().isEmpty() || pipeline.filters().isEmpty()
                 || pipeline.ordering() == null || pipeline.ordering().offset() != 0
@@ -1447,7 +1459,7 @@ public final class PipelineCompiler
      * those few keys), and let the ordinary ordering cut the over-collected candidates exactly. The payload
      * then interns only the candidates -- the unbounded form appended and sorted every filter survivor.
      */
-    private static void emitBoundedTopStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int keyColumn)
+    private void emitBoundedTopStringKeyStage(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int keyColumn)
     {
         boolean descending = pipeline.ordering().keys().getFirst().descending();
         int limit = pipeline.ordering().limit();
@@ -1483,7 +1495,7 @@ public final class PipelineCompiler
         out.append("      }\n");
     }
 
-    private static void emitBoundedTopKeyStage(StringBuilder out, Plan.Pipeline pipeline, int keyColumn)
+    private void emitBoundedTopKeyStage(StringBuilder out, Plan.Pipeline pipeline, int keyColumn)
     {
         boolean descending = pipeline.ordering().keys().getFirst().descending();
         int limit = pipeline.ordering().limit();
@@ -1512,7 +1524,7 @@ public final class PipelineCompiler
     }
 
     /** Declare the growable output arrays (one per projection, plus a null mask per nullable column reference) before the row loop. */
-    private static void emitProjectionState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable)
+    private void emitProjectionState(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable)
     {
         int count = pipeline.projections().size();
         out.append("    int outCap = 1024; int outRow = 0;\n");
@@ -1525,7 +1537,7 @@ public final class PipelineCompiler
     }
 
     /** Append one surviving row's projected values to the output arrays, growing them when full. */
-    private static void emitProjectionAppend(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings,
+    private void emitProjectionAppend(StringBuilder out, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings,
             boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Expr> projections = pipeline.projections();
@@ -1561,7 +1573,7 @@ public final class PipelineCompiler
     }
 
     /** Trim the output arrays and return the materialized result (then ORDER BY / LIMIT); projections were applied inline. */
-    private static void emitProjectionResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private void emitProjectionResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         int count = pipeline.projections().size();
         out.append("    long[][] result = new long[").append(count).append("][];\n");
@@ -1588,7 +1600,7 @@ public final class PipelineCompiler
 
     // ---- single-input scan -> filter -> aggregate ----
 
-    private static void emitScanBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private void emitScanBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         out.append("    org.weakref.nitro.jit.Column[] in = inputs[0]; int rowCount = rowCounts[0];\n");
         TreeSet<Integer> referenced = referencedColumns(pipeline);
@@ -1670,7 +1682,7 @@ public final class PipelineCompiler
      * Logical types of a window pipeline's result columns: every input column ({@code [0, columnCount)}) typed by its
      * encoding (STRING for a string-encoded column, else LONG), then a trailing LONG rank column.
      */
-    private static List<Type> windowOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private List<Type> windowOutputTypes(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         List<Type> types = new ArrayList<>();
         for (int column = 0; column < pipeline.columnCount(); column++) {
@@ -1684,7 +1696,7 @@ public final class PipelineCompiler
         return types;
     }
 
-    private static void emitWindowBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private void emitWindowBody(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         int columnCount = pipeline.columnCount();
         Map<Plan.Condition, Integer> stringMaskIds = emitWindowMaterializationArrays(out, pipeline, nullable, resultTypes);
@@ -1710,7 +1722,7 @@ public final class PipelineCompiler
      * applying any scan filters -- into the same materialization arrays the eager path builds, then run the identical
      * ranking logic. Reuses the shared fill loop and rank/gather codegen so the two paths produce identical results.
      */
-    private static void emitWindowBodyStreaming(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private void emitWindowBodyStreaming(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         int columnCount = pipeline.columnCount();
         Map<Plan.Condition, Integer> stringMaskIds = emitWindowMaterializationArrays(out, pipeline, nullable, resultTypes);
@@ -1738,7 +1750,7 @@ public final class PipelineCompiler
      * shared by the eager and streaming window paths, and return the predicate-over-dictionary mask ids (stable across
      * batches because each string filter is reduced once per batch into the same {@code stringMask<id>} variable).
      */
-    private static Map<Plan.Condition, Integer> emitWindowMaterializationArrays(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private Map<Plan.Condition, Integer> emitWindowMaterializationArrays(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         int columnCount = pipeline.columnCount();
         List<Plan.Condition> stringMatches = collectPipelineStringMatches(pipeline);
@@ -1758,7 +1770,7 @@ public final class PipelineCompiler
     }
 
     /** Per-batch (or whole-input) fill loop appending each surviving row's columns into the materialization arrays. */
-    private static void emitWindowFillLoop(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitWindowFillLoop(StringBuilder out, String indent, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int columnCount = pipeline.columnCount();
         out.append(indent).append("for (int i = 0; i < rowCount; i++) {\n");
@@ -1798,7 +1810,7 @@ public final class PipelineCompiler
      * {@code rank <= limit}), and gather the kept rows plus the trailing rank column into the result. Shared by the
      * eager and streaming window paths once the {@code w<c>}/{@code wN<c>}/{@code rows} arrays are filled.
      */
-    private static void emitWindowRankAndGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private void emitWindowRankAndGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         Plan.Window window = pipeline.window();
         if (!window.runningAggregates().isEmpty()) {
@@ -1896,7 +1908,7 @@ public final class PipelineCompiler
      * Every row is kept; the result is the input columns plus the trailing average column (NULL for an all-null
      * partition). The pipeline's following HAVING/ORDER BY/projection then apply.
      */
-    private static void emitWindowAggregateGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private void emitWindowAggregateGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         Plan.Window window = pipeline.window();
         int columnCount = pipeline.columnCount();
@@ -1989,7 +2001,7 @@ public final class PipelineCompiler
      * column is a singleton) and assign every row its value up to and including itself. Every row is kept; the result is
      * the input columns plus one trailing column per running aggregate (NULL until the partition's first non-null).
      */
-    private static void emitWindowRunningGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private void emitWindowRunningGather(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         Plan.Window window = pipeline.window();
         int columnCount = pipeline.columnCount();
@@ -2067,7 +2079,7 @@ public final class PipelineCompiler
     }
 
     /** The running-aggregate combine of {@code accumulator} with {@code value}: the new value for the first row, else folded. */
-    private static String runningCombine(String function, String accumulator, String value, String has)
+    private String runningCombine(String function, String accumulator, String value, String has)
     {
         return switch (function) {
             case "max" -> has + " ? Math.max(" + accumulator + ", " + value + ") : " + value;
@@ -2078,13 +2090,13 @@ public final class PipelineCompiler
     }
 
     /** A window output column carries nulls when its (nullable) source column does -- the rank column never does. */
-    private static boolean windowColumnNullable(Plan.Pipeline pipeline, boolean[][] nullable, int column, List<Type> resultTypes)
+    private boolean windowColumnNullable(Plan.Pipeline pipeline, boolean[][] nullable, int column, List<Type> resultTypes)
     {
         return combinedNullable(pipeline, nullable, column);
     }
 
     /** Emit one comparator clause over materialized window columns {@code wC[pa]} vs {@code wC[pb]}, null-aware. */
-    private static void emitWindowCompare(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, int column, boolean descending)
+    private void emitWindowCompare(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, int column, boolean descending)
     {
         String compare = resultTypes.get(column).compare("fw" + column + "[pa]", "fw" + column + "[pb]");
         if (windowColumnNullable(pipeline, nullable, column, resultTypes)) {
@@ -2106,7 +2118,7 @@ public final class PipelineCompiler
     }
 
     /** True when row {@code rowVar} has a null in any partition column (so it is a singleton partition). */
-    private static String windowNullPartitionTest(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, String rowVar)
+    private String windowNullPartitionTest(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes, String rowVar)
     {
         StringBuilder test = new StringBuilder("false");
         for (int partitionColumn : window.partitionColumns()) {
@@ -2118,7 +2130,7 @@ public final class PipelineCompiler
     }
 
     /** True when the current row {@code r} differs from {@code prev} on any partition column (value equality, null-aware). */
-    private static String windowPartitionChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private String windowPartitionChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         return windowValuesDiffer(window.partitionColumns(), pipeline, nullable, resultTypes);
     }
@@ -2128,7 +2140,7 @@ public final class PipelineCompiler
      * two nulls are EQUAL (PARTITION BY groups all null keys together, like the operator harness's window), a null
      * and a value differ. Used by the partition-aggregate gather; the ranking walk keeps its singleton-null rule.
      */
-    private static String windowPartitionChangedNullsEqual(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private String windowPartitionChangedNullsEqual(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         int[] columns = window.partitionColumns();
         if (columns.length == 0) {
@@ -2151,7 +2163,7 @@ public final class PipelineCompiler
     }
 
     /** True when the current row {@code r} differs from {@code prev} on any ORDER BY key (drives RANK ties). */
-    private static String windowOrderingChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private String windowOrderingChanged(Plan.Window window, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         int[] columns = new int[window.orderBy().size()];
         for (int i = 0; i < columns.length; i++) {
@@ -2165,7 +2177,7 @@ public final class PipelineCompiler
      * equality. Matches {@code OperatorEqualitySemantics}: two nulls are NOT equal (so they count as differing) and
      * a null differs from a value.
      */
-    private static String windowValuesDiffer(int[] columns, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
+    private String windowValuesDiffer(int[] columns, Plan.Pipeline pipeline, boolean[][] nullable, List<Type> resultTypes)
     {
         if (columns.length == 0) {
             return "false";
@@ -2192,12 +2204,12 @@ public final class PipelineCompiler
      * source -- load both shapes behind a runtime dispatch, aliasing the view's ids to identity so the row loop
      * reads the row-indexed mask unchanged.
      */
-    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
+    private void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar)
     {
         emitStreamingScanColumnLoad(out, body, pipeline, encodings, nullableAll, column, encoding, nullable, rowsVar, false);
     }
 
-    private static void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar, boolean filterDual)
+    private void emitStreamingScanColumnLoad(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullableAll, int column, ColumnEncoding encoding, boolean nullable, String rowsVar, boolean filterDual)
     {
         if (encoding != ColumnEncoding.STRING
                 || !(filterDual || stringMaybeView(pipeline, column) || stringBoundedFilterViewable(pipeline, encodings, nullableAll, column)
@@ -2226,7 +2238,7 @@ public final class PipelineCompiler
     }
 
     /** Emit (once) the shared identity-ids scratch: a growing {@code [0, n)} array reused across batches. */
-    private static void emitIdentityIdsHelper(ClassBody body)
+    private void emitIdentityIdsHelper(ClassBody body)
     {
         if (body.methods().indexOf("int[] identityIds(") >= 0) {
             return;
@@ -2244,7 +2256,7 @@ public final class PipelineCompiler
     }
 
     /** Declare the local(s) for a scan column according to its encoding: flat values, dict ids + dictionary, or a constant; plus a null mask when nullable. */
-    private static void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding, boolean nullable)
+    private void emitScanColumnLoad(StringBuilder out, int column, ColumnEncoding encoding, boolean nullable)
     {
         switch (encoding) {
             case FLAT, F64 -> {
@@ -2278,7 +2290,7 @@ public final class PipelineCompiler
     }
 
     /** Access expression for a scan column at row {@code row}: flat index, dictionary indirection, hoisted constant, or string id. */
-    private static String scanAccess(int column, ColumnEncoding encoding, String row)
+    private String scanAccess(int column, ColumnEncoding encoding, String row)
     {
         return switch (encoding) {
             case FLAT, F64 -> "c" + column + "[" + row + "]";
@@ -2289,7 +2301,7 @@ public final class PipelineCompiler
     }
 
     /** Is-null expression for a scan column at row {@code row}; {@code "false"} (the fast path) when not nullable. */
-    private static String nullAccess(int column, ColumnEncoding encoding, boolean nullable, String row)
+    private String nullAccess(int column, ColumnEncoding encoding, boolean nullable, String row)
     {
         if (!nullable) {
             return "false";
@@ -2301,7 +2313,7 @@ public final class PipelineCompiler
     }
 
     /** Collect every predicate-over-dictionary leaf (exact, LIKE, substring) reachable through and/or/not. */
-    private static void collectStringMatches(Plan.Condition condition, List<Plan.Condition> into)
+    private void collectStringMatches(Plan.Condition condition, List<Plan.Condition> into)
     {
         if (condition instanceof Plan.StringMatch || condition instanceof Plan.LikeMatch || condition instanceof Plan.SubstringMatch
                 || condition instanceof Plan.StringColumnCompare) {
@@ -2320,7 +2332,7 @@ public final class PipelineCompiler
     }
 
     /** Collect predicate-over-dictionary leaves nested in an expression's CASE conditions (e.g. {@code sum(CASE WHEN s IN (..) THEN ..)}). */
-    private static void collectStringMatchesInExpr(Plan.Expr expr, List<Plan.Condition> into)
+    private void collectStringMatchesInExpr(Plan.Expr expr, List<Plan.Condition> into)
     {
         switch (expr) {
             case Plan.Case kase -> {
@@ -2345,7 +2357,7 @@ public final class PipelineCompiler
     }
 
     /** Collect every predicate-over-dictionary leaf in the pipeline: from WHERE filters and from CASE conditions in aggregate inputs. */
-    private static List<Plan.Condition> collectPipelineStringMatches(Plan.Pipeline pipeline)
+    private List<Plan.Condition> collectPipelineStringMatches(Plan.Pipeline pipeline)
     {
         List<Plan.Condition> into = new ArrayList<>();
         for (Plan.Condition filter : pipeline.filters()) {
@@ -2360,7 +2372,7 @@ public final class PipelineCompiler
     }
 
     /** The dictionary-string column a predicate-over-dictionary leaf tests. */
-    private static int stringMatchColumn(Plan.Condition condition)
+    private int stringMatchColumn(Plan.Condition condition)
     {
         return switch (condition) {
             case Plan.StringMatch match -> match.column();
@@ -2380,7 +2392,7 @@ public final class PipelineCompiler
             "length_utf8", entry -> "org.weakref.nitro.jit.StringMatching.codePointCount(" + entry + ")");
 
     /** The string column a per-entry derivation call reads, or -1 when the call is not a registered derivation over a plain column. */
-    private static int stringDerivationColumn(Plan.Call call)
+    private int stringDerivationColumn(Plan.Call call)
     {
         if (STRING_DERIVATIONS.containsKey(call.name()) && call.arguments().size() == 1
                 && call.arguments().getFirst() instanceof Plan.Col col) {
@@ -2389,13 +2401,13 @@ public final class PipelineCompiler
         return -1;
     }
 
-    private static String derivationArray(Plan.Call call)
+    private String derivationArray(Plan.Call call)
     {
         return "sDrv_" + call.name() + "_" + stringDerivationColumn(call);
     }
 
     /** Collect the distinct per-entry derivations the accumulate path evaluates (group keys, aggregate inputs, projection-only projections). */
-    private static List<Plan.Call> collectStringDerivations(Plan.Pipeline pipeline)
+    private List<Plan.Call> collectStringDerivations(Plan.Pipeline pipeline)
     {
         Map<String, Plan.Call> distinct = new java.util.LinkedHashMap<>();
         List<Plan.Expr> roots = new ArrayList<>(pipeline.groupKeys());
@@ -2413,7 +2425,7 @@ public final class PipelineCompiler
         return new ArrayList<>(distinct.values());
     }
 
-    private static void collectStringDerivationsInExpr(Plan.Expr expr, Map<String, Plan.Call> into)
+    private void collectStringDerivationsInExpr(Plan.Expr expr, Map<String, Plan.Call> into)
     {
         switch (expr) {
             case Plan.Call call -> {
@@ -2442,7 +2454,7 @@ public final class PipelineCompiler
     }
 
     /** Fill a derivation array over the whole dictionary (the eager path: the dictionary is complete up front). */
-    private static void emitStringDerivationPrelude(StringBuilder out, Plan.Call call, String dictionaryVar)
+    private void emitStringDerivationPrelude(StringBuilder out, Plan.Call call, String dictionaryVar)
     {
         String array = derivationArray(call);
         out.append("    int[] ").append(array).append(" = new int[").append(dictionaryVar).append(".length];\n");
@@ -2452,7 +2464,7 @@ public final class PipelineCompiler
     }
 
     /** Incremental (field-held) derivation fill for a globally-interned streamed column, mirroring the incremental masks. */
-    private static void emitIncrementalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Call call, String dictionaryVar, String sizeVar)
+    private void emitIncrementalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Call call, String dictionaryVar, String sizeVar)
     {
         String array = derivationArray(call);
         body.field("int[]", array);
@@ -2475,7 +2487,7 @@ public final class PipelineCompiler
      * identity-aliased ids -- and a dictionary batch derives per page-dictionary entry, cached by dictionary
      * identity across the batches that share it.
      */
-    private static void emitPageLocalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, Plan.Call call, int column, String rowsVar)
+    private void emitPageLocalStringDerivationPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, Plan.Call call, int column, String rowsVar)
     {
         String array = derivationArray(call);
         body.field("int[]", array);
@@ -2508,7 +2520,7 @@ public final class PipelineCompiler
         out.append("    }\n");
     }
 
-    private static void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, int id, String dictionaryVar)
+    private void emitStringMaskPrelude(StringBuilder out, Plan.Condition match, int id, String dictionaryVar)
     {
         out.append("    boolean[] sMask").append(id).append(" = new boolean[").append(dictionaryVar).append(".length];\n");
         emitStringMaskFill(out, match, id, dictionaryVar, "0", dictionaryVar + ".length");
@@ -2520,14 +2532,14 @@ public final class PipelineCompiler
      * only the entries added since the last one, so the total per-query mask work is one pass over the final
      * dictionary rather than one pass per batch.
      */
-    private static void emitIncrementalStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
+    private void emitIncrementalStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
     {
         body.field("boolean[]", "sMask" + id);
         body.field("int", "sMaskLen" + id);
         emitIncrementalStringMaskPreludeBody(out, match, id, dictionaryVar, sizeVar);
     }
 
-    private static void emitIncrementalStringMaskPreludeBody(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
+    private void emitIncrementalStringMaskPreludeBody(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String sizeVar)
     {
         out.append("    if (sMask").append(id).append(" == null) { sMask").append(id).append(" = new boolean[0]; }\n");
         out.append("    if (").append(sizeVar).append(" > sMaskLen").append(id).append(") {\n");
@@ -2540,7 +2552,7 @@ public final class PipelineCompiler
     }
 
     /** Fill {@code sMask<id>[from, to)} by testing the dictionary entries, declaring the match's literals locally. */
-    private static void emitStringMaskFill(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String from, String to)
+    private void emitStringMaskFill(StringBuilder out, Plan.Condition match, int id, String dictionaryVar, String from, String to)
     {
         if (match instanceof Plan.LikeMatch like) {
             String containsLiteral = likeContainsLiteral(like.pattern());
@@ -2603,7 +2615,7 @@ public final class PipelineCompiler
     }
 
     /** The literal of a pure-containment pattern ({@code %literal%}, no other wildcards/escapes), or null. */
-    private static String likeContainsLiteral(String pattern)
+    private String likeContainsLiteral(String pattern)
     {
         if (pattern.length() < 2 || !pattern.startsWith("%") || !pattern.endsWith("%")) {
             return null;
@@ -2616,13 +2628,13 @@ public final class PipelineCompiler
     }
 
     /** Render a Java double-quoted string literal, escaping backslashes and quotes. */
-    private static String javaStringLiteral(String value)
+    private String javaStringLiteral(String value)
     {
         return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     /** Sample the first rows to estimate the single group key's domain and decide whether to speculate array mode. */
-    private static void emitGroupSampleProlog(StringBuilder out, Plan.Expr groupKey, IntFunction<String> sampleResolver)
+    private void emitGroupSampleProlog(StringBuilder out, Plan.Expr groupKey, IntFunction<String> sampleResolver)
     {
         String sampleKey = expr(groupKey, sampleResolver);
         out.append("    int sampleCount = Math.min(rowCount, ").append(SAMPLE_SIZE).append(");\n");
@@ -2644,7 +2656,7 @@ public final class PipelineCompiler
      * right after the build that completes its inputs -- matching where the operator/Trino plan applies it -- rather
      * than after every probe.
      */
-    private static int filterLevel(Plan.Condition filter, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
+    private int filterLevel(Plan.Condition filter, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         collectConditionColumns(filter, columns);
@@ -2658,25 +2670,25 @@ public final class PipelineCompiler
     }
 
     /** Conjunction (Java {@code &&}) of the rendered filter conditions. */
-    private static String conjunction(List<Plan.Condition> conditions, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String conjunction(List<Plan.Condition> conditions, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         return conditions.stream().map(c -> conditionTrue(c, resolver, nullResolver, stringMaskIds)).collect(joining(" && "));
     }
 
     /** Zero literal of a column's Java type (the masked-out value of an unmatched left-join build column). */
-    private static String zeroFor(ColumnEncoding encoding)
+    private String zeroFor(ColumnEncoding encoding)
     {
         return encoding == ColumnEncoding.STRING ? "0" : "0L";
     }
 
     /** A left-join build column's value: the masked-out zero when the row had no match ({@code rowVar == -1}), else the access. */
-    private static String outerValue(String rowVar, ColumnEncoding encoding, String access)
+    private String outerValue(String rowVar, ColumnEncoding encoding, String access)
     {
         return "(" + rowVar + " == -1 ? " + zeroFor(encoding) + " : " + access + ")";
     }
 
     /** A left-join build column is NULL when the row had no match, or when the underlying value is null. */
-    private static String outerNull(String rowVar, String nullAccess)
+    private String outerNull(String rowVar, String nullAccess)
     {
         return nullAccess.equals("false") ? "(" + rowVar + " == -1)" : "(" + rowVar + " == -1 || " + nullAccess + ")";
     }
@@ -2687,7 +2699,7 @@ public final class PipelineCompiler
      * before the remaining probes (matching where the operator/Trino plan applies the filter). Opens one {@code if}
      * brace per probe and per interleaved filter group; returns the number opened so the caller can close them.
      */
-    private static int emitProbesWithFilters(StringBuilder out, String baseIndent, Plan.Pipeline pipeline, List<Plan.Join> joins,
+    private int emitProbesWithFilters(StringBuilder out, String baseIndent, Plan.Pipeline pipeline, List<Plan.Join> joins,
             int[] buildOffset, int probeColumns, int joinCount, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver,
             Map<Plan.Condition, Integer> stringMaskIds, Set<Plan.Condition> pushedToBuild)
     {
@@ -2772,7 +2784,7 @@ public final class PipelineCompiler
      * then swap in. Probe-only filters run in the first stage before any join. A selective early join prunes the
      * decode of every later join key and filter column.
      */
-    private static void emitStagedSelection(StringBuilder execute, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
+    private void emitStagedSelection(StringBuilder execute, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable,
             List<Plan.Join> joins, int[] buildOffset, int probeColumns, List<Plan.Condition> filterMatches, Map<Plan.Condition, Integer> stringMaskIds,
             Set<Plan.Condition> pushedToBuild)
     {
@@ -2943,7 +2955,7 @@ public final class PipelineCompiler
     }
 
     /** Add the probe-side ({@code < probeColumns}) columns {@code condition} reads into {@code into}. */
-    private static void collectProbeConditionColumns(Plan.Condition condition, int probeColumns, TreeSet<Integer> into)
+    private void collectProbeConditionColumns(Plan.Condition condition, int probeColumns, TreeSet<Integer> into)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         collectConditionColumns(condition, columns);
@@ -2954,7 +2966,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
+    private void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes)
     {
         emitJoinBody(out, body, pipeline, encodings, nullable, resultTypes, false);
     }
@@ -2966,7 +2978,7 @@ public final class PipelineCompiler
      * {@code inputs}/{@code rowCounts}. Build-side string-filter masks build once; probe-side masks rebuild per
      * batch (the probe's per-batch dictionary).
      */
-    private static void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes, boolean streaming)
+    private void emitJoinBody(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, List<Type> resultTypes, boolean streaming)
     {
         int probeColumns = pipeline.columnCount();
         List<Plan.Join> joins = pipeline.joins();
@@ -3369,7 +3381,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static int buildOf(List<Plan.Join> joins, int[] buildOffset, int combinedColumn)
+    private int buildOf(List<Plan.Join> joins, int[] buildOffset, int combinedColumn)
     {
         for (int k = 0; k < joins.size(); k++) {
             int start = buildOffset[k];
@@ -3393,7 +3405,7 @@ public final class PipelineCompiler
      * build. (The filter remains in the probe WHERE too; for survivors that is a redundant, always-true re-check.)
      */
     /** The build key's hash/array value array: a string (or dictionary) key is keyed by its dense dict ids, else flat longs. */
-    private static String buildKeyArray(int k, int localKey, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
+    private String buildKeyArray(int k, int localKey, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, int[] buildOffset)
     {
         ColumnEncoding encoding = combinedEncoding(pipeline, encodings, buildOffset[k] + localKey);
         ColumnVars vars = buildVars(k, localKey);
@@ -3406,7 +3418,7 @@ public final class PipelineCompiler
      * null build row must not enter the table. Returns the OR of the nullable keys' null masks, or {@code null} when no
      * key is nullable.
      */
-    private static String buildKeyNullGuard(int k, int[] buildKeys, Plan.Pipeline pipeline, boolean[][] nullable, int[] buildOffset)
+    private String buildKeyNullGuard(int k, int[] buildKeys, Plan.Pipeline pipeline, boolean[][] nullable, int[] buildOffset)
     {
         List<String> terms = new ArrayList<>();
         for (int localKey : buildKeys) {
@@ -3417,7 +3429,7 @@ public final class PipelineCompiler
         return terms.isEmpty() ? null : String.join(" || ", terms);
     }
 
-    private static void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
+    private void emitBuildStructures(StringBuilder out, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
@@ -3470,7 +3482,7 @@ public final class PipelineCompiler
      * duplicate) with the latest row as the chain head in {@code jRow<k>[slot]}. A unique build never collides on key,
      * so {@code buildNext<k>} stays null and the probe runs a single iteration -- byte-identical to a unique-key table.
      */
-    private static void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
+    private void emitHashBuild(StringBuilder out, String indent, int k, int[] buildKeys, String buildFilter, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int[] buildOffset)
     {
         int keyCount = buildKeys.length;
         String rows = "build" + k + "Rows";
@@ -3517,7 +3529,7 @@ public final class PipelineCompiler
      * streaming path -- a build-originated string key (e.g. {@code item.i_category}) remaps against a fully-built
      * dictionary.
      */
-    private static boolean hasStreamedProbeStringJoinKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
+    private boolean hasStreamedProbeStringJoinKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings)
     {
         for (Plan.Join join : pipeline.joins()) {
             for (int probeKey : join.probeKeyColumns()) {
@@ -3535,7 +3547,7 @@ public final class PipelineCompiler
      * Probe and build carry independent dictionaries, so the join must match by value; the remap reduces that to the
      * existing integer-keyed hash/array probe (the build is keyed by its own dense dict ids).
      */
-    private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
+    private void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns)
     {
         emitJoinKeyRemaps(out, pipeline, encodings, joins, buildOffset, probeColumns, null);
     }
@@ -3543,12 +3555,12 @@ public final class PipelineCompiler
     /** {@code buildOriginated} selects which keys to emit: TRUE for build-sourced probe keys only (their dictionaries
      * are constant once the builds load, so the remap hoists out of the streaming batch loop), FALSE for fact-sourced
      * keys only (the probe dictionary loads with the probe), {@code null} for all. */
-    private static void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
+    private void emitJoinKeyRemaps(StringBuilder out, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
     {
         emitJoinKeyRemaps(out, null, pipeline, encodings, joins, buildOffset, probeColumns, buildOriginated);
     }
 
-    private static void emitJoinKeyRemaps(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
+    private void emitJoinKeyRemaps(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, List<Plan.Join> joins, int[] buildOffset, int probeColumns, Boolean buildOriginated)
     {
         for (int k = 0; k < joins.size(); k++) {
             Plan.Join join = joins.get(k);
@@ -3588,7 +3600,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private void emitProbeLookup(StringBuilder out, String indent, int k, Plan.Join join, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         int[] probeKeys = join.probeKeyColumns();
         int keyCount = probeKeys.length;
@@ -3642,7 +3654,7 @@ public final class PipelineCompiler
     }
 
     /** Conjunction {@code jKey<k>_0[js] == pk<k>_0 && ...} comparing every stored build key component. */
-    private static String probeKeyCompare(int k, int keyCount)
+    private String probeKeyCompare(int k, int keyCount)
     {
         StringBuilder compare = new StringBuilder();
         for (int kx = 0; kx < keyCount; kx++) {
@@ -3656,13 +3668,13 @@ public final class PipelineCompiler
 
     // ---- shared per-row body: optional filter, then accumulate ----
 
-    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
+    private void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate)
     {
         emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, false, false);
     }
 
     /** The per-batch group-memo locals (see the memoized findGroup in the grouped accumulate). */
-    private static void emitGroupMemoLocals(StringBuilder out, String indent)
+    private void emitGroupMemoLocals(StringBuilder out, String indent)
     {
         out.append(indent).append("long gMemoKey = 0L; int gMemoBase = -1; long[] gMemoTable = null;\n");
     }
@@ -3671,12 +3683,12 @@ public final class PipelineCompiler
      * Emit one surviving row's body (filter then projection / group / global accumulate). When {@code filtersApplied}
      * the WHERE was already applied upstream (interleaved with the join probes for early-out), so it is not re-checked.
      */
-    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
+    private void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied)
     {
         emitRowBody(out, body, indent, pipeline, encodings, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, grouped, speculate, filtersApplied, false);
     }
 
-    private static void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied, boolean memo)
+    private void emitRowBody(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean grouped, boolean speculate, boolean filtersApplied, boolean memo)
     {
         String bodyIndent = indent;
         boolean emitFilter = !filtersApplied && !pipeline.filters().isEmpty();
@@ -3701,7 +3713,7 @@ public final class PipelineCompiler
 
     // ---- global aggregation ----
 
-    private static void emitGlobalState(StringBuilder out, List<Plan.Aggregate> aggregates)
+    private void emitGlobalState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
         int total = cellCount(aggregates);
         for (int c = 0; c < total; c++) {
@@ -3717,7 +3729,7 @@ public final class PipelineCompiler
      * cell-updating accumulator over scan values -- no fused distinct set, no winners-mode string minimum,
      * no dictionary-indexed input -- so the loops are independent and need no shared per-row context.
      */
-    private static boolean splittableGlobalAggregates(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private boolean splittableGlobalAggregates(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         for (Plan.Aggregate aggregate : pipeline.aggregates()) {
             if (aggregate.fn().equals("count_distinct") || aggregate.fn().equals("min_utf8")) {
@@ -3738,7 +3750,7 @@ public final class PipelineCompiler
         return true;
     }
 
-    private static void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitGlobalAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         for (int a = 0; a < aggregates.size(); a++) {
@@ -3747,12 +3759,12 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitAggregateUpdate(StringBuilder out, String indent, Plan.Aggregate aggregate, List<String> cells, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         emitAggregateUpdate(out, indent, null, null, aggregate, -1, cells, null, "i", resolver, nullResolver, stringMaskIds);
     }
 
-    private static void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitAggregateUpdate(StringBuilder out, String indent, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         emitAggregateUpdate(out, indent, null, body, aggregate, index, cells, groupId, "i", resolver, nullResolver, stringMaskIds);
     }
@@ -3764,12 +3776,12 @@ public final class PipelineCompiler
      * only when {@code distinctAdd<index>(groupId, input)} inserts a new (group, value) pair into the emitted
      * open-addressing set.
      */
-    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         emitAggregateUpdate(out, indent, pipeline, body, aggregate, index, cells, groupId, "i", resolver, nullResolver, stringMaskIds);
     }
 
-    private static void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, String viewRowExpression, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitAggregateUpdate(StringBuilder out, String indent, Plan.Pipeline pipeline, ClassBody body, Plan.Aggregate aggregate, int index, List<String> cells, String groupId, String viewRowExpression, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         if (pipeline != null && aggregate.fn().equals("min_utf8") && aggregate.input() instanceof Plan.Col col
                 && stringMinWinners(pipeline, col.index())) {
@@ -3829,7 +3841,7 @@ public final class PipelineCompiler
      * groupId nonzero. Global (the group identity is the constant 1): value-only slots -- half the footprint, so
      * half the cache misses per probe on a high-cardinality input -- with the zero value held in a sentinel flag.
      */
-    private static void emitDistinctSet(ClassBody body, int index, boolean global)
+    private void emitDistinctSet(ClassBody body, int index, boolean global)
     {
         String set = "dSet" + index;
         if (body.methods().indexOf("boolean distinctAdd" + index + "(") >= 0) {
@@ -3899,12 +3911,12 @@ public final class PipelineCompiler
     }
 
     /** The dictionary variable for a string aggregate's input: set when the input is a plain scan column (whose string id the row loop works on), else null. */
-    private static String aggregateInputDictionary(Plan.Aggregate aggregate)
+    private String aggregateInputDictionary(Plan.Aggregate aggregate)
     {
         return aggregate.input() instanceof Plan.Col col ? "cStr" + col.index() : null;
     }
 
-    private static void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates, List<Type> resultTypes)
+    private void emitGlobalResult(StringBuilder out, List<Plan.Aggregate> aggregates, List<Type> resultTypes)
     {
         int n = aggregates.size();
         out.append("    long[][] result = new long[").append(n).append("][];\n");
@@ -3942,7 +3954,7 @@ public final class PipelineCompiler
     // group-key columns (null where inactive in the group's set), the aggregate columns, then a trailing
     // grouping_id column (the GROUPING() bitmask: bit i set for each group key i not in the set).
 
-    private static void emitGroupingSetsState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline)
+    private void emitGroupingSetsState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
@@ -3972,7 +3984,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitGroupingSetsAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitGroupingSetsAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
@@ -4015,7 +4027,7 @@ public final class PipelineCompiler
     }
 
     /** The find-or-create method for grouping set {@code s}: canonicalize, probe, insert, resize; returns the slot base. */
-    private static void emitGroupingSetFindMethod(ClassBody body, int s, int[] set, String parameters, int keyCount, List<Plan.Aggregate> aggregates)
+    private void emitGroupingSetFindMethod(ClassBody body, int s, int[] set, String parameters, int keyCount, List<Plan.Aggregate> aggregates)
     {
         java.util.Set<Integer> active = new java.util.HashSet<>();
         for (int index : set) {
@@ -4096,7 +4108,7 @@ public final class PipelineCompiler
         out.append("  }\n");
     }
 
-    private static void emitGroupingSetsResult(StringBuilder out, Plan.Pipeline pipeline, int reconstructDictColumn, List<Type> resultTypes)
+    private void emitGroupingSetsResult(StringBuilder out, Plan.Pipeline pipeline, int reconstructDictColumn, List<Type> resultTypes)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int keyCount = pipeline.groupKeys().size();
@@ -4139,7 +4151,7 @@ public final class PipelineCompiler
     }
 
     /** Hash input over (setId, ck0, ..., ck{keyCount-1}) for the grouping-sets accumulate. */
-    private static String groupingSetsHashFold(int keyCount)
+    private String groupingSetsHashFold(int keyCount)
     {
         String folded = "(long) setId";
         for (int kx = 0; kx < keyCount; kx++) {
@@ -4149,7 +4161,7 @@ public final class PipelineCompiler
     }
 
     /** Conjunction comparing a stored slot's (setId, keys, null flags) against the probe's. */
-    private static String groupingSetsKeyCompare(int keyCount)
+    private String groupingSetsKeyCompare(int keyCount)
     {
         // The setId and null bits are covered by the gMeta word; only the key values remain to compare.
         StringBuilder compare = new StringBuilder();
@@ -4160,7 +4172,7 @@ public final class PipelineCompiler
     }
 
     /** The GROUPING() bitmask for a set: bit {@code kx} set when group key {@code kx} is NOT active in the set. */
-    private static long groupingIdBitmask(int[] set, int keyCount)
+    private long groupingIdBitmask(int[] set, int keyCount)
     {
         java.util.Set<Integer> active = new java.util.HashSet<>();
         for (int index : set) {
@@ -4177,7 +4189,7 @@ public final class PipelineCompiler
 
     // ---- grouped aggregation (single long key) ----
 
-    private static void emitGroupedState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
+    private void emitGroupedState(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate)
     {
         if (!pipeline.groupingSets().isEmpty()) {
             emitGroupingSetsState(out, body, pipeline);
@@ -4231,7 +4243,7 @@ public final class PipelineCompiler
      * shape does not apply (multiple/computed/nullable keys, grouping sets, joins, or a nullable aggregate --
      * the array state carries no result null masks).
      */
-    private static int streamedStringIdKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
+    private int streamedStringIdKey(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable)
     {
         if (pipeline.groupKeys().size() == 1 && pipeline.groupingSets().isEmpty() && pipeline.window() == null
                 && pipeline.joins().isEmpty()
@@ -4246,7 +4258,7 @@ public final class PipelineCompiler
     }
 
     /** State for the dense string-id grouping: per-cell arrays indexed by global id, grown to the dictionary size. */
-    private static void emitStringIdGroupedState(StringBuilder out, List<Plan.Aggregate> aggregates)
+    private void emitStringIdGroupedState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
         out.append("    int sgCap = 0; int sgCount = 0;\n");
         out.append("    boolean[] sgUsed = new boolean[0];\n");
@@ -4256,7 +4268,7 @@ public final class PipelineCompiler
     }
 
     /** Per-batch growth of the dense string-id state to the (monotonically growing) dictionary size. */
-    private static void emitStringIdGroupedGrowth(StringBuilder out, List<Plan.Aggregate> aggregates, int keyColumn)
+    private void emitStringIdGroupedGrowth(StringBuilder out, List<Plan.Aggregate> aggregates, int keyColumn)
     {
         out.append("      if (cStrLen").append(keyColumn).append(" > sgCap) {\n");
         out.append("        int sgNew = Math.max(cStrLen").append(keyColumn).append(", sgCap * 2);\n");
@@ -4269,7 +4281,7 @@ public final class PipelineCompiler
     }
 
     /** One row's fold into the dense string-id state: first touch initializes the group's cells lazily. */
-    private static void emitStringIdGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, int keyColumn, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private void emitStringIdGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, int keyColumn, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         out.append(indent).append("int sgid = cIds").append(keyColumn).append("[i];\n");
@@ -4282,7 +4294,7 @@ public final class PipelineCompiler
     }
 
     /** Compact the dense string-id state to the occupied ids: key column = the id, then finalized aggregates. */
-    private static void emitStringIdGroupedResult(StringBuilder out, Plan.Pipeline pipeline, List<Type> resultTypes)
+    private void emitStringIdGroupedResult(StringBuilder out, Plan.Pipeline pipeline, List<Type> resultTypes)
     {
         List<Plan.Aggregate> aggregates = pipeline.aggregates();
         int aggregateCount = aggregates.size();
@@ -4309,17 +4321,17 @@ public final class PipelineCompiler
         out.append("    return applyProjection(applyOrdering(applyHaving(new org.weakref.nitro.jit.CompiledPipeline.Result(sgCount, result, types))));\n");
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
+    private void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate)
     {
         emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, "i", false);
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression)
+    private void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression)
     {
         emitGroupedAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds, speculate, viewRowExpression, false);
     }
 
-    private static void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression, boolean memo)
+    private void emitGroupedAccumulate(StringBuilder out, ClassBody body, String indent, Plan.Pipeline pipeline, boolean[][] nullable, IntFunction<String> resolver, IntFunction<String> groupKeyResolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds, boolean speculate, String viewRowExpression, boolean memo)
     {
         if (!pipeline.groupingSets().isEmpty()) {
             emitGroupingSetsAccumulate(out, body, indent, pipeline, nullable, resolver, groupKeyResolver, nullResolver, stringMaskIds);
@@ -4486,7 +4498,7 @@ public final class PipelineCompiler
         method.append("  }\n");
     }
 
-    private static void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
+    private void emitGroupedResult(StringBuilder out, Plan.Pipeline pipeline, boolean[][] nullable, boolean speculate, int reconstructDictColumn, List<Type> resultTypes)
     {
         if (!pipeline.groupingSets().isEmpty()) {
             emitGroupingSetsResult(out, pipeline, reconstructDictColumn, resultTypes);
@@ -4558,7 +4570,7 @@ public final class PipelineCompiler
     }
 
     /** Finalize each aggregate's cells into one result column (over {@code groupCount} groups in {@code agg<cell>}). */
-    private static void emitAggregateResultColumns(StringBuilder out, String indent, int firstResultColumn, List<Plan.Aggregate> aggregates)
+    private void emitAggregateResultColumns(StringBuilder out, String indent, int firstResultColumn, List<Plan.Aggregate> aggregates)
     {
         for (int a = 0; a < aggregates.size(); a++) {
             out.append(indent).append("long[] outAgg").append(a).append(" = new long[groupCount];\n");
@@ -4569,13 +4581,13 @@ public final class PipelineCompiler
     }
 
     /** Reconstruct a group key for output: identity for a plain key, or a dictionary lookup for a group-on-id key. */
-    private static String reconstructKey(int dictColumn, String keyExpr)
+    private String reconstructKey(int dictColumn, String keyExpr)
     {
         return dictColumn < 0 ? "(" + keyExpr + ")" : "cDict" + dictColumn + "[(int) (" + keyExpr + ")]";
     }
 
     /** Emit one key result column, copying the stored keys or reconstructing dictionary values for a group-on-id key. */
-    private static void emitKeyResultColumn(StringBuilder out, String indent, int resultIndex, int keyIndex, int reconstructDictColumn, String count)
+    private void emitKeyResultColumn(StringBuilder out, String indent, int resultIndex, int keyIndex, int reconstructDictColumn, String count)
     {
         if (reconstructDictColumn < 0) {
             out.append(indent).append("result[").append(resultIndex).append("] = java.util.Arrays.copyOf(keyByGid").append(keyIndex).append(", ").append(count).append(");\n");
@@ -4588,7 +4600,7 @@ public final class PipelineCompiler
     }
 
     /** Single-key open-addressing grouping table (the deopt target for speculative array grouping). */
-    private static void emitSingleKeyHashState(StringBuilder out, List<Plan.Aggregate> aggregates)
+    private void emitSingleKeyHashState(StringBuilder out, List<Plan.Aggregate> aggregates)
     {
         out.append("    int cap = 1024;\n");
         out.append("    long[] htKey0 = new long[cap];\n");
@@ -4602,7 +4614,7 @@ public final class PipelineCompiler
     }
 
     /** Emit a find-or-create lookup of {@code hkey} in the single-key hash table, leaving {@code int gid} in scope. */
-    private static void emitSingleKeyHashFindOrCreate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates)
+    private void emitSingleKeyHashFindOrCreate(StringBuilder out, String indent, List<Plan.Aggregate> aggregates)
     {
         out.append(indent).append("int hslot = mix(hkey) & htMask;\n");
         out.append(indent).append("while (htGid[hslot] != -1 && htKey0[hslot] != hkey) { hslot = (hslot + 1) & htMask; }\n");
@@ -4636,7 +4648,7 @@ public final class PipelineCompiler
      * {@code gk0}, or {@code htKey0[s]}). One component folds to itself (preserving the single-key form);
      * multiple fold with a Fibonacci-style multiply-add so each component shifts the others' bits.
      */
-    private static String hashFold(String base, String suffix, int keyCount)
+    private String hashFold(String base, String suffix, int keyCount)
     {
         String folded = base + "0" + suffix;
         for (int kx = 1; kx < keyCount; kx++) {
@@ -4646,7 +4658,7 @@ public final class PipelineCompiler
     }
 
     /** Conjunction {@code htKey0[slot] == gk0 && ...} comparing every stored key component to the probe. */
-    private static String keyCompare(int keyCount, int keyOffset)
+    private String keyCompare(int keyCount, int keyOffset)
     {
         // The null bits, when present, are covered by the gMeta word; only the key values remain to compare.
         StringBuilder compare = new StringBuilder();
@@ -4656,26 +4668,26 @@ public final class PipelineCompiler
         return compare.toString();
     }
 
-    private static void emitMix(StringBuilder out)
+    private void emitMix(StringBuilder out)
     {
         out.append("  private static int mix(long key) {\n");
         out.append("    long h = key; h ^= h >>> 33; h *= 0xff51afd7ed558ccdL; h ^= h >>> 33;");
         out.append(" h *= 0xc4ceb9fe1a85ec53L; h ^= h >>> 33; return (int) h;\n  }\n");
     }
 
-    private static AggregateLibrary.AggregateCompiler aggregator(Plan.Aggregate aggregate)
+    private AggregateLibrary.AggregateCompiler aggregator(Plan.Aggregate aggregate)
     {
-        return AggregateLibrary.get(aggregate.fn());
+        return aggregateFunctions.get(aggregate.fn());
     }
 
     /** Rendered input expression for an aggregate, or {@code null} for a nullary aggregate such as {@code count}. */
-    private static String input(Plan.Aggregate aggregate, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String input(Plan.Aggregate aggregate, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         return aggregate.input() == null ? null : expr(aggregate.input(), resolver, nullResolver, stringMaskIds);
     }
 
     /** Total number of {@code long} state cells across all aggregates. */
-    private static int cellCount(List<Plan.Aggregate> aggregates)
+    private int cellCount(List<Plan.Aggregate> aggregates)
     {
         int total = 0;
         for (Plan.Aggregate aggregate : aggregates) {
@@ -4685,7 +4697,7 @@ public final class PipelineCompiler
     }
 
     /** The flat cell index at which aggregate {@code index}'s cells begin. */
-    private static int cellBase(List<Plan.Aggregate> aggregates, int index)
+    private int cellBase(List<Plan.Aggregate> aggregates, int index)
     {
         int base = 0;
         for (int a = 0; a < index; a++) {
@@ -4699,7 +4711,7 @@ public final class PipelineCompiler
      * {@code element} is null the cells are scalars ({@code a3}); otherwise they are array elements
      * ({@code agg3[gid]}).
      */
-    private static List<String> cells(List<Plan.Aggregate> aggregates, int index, String prefix, String element)
+    private List<String> cells(List<Plan.Aggregate> aggregates, int index, String prefix, String element)
     {
         int base = cellBase(aggregates, index);
         int n = aggregator(aggregates.get(index)).cells();
@@ -4712,7 +4724,7 @@ public final class PipelineCompiler
     }
 
     /** Lvalue strings for aggregate {@code index}'s state cells stored inline in a slot record at {@code base}. */
-    private static List<String> slotCells(List<Plan.Aggregate> aggregates, int index, String table, String base, int firstCellWord)
+    private List<String> slotCells(List<Plan.Aggregate> aggregates, int index, String table, String base, int firstCellWord)
     {
         int cellBase = cellBase(aggregates, index);
         int n = aggregator(aggregates.get(index)).cells();
@@ -4727,7 +4739,7 @@ public final class PipelineCompiler
      * Extract the in-record aggregate cells into gid-ordered {@code agg<cell>} arrays with one sequential walk of
      * the slot table, so the result emitters (which finalize from {@code agg<cell>[g]}) stay layout-agnostic.
      */
-    private static void emitCellExtraction(StringBuilder out, String table, String maskVar, int stride, int firstCellWord, List<Plan.Aggregate> aggregates)
+    private void emitCellExtraction(StringBuilder out, String table, String maskVar, int stride, int firstCellWord, List<Plan.Aggregate> aggregates)
     {
         int total = cellCount(aggregates);
         for (int c = 0; c < total; c++) {
@@ -4744,25 +4756,35 @@ public final class PipelineCompiler
         out.append("    }\n");
     }
 
-    /** Emit the {@code Type[] types} literal for the result columns, each resolved by name from {@link Types}. */
-    private static void emitResultTypes(StringBuilder out, String indent, List<Type> resultTypes)
+    private void emitTypeResolverConstructor(StringBuilder out, String simpleName)
+    {
+        out.append("  private final java.util.function.Function<String, org.weakref.nitro.jit.Type> typeResolver;\n");
+        out.append("  public ").append(simpleName)
+                .append("(java.util.function.Function<String, org.weakref.nitro.jit.Type> typeResolver) {\n")
+                .append("    if (typeResolver == null) { throw new NullPointerException(\"typeResolver is null\"); }\n")
+                .append("    this.typeResolver = typeResolver;\n")
+                .append("  }\n");
+    }
+
+    /** Emit the {@code Type[] types} literal for the result columns, resolved by the injected owner. */
+    private void emitResultTypes(StringBuilder out, String indent, List<Type> resultTypes)
     {
         StringBuilder elements = new StringBuilder();
         for (Type type : resultTypes) {
-            elements.append(elements.length() == 0 ? "" : ", ").append("org.weakref.nitro.jit.Types.get(\"").append(type.name()).append("\")");
+            elements.append(elements.length() == 0 ? "" : ", ").append("typeResolver.apply(\"").append(type.name()).append("\")");
         }
         out.append(indent).append("org.weakref.nitro.jit.Type[] types = new org.weakref.nitro.jit.Type[] { ").append(elements).append(" };\n");
     }
 
     /** Identity assignment for every aggregate's state cells at array index {@code index} in storage named {@code prefix<cell>}. */
-    private static void emitStateIdentity(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, String prefix, String index)
+    private void emitStateIdentity(StringBuilder out, String indent, List<Plan.Aggregate> aggregates, String prefix, String index)
     {
         for (int a = 0; a < aggregates.size(); a++) {
             aggregator(aggregates.get(a)).emitIdentity(out, indent, cells(aggregates, a, prefix, index));
         }
     }
 
-    private static TreeSet<Integer> referencedColumns(Plan.Pipeline pipeline)
+    private TreeSet<Integer> referencedColumns(Plan.Pipeline pipeline)
     {
         TreeSet<Integer> referenced = new TreeSet<>();
         for (Plan.Condition filter : pipeline.filters()) {
@@ -4787,7 +4809,7 @@ public final class PipelineCompiler
     }
 
     /** Columns the aggregation body reads: the group keys and the aggregate inputs (the "payload" of a filtering scan). */
-    private static TreeSet<Integer> accumulateColumns(Plan.Pipeline pipeline)
+    private TreeSet<Integer> accumulateColumns(Plan.Pipeline pipeline)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         if (projectionOnly(pipeline)) {
@@ -4816,7 +4838,7 @@ public final class PipelineCompiler
      * candidate bytes in place). The generated prelude then evaluates predicates over the page bytes -- no
      * interning, no per-row copies -- aliasing the row ids to identity so the row loop is unchanged.
      */
-    public static boolean stringMaybeView(Plan.Pipeline pipeline, int column)
+    public boolean stringMaybeView(Plan.Pipeline pipeline, int column)
     {
         // Views are a single-input mechanism: the join phases load plain string columns.
         if (!pipeline.joins().isEmpty()) {
@@ -4863,7 +4885,7 @@ public final class PipelineCompiler
      * batch), so the view's full-batch shape can never leak into id-consuming code -- the filter evaluates in
      * place, and the few payload rows intern as usual.
      */
-    public static boolean stringBoundedFilterViewable(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int column)
+    public boolean stringBoundedFilterViewable(Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, int column)
     {
         if (boundedTopKeyColumn(pipeline, encodings, nullable) < 0) {
             return false;
@@ -4908,7 +4930,7 @@ public final class PipelineCompiler
      * per-row view evaluation. The view is confined to the filter-stage materialize (a dedicated source call);
      * payload stages still intern, but only the filter's survivors.
      */
-    public static boolean stringFilterViewable(Plan.Pipeline pipeline, boolean[][] nullable, int column)
+    public boolean stringFilterViewable(Plan.Pipeline pipeline, boolean[][] nullable, int column)
     {
         if (!pipeline.joins().isEmpty() || nullableOf(nullable, 0, column)) {
             return false;
@@ -4935,7 +4957,7 @@ public final class PipelineCompiler
     }
 
     /** Is {@code column} a winners-mode min input: a maybe-view column some {@code min_utf8} reads directly? */
-    public static boolean stringMinWinners(Plan.Pipeline pipeline, int column)
+    public boolean stringMinWinners(Plan.Pipeline pipeline, int column)
     {
         boolean min = pipeline.aggregates().stream().anyMatch(aggregate -> aggregate.fn().equals("min_utf8")
                 && aggregate.input() instanceof Plan.Col col && col.index() == column);
@@ -4943,7 +4965,7 @@ public final class PipelineCompiler
     }
 
     /** The structural half of winners-mode eligibility (everything except requiring a min consumer). */
-    private static boolean minWinnersShape(Plan.Pipeline pipeline, int column)
+    private boolean minWinnersShape(Plan.Pipeline pipeline, int column)
     {
         if (pipeline.groupKeys().stream().anyMatch(key -> referencesColumn(key, column))
                 || (projectionOnly(pipeline) && pipeline.projections().stream().anyMatch(projection -> referencesColumn(projection, column)))) {
@@ -4974,7 +4996,7 @@ public final class PipelineCompiler
         return true;
     }
 
-    private static boolean referencesColumn(Plan.Expr expr, int column)
+    private boolean referencesColumn(Plan.Expr expr, int column)
     {
         TreeSet<Integer> referenced = new TreeSet<>();
         collectColumns(expr, referenced);
@@ -4988,7 +5010,7 @@ public final class PipelineCompiler
      * predicate masks extend incrementally rather than rebuilding per batch. A filter-only column's ids die with
      * the batch (page-local dictionary), and a winners-mode min input compares bytes in place (no ids at all).
      */
-    public static boolean stringIdsCrossBatches(Plan.Pipeline pipeline, int column)
+    public boolean stringIdsCrossBatches(Plan.Pipeline pipeline, int column)
     {
         return accumulateColumns(pipeline).contains(column) && !stringMinWinners(pipeline, column)
                 && !stringDerivedOnly(pipeline, column);
@@ -5000,7 +5022,7 @@ public final class PipelineCompiler
      * dictionary batch caches it per page-dictionary entry -- no global intern (ClickBench q28's
      * avg(length(URL)) otherwise interned ~20M URLs just to read their lengths).
      */
-    public static boolean stringDerivedOnly(Plan.Pipeline pipeline, int column)
+    public boolean stringDerivedOnly(Plan.Pipeline pipeline, int column)
     {
         if (!pipeline.joins().isEmpty() || pipeline.window() != null) {
             return false;
@@ -5042,7 +5064,7 @@ public final class PipelineCompiler
     }
 
     /** Does {@code expr} reach {@code column} only through registered per-entry derivation calls? */
-    private static boolean referencesOnlyThroughDerivations(Plan.Expr expr, int column)
+    private boolean referencesOnlyThroughDerivations(Plan.Expr expr, int column)
     {
         return switch (expr) {
             case Plan.Col col -> col.index() != column;
@@ -5057,10 +5079,10 @@ public final class PipelineCompiler
     }
 
     /** Order top-level (AND-ed) conjuncts most-selective-first by a static heuristic; AND is commutative so this is safe. */
-    private static List<Plan.Condition> orderBySelectivity(List<Plan.Condition> conjuncts)
+    private List<Plan.Condition> orderBySelectivity(List<Plan.Condition> conjuncts)
     {
         List<Plan.Condition> ordered = new ArrayList<>(conjuncts);
-        ordered.sort(java.util.Comparator.comparingInt(PipelineCompiler::selectivityRank));
+        ordered.sort(java.util.Comparator.comparingInt(this::selectivityRank));
         return ordered;
     }
 
@@ -5072,7 +5094,7 @@ public final class PipelineCompiler
      * conjuncts stay unfused -- a single-leaf string stage rides the zero-copy view / predicate-over-dictionary
      * machinery that fusing would forfeit.
      */
-    private static List<Plan.Condition> fuseSameColumnConjuncts(List<Plan.Condition> conjuncts)
+    private List<Plan.Condition> fuseSameColumnConjuncts(List<Plan.Condition> conjuncts)
     {
         Map<TreeSet<Integer>, List<Plan.Condition>> groups = new java.util.LinkedHashMap<>();
         List<Plan.Condition> passthrough = new ArrayList<>();   // string-bearing or column-less, in order
@@ -5113,7 +5135,7 @@ public final class PipelineCompiler
      * statistics; this orders by predicate shape: equality and single-value membership are assumed most selective,
      * ranges and pattern matches middling, negations and disjunctions least.
      */
-    private static int selectivityRank(Plan.Condition condition)
+    private int selectivityRank(Plan.Condition condition)
     {
         return switch (condition) {
             case Plan.Predicate predicate -> switch (predicate.op()) {
@@ -5133,7 +5155,7 @@ public final class PipelineCompiler
     }
 
     /** A Java {@code new int[] {...}} literal of the given column indices, for a {@code Source.materialize} call. */
-    private static String intArrayLiteral(Iterable<Integer> values)
+    private String intArrayLiteral(Iterable<Integer> values)
     {
         StringBuilder literal = new StringBuilder("new int[] {");
         boolean first = true;
@@ -5147,7 +5169,7 @@ public final class PipelineCompiler
         return literal.append("}").toString();
     }
 
-    private static void collectColumns(Plan.Expr expr, TreeSet<Integer> into)
+    private void collectColumns(Plan.Expr expr, TreeSet<Integer> into)
     {
         if (expr instanceof Plan.Col col) {
             into.add(col.index());
@@ -5172,7 +5194,7 @@ public final class PipelineCompiler
         // Plan.Lit references no columns.
     }
 
-    private static void collectConditionColumns(Plan.Condition condition, TreeSet<Integer> into)
+    private void collectConditionColumns(Plan.Condition condition, TreeSet<Integer> into)
     {
         switch (condition) {
             case Plan.Predicate predicate -> {
@@ -5199,7 +5221,7 @@ public final class PipelineCompiler
      * String-match filters qualify -- this dimension's predicate-over-dictionary masks are emitted before its
      * structures.
      */
-    private static boolean pushableToBuild(Plan.Condition filter, int start, int end)
+    private boolean pushableToBuild(Plan.Condition filter, int start, int end)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         collectConditionColumns(filter, columns);
@@ -5211,13 +5233,13 @@ public final class PipelineCompiler
 
     /** Render a boolean condition tree as a Java expression. */
     /** Null-unaware boolean rendering (for contexts whose operands are non-null: HAVING result columns, CASE whens). */
-    private static String condition(Plan.Condition condition, IntFunction<String> resolver)
+    private String condition(Plan.Condition condition, IntFunction<String> resolver)
     {
         return condition(condition, resolver, NEVER_NULL);
     }
 
     /** Map a SQL comparison operator to its Java equivalent ({@code =} -> {@code ==}, {@code <>} -> {@code !=}). */
-    private static String comparison(String sqlOperator)
+    private String comparison(String sqlOperator)
     {
         return switch (sqlOperator) {
             case "=" -> "==";
@@ -5230,7 +5252,7 @@ public final class PipelineCompiler
      * The value comparison of a predicate: an {@code _f64}-suffixed operator compares the operands' long
      * lanes as the doubles whose raw bits they hold; anything else compares the longs directly.
      */
-    private static String predicateComparison(String sqlOperator, String left, String right)
+    private String predicateComparison(String sqlOperator, String left, String right)
     {
         if (sqlOperator.endsWith("_f64")) {
             String op = switch (sqlOperator) {
@@ -5247,7 +5269,7 @@ public final class PipelineCompiler
         return "(" + left + " " + comparison(sqlOperator) + " " + right + ")";
     }
 
-    private static String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private String condition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (condition) {
             case Plan.Predicate predicate -> {
@@ -5273,7 +5295,7 @@ public final class PipelineCompiler
         };
     }
 
-    private static String expr(Plan.Expr expr, IntFunction<String> resolver)
+    private String expr(Plan.Expr expr, IntFunction<String> resolver)
     {
         return expr(expr, resolver, NEVER_NULL);
     }
@@ -5284,11 +5306,11 @@ public final class PipelineCompiler
      * literals render plainly and arithmetic uses the untyped operators -- unlike the row loops, where F64
      * rides as raw bits and the {@code _f64} vocabulary unwraps it.
      */
-    private static String decodedExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private String decodedExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (expr) {
             case Plan.LitF64 lit -> String.valueOf(lit.value());
-            case Plan.Bin bin -> ScalarLibrary.get(decodedOperator(bin.op())).emit(List.of(
+            case Plan.Bin bin -> scalarFunctions.get(decodedOperator(bin.op())).emit(List.of(
                     decodedExpr(bin.left(), resolver, nullResolver),
                     decodedExpr(bin.right(), resolver, nullResolver)));
             default -> expr(expr, resolver, nullResolver);
@@ -5296,7 +5318,7 @@ public final class PipelineCompiler
     }
 
     /** Condition rendering for post-aggregation rows, whose DOUBLE lanes have already been decoded to Java doubles. */
-    private static String decodedCondition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private String decodedCondition(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return switch (condition) {
             case Plan.Predicate predicate -> {
@@ -5320,7 +5342,7 @@ public final class PipelineCompiler
         };
     }
 
-    private static String decodedComparison(String operator)
+    private String decodedComparison(String operator)
     {
         return switch (operator) {
             case "lt_f64" -> "<";
@@ -5334,7 +5356,7 @@ public final class PipelineCompiler
     }
 
     /** Map the {@code _f64} vocabulary to the plain operators in decoded contexts (doubles are already unwrapped). */
-    private static String decodedOperator(String op)
+    private String decodedOperator(String op)
     {
         return switch (op) {
             case "add_f64" -> "+";
@@ -5345,12 +5367,12 @@ public final class PipelineCompiler
         };
     }
 
-    private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return expr(expr, resolver, nullResolver, Map.of());
     }
 
-    private static String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String expr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         return switch (expr) {
             case Plan.Col col -> resolver.apply(col.index());
@@ -5358,19 +5380,19 @@ public final class PipelineCompiler
             case Plan.LitF64 lit -> Double.doubleToRawLongBits(lit.value()) + "L /* " + lit.value() + " */";
             case Plan.LitStr ignored -> "0L";   // constant string: emit dictionary id 0 (the value comes from the consumer's single-entry dictionary)
             case Plan.NullLit ignored -> "0L";   // null long: a placeholder value; the null mask (below) is what matters
-            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
+            case Plan.Bin bin -> scalarFunctions.get(bin.op()).emit(List.of(expr(bin.left(), resolver, nullResolver, stringMaskIds), expr(bin.right(), resolver, nullResolver, stringMaskIds)));
             case Plan.Call call -> stringDerivationColumn(call) >= 0
                     // A per-dictionary-entry derivation (e.g. length_utf8 over a string column): the prelude filled
                     // sDrv_<fn>_<col> per entry, so the row value is one array lookup by the row's id.
                     ? derivationArray(call) + "[(int) (" + resolver.apply(stringDerivationColumn(call)) + ")]"
-                    : ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
+                    : scalarFunctions.get(call.name()).emit(call.arguments().stream().map(argument -> expr(argument, resolver, nullResolver, stringMaskIds)).toList());
             case Plan.Case kase -> caseExpression(kase, resolver, nullResolver, stringMaskIds);
             case Plan.Coalesce coalesce -> coalesceExpression(coalesce, resolver, nullResolver, stringMaskIds);
         };
     }
 
     /** Render a CASE as a right-nested conditional, falling through to the default value. */
-    private static String caseExpression(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String caseExpression(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         StringBuilder out = new StringBuilder();
         for (Plan.Case.Branch branch : kase.branches()) {
@@ -5385,7 +5407,7 @@ public final class PipelineCompiler
     }
 
     /** Render COALESCE as a right-nested conditional returning the first non-null argument. */
-    private static String coalesceExpression(Plan.Coalesce coalesce, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String coalesceExpression(Plan.Coalesce coalesce, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         List<Plan.Expr> arguments = coalesce.arguments();
         // The fallback is the first argument that is never null (it always wins if reached), or the last one.
@@ -5410,12 +5432,12 @@ public final class PipelineCompiler
     // ---- three-valued (null-aware) expression and condition rendering ----
 
     /** Boolean expression that is true when {@code expr} evaluates to SQL null. {@code "false"} on the fast path. */
-    private static String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
+    private String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver)
     {
         return nullExpr(expr, resolver, nullResolver, Map.of());
     }
 
-    private static String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String nullExpr(Plan.Expr expr, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         return switch (expr) {
             case Plan.Col col -> nullResolver.apply(col.index());
@@ -5447,7 +5469,7 @@ public final class PipelineCompiler
         };
     }
 
-    private static String andNull(String left, String right)
+    private String andNull(String left, String right)
     {
         if (left.equals("false") || right.equals("false")) {
             return "false";
@@ -5462,7 +5484,7 @@ public final class PipelineCompiler
     }
 
     /** Null-ness of a CASE: the null-ness of whichever branch value is selected (when-conditions assumed non-null). */
-    private static String caseNull(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String caseNull(Plan.Case kase, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         boolean anyNull = !nullExpr(kase.defaultValue(), resolver, nullResolver, stringMaskIds).equals("false");
         for (Plan.Case.Branch branch : kase.branches()) {
@@ -5482,7 +5504,7 @@ public final class PipelineCompiler
         return out.toString();
     }
 
-    private static String orNull(String left, String right)
+    private String orNull(String left, String right)
     {
         if (left.equals("false")) {
             return right;
@@ -5494,12 +5516,12 @@ public final class PipelineCompiler
     }
 
     /** {@code !(nullExpr)}, or empty when provably non-null (drops the guard on the fast path). */
-    private static String notNullGuard(String nullExpression)
+    private String notNullGuard(String nullExpression)
     {
         return nullExpression.equals("false") ? "" : "!(" + nullExpression + ")";
     }
 
-    private static String andGuards(String left, String right)
+    private String andGuards(String left, String right)
     {
         if (left.isEmpty()) {
             return right;
@@ -5511,7 +5533,7 @@ public final class PipelineCompiler
     }
 
     /** Boolean expression that is true when {@code condition} evaluates to SQL TRUE (three-valued logic). */
-    private static String conditionTrue(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String conditionTrue(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         switch (condition) {
             case Plan.Predicate predicate -> {
@@ -5556,7 +5578,7 @@ public final class PipelineCompiler
     }
 
     /** A predicate-over-dictionary leaf as SQL TRUE: the row's id is in the mask (and the value is not null). */
-    private static String stringMaskTrue(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String stringMaskTrue(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int column = stringMatchColumn(match);
         String guard = notNullGuard(nullResolver.apply(column));
@@ -5565,7 +5587,7 @@ public final class PipelineCompiler
     }
 
     /** Boolean expression that is true when {@code condition} evaluates to SQL FALSE (three-valued logic). */
-    private static String conditionFalse(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String conditionFalse(Plan.Condition condition, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         switch (condition) {
             case Plan.Predicate predicate -> {
@@ -5612,7 +5634,7 @@ public final class PipelineCompiler
     }
 
     /** A predicate-over-dictionary leaf as SQL FALSE: the row's id is not in the mask (and the value is not null). */
-    private static String stringMaskFalse(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String stringMaskFalse(Plan.Condition match, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         int column = stringMatchColumn(match);
         String guard = notNullGuard(nullResolver.apply(column));
@@ -5627,7 +5649,7 @@ public final class PipelineCompiler
      * value equality becomes the integer test; a left value absent from the right dictionary maps to {@code -1}, which
      * never equals a (non-negative) right id.
      */
-    private static String stringColumnCompareTest(Plan.StringColumnCompare compare, boolean inequality, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
+    private String stringColumnCompareTest(Plan.StringColumnCompare compare, boolean inequality, IntFunction<String> resolver, IntFunction<String> nullResolver, Map<Plan.Condition, Integer> stringMaskIds)
     {
         String guard = andGuards(notNullGuard(nullResolver.apply(compare.left())), notNullGuard(nullResolver.apply(compare.right())));
         int id = stringMaskIds.get(compare);
@@ -5644,7 +5666,7 @@ public final class PipelineCompiler
      * compares two columns carrying independent dictionaries with a single integer lookup per row.
      */
     /** Emit the per-dictionary prelude for a string condition: a remap for a column-vs-column compare, else a mask. {@code dictionaryVar} maps a column index to its materialized dictionary variable. */
-    private static void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
+    private void emitStringConditionPrelude(StringBuilder out, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
     {
         emitStringConditionPrelude(out, null, match, id, dictionaryVar);
     }
@@ -5654,7 +5676,7 @@ public final class PipelineCompiler
      * (ids stable across batches, see {@link #stringIdsCrossBatches}) gets an incremental field-held mask;
      * everything else rebuilds per batch over the page-local dictionary, as in the materialized path.
      */
-    private static void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition match, int id, String rowsVar)
+    private void emitStreamingStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, ColumnEncoding[][] encodings, boolean[][] nullable, Plan.Condition match, int id, String rowsVar)
     {
         if (match instanceof Plan.StringColumnCompare) {
             emitStringConditionPrelude(out, match, id, column -> "cStr" + column);
@@ -5694,7 +5716,7 @@ public final class PipelineCompiler
      * place (vectorized containment / byte equality over the page data) into a row-indexed mask, with the ids
      * aliased to identity by the column load; a dictionary-page batch keeps the identity-cached entry mask.
      */
-    private static void emitViewOrCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id, int column, String rowsVar)
+    private void emitViewOrCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Pipeline pipeline, Plan.Condition match, int id, int column, String rowsVar)
     {
         body.field("boolean[]", "sMask" + id);
         body.field("byte[][]", "sMaskDict" + id);
@@ -5712,7 +5734,7 @@ public final class PipelineCompiler
     }
 
     /** Per-row in-place fill of a view batch's mask: vectorized containment for LIKE, byte equality for IN. */
-    private static void emitViewMaskFill(StringBuilder out, ClassBody body, Plan.Condition match, int id, int column, String rowsVar)
+    private void emitViewMaskFill(StringBuilder out, ClassBody body, Plan.Condition match, int id, int column, String rowsVar)
     {
         // The view holds page positions; in a staged context the mask's slot e maps to the stage's
         // selection[e] (identity in the first conjunct), in the dense no-filter loop to e itself.
@@ -5756,7 +5778,7 @@ public final class PipelineCompiler
      * changes (once per row-group chunk) rather than once per batch -- a LIKE over a fact's URL column was paying
      * its regex over the whole page dictionary thousands of times.
      */
-    private static void emitIdentityCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar)
+    private void emitIdentityCachedStringMaskPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, String dictionaryVar)
     {
         body.field("boolean[]", "sMask" + id);
         body.field("byte[][]", "sMaskDict" + id);
@@ -5768,7 +5790,7 @@ public final class PipelineCompiler
     }
 
     /** With a {@code body}, the remap / class arrays become instance fields (read from out-of-line stage methods). */
-    private static void emitStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
+    private void emitStringConditionPrelude(StringBuilder out, ClassBody body, Plan.Condition match, int id, IntFunction<String> dictionaryVar)
     {
         if (match instanceof Plan.StringColumnCompare compare) {
             if (compare.hasSubstring()) {
@@ -5790,7 +5812,7 @@ public final class PipelineCompiler
         }
     }
 
-    private static void emitStringRemapPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar)
+    private void emitStringRemapPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar)
     {
         out.append("    java.util.HashMap<String, Integer> sRightIdx").append(id).append(" = new java.util.HashMap<>();\n");
         out.append("    for (int e = 0; e < ").append(rightDictionaryVar).append(".length; e++) {\n");
@@ -5810,14 +5832,14 @@ public final class PipelineCompiler
      * {@code sLeftClass[leftId] == sRightClass[rightId]}. Unlike the whole-value remap, both sides are canonicalized,
      * since two distinct right entries can share a prefix.
      */
-    private static void emitStringPrefixClassPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar, int start, int length)
+    private void emitStringPrefixClassPrelude(StringBuilder out, boolean asField, int id, String leftDictionaryVar, String rightDictionaryVar, int start, int length)
     {
         out.append("    java.util.HashMap<String, Integer> sClass").append(id).append(" = new java.util.HashMap<>();\n");
         emitPrefixClassLoop(out, asField, id, "sLeftClass", leftDictionaryVar, start, length);
         emitPrefixClassLoop(out, asField, id, "sRightClass", rightDictionaryVar, start, length);
     }
 
-    private static void emitPrefixClassLoop(StringBuilder out, boolean asField, int id, String arrayName, String dictionaryVar, int start, int length)
+    private void emitPrefixClassLoop(StringBuilder out, boolean asField, int id, String arrayName, String dictionaryVar, int start, int length)
     {
         out.append(asField ? "    " : "    int[] ").append(arrayName).append(id).append(" = new int[").append(dictionaryVar).append(".length];\n");
         out.append("    for (int e = 0; e < ").append(dictionaryVar).append(".length; e++) {\n");

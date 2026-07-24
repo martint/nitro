@@ -122,6 +122,24 @@ class TestArchitectureDependencies
                 .isEmpty();
     }
 
+    @Test
+    void testCompilerRegistriesAndCachesAreExplicitlyOwned()
+    {
+        Pattern ambientCompilerResource = Pattern.compile(
+                "static\\s+final\\s+[^;\\n]*(?:REGISTRY|DOUBLE_RESULTS|CLASS_CACHE|\\bCOUNTER\\b)\\s*(?:=|;)");
+        List<Path> compilerSources = List.of(
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/Types.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/ScalarLibrary.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/AggregateLibrary.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/CompilerResources.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/PipelineCompiler.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/BatchFunctionCompiler.java"));
+
+        assertThat(compilerSources)
+                .as("function/type registries and generated-class caches are integration-owned compiler dependencies")
+                .noneMatch(path -> matches(path, ambientCompilerResource));
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();

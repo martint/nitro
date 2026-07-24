@@ -23,13 +23,12 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 /**
- * Registry of {@link Type}s. Built-in types are registered here, and new types are added with
- * {@link #register}; the compiler resolves a type by {@link Type#name() name} via {@link #get}. Generated code
- * references a type as {@code Types.get("<name>")}, so a custom type flows through results without any change to
- * the compiler.
+ * Explicitly owned registry of {@link Type}s. Built-in types are registered for every owner, and new types are added
+ * with {@link #register}; generated pipelines receive their owner's resolver during construction.
  */
 public final class Types
 {
@@ -65,28 +64,43 @@ public final class Types
             slot -> slot,
             Types::reconstructString);
 
-    private static final Map<String, Type> REGISTRY = new ConcurrentHashMap<>();
+    private final Map<String, Type> registry = new ConcurrentHashMap<>();
 
-    static {
+    public Types()
+    {
         register(LONG);
         register(DOUBLE);
         register(STRING);
     }
 
-    private Types() {}
-
-    public static void register(Type type)
+    public void register(Type type)
     {
-        REGISTRY.put(type.name(), type);
+        registry.put(type.name(), type);
     }
 
-    public static Type get(String name)
+    public Type get(String name)
     {
-        Type type = REGISTRY.get(name);
+        Type type = registry.get(name);
         if (type == null) {
             throw new IllegalArgumentException("unknown type: " + name);
         }
         return type;
+    }
+
+    /**
+     * Freezes the current bindings for one compiler artifact. Later registry changes cannot alter the meaning of an
+     * already compiled pipeline or extend its connector-classloader reachability.
+     */
+    public Function<String, Type> snapshotResolver()
+    {
+        Map<String, Type> snapshot = Map.copyOf(registry);
+        return name -> {
+            Type type = snapshot.get(name);
+            if (type == null) {
+                throw new IllegalArgumentException("unknown type: " + name);
+            }
+            return type;
+        };
     }
 
     /** Reconstructs a result column into an engine {@link Vector}; the runtime counterpart of {@link Type#decode}. */

@@ -28,6 +28,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -112,7 +113,7 @@ public class BenchmarkCompiledJoin
                 List.of(),
                 List.of(new Plan.Col(3)),
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
-        compiled = PipelineCompiler.compile(plan);
+        compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(plan);
 
         long interp = interpreted();
         // Dense and sparse inputs map every fact row to the same dimension attribute, so all three agree.

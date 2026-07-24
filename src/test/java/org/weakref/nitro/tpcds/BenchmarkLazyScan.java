@@ -29,6 +29,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.jit.Column;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.jit.QueryLowering;
@@ -82,7 +83,7 @@ public class BenchmarkLazyScan
                 .aggregate("sum", "ss_sales_price")
                 .aggregate("sum", "ss_ext_sales_price");
         lowered = query.lower();
-        streaming = PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        streaming = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
     }
 
     @Setup(Level.Invocation)

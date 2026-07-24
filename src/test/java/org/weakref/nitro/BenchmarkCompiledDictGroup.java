@@ -26,6 +26,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.jit.Column;
 import org.weakref.nitro.jit.ColumnEncoding;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 
@@ -82,8 +83,8 @@ public class BenchmarkCompiledDictGroup
                 List.of(),
                 List.of(new Plan.Col(0)),
                 List.of(new Plan.Aggregate("sum", new Plan.Col(1))));
-        flatCompiled = PipelineCompiler.compile(plan);
-        dictCompiled = PipelineCompiler.compile(plan, new ColumnEncoding[][] {{ColumnEncoding.DICTIONARY, ColumnEncoding.FLAT}});
+        flatCompiled = new PipelineCompiler(CompilerResources.createDefault()).compile(plan);
+        dictCompiled = new PipelineCompiler(CompilerResources.createDefault()).compile(plan, new ColumnEncoding[][] {{ColumnEncoding.DICTIONARY, ColumnEncoding.FLAT}});
 
         if (flatGroup() != dictGroup()) {
             throw new IllegalStateException("mismatch: flat=" + flatGroup() + " dict=" + dictGroup());

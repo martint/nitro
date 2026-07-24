@@ -18,6 +18,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Lowers a star-shaped query described by column <em>name</em> into the positional {@link Plan.Pipeline} the
  * compiler consumes, plus the per-input load spec (which physical columns to read, in order, with their
@@ -131,9 +133,9 @@ public final class QueryLowering
             inputs = List.copyOf(inputs);
         }
 
-        public CompiledPipeline compile()
+        public CompiledPipeline compile(PipelineCompiler compiler)
         {
-            return PipelineCompiler.compile(pipeline, encodings(), nullable());
+            return requireNonNull(compiler, "compiler is null").compile(pipeline, encodings(), nullable());
         }
 
         public ColumnEncoding[][] encodings()

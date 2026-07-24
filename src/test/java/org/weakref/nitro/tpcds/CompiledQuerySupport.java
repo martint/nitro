@@ -21,6 +21,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.operator.Batch;
@@ -289,7 +290,7 @@ public final class CompiledQuerySupport
 
     public static CompiledPipeline compile()
     {
-        return PipelineCompiler.compile(plan());
+        return new PipelineCompiler(CompilerResources.createDefault()).compile(plan());
     }
 
     public static CompiledPipeline.Result runCompiled(CompiledPipeline compiled, Loaded data)
@@ -532,7 +533,7 @@ public final class CompiledQuerySupport
         for (int c = 0; c < width; c++) {
             org.weakref.nitro.jit.QueryLowering.Column spec = specs.get(c);
             if (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
-                    && PipelineCompiler.stringIdsCrossBatches(pipeline, c)) {
+                    && new PipelineCompiler(CompilerResources.createDefault()).stringIdsCrossBatches(pipeline, c)) {
                 globalDictionaries[c] = new GlobalStringDictionary(regexpTransform(spec));
             }
             else if (spec.regexpPattern() != null || (spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING && spec.substringLength() >= 0)) {
@@ -543,8 +544,8 @@ public final class CompiledQuerySupport
             // no nulls.
             viewable[c] = spec.encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
                     && !spec.nullable()
-                    && (PipelineCompiler.stringMaybeView(pipeline, c)
-                            || PipelineCompiler.stringBoundedFilterViewable(pipeline, probeEncodings, probeNullable, c));
+                    && (new PipelineCompiler(CompilerResources.createDefault()).stringMaybeView(pipeline, c)
+                            || new PipelineCompiler(CompilerResources.createDefault()).stringBoundedFilterViewable(pipeline, probeEncodings, probeNullable, c));
         }
         // A derivation-only column (consumed only through per-entry numeric derivations + leaf filters) never
         // interns: its plain pages pass through as views for ANY selection -- the generated derivation prelude
@@ -553,7 +554,7 @@ public final class CompiledQuerySupport
         for (int c = 0; c < width; c++) {
             derivedView[c] = specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
                     && !specs.get(c).nullable()
-                    && PipelineCompiler.stringDerivedOnly(pipeline, c);
+                    && new PipelineCompiler(CompilerResources.createDefault()).stringDerivedOnly(pipeline, c);
         }
         // Winners dictionaries for winners-mode min inputs: appended to only on a new minimum, snapshotted for
         // the result reconstruction.
@@ -562,7 +563,7 @@ public final class CompiledQuerySupport
         int[] winnersSizes = new int[width];
         for (int c = 0; c < width; c++) {
             if (specs.get(c).encoding() == org.weakref.nitro.jit.ColumnEncoding.STRING
-                    && PipelineCompiler.stringMinWinners(pipeline, c)) {
+                    && new PipelineCompiler(CompilerResources.createDefault()).stringMinWinners(pipeline, c)) {
                 minWinners[c] = true;
                 winners[c] = new byte[16][];
             }
@@ -1251,7 +1252,7 @@ public final class CompiledQuerySupport
         }
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
-                PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         int buildCount = sources.size() - 1;
         org.weakref.nitro.jit.Column[][] builds = new org.weakref.nitro.jit.Column[buildCount][];
         int[] buildRowCounts = new int[buildCount];
@@ -1550,7 +1551,7 @@ public final class CompiledQuerySupport
         for (int s = 0; s < sources.size(); s++) {
             resolveInput(allocator, tables, sources.get(s), virtuals, inputs, rowCounts, s);
         }
-        return new LoweredResult(lowered.compile().execute(inputs, rowCounts), inputs);
+        return new LoweredResult(lowered.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(inputs, rowCounts), inputs);
     }
 
     private static StreamedResult streamCapturingBuilds(Allocator allocator, ParquetTables tables,
@@ -2575,7 +2576,7 @@ public final class CompiledQuerySupport
     public static LoweredResult runLowered(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         LoadedInputs loaded = loadLoweredInputs(allocator, tables, lowered);
-        return new LoweredResult(lowered.compile().execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
+        return new LoweredResult(lowered.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(loaded.inputs(), loaded.rowCounts()), loaded.inputs());
     }
 
     /**
@@ -2586,7 +2587,7 @@ public final class CompiledQuerySupport
     public static LoweredResult runStreamingPorted(Allocator allocator, ParquetTables tables, org.weakref.nitro.jit.QueryLowering.Lowered lowered)
     {
         org.weakref.nitro.jit.StreamingPipeline streaming =
-                PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         StreamedResult streamed = streamCapturingBuilds(allocator, tables, lowered, streaming, true);
         org.weakref.nitro.jit.Column[][] inputsForDictRef = new org.weakref.nitro.jit.Column[lowered.inputs().size()][];
         for (int b = 0; b < streamed.builds().length; b++) {
@@ -2606,8 +2607,8 @@ public final class CompiledQuerySupport
             org.weakref.nitro.jit.QueryLowering.Lowered subquery, org.weakref.nitro.jit.QueryLowering.Lowered main, String virtualTable)
     {
         org.weakref.nitro.jit.StreamingPipeline subStreaming =
-                PipelineCompiler.compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
-        return runMultiStage(allocator, tables, subquery, subStreaming, main, main.compile(), virtualTable);
+                new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(subquery.pipeline(), subquery.encodings(), subquery.nullable());
+        return runMultiStage(allocator, tables, subquery, subStreaming, main, main.compile(new PipelineCompiler(CompilerResources.createDefault())), virtualTable);
     }
 
     /**
@@ -2682,7 +2683,7 @@ public final class CompiledQuerySupport
             // Stream every branch (grouped or projection-only): streaming materializes only the branch's filtered
             // output, not its whole fact -- draining an ungrouped branch's fact eagerly was the dominant cost.
             org.weakref.nitro.jit.StreamingPipeline streaming =
-                    PipelineCompiler.compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
+                    new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(branch.pipeline(), branch.encodings(), branch.nullable());
             StreamedResult streamed = streamCapturingBuilds(allocator, tables, branch, streaming, true, virtuals);
             CompiledPipeline.Result result = streamed.result();
             org.weakref.nitro.jit.Column[][] dictInputs = new org.weakref.nitro.jit.Column[branch.inputs().size()][];
@@ -2758,7 +2759,7 @@ public final class CompiledQuerySupport
                 rowCounts[s] = loaded.rows;
             }
         }
-        return new LoweredResult(main.compile().execute(inputs, rowCounts), inputs);
+        return new LoweredResult(main.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(inputs, rowCounts), inputs);
     }
 
     /** Row-wise concatenation of same-schema branch results into one {@link org.weakref.nitro.jit.Column}[] (numeric and dictionary-string columns). */

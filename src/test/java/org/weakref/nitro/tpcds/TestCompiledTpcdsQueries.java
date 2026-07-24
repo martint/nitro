@@ -424,7 +424,7 @@ public class TestCompiledTpcdsQueries
             org.weakref.nitro.jit.QueryLowering.Lowered lowered = entry.getValue().query().lower();
             org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
             org.weakref.nitro.jit.StreamingPipeline streaming =
-                    org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                    new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
             org.weakref.nitro.jit.CompiledPipeline.Result lazy =
                     CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming, true);
             assertThat(rows(lazy)).as("Q%s streaming-lazy vs eager", entry.getKey()).isEqualTo(rows(eager));
@@ -454,7 +454,7 @@ public class TestCompiledTpcdsQueries
 
         org.weakref.nitro.jit.CompiledPipeline.Result joinEager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered).result();
         org.weakref.nitro.jit.StreamingPipeline joinStreaming =
-                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
+                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(joinLowered.pipeline(), joinLowered.encodings(), joinLowered.nullable());
         org.weakref.nitro.jit.CompiledPipeline.Result joinLazy =
                 CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, joinLowered, joinStreaming, true);
 
@@ -482,7 +482,7 @@ public class TestCompiledTpcdsQueries
                 .aggregate("sum", "ss_ext_sales_price");
         org.weakref.nitro.jit.QueryLowering.Lowered lowered = query.lower();
         org.weakref.nitro.jit.StreamingPipeline streaming =
-                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
 
         var probe = lowered.inputs().get(0);
         org.weakref.nitro.jit.CompiledPipeline.Result eager = streaming.execute(
@@ -510,7 +510,7 @@ public class TestCompiledTpcdsQueries
         org.weakref.nitro.jit.CompiledPipeline.Result eager = CompiledQuerySupport.runLowered(new Allocator(EngineResources.createDefault()), tables, lowered).result();
 
         org.weakref.nitro.jit.StreamingPipeline streaming =
-                org.weakref.nitro.jit.PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+                new org.weakref.nitro.jit.PipelineCompiler(org.weakref.nitro.jit.CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
         org.weakref.nitro.jit.CompiledPipeline.Result streamed =
                 CompiledQuerySupport.runStreamingLowered(new Allocator(EngineResources.createDefault()), tables, lowered, streaming);
 

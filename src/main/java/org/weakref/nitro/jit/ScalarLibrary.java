@@ -36,16 +36,17 @@ public final class ScalarLibrary
         String emit(List<String> arguments);
     }
 
-    private static final Map<String, ScalarCompiler> REGISTRY = new ConcurrentHashMap<>();
+    private final Map<String, ScalarCompiler> registry = new ConcurrentHashMap<>();
 
     /**
      * Names of scalar functions whose result is a DOUBLE regardless of argument types (e.g. an integer average that
      * yields a true floating-point quotient). The compiler consults this so the projection / sort machinery encodes
      * such a call's slot as raw double bits and compares it as DOUBLE.
      */
-    private static final Set<String> DOUBLE_RESULTS = ConcurrentHashMap.newKeySet();
+    private final Set<String> doubleResults = ConcurrentHashMap.newKeySet();
 
-    static {
+    public ScalarLibrary()
+    {
         register("+", infix("+"));
         register("-", infix("-"));
         register("*", infix("*"));
@@ -81,37 +82,35 @@ public final class ScalarLibrary
         // treats it (and any ORDER BY over it) as DOUBLE.
         register("divide_i64_to_f64", arguments ->
                 "((double) " + arguments.get(0) + " / (double) " + arguments.get(1) + ")");
-        DOUBLE_RESULTS.add("divide_i64_to_f64");
+        doubleResults.add("divide_i64_to_f64");
         // SQL round(DOUBLE) semantics used at result boundaries: nearest integer with exact halves away from zero.
         // Math.round differs for negative halves, so express the rule directly and keep it available to every
         // compiled shape through the scalar registry rather than embedding it in a query lowering.
         register("round_f64", arguments ->
                 "Math.copySign(Math.floor(Math.abs(" + arguments.get(0) + ") + 0.5d), " + arguments.get(0) + ")");
-        DOUBLE_RESULTS.add("round_f64");
+        doubleResults.add("round_f64");
         // True double / double division (IEEE), mirroring the interpreted divide_f64 primitive. Both operands arrive
         // already decoded to doubles (the projection resolver decodes a DOUBLE column), so this is a plain division;
         // the projection re-encodes the double result. Used for the coefficient of variation (stddev_samp / avg).
         register("divide_f64", arguments ->
                 "(" + arguments.get(0) + " / " + arguments.get(1) + ")");
-        DOUBLE_RESULTS.add("divide_f64");
+        doubleResults.add("divide_f64");
         // Reinterpret a long column holding raw double bits as a DOUBLE. A DOUBLE value materialized by an earlier
         // stage is stored as a flat long[] of bits; the consuming stage scans it as a long, so this names it back to a
         // DOUBLE for output and double-typed comparison. (Ordering still runs on the raw bits, which for positive
         // doubles is the same order.) The argument is the raw bits; decoding then DOUBLE-result re-encoding round-trips.
         register("reinterpret_f64", arguments -> "Double.longBitsToDouble(" + arguments.get(0) + ")");
-        DOUBLE_RESULTS.add("reinterpret_f64");
+        doubleResults.add("reinterpret_f64");
     }
 
-    private ScalarLibrary() {}
-
-    public static void register(String name, ScalarCompiler compiler)
+    public void register(String name, ScalarCompiler compiler)
     {
-        REGISTRY.put(name, compiler);
+        registry.put(name, compiler);
     }
 
-    public static ScalarCompiler get(String name)
+    public ScalarCompiler get(String name)
     {
-        ScalarCompiler compiler = REGISTRY.get(name);
+        ScalarCompiler compiler = registry.get(name);
         if (compiler == null) {
             throw new UnsupportedOperationException("scalar function: " + name);
         }
@@ -119,9 +118,9 @@ public final class ScalarLibrary
     }
 
     /** Whether the named scalar function returns a DOUBLE irrespective of its argument types. */
-    public static boolean isDoubleResult(String name)
+    public boolean isDoubleResult(String name)
     {
-        return DOUBLE_RESULTS.contains(name);
+        return doubleResults.contains(name);
     }
 
     private static ScalarCompiler f64Infix(String operator)

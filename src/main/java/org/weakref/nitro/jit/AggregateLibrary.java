@@ -83,9 +83,10 @@ public final class AggregateLibrary
         }
     }
 
-    private static final Map<String, AggregateCompiler> REGISTRY = new ConcurrentHashMap<>();
+    private final Map<String, AggregateCompiler> registry = new ConcurrentHashMap<>();
 
-    static {
+    public AggregateLibrary()
+    {
         register("sum", new AggregateCompiler()
         {
             @Override public int cells()
@@ -362,8 +363,6 @@ public final class AggregateLibrary
         });
     }
 
-    private AggregateLibrary() {}
-
     /**
      * A two-cell F64 fold: [0] = bits of the running value (sum / min / max as doubles), [1] = non-null count
      * (zero means SQL NULL). {@code infix} selects {@code a + b}; otherwise {@code fold(a, b)}.
@@ -418,14 +417,14 @@ public final class AggregateLibrary
         };
     }
 
-    public static void register(String name, AggregateCompiler compiler)
+    public void register(String name, AggregateCompiler compiler)
     {
-        REGISTRY.put(name, compiler);
+        registry.put(name, compiler);
     }
 
-    public static AggregateCompiler get(String name)
+    public AggregateCompiler get(String name)
     {
-        AggregateCompiler compiler = REGISTRY.get(name);
+        AggregateCompiler compiler = registry.get(name);
         if (compiler == null) {
             throw new UnsupportedOperationException("aggregate: " + name);
         }

@@ -28,6 +28,7 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.QueryLowering;
 import org.weakref.nitro.jit.StreamingPipeline;
@@ -79,8 +80,8 @@ public class BenchmarkStreamingScan
                 .aggregate("sum", "ss_sales_price")
                 .aggregate("sum", "ss_ext_sales_price");
         lowered = query.lower();
-        eager = lowered.compile();                                                   // one-time
-        streaming = PipelineCompiler.compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
+        eager = lowered.compile(new PipelineCompiler(CompilerResources.createDefault()));                                                   // one-time
+        streaming = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(lowered.pipeline(), lowered.encodings(), lowered.nullable());
     }
 
     @Setup(Level.Invocation)

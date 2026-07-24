@@ -25,6 +25,29 @@ import static org.assertj.core.api.Assertions.within;
 public class TestJitPipeline
 {
     @Test
+    void generatedClassCachesAreOwnerScoped()
+    {
+        Plan.Pipeline pipeline = new Plan.Pipeline(
+                1,
+                List.of(),
+                List.of(),
+                List.of(new Plan.Aggregate("count", null)));
+        CompilerResources firstResources = CompilerResources.createDefault();
+        CompilerResources secondResources = CompilerResources.createDefault();
+        PipelineCompiler first = new PipelineCompiler(firstResources);
+        PipelineCompiler second = new PipelineCompiler(secondResources);
+
+        CompiledPipeline firstCompilation = first.compile(pipeline);
+        assertThat(first.compile(pipeline).getClass()).isSameAs(firstCompilation.getClass());
+        assertThat(second.compile(pipeline).getClass()).isNotSameAs(firstCompilation.getClass());
+
+        firstResources.close();
+        assertThat(firstCompilation.execute(new long[][][] {{{1, 2, 3}}}, new int[] {3}).columns()[0][0])
+                .isEqualTo(3);
+        secondResources.close();
+    }
+
+    @Test
     void compilesEqualityPredicates()
     {
         // SELECT count(*) WHERE a = 7 AND b <> 3 -- SQL '=' and '<>' must lower to Java '==' and '!='.
@@ -48,7 +71,7 @@ public class TestJitPipeline
             }
         }
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline);
         CompiledPipeline.Result result = compiled.execute(new long[][][] {{a, b}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(1);
@@ -82,10 +105,10 @@ public class TestJitPipeline
             }
         }
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline);
         CompiledPipeline.Result result = compiled.execute(new long[][][] {{a, b}}, new int[] {rows});
 
-        System.out.println("=== generated source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
         assertThat(result.rowCount()).isEqualTo(1);
         assertThat(result.columns()[0][0]).isEqualTo(expectedSum);
         assertThat(result.columns()[1][0]).isEqualTo(expectedCount);
@@ -107,7 +130,7 @@ public class TestJitPipeline
         long[] a = {100, 200, 300};
         long[] b = {4, 0, 5};   // middle row divides by zero -> NULL
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{a, b}}, new int[] {a.length});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{a, b}}, new int[] {a.length});
 
         assertThat(result.rowCount()).isEqualTo(3);
         assertThat(result.nulls()).isNotNull();
@@ -140,7 +163,7 @@ public class TestJitPipeline
         boolean[] vNull = {false, true, false};   // row 1: v is NULL
 
         boolean[][] nullable = {{false, true}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
 
         assertThat(result.rowCount()).isEqualTo(3);
@@ -173,12 +196,12 @@ public class TestJitPipeline
         boolean[][] nullable = {{false, true}};
 
         Plan.Pipeline isNull = new Plan.Pipeline(2, List.of(new Plan.IsNull(1)), List.of(), List.of(new Plan.Aggregate("count", null)));
-        CompiledPipeline.Result nullResult = PipelineCompiler.compile(isNull, null, nullable)
+        CompiledPipeline.Result nullResult = new PipelineCompiler(CompilerResources.createDefault()).compile(isNull, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {rows});
         assertThat(nullResult.columns()[0][0]).isEqualTo(nullCount);
 
         Plan.Pipeline isNotNull = new Plan.Pipeline(2, List.of(new Plan.IsNull(1, true)), List.of(), List.of(new Plan.Aggregate("count", null)));
-        CompiledPipeline.Result notNullResult = PipelineCompiler.compile(isNotNull, null, nullable)
+        CompiledPipeline.Result notNullResult = new PipelineCompiler(CompilerResources.createDefault()).compile(isNotNull, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {rows});
         assertThat(notNullResult.columns()[0][0]).isEqualTo(rows - nullCount);
     }
@@ -210,7 +233,7 @@ public class TestJitPipeline
             acc[2] += 1;
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{k, a, b}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -235,7 +258,7 @@ public class TestJitPipeline
         long[] keys = {0, 0, 1, 1, 2, 2};
         long[] values = {2, 3, -2, -3, 0, 0};
         boolean[] valueNulls = {false, false, false, false, true, true};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, new boolean[][] {{false, true}})
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, new boolean[][] {{false, true}})
                 .execute(new Column[][] {{new Column.FlatColumn(keys), new Column.FlatColumn(values, valueNulls)}}, new int[] {keys.length});
 
         assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
@@ -264,7 +287,7 @@ public class TestJitPipeline
             bits[i] = Double.doubleToRawLongBits(values[i]);
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{bits}}, new int[] {values.length});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{bits}}, new int[] {values.length});
         assertThat(result.types()[0]).isEqualTo(Types.DOUBLE);
         for (int r = 0; r < values.length; r++) {
             assertThat(Double.longBitsToDouble(result.columns()[0][r])).isEqualTo(values[r]);
@@ -301,7 +324,7 @@ public class TestJitPipeline
         }
         kept.sort((a, b) -> Long.compare(b[1], a[1]));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(5);
         for (int r = 0; r < 5; r++) {
             assertThat(result.columns()[1][r]).as("k at rank %d", r).isEqualTo(kept.get(r)[1]);
@@ -340,7 +363,7 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.FLAT}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, encodings)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings)
                 .execute(new Column[][] {{new Column.StringColumn(ids, dictionary), new Column.FlatColumn(v)}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -378,7 +401,7 @@ public class TestJitPipeline
             reference.merge(k[i], v[i], Long::sum);
         }
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline);
         CompiledPipeline.Result result = compiled.execute(new long[][][] {{k, v}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -429,7 +452,7 @@ public class TestJitPipeline
                 .map(Map.Entry::getKey)
                 .toList();
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(limit);
         assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
@@ -479,7 +502,7 @@ public class TestJitPipeline
         }
 
         boolean[][] nullable = {{true}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable);
         CompiledPipeline.Result result = compiled.execute(
                 new Column[][] {{new Column.FlatColumn(v, vNull)}}, new int[] {rows});
 
@@ -513,7 +536,7 @@ public class TestJitPipeline
             reference.get(k[i])[1]++;
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] averages = result.columns()[1];
@@ -550,7 +573,7 @@ public class TestJitPipeline
             expectedScaled += org.weakref.nitro.jit.DecimalMath.roundScaledDivide(p[i], q[i], 100);
         }
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline);
         CompiledPipeline.Result result = compiled.execute(new long[][][] {{p, q}}, new int[] {rows});
 
         assertThat(result.columns()[0][0]).isEqualTo(expectedProduct);
@@ -592,7 +615,7 @@ public class TestJitPipeline
         }
 
         boolean[][] nullable = {{true, false}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable);
         Column[][] inputs = {
                 {new Column.FlatColumn(factKey, factKeyNull), new Column.FlatColumn(v)},
                 {new Column.FlatColumn(dimKey)}};
@@ -632,7 +655,7 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         CompiledPipeline.Result result = compiled.execute(
                 new Column[][] {{new Column.StringColumn(ids, dictionary)}}, new int[] {rows});
 
@@ -679,7 +702,7 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         CompiledPipeline.Result result = compiled.execute(
                 new Column[][] {{new Column.StringColumn(sIds, sDict), new Column.StringColumn(tIds, tDict)}}, new int[] {rows});
 
@@ -726,7 +749,7 @@ public class TestJitPipeline
         ColumnEncoding[][] encodings = {
                 {ColumnEncoding.FLAT, ColumnEncoding.FLAT},
                 {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {
                 {new Column.FlatColumn(factKey), new Column.FlatColumn(v)},
                 {new Column.FlatColumn(dimKey), new Column.StringColumn(dimString, dictionary)}};
@@ -774,7 +797,7 @@ public class TestJitPipeline
         ColumnEncoding[][] encodings = {
                 {ColumnEncoding.FLAT, ColumnEncoding.FLAT},
                 {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {
                 {new Column.FlatColumn(factKey), new Column.FlatColumn(v)},
                 {new Column.FlatColumn(dimKey), new Column.StringColumn(dimCategory, dictionary)}};
@@ -808,10 +831,10 @@ public class TestJitPipeline
             v[i] = (i % 11) - 2;
         }
 
-        Map<Long, Long> eager = groupSums(PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows}));
+        Map<Long, Long> eager = groupSums(new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows}));
 
         int batchSize = 4096;
-        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        StreamingPipeline streaming = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null);
         CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, k, v), new Column[0][], new int[0]);
         Map<Long, Long> result = groupSums(streamed);
 
@@ -844,9 +867,9 @@ public class TestJitPipeline
             buildKey[i] = i;   // keys 0..2499 present; 2500..4999 absent -> anti keeps the absent half
         }
 
-        long eager = PipelineCompiler.compile(pipeline)
+        long eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{k, v}, {buildKey}}, new int[] {rows, buildKey.length}).columns()[0][0];
-        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+        CompiledPipeline.Result streamed = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null).execute(
                 flatBatches(4096, rows, k, v), new Column[][] {{new Column.FlatColumn(buildKey)}}, new int[] {buildKey.length});
 
         assertThat(streamed.columns()[0][0]).isEqualTo(eager);
@@ -872,9 +895,9 @@ public class TestJitPipeline
         }
         long[] thresholds = {10, 50};
 
-        long eager = PipelineCompiler.compile(pipeline)
+        long eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{v}, {thresholds}}, new int[] {rows, thresholds.length}).columns()[0][0];
-        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+        CompiledPipeline.Result streamed = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null).execute(
                 flatBatches(4096, rows, v), new Column[][] {{new Column.FlatColumn(thresholds)}}, new int[] {thresholds.length});
 
         assertThat(streamed.columns()[0][0]).isEqualTo(eager);
@@ -911,9 +934,9 @@ public class TestJitPipeline
             }
         }
 
-        long eager = PipelineCompiler.compile(pipeline)
+        long eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{k}, {buildKey, buildVal}}, new int[] {rows, buildKey.length}).columns()[0][0];
-        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null).execute(
+        CompiledPipeline.Result streamed = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null).execute(
                 flatBatches(4096, rows, k), new Column[][] {{new Column.FlatColumn(buildKey), new Column.FlatColumn(buildVal)}}, new int[] {buildKey.length});
 
         assertThat(streamed.columns()[0][0]).isEqualTo(eager);
@@ -947,9 +970,9 @@ public class TestJitPipeline
             buildKey[i] = i;   // every probe key matches
         }
 
-        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{k, v}, {buildKey}}, new int[] {rows, buildKey.length});
-        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, null, null)
+        CompiledPipeline.Result streamed = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null)
                 .execute(growingBatches(rows, k, v), new Column[][] {{new Column.FlatColumn(buildKey)}}, new int[] {buildKey.length});
 
         assertThat(streamed.rowCount()).isEqualTo(eager.rowCount());
@@ -990,10 +1013,10 @@ public class TestJitPipeline
         Column[][] builds = {
                 {new Column.FlatColumn(dKey), new Column.StringColumn(dStateIds, dDict)},
                 {new Column.StringColumn(rKey, rDict)}};
-        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline, encodings)
+        CompiledPipeline.Result eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings)
                 .execute(new Column[][] {{new Column.FlatColumn(pk), new Column.FlatColumn(v)}, builds[0], builds[1]},
                         new int[] {rows, dKey.length, rKey.length});
-        CompiledPipeline.Result streamed = PipelineCompiler.compileStreaming(pipeline, encodings, null)
+        CompiledPipeline.Result streamed = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, encodings, null)
                 .execute(flatBatches(4096, rows, pk, v), builds, new int[] {dKey.length, rKey.length});
 
         assertThat(streamed.rowCount()).isEqualTo(eager.rowCount());
@@ -1117,7 +1140,7 @@ public class TestJitPipeline
             }
         }
 
-        System.out.println("=== generated grouped source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated grouped source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
         // Dense keys in [0, 5000): the sample speculates array mode and the bet holds (no deopt).
         verifyGroupedSumCount(pipeline, k, v, reference);
@@ -1156,7 +1179,7 @@ public class TestJitPipeline
 
     private static void verifyGroupedSumCount(Plan.Pipeline pipeline, long[] k, long[] v, Map<Long, long[]> reference)
     {
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {k.length});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {k.length});
         assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] sums = result.columns()[1];
@@ -1195,9 +1218,9 @@ public class TestJitPipeline
             acc[1]++;
         }
 
-        System.out.println("=== generated multi-key grouped source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated multi-key grouped source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k0, k1, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k0, k1, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
 
         long[] outK0 = result.columns()[0];
@@ -1244,9 +1267,9 @@ public class TestJitPipeline
             reference.merge(attr, measure[i], Long::sum);
         }
 
-        System.out.println("=== generated join source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated join source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{fk, measure}, {dkey, dattr}}, new int[] {fact, dim});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -1270,7 +1293,7 @@ public class TestJitPipeline
             sparseFk[i] = sparseKey[d];
             sparseReference.merge(dattr[d], measure[i], Long::sum);
         }
-        CompiledPipeline.Result sparseResult = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result sparseResult = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{sparseFk, measure}, {sparseKey, dattr}}, new int[] {fact, dim});
         assertThat(sparseResult.rowCount()).isEqualTo(sparseReference.size());
         long[] sKeys = sparseResult.columns()[0];
@@ -1314,7 +1337,7 @@ public class TestJitPipeline
         expected.sort((a, b) -> Double.compare(a[1], b[1]));   // avg ASC
         List<double[]> top5 = expected.size() > 5 ? expected.subList(0, 5) : expected;
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(top5.size());
         long[] keys = result.columns()[0];
         long[] avgBits = result.columns()[1];
@@ -1378,8 +1401,8 @@ public class TestJitPipeline
         long[][][] inputs = {{fk, item, qty}, {dKey, dYear}};
         int[] counts = {fact, dim};
 
-        CompiledPipeline.Result loweredResult = lowered.compile().execute(inputs, counts);
-        CompiledPipeline.Result handResult = PipelineCompiler.compile(hand).execute(inputs, counts);
+        CompiledPipeline.Result loweredResult = lowered.compile(new PipelineCompiler(CompilerResources.createDefault())).execute(inputs, counts);
+        CompiledPipeline.Result handResult = new PipelineCompiler(CompilerResources.createDefault()).compile(hand).execute(inputs, counts);
 
         // Same plan, same data -> identical results.
         assertThat(loweredResult.rowCount()).isEqualTo(handResult.rowCount());
@@ -1416,9 +1439,9 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.FLAT}};
-        System.out.println("=== generated group-by-string source ===\n" + PipelineCompiler.render(pipeline, encodings));
+        System.out.println("=== generated group-by-string source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline, encodings));
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.StringColumn(ids, dictionary), new Column.FlatColumn(v)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
@@ -1456,7 +1479,7 @@ public class TestJitPipeline
         long expected = 3;
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING}, {ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.StringColumn(probeIds, probeDict)}, {new Column.StringColumn(buildIds, buildDict)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {probeIds.length, buildIds.length});
 
@@ -1489,7 +1512,7 @@ public class TestJitPipeline
         long expected = 2;
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}, {ColumnEncoding.STRING, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {
                 {new Column.StringColumn(probeAIds, probeA), new Column.StringColumn(probeBIds, probeB)},
                 {new Column.StringColumn(buildAIds, buildA), new Column.StringColumn(buildBIds, buildB)}};
@@ -1519,7 +1542,7 @@ public class TestJitPipeline
         long expected = 2;
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.StringColumn(ids0, dict0), new Column.StringColumn(ids1, dict1)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {ids0.length});
 
@@ -1547,7 +1570,7 @@ public class TestJitPipeline
         long expected = 1;
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.StringColumn(ids0, dict0), new Column.StringColumn(ids1, dict1)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {ids0.length});
 
@@ -1579,7 +1602,7 @@ public class TestJitPipeline
         long[] buildKey = {1, 3, 3};   // subset, with a duplicate to prove the probe row is kept once
         long expected = 20 + 40;       // only keys 1 and 3 are present
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{probeKey, probeVal}, {buildKey}}, new int[] {probeKey.length, buildKey.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1604,7 +1627,7 @@ public class TestJitPipeline
         long[] buildVal = {10, 20, 30};
         long expected = 10 + 20 + 30;              // p.k=1 -> {10,20}, p.k=2 -> {30}, p.k=3 -> none
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{probeKey}, {buildKey, buildVal}}, new int[] {probeKey.length, buildKey.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1628,7 +1651,7 @@ public class TestJitPipeline
         long[] buildVal = {1, 2, 4, 8};
         long expected = 8 + (1 + 2 + 4);           // p.k=5 -> {8}, p.k=1_000_000 -> {1,2,4}
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{probeKey}, {buildKey, buildVal}}, new int[] {probeKey.length, buildKey.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1642,7 +1665,7 @@ public class TestJitPipeline
                 .withProjections(List.of(new Plan.Col(0), new Plan.NullLit()));
 
         long[] v = {3, 4, 5};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{v}}, new int[] {v.length});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{v}}, new int[] {v.length});
 
         assertThat(result.types()[1]).isEqualTo(Types.LONG);
         assertThat(result.nulls()[1]).isNotNull();
@@ -1668,7 +1691,7 @@ public class TestJitPipeline
         boolean[] vNull = {true, true, false, false};   // group 0 is all-null, group 1 has values
 
         boolean[][] nullable = {{false, true}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
 
         assertThat(result.rowCount()).isEqualTo(2);
@@ -1705,7 +1728,7 @@ public class TestJitPipeline
         boolean[] vNull = {true, true, false, false};
 
         boolean[][] nullable = {{false, true}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(v, vNull)}}, new int[] {k.length});
 
         assertThat(result.rowCount()).isEqualTo(2);
@@ -1734,7 +1757,7 @@ public class TestJitPipeline
         boolean[] bNull = {true, false};   // group 0: b NULL -> max(b) NULL -> HAVING UNKNOWN -> dropped
 
         boolean[][] nullable = {{false, false, true}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k), new Column.FlatColumn(a), new Column.FlatColumn(b, bNull)}}, new int[] {k.length});
 
         assertThat(result.rowCount()).isEqualTo(1);
@@ -1757,7 +1780,7 @@ public class TestJitPipeline
         // sorted by (p, d): (1,1,10),(1,2,5),(1,3,12),(2,1,100),(2,2,7); running max: 10,10,12,100,100.
         Map<Long, Long> expected = Map.of(11L, 10L, 12L, 10L, 13L, 12L, 21L, 100L, 22L, 100L);
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{p, d, v}}, new int[] {p.length});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{p, d, v}}, new int[] {p.length});
 
         assertThat(result.rowCount()).isEqualTo(p.length);
         assertThat(result.types().length).isEqualTo(4);
@@ -1784,7 +1807,7 @@ public class TestJitPipeline
         // averages: p=1 -> round(33/3)=11; p=2 -> round(205/2)=103 (round half up: (205+1)/2=103); p=3 -> 7
         Map<Long, Long> expectedAvg = Map.of(1L, 11L, 2L, 103L, 3L, 7L);
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{p, v}}, new int[] {p.length});
 
         assertThat(result.rowCount()).isEqualTo(p.length);
@@ -1820,7 +1843,7 @@ public class TestJitPipeline
         long[] v = {10, 11, 12, 100, 105, 7};
         Map<Long, Long> expectedSum = Map.of(1L, 33L, 2L, 205L, 3L, 7L);
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{p, v}}, new int[] {p.length});
 
         assertThat(result.rowCount()).isEqualTo(p.length);
@@ -1849,7 +1872,7 @@ public class TestJitPipeline
         // pairs: (10>5) T, (10>15) F, (20>5) T, (20>15) T -> 3
         long expected = 3;
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{probeVal}, {buildThreshold}}, new int[] {probeVal.length, buildThreshold.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1873,7 +1896,7 @@ public class TestJitPipeline
         long[] buildKey = {1, 3, 3};   // keys 1 and 3 are present (duplicate proves it still excludes once)
         long expected = 10 + 30 + 50;  // keys 0, 2, 4 have no match
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{probeKey, probeVal}, {buildKey}}, new int[] {probeKey.length, buildKey.length});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1903,7 +1926,7 @@ public class TestJitPipeline
         long expected = 2;
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.STRING}, {ColumnEncoding.FLAT, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {
                 {new Column.FlatColumn(probeKey), new Column.StringColumn(boughtIds, boughtDict)},
                 {new Column.FlatColumn(dimKey), new Column.StringColumn(currentIds, currentDict)}};
@@ -1950,7 +1973,7 @@ public class TestJitPipeline
             expected += d2Val[(int) d1Fk[(int) factKey[i]]];
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(
                 new long[][][] {{factKey}, {d1Key, d1Fk}, {d2Key, d2Val}}, new int[] {rows, dim1, dim2});
 
         assertThat(result.columns()[0][0]).isEqualTo(expected);
@@ -1988,7 +2011,7 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.FLAT, ColumnEncoding.STRING}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.FlatColumn(k), new Column.FlatColumn(v), new Column.StringColumn(ids, dictionary)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
@@ -2036,9 +2059,9 @@ public class TestJitPipeline
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.FLAT, ColumnEncoding.FLAT, ColumnEncoding.STRING}};
         boolean[][] nullable = {{false, false, true}};
-        System.out.println("=== generated string-filter source ===\n" + PipelineCompiler.render(pipeline, encodings, nullable));
+        System.out.println("=== generated string-filter source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline, encodings, nullable));
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings, nullable);
         Column[][] inputs = {{
                 new Column.FlatColumn(k),
                 new Column.FlatColumn(v),
@@ -2077,9 +2100,9 @@ public class TestJitPipeline
         }
 
         boolean[][] nullable = {{false, true}};
-        System.out.println("=== generated coalesce source ===\n" + PipelineCompiler.render(pipeline, null, nullable));
+        System.out.println("=== generated coalesce source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline, null, nullable));
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable);
         Column[][] inputs = {{new Column.FlatColumn(k), new Column.FlatColumn(m, mNull)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -2132,9 +2155,9 @@ public class TestJitPipeline
 
         ColumnEncoding[][] encodings = null;
         boolean[][] nullable = {{false, true, true}};
-        System.out.println("=== generated null-aware source ===\n" + PipelineCompiler.render(pipeline, encodings, nullable));
+        System.out.println("=== generated null-aware source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline, encodings, nullable));
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings, nullable);
         Column[][] inputs = {{
                 new Column.FlatColumn(k),
                 new Column.FlatColumn(f, fNull),
@@ -2177,7 +2200,7 @@ public class TestJitPipeline
             groups.computeIfAbsent(k[i], ignored -> new java.util.ArrayList<>()).add(v[i]);
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.types()[1]).isEqualTo(Types.DOUBLE);
         long[] keys = result.columns()[0];
         long[] bits = result.columns()[1];
@@ -2223,9 +2246,9 @@ public class TestJitPipeline
             acc[1]++;
         }
 
-        System.out.println("=== generated avg source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated avg source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(sumCount.size());
         // Result columns: 0=k, 1=sum (LONG), 2=count (LONG), 3=avg (DOUBLE).
         assertThat(result.types()[3]).isEqualTo(Types.DOUBLE);
@@ -2274,9 +2297,9 @@ public class TestJitPipeline
         qualifying.sort((a, b) -> Long.compare(a[0], b[0]));
         List<long[]> expected = qualifying.size() > 20 ? qualifying.subList(0, 20) : qualifying;
 
-        System.out.println("=== generated having source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated having source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(expected.size());
         long[] outKeys = result.columns()[0];
         long[] outSums = result.columns()[1];
@@ -2314,9 +2337,9 @@ public class TestJitPipeline
         sums.forEach((key, sum) -> expected.add(new long[] {key, sum}));
         expected.sort((a, b) -> a[1] != b[1] ? Long.compare(b[1], a[1]) : Long.compare(a[0], b[0]));
 
-        System.out.println("=== generated order-by source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated order-by source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(10);
         long[] outKeys = result.columns()[0];
         long[] outSums = result.columns()[1];
@@ -2354,7 +2377,7 @@ public class TestJitPipeline
         }
 
         boolean[][] nullable = {{true, false}};
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline, null, nullable)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable)
                 .execute(new Column[][] {{new Column.FlatColumn(k, kNull), new Column.FlatColumn(v)}}, new int[] {rows});
 
         assertThat(result.rowCount()).isEqualTo(4);            // keys 1,2,3 + the null group
@@ -2398,9 +2421,9 @@ public class TestJitPipeline
             acc[2] = Math.max(acc[2], Math.abs(v[i]));
         }
 
-        System.out.println("=== generated scalar/case source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated scalar/case source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] absSum = result.columns()[1];
@@ -2447,9 +2470,9 @@ public class TestJitPipeline
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.DICTIONARY, ColumnEncoding.CONSTANT}};
-        System.out.println("=== generated encoded source ===\n" + PipelineCompiler.render(pipeline, encodings));
+        System.out.println("=== generated encoded source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline, encodings));
 
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.DictionaryColumn(ids, dictionary), new Column.ConstantColumn(constant)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
@@ -2465,7 +2488,7 @@ public class TestJitPipeline
         }
 
         // The flat-input plan over decoded columns must produce the identical grouping.
-        CompiledPipeline.Result flat = PipelineCompiler.compile(pipeline).execute(new long[][][] {{flatKey, flatValue}}, new int[] {rows});
+        CompiledPipeline.Result flat = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{flatKey, flatValue}}, new int[] {rows});
         assertThat(flat.rowCount()).isEqualTo(result.rowCount());
     }
 
@@ -2497,9 +2520,9 @@ public class TestJitPipeline
             acc[2] += v[i];
         }
 
-        System.out.println("=== generated min/max source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated min/max source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] mins = result.columns()[1];
@@ -2545,9 +2568,9 @@ public class TestJitPipeline
             }
         }
 
-        System.out.println("=== generated boolean-filter source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated boolean-filter source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline).execute(new long[][][] {{k, v}}, new int[] {rows});
         assertThat(result.rowCount()).isEqualTo(reference.size());
         long[] keys = result.columns()[0];
         long[] sums = result.columns()[1];
@@ -2599,9 +2622,9 @@ public class TestJitPipeline
             }
         }
 
-        System.out.println("=== generated two-join star source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated two-join star source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{fkA, fkB, measure}, {daKey, daAttr}, {dbKey, dbAttr}}, new int[] {fact, dimA, dimB});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -2637,7 +2660,7 @@ public class TestJitPipeline
             expectedSum += measure[i];
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{fk, measure}, {key, attr}}, new int[] {10, 5});
 
         assertThat(result.rowCount()).isEqualTo(1);
@@ -2686,9 +2709,9 @@ public class TestJitPipeline
             reference.merge(attr, measure[i], Long::sum);
         }
 
-        System.out.println("=== generated multi-key join source ===\n" + PipelineCompiler.render(pipeline));
+        System.out.println("=== generated multi-key join source ===\n" + new PipelineCompiler(CompilerResources.createDefault()).render(pipeline));
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{fk0, fk1, measure}, {dk0, dk1, dattr}}, new int[] {fact, dim});
 
         assertThat(result.rowCount()).isEqualTo(reference.size());
@@ -2730,7 +2753,7 @@ public class TestJitPipeline
             total += v[i];
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{a, b, v}}, new int[] {rows});
 
         long[] outA = result.columns()[0];
@@ -2801,11 +2824,11 @@ public class TestJitPipeline
             v[i] = (i % 100) - 30;        // mix of negative and positive
         }
 
-        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{a, b, v}}, new int[] {rows});
 
         int batchSize = 4096;
-        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        StreamingPipeline streaming = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null);
         CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, a, b, v), new Column[0][], new int[0]);
 
         Map<String, String> eagerRows = rollupRows(eager);
@@ -2867,7 +2890,7 @@ public class TestJitPipeline
             m[i] = i;                // distinct passthrough payload
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{p, o, m}}, new int[] {rows});
 
         long[] expectedRank = referenceRanking(p, o, m, new int[] {0}, new int[] {1}, new boolean[] {true}, limit);
@@ -2937,11 +2960,11 @@ public class TestJitPipeline
             m[i] = i;                // distinct passthrough payload
         }
 
-        CompiledPipeline.Result eager = PipelineCompiler.compile(pipeline)
+        CompiledPipeline.Result eager = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline)
                 .execute(new long[][][] {{p, o, m}}, new int[] {rows});
 
         int batchSize = 4096;
-        StreamingPipeline streaming = PipelineCompiler.compileStreaming(pipeline, null, null);
+        StreamingPipeline streaming = new PipelineCompiler(CompilerResources.createDefault()).compileStreaming(pipeline, null, null);
         CompiledPipeline.Result streamed = streaming.execute(flatBatches(batchSize, rows, p, o, m), new Column[0][], new int[0]);
 
         // Batches are contiguous input-order slices, so the streamed materialization order matches the eager one; the
@@ -2989,7 +3012,7 @@ public class TestJitPipeline
             m[i] = i;
         }
 
-        CompiledPipeline.Result result = PipelineCompiler.compile(
+        CompiledPipeline.Result result = new PipelineCompiler(CompilerResources.createDefault()).compile(
                         pipeline,
                         null,
                         new boolean[][] {{true, false, false}})

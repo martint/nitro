@@ -28,6 +28,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.operator.AggregationOperator;
@@ -114,7 +115,7 @@ public class BenchmarkCompiledPipeline
                 List.of(new Plan.Predicate(">", new Plan.Col(0), new Plan.Lit(THRESHOLD))),
                 List.of(),
                 List.of(new Plan.Aggregate("sum", new Plan.Bin("*", new Plan.Col(0), new Plan.Col(1)))));
-        compiled = PipelineCompiler.compile(plan);
+        compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(plan);
 
         long f = fused();
         long i = interpreted();

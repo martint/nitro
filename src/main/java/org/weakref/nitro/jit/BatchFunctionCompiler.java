@@ -16,7 +16,8 @@ package org.weakref.nitro.jit;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.util.TreeSet;
-import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Compiles a scalar expression subtree into a single bespoke {@link PrimitiveFunction} -- one fused loop over the
@@ -33,12 +34,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class BatchFunctionCompiler
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
-    private static final AtomicInteger COUNTER = new AtomicInteger();
+    private final CompilerResources resources;
+    private final ScalarLibrary scalarFunctions;
 
-    private BatchFunctionCompiler() {}
+    public BatchFunctionCompiler(CompilerResources resources)
+    {
+        this.resources = requireNonNull(resources, "resources is null");
+        this.scalarFunctions = resources.scalarFunctions();
+    }
 
     /** Compile {@code expression} (over {@code I64} input columns referenced by {@link Plan.Col} index) into a fused batch function. */
-    public static PrimitiveFunction compile(Plan.Expr expression)
+    public PrimitiveFunction compile(Plan.Expr expression)
     {
         return compile(expression, false);
     }
@@ -50,9 +56,9 @@ public final class BatchFunctionCompiler
      * auto-vectorizer reaches inconsistently or not at all -- with a scalar tail; otherwise the dense path is a
      * plain counted loop the JIT may auto-vectorize. The sparse (gather) path is always scalar.
      */
-    public static PrimitiveFunction compile(Plan.Expr expression, boolean explicitVector)
+    public PrimitiveFunction compile(Plan.Expr expression, boolean explicitVector)
     {
-        String simpleName = "BatchFn_" + COUNTER.incrementAndGet();
+        String simpleName = "BatchFn_" + resources.nextClassName();
         String source = render(expression, simpleName, explicitVector);
         try {
             Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
@@ -64,13 +70,13 @@ public final class BatchFunctionCompiler
     }
 
     /** Exposed for inspection/tests: the Java source that would be compiled (scalar dense path). */
-    public static String render(Plan.Expr expression, String simpleName)
+    public String render(Plan.Expr expression, String simpleName)
     {
         return render(expression, simpleName, false);
     }
 
     /** Exposed for inspection/tests: the Java source that would be compiled. */
-    public static String render(Plan.Expr expression, String simpleName, boolean explicitVector)
+    public String render(Plan.Expr expression, String simpleName, boolean explicitVector)
     {
         TreeSet<Integer> columns = new TreeSet<>();
         collectColumns(expression, columns);
@@ -126,7 +132,7 @@ public final class BatchFunctionCompiler
     }
 
     /** Render the per-position scalar expression, indexed by the loop variable {@code i}. */
-    private static String expr(Plan.Expr expression)
+    private String expr(Plan.Expr expression)
     {
         return switch (expression) {
             case Plan.Col col -> "in" + col.index() + "[i]";
@@ -134,8 +140,8 @@ public final class BatchFunctionCompiler
             case Plan.LitF64 lit -> Double.doubleToRawLongBits(lit.value()) + "L /* " + lit.value() + " */";
             case Plan.LitStr ignored -> throw new UnsupportedOperationException("string literal projection is JIT-only");
             case Plan.NullLit ignored -> throw new UnsupportedOperationException("null literal projection is JIT-only");
-            case Plan.Bin bin -> ScalarLibrary.get(bin.op()).emit(java.util.List.of(expr(bin.left()), expr(bin.right())));
-            case Plan.Call call -> ScalarLibrary.get(call.name()).emit(call.arguments().stream().map(BatchFunctionCompiler::expr).toList());
+            case Plan.Bin bin -> scalarFunctions.get(bin.op()).emit(java.util.List.of(expr(bin.left()), expr(bin.right())));
+            case Plan.Call call -> scalarFunctions.get(call.name()).emit(call.arguments().stream().map(this::expr).toList());
             case Plan.Case ignored -> throw new UnsupportedOperationException("CASE not yet supported in batch functions");
             case Plan.Coalesce ignored -> throw new UnsupportedOperationException("COALESCE not yet supported in batch functions");
         };

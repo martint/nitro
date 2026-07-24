@@ -77,8 +77,8 @@ public class BenchmarkBatchFunction
         Plan.Expr expression = new Plan.Bin("+",
                 new Plan.Bin("*", new Plan.Col(0), new Plan.Col(1)),
                 new Plan.Bin("*", new Plan.Col(2), new Plan.Col(3)));
-        fused = BatchFunctionCompiler.compile(expression, false);
-        fusedVector = BatchFunctionCompiler.compile(expression, true);
+        fused = new BatchFunctionCompiler(CompilerResources.createDefault()).compile(expression, false);
+        fusedVector = new BatchFunctionCompiler(CompilerResources.createDefault()).compile(expression, true);
         long[] a = new long[rows];
         long[] b = new long[rows];
         long[] c = new long[rows];

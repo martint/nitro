@@ -27,9 +27,60 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TestBatchFunctionCompiler
 {
+    @Test
+    void functionRegistriesAreExplicitAndIsolated()
+    {
+        ScalarLibrary first = new ScalarLibrary();
+        ScalarLibrary second = new ScalarLibrary();
+        AggregateLibrary firstAggregates = new AggregateLibrary();
+        AggregateLibrary secondAggregates = new AggregateLibrary();
+        first.register("custom_increment", arguments -> "(" + arguments.getFirst() + " + 1L)");
+        firstAggregates.register("custom_sum", firstAggregates.get("sum"));
+
+        String source = new BatchFunctionCompiler(new CompilerResources(new Types(), first, new AggregateLibrary()))
+                .render(new Plan.Call("custom_increment", new Plan.Col(0)), "CustomIncrement");
+        assertThat(source).contains("(in0[i] + 1L)");
+        assertThatThrownBy(() -> new BatchFunctionCompiler(new CompilerResources(new Types(), second, new AggregateLibrary()))
+                .render(new Plan.Call("custom_increment", new Plan.Col(0)), "MissingCustomIncrement"))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("scalar function: custom_increment");
+        assertThat(firstAggregates.get("custom_sum")).isSameAs(firstAggregates.get("sum"));
+        assertThatThrownBy(() -> secondAggregates.get("custom_sum"))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("aggregate: custom_sum");
+    }
+
+    @Test
+    void typeRegistrySnapshotsDoNotObserveLaterRegistrations()
+    {
+        Types types = new Types();
+        var snapshot = types.snapshotResolver();
+        Type custom = new TestingType("custom");
+
+        types.register(custom);
+
+        assertThat(types.get("custom")).isSameAs(custom);
+        assertThatThrownBy(() -> snapshot.apply("custom"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("unknown type: custom");
+    }
+
+    @Test
+    void closingCompilerResourcesIsTerminal()
+    {
+        CompilerResources resources = CompilerResources.createDefault();
+        BatchFunctionCompiler compiler = new BatchFunctionCompiler(resources);
+        resources.close();
+
+        assertThatThrownBy(() -> compiler.compile(new Plan.Bin("+", new Plan.Col(0), new Plan.Lit(1))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Compiler resources are closed");
+    }
+
     @Test
     void compilesFusedI64Expression()
     {
@@ -39,7 +90,7 @@ public class TestBatchFunctionCompiler
                 new Plan.Bin("*", new Plan.Col(2), new Plan.Col(3)));
         // Both the scalar (auto-vectorizable) and explicit Vector-API dense paths must match.
         for (boolean explicitVector : new boolean[] {false, true}) {
-            assertFusedExpressionMatchesNaive(BatchFunctionCompiler.compile(expression, explicitVector));
+            assertFusedExpressionMatchesNaive(new BatchFunctionCompiler(CompilerResources.createDefault()).compile(expression, explicitVector));
         }
     }
 
@@ -75,6 +126,28 @@ public class TestBatchFunctionCompiler
         long[] sparse = ((I64Vector) function.apply(inputs, Mask.sparse(selection, rows), Set.of(Stream.VALUES), null, context).values()).values();
         for (int p : selection) {
             assertThat(sparse[p]).as("sparse row %d", p).isEqualTo(a[p] * b[p] + c[p] * d[p]);
+        }
+    }
+
+    private record TestingType(String name)
+            implements Type
+    {
+        @Override
+        public String compare(String a, String b)
+        {
+            return "Long.compare(" + a + ", " + b + ")";
+        }
+
+        @Override
+        public String decode(String slot)
+        {
+            return slot;
+        }
+
+        @Override
+        public org.weakref.nitro.data.Vector toVector(long[] slots, int count, byte[][] dictionary)
+        {
+            return new I64Vector(java.util.Arrays.copyOf(slots, count));
         }
     }
 }

@@ -28,6 +28,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.jit.CompiledPipeline;
+import org.weakref.nitro.jit.CompilerResources;
 import org.weakref.nitro.jit.PipelineCompiler;
 import org.weakref.nitro.jit.Plan;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -107,7 +108,7 @@ public class BenchmarkCompiledMultiKeyGroupBy
                 List.of(),
                 List.of(new Plan.Col(0), new Plan.Col(1)),
                 List.of(new Plan.Aggregate("sum", new Plan.Col(2))));
-        compiled = PipelineCompiler.compile(plan);
+        compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(plan);
 
         if (jitCompiled() != interpreted()) {
             throw new IllegalStateException("mismatch: jit=" + jitCompiled() + " interpreted=" + interpreted());

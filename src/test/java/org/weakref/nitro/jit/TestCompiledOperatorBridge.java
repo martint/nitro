@@ -61,7 +61,7 @@ public class TestCompiledOperatorBridge
         }
 
         ColumnEncoding[][] encodings = {{ColumnEncoding.STRING, ColumnEncoding.FLAT}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, encodings);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, encodings);
         Column[][] inputs = {{new Column.StringColumn(ids, dictionary), new Column.FlatColumn(v)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
@@ -112,7 +112,7 @@ public class TestCompiledOperatorBridge
         }
 
         boolean[][] nullable = {{true, false}};
-        CompiledPipeline compiled = PipelineCompiler.compile(pipeline, null, nullable);
+        CompiledPipeline compiled = new PipelineCompiler(CompilerResources.createDefault()).compile(pipeline, null, nullable);
         Column[][] inputs = {{new Column.FlatColumn(k, kNull), new Column.FlatColumn(v)}};
         CompiledPipeline.Result result = compiled.execute(inputs, new int[] {rows});
 
