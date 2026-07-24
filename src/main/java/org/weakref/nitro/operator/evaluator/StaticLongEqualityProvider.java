@@ -14,24 +14,26 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.core.function.FunctionCapability;
-import org.weakref.nitro.core.function.InvocationBinding;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalLong;
 
-import static java.util.Objects.requireNonNull;
-
-/// Binding of a dynamically resolved call to Nitro's current vector primitive protocol.
-public record PrimitiveInvocationBinding(PrimitiveFunction function, List<FunctionCapability> capabilities)
-        implements InvocationBinding
+/**
+ * Optional physical optimization supplied by a dynamically registered function.
+ * The provider, rather than an operator, owns the function's arity and operand semantics.
+ */
+public interface StaticLongEqualityProvider
+        extends FunctionCapability
 {
-    public PrimitiveInvocationBinding(PrimitiveFunction function)
+    Optional<StaticLongEquality> staticLongEquality(List<Reference> arguments, LiteralResolver literals);
+
+    @FunctionalInterface
+    interface LiteralResolver
     {
-        this(function, List.of());
+        OptionalLong resolve(Reference reference);
     }
 
-    public PrimitiveInvocationBinding
-    {
-        function = requireNonNull(function, "function is null");
-        capabilities = List.copyOf(capabilities);
-    }
+    record StaticLongEquality(Reference input, long value) {}
 }

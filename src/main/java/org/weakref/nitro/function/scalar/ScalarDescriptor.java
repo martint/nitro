@@ -13,18 +13,28 @@
  */
 package org.weakref.nitro.function.scalar;
 
+import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
 public record ScalarDescriptor(
         String name,
         boolean deterministic,
-        PrimitiveFunction implementation)
+        PrimitiveFunction implementation,
+        List<FunctionCapability> capabilities)
 {
+    public ScalarDescriptor(String name, boolean deterministic, PrimitiveFunction implementation)
+    {
+        this(name, deterministic, implementation, List.of());
+    }
+
     public ScalarDescriptor
     {
         requireNonNull(name, "name is null");
         requireNonNull(implementation, "implementation is null");
+        capabilities = List.copyOf(capabilities);
     }
 }

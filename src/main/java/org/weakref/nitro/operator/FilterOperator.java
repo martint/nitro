@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
@@ -33,6 +34,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.Optional;
+import java.util.OptionalLong;
 
 public class FilterOperator
         implements Operator
@@ -81,7 +83,7 @@ public class FilterOperator
         }, allocator);
         this.predicateMask = predicateMask;
         if (PUSH_STATIC_LONG_EQUALITY) {
-            staticLongEqualityFilter(evaluationPlan, predicateMask).ifPresent(source::pushDynamicFilter);
+            staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
         }
     }
 
@@ -89,31 +91,41 @@ public class FilterOperator
      * Extracts an exact {@code BIGINT input = integral literal} predicate as a scan filter. The original filter stays
      * in this operator, so this is a conservative physical pushdown rather than a semantic rewrite.
      */
-    static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, MaskExpression predicateMask)
+    static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, MaskExpression predicateMask, PrimitiveRegistry primitiveRegistry)
     {
         if (!(predicateMask instanceof ReferenceMask(Reference(Variable predicate, Stream stream))) || stream != Stream.VALUES) {
             return Optional.empty();
         }
         Assignment predicateAssignment = assignment(plan, predicate);
         if (predicateAssignment == null || predicateAssignment.mask() != AllMask.ALL
-                || !(predicateAssignment.operation() instanceof Call(String name, var arguments, _))
-                || !name.equals("eq") || arguments.size() != 2) {
+                || !(predicateAssignment.operation() instanceof Call call)) {
             return Optional.empty();
         }
-
-        Optional<DynamicFilter> filter = staticLongEqualityFilter(plan, arguments.get(0), arguments.get(1));
-        return filter.isPresent() ? filter : staticLongEqualityFilter(plan, arguments.get(1), arguments.get(0));
+        Optional<StaticLongEqualityProvider> provider = primitiveRegistry.capability(call, StaticLongEqualityProvider.class);
+        if (provider.isEmpty()) {
+            return Optional.empty();
+        }
+        return provider.orElseThrow()
+                .staticLongEquality(call.arguments(), reference -> literalLong(plan, reference))
+                .flatMap(equality -> dynamicFilter(equality.input(), equality.value()));
     }
 
-    private static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, Reference inputReference, Reference literalReference)
+    private static OptionalLong literalLong(EvaluationPlan plan, Reference reference)
     {
-        if (!(inputReference instanceof Reference(Input(int input), Stream inputStream)) || inputStream != Stream.VALUES
-                || !(literalReference instanceof Reference(Variable literal, Stream literalStream)) || literalStream != Stream.VALUES) {
-            return Optional.empty();
+        if (!(reference instanceof Reference(Variable literal, Stream stream)) || stream != Stream.VALUES) {
+            return OptionalLong.empty();
         }
         Assignment literalAssignment = assignment(plan, literal);
         if (literalAssignment == null || literalAssignment.mask() != AllMask.ALL
                 || !(literalAssignment.operation() instanceof Literal(Long value))) {
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(value);
+    }
+
+    private static Optional<DynamicFilter> dynamicFilter(Reference inputReference, long value)
+    {
+        if (!(inputReference instanceof Reference(Input(int input), Stream stream)) || stream != Stream.VALUES) {
             return Optional.empty();
         }
         return Optional.of(DynamicFilter.fromRange(input, value, value));

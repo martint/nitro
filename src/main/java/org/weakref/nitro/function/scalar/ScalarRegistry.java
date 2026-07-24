@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.function.scalar;
 
+import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.lang.reflect.InvocationTargetException;
@@ -37,7 +38,10 @@ public final class ScalarRegistry
         ScalarDescriptor descriptor = new ScalarDescriptor(
                 scalarFunction.name(),
                 scalarFunction.deterministic(),
-                instantiate(functionClass.asSubclass(PrimitiveFunction.class)));
+                instantiate(functionClass.asSubclass(PrimitiveFunction.class)),
+                java.util.Arrays.stream(scalarFunction.capabilities())
+                        .map(ScalarRegistry::instantiateCapability)
+                        .toList());
 
         checkArgument(descriptors.putIfAbsent(descriptor.name(), descriptor) == null, "Scalar function already registered: %s", descriptor.name());
         return descriptor;
@@ -52,13 +56,23 @@ public final class ScalarRegistry
 
     private static PrimitiveFunction instantiate(Class<? extends PrimitiveFunction> functionClass)
     {
+        return (PrimitiveFunction) instantiateComponent(functionClass);
+    }
+
+    private static FunctionCapability instantiateCapability(Class<? extends FunctionCapability> capabilityClass)
+    {
+        return (FunctionCapability) instantiateComponent(capabilityClass);
+    }
+
+    private static Object instantiateComponent(Class<?> implementationClass)
+    {
         try {
-            var constructor = functionClass.getDeclaredConstructor();
+            var constructor = implementationClass.getDeclaredConstructor();
             constructor.setAccessible(true);
             return constructor.newInstance();
         }
         catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException exception) {
-            throw new IllegalArgumentException("Unable to instantiate scalar function: " + functionClass.getName(), exception);
+            throw new IllegalArgumentException("Unable to instantiate scalar function component: " + implementationClass.getName(), exception);
         }
     }
 }

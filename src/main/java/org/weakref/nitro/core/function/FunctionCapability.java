@@ -11,23 +11,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar;
+package org.weakref.nitro.core.function;
 
-import org.weakref.nitro.core.function.FunctionCapability;
-
-import java.lang.annotation.Retention;
-import java.lang.annotation.Target;
-
-import static java.lang.annotation.ElementType.TYPE;
-import static java.lang.annotation.RetentionPolicy.RUNTIME;
-
-@Retention(RUNTIME)
-@Target(TYPE)
-public @interface ScalarFunction
-{
-    String name();
-
-    boolean deterministic() default true;
-
-    Class<? extends FunctionCapability>[] capabilities() default {};
-}
+/**
+ * Classloader-neutral marker for optional behavior supplied with a resolved function.
+ */
+public interface FunctionCapability {}

@@ -14,6 +14,9 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.function.scalar.builtin.EqualI64;
+import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
@@ -94,14 +97,17 @@ class TestDynamicFilter
     {
         Variable literal = new Variable(0);
         Variable equals = new Variable(1);
-        EvaluationPlan plan = new EvaluationPlan(List.of(
-                new Assignment(literal, new Literal(42L), AllMask.ALL),
-                new Assignment(equals, new Call("eq", List.of(
-                        new Reference(new Input(3), Stream.VALUES),
-                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
         ReferenceMask predicate = new ReferenceMask(new Reference(equals, Stream.VALUES));
 
-        DynamicFilter filter = FilterOperator.staticLongEqualityFilter(plan, predicate).orElseThrow();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("aliased_equality", new EqualI64(), new EqualI64Optimization());
+        EvaluationPlan aliasedPlan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(42L), AllMask.ALL),
+                new Assignment(equals, new Call("aliased_equality", List.of(
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+
+        DynamicFilter filter = FilterOperator.staticLongEqualityFilter(aliasedPlan, predicate, registry).orElseThrow();
         assertThat(filter.column()).isEqualTo(3);
         assertThat(filter.accepts(41)).isFalse();
         assertThat(filter.accepts(42)).isTrue();
@@ -120,6 +126,8 @@ class TestDynamicFilter
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
         NotMask predicate = new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES)));
 
-        assertThat(FilterOperator.staticLongEqualityFilter(plan, predicate)).isEmpty();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("eq", (inputs, mask, requestedStreams, output, context) -> output);
+        assertThat(FilterOperator.staticLongEqualityFilter(plan, predicate, registry)).isEmpty();
     }
 }

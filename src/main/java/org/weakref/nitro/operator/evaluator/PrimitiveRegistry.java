@@ -13,11 +13,14 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
+import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.ResolvedCall;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
+import org.weakref.nitro.operator.evaluator.ir.Call;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,17 +30,29 @@ import static java.util.Objects.requireNonNull;
 public final class PrimitiveRegistry
 {
     private final Map<String, PrimitiveFunction> functions = new LinkedHashMap<>();
+    private final Map<String, List<FunctionCapability>> capabilities = new LinkedHashMap<>();
 
     public void register(String name, PrimitiveFunction function)
+    {
+        register(name, function, List.of());
+    }
+
+    public void register(String name, PrimitiveFunction function, FunctionCapability... capabilities)
+    {
+        register(name, function, List.of(capabilities));
+    }
+
+    private void register(String name, PrimitiveFunction function, List<FunctionCapability> functionCapabilities)
     {
         requireNonNull(name, "name is null");
         requireNonNull(function, "function is null");
         checkArgument(functions.putIfAbsent(name, function) == null, "Primitive function already registered: %s", name);
+        capabilities.put(name, List.copyOf(functionCapabilities));
     }
 
     public void register(ScalarDescriptor descriptor)
     {
-        register(descriptor.name(), descriptor.implementation());
+        register(descriptor.name(), descriptor.implementation(), descriptor.capabilities());
     }
 
     public void register(ResolvedCall call)
@@ -49,7 +64,7 @@ public final class PrimitiveRegistry
         if (call.semantics().deterministic() != binding.function().deterministic()) {
             throw new IllegalArgumentException("Resolved call determinism does not match its primitive invocation: " + call.identity());
         }
-        register(call.identity().value(), binding.function());
+        register(call.identity().value(), binding.function(), binding.capabilities());
     }
 
     public PrimitiveFunction get(String name)
@@ -57,6 +72,28 @@ public final class PrimitiveRegistry
         PrimitiveFunction function = functions.get(name);
         checkArgument(function != null, "Unknown primitive function: %s", name);
         return function;
+    }
+
+    public <T extends FunctionCapability> Optional<T> capability(Call call, Class<T> capabilityType)
+    {
+        requireNonNull(capabilityType, "capabilityType is null");
+        List<FunctionCapability> callCapabilities;
+        if (call.resolvedCall() != null &&
+                call.resolvedCall().invocation() instanceof PrimitiveInvocationBinding binding) {
+            callCapabilities = binding.capabilities();
+        }
+        else {
+            callCapabilities = capabilities.get(call.name());
+            if (callCapabilities == null) {
+                return Optional.empty();
+            }
+        }
+        for (FunctionCapability capability : callCapabilities) {
+            if (capabilityType.isInstance(capability)) {
+                return Optional.of(capabilityType.cast(capability));
+            }
+        }
+        return Optional.empty();
     }
 
     public Optional<ProjectionCodeProvider> projectionCodeProvider(String name)

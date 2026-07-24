@@ -37,7 +37,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "eq")
+@ScalarFunction(name = "eq", capabilities = EqualI64Optimization.class)
 public final class EqualI64
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction, ProjectionCodeProvider
 {

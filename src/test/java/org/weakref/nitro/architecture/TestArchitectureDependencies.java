@@ -254,6 +254,13 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testFilterOperatorDoesNotRecognizeEqualityFunctionName()
+    {
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/FilterOperator.java")))
+                .doesNotContain("\"eq\"");
+    }
+
+    @Test
     void testFunctionImplementationsDoNotOwnStaticCaches()
     {
         Pattern ambientFunctionCache = Pattern.compile(
