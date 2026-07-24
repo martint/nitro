@@ -274,10 +274,17 @@ class TestArchitectureDependencies
         assertThat(filter)
                 .doesNotContain("\"lt\"")
                 .doesNotContain("LessThanI64");
-        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanI64.java")))
+        List<Path> migratedI64Scalars = List.of(
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/AddI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/EqualI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LessThanI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/MultiplyI64.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/SubtractI64.java"));
+        assertThat(migratedI64Scalars.stream().map(TestArchitectureDependencies::read))
                 .as("optional lowering capabilities must not alter the hot scalar implementation shape")
-                .doesNotContain("ProjectionCodeProvider")
-                .doesNotContain("RangeBoundProvider");
+                .allMatch(source ->
+                        !source.contains("ProjectionCodeProvider") &&
+                                !source.contains("RangeBoundProvider"));
     }
 
     @Test

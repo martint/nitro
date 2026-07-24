@@ -13,10 +13,6 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
-import org.weakref.nitro.core.function.projection.ProjectionArgument;
-import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
-import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -31,30 +27,15 @@ import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "add")
+@ScalarFunction(name = "add", capabilities = AddI64Optimization.class)
 public final class AddI64
-        implements PrimitiveFunction, ProjectionCodeProvider
+        implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AddI64");
-
-    @Override
-    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
-    {
-        if (arguments.size() != 2) {
-            return Optional.empty();
-        }
-        var left = builder.argument(0, ProjectionCodeBuilder.ValueType.I64);
-        var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
-        return Optional.of(builder.program(
-                List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
-                builder.add(left, right),
-                builder.or(builder.isNull(0), builder.isNull(1))));
-    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()

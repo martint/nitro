@@ -17,15 +17,15 @@ import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
-import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 
-public final class EqualI64Optimization
-        implements StaticLongEqualityProvider, ProjectionCodeProvider
+/**
+ * Registry-owned projection lowering for I64 subtraction.
+ */
+public final class SubtractI64Optimization
+        implements ProjectionCodeProvider
 {
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
@@ -37,24 +37,7 @@ public final class EqualI64Optimization
         var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
         return Optional.of(builder.program(
                 List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
-                builder.equal(left, right),
+                builder.subtract(left, right),
                 builder.or(builder.isNull(0), builder.isNull(1))));
-    }
-
-    @Override
-    public Optional<StaticLongEquality> staticLongEquality(List<Reference> arguments, LiteralResolver literals)
-    {
-        if (arguments.size() != 2) {
-            return Optional.empty();
-        }
-        OptionalLong left = literals.resolve(arguments.get(0));
-        OptionalLong right = literals.resolve(arguments.get(1));
-        if (left.isPresent() && right.isEmpty()) {
-            return Optional.of(new StaticLongEquality(arguments.get(1), left.getAsLong()));
-        }
-        if (right.isPresent() && left.isEmpty()) {
-            return Optional.of(new StaticLongEquality(arguments.get(0), right.getAsLong()));
-        }
-        return Optional.empty();
     }
 }
