@@ -375,6 +375,34 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testProviderAuthoredDoubleComparisonMaskPreservesNullSemantics()
+    {
+        Variable two = new Variable(0);
+        Variable lessThan = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(two, new Literal(2.0), AllMask.ALL),
+                        new Assignment(lessThan, new Call("lt_f64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(two, Stream.VALUES))), AllMask.ALL)),
+                List.of());
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new F64Vector(new double[] {1.0, 1.0, 3.0, 3.0}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+        ReferenceMask predicate = new ReferenceMask(new Reference(lessThan, Stream.VALUES));
+
+        Mask trueResult = evaluator.evaluate(predicate, Mask.all(4));
+        Mask falseResult = evaluator.evaluate(new NotMask(predicate), Mask.all(4));
+
+        assertThat(trueResult).containsExactly(0);
+        assertThat(falseResult).containsExactly(2);
+    }
+
+    @Test
     void testUtf8LiteralUsesRleAndContainsSupportsIt()
     {
         Variable needle = new Variable(0);

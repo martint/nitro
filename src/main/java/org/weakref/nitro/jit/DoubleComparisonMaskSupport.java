@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
+package org.weakref.nitro.jit;
 
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
@@ -43,35 +43,45 @@ final class DoubleComparisonMaskSupport
         boolean test(double left, double right);
     }
 
-    public static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    static boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (inputs.size() != 2) {
             return false;
         }
-        if (tryColumnConstantInPlace(inputs, mask, kernel, operator, true)) {
-            return true;
-        }
-        return evaluatePerRow(inputs, mask, kernel, true);
+        return tryEvaluateTrueMaskInPlace(inputs.get(0), inputs.get(1), mask, kernel, operator);
     }
 
-    public static boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    static boolean tryEvaluateTrueMaskInPlace(Streams left, Streams right, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    {
+        if (tryColumnConstantInPlace(left, right, mask, kernel, operator, true)) {
+            return true;
+        }
+        return evaluatePerRow(left, right, mask, kernel, true);
+    }
+
+    static boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
     {
         if (inputs.size() != 2) {
             return false;
         }
-        if (tryColumnConstantInPlace(inputs, mask, kernel, operator, false)) {
-            return true;
-        }
-        return evaluatePerRow(inputs, mask, kernel, false);
+        return tryEvaluateFalseMaskInPlace(inputs.get(0), inputs.get(1), mask, kernel, operator);
     }
 
-    private static boolean tryColumnConstantInPlace(List<Streams> inputs, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator baseOperator, boolean wantTrue)
+    static boolean tryEvaluateFalseMaskInPlace(Streams left, Streams right, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    {
+        if (tryColumnConstantInPlace(left, right, mask, kernel, operator, false)) {
+            return true;
+        }
+        return evaluatePerRow(left, right, mask, kernel, false);
+    }
+
+    private static boolean tryColumnConstantInPlace(Streams leftInput, Streams rightInput, Mask mask, ComparisonKernel kernel, Mask.ComparisonOperator baseOperator, boolean wantTrue)
     {
         if (baseOperator == null) {
             return false;
         }
-        Vector left = inputs.get(0).values();
-        Vector right = inputs.get(1).values();
+        Vector left = leftInput.values();
+        Vector right = rightInput.values();
 
         Vector column;
         double literal;
@@ -90,7 +100,7 @@ final class DoubleComparisonMaskSupport
             return false;
         }
 
-        if (!isNullAndErrorFree(inputs.get(0)) || !isNullAndErrorFree(inputs.get(1))) {
+        if (!isNullAndErrorFree(leftInput) || !isNullAndErrorFree(rightInput)) {
             return false;
         }
 
@@ -120,14 +130,14 @@ final class DoubleComparisonMaskSupport
         return true;
     }
 
-    private static boolean evaluatePerRow(List<Streams> inputs, Mask mask, ComparisonKernel kernel, boolean wantTrue)
+    private static boolean evaluatePerRow(Streams leftInput, Streams rightInput, Mask mask, ComparisonKernel kernel, boolean wantTrue)
     {
-        VectorAccess.DoubleValues leftValues = VectorAccess.doubleValues(inputs.get(0).values());
-        VectorAccess.DoubleValues rightValues = VectorAccess.doubleValues(inputs.get(1).values());
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.ERRORS));
+        VectorAccess.DoubleValues leftValues = VectorAccess.doubleValues(leftInput.values());
+        VectorAccess.DoubleValues rightValues = VectorAccess.doubleValues(rightInput.values());
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(leftInput.getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(rightInput.getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(leftInput.getOrNull(Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(rightInput.getOrNull(Stream.ERRORS));
         mask.retainIf(position -> {
             if (leftErrors.value(position) || rightErrors.value(position) || leftNulls.value(position) || rightNulls.value(position)) {
                 return false;

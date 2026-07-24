@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 
 public final class EqualF64Optimization
         extends BinaryF64ProjectionOptimization
+        implements MaskCodeProvider
 {
     @Override
     protected ProjectionCodeBuilder.Value value(

@@ -19,7 +19,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -32,33 +31,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "eq_f64", capabilities = EqualF64Optimization.class)
 public final class EqualF64
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
+        implements PrimitiveFunction
 {
-    private static boolean equal(double left, double right)
-    {
-        return left == right;
-    }
-
-    @Override
-    public boolean requiresCompletedInputCompanionStreamsForMask()
-    {
-        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
-        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
-        return false;
-    }
-
-    @Override
-    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return DoubleComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, EqualF64::equal, Mask.ComparisonOperator.EQUAL);
-    }
-
-    @Override
-    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return DoubleComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, EqualF64::equal, Mask.ComparisonOperator.EQUAL);
-    }
-
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualF64");
 
     @Override

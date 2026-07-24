@@ -15,11 +15,14 @@ package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.EqualF64;
+import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.operator.Streams;
@@ -80,6 +83,24 @@ public class TestScalarRegistry
         assertThat(provider.argumentCount()).isEqualTo(1);
         assertThat(provider.argumentIndex()).isZero();
         assertThat(provider.inputComponent()).isEqualTo(DirectMaskInputProvider.InputComponent.NULLS);
+    }
+
+    @Test
+    void testRegistersProviderAuthoredMaskCodeAsCapabilityMetadata()
+    {
+        ScalarRegistry scalarRegistry = new ScalarRegistry();
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+
+        ScalarDescriptor descriptor = scalarRegistry.register(EqualF64.class);
+        primitiveRegistry.register(descriptor);
+
+        assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
+        MaskCodeProvider provider = descriptor.capabilities().stream()
+                .filter(MaskCodeProvider.class::isInstance)
+                .map(MaskCodeProvider.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(provider).isInstanceOf(EqualF64Optimization.class);
     }
 
     @ScalarFunction(name = "add")

@@ -207,24 +207,29 @@ class TestArchitectureDependencies
         }
 
         assertThat(files).containsExactlyInAnyOrder(
+                "DoubleComparisonMaskSupport.java",
                 "FusedMultiProjection.java",
                 "FusedProjectionCompiler.java",
                 "InMemoryCompiler.java",
+                "ProjectionMaskCompiler.java",
                 "ProjectionProgramBuilder.java");
     }
 
     @Test
     void testProjectionCompilerHasNoFunctionVocabulary()
     {
-        Path compiler = MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java");
-        String source = read(compiler);
+        List<String> compilerSources = List.of(
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/ProjectionMaskCompiler.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/DoubleComparisonMaskSupport.java")));
 
-        assertThat(source)
-                .doesNotContain("function.scalar.builtin")
-                .doesNotContain("BuiltinProjectionPrograms")
-                .doesNotContain("validateInstructionShape")
-                .doesNotContain("call.name().equals")
-                .doesNotContain("switch (call.name())");
+        assertThat(compilerSources)
+                .allMatch(source ->
+                        !source.contains("function.scalar.builtin") &&
+                                !source.contains("BuiltinProjectionPrograms") &&
+                                !source.contains("validateInstructionShape") &&
+                                !source.contains("call.name().equals") &&
+                                !source.contains("switch (call.name())"));
         assertThat(MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/BuiltinProjectionPrograms.java"))
                 .as("projection lowering belongs to the dynamically registered provider, not a central catalog")
                 .doesNotExist();
@@ -269,6 +274,9 @@ class TestArchitectureDependencies
         assertThat(evaluator)
                 .doesNotContain("\"lt\"")
                 .doesNotContain("LessThanI64")
+                .doesNotContain("F64Comparison")
+                .doesNotContain("DoubleComparison")
+                .doesNotContain("ProjectionMaskCompiler.Operation")
                 .doesNotContain("constantBound(")
                 .doesNotContain("RangeFusion");
         assertThat(filter)

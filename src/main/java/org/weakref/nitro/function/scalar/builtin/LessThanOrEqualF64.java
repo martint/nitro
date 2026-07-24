@@ -19,7 +19,6 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -32,33 +31,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "lte_f64", capabilities = LessThanOrEqualF64Optimization.class)
 public final class LessThanOrEqualF64
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
+        implements PrimitiveFunction
 {
-    private static boolean lessThanOrEqual(double left, double right)
-    {
-        return left <= right;
-    }
-
-    @Override
-    public boolean requiresCompletedInputCompanionStreamsForMask()
-    {
-        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
-        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
-        return false;
-    }
-
-    @Override
-    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return DoubleComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, LessThanOrEqualF64::lessThanOrEqual, Mask.ComparisonOperator.LESS_THAN_OR_EQUAL);
-    }
-
-    @Override
-    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return DoubleComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, LessThanOrEqualF64::lessThanOrEqual, Mask.ComparisonOperator.LESS_THAN_OR_EQUAL);
-    }
-
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanOrEqualF64");
 
     @Override

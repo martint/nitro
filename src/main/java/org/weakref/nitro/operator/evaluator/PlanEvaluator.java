@@ -15,6 +15,8 @@ package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
+import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -28,6 +30,7 @@ import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.builtin.Utf8Support;
+import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -108,7 +111,7 @@ public final class PlanEvaluator
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
-    private final Map<Variable, Reference> directMaskInputs;
+    private final Map<Variable, PreboundMask> preboundMasks;
     private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
     private final Map<Producer, Set<Stream>> explicitProjectedStreamsByProducer;
@@ -173,7 +176,7 @@ public final class PlanEvaluator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
-        this.directMaskInputs = bindDirectMaskInputs(plan, primitiveRegistry);
+        this.preboundMasks = bindPreboundMasks(plan, primitiveRegistry, assignments);
         this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
         this.explicitProjectedStreamsByProducer = streamsByProducer(plan.outputs());
@@ -977,9 +980,12 @@ public final class PlanEvaluator
         return indexedAssignments;
     }
 
-    private static Map<Variable, Reference> bindDirectMaskInputs(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
+    private static Map<Variable, PreboundMask> bindPreboundMasks(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            Map<Variable, Assignment> assignments)
     {
-        Map<Variable, Reference> directInputs = new HashMap<>();
+        Map<Variable, PreboundMask> bindings = new HashMap<>();
         for (Assignment assignment : plan.assignments()) {
             if (!(assignment.operation() instanceof Call call)) {
                 continue;
@@ -1000,9 +1006,58 @@ public final class PlanEvaluator
                         case NULLS -> Stream.NULLS;
                         case ERRORS -> Stream.ERRORS;
                     });
-            directInputs.put(assignment.output(), directInput);
+            bindings.put(assignment.output(), new DirectPreboundMask(directInput));
+            continue;
         }
-        return Map.copyOf(directInputs);
+        for (Assignment assignment : plan.assignments()) {
+            if (!(assignment.operation() instanceof Call call) || bindings.containsKey(assignment.output())) {
+                continue;
+            }
+            MaskCodeProvider provider = primitiveRegistry.capabilityOrNull(call, MaskCodeProvider.class);
+            if (provider == null) {
+                continue;
+            }
+            List<ProjectionArgument> argumentShapes = call.arguments().stream()
+                    .map(argument -> projectionArgument(argument, assignments))
+                    .toList();
+            ProjectionMaskCompiler.tryCompile(provider, argumentShapes)
+                    .ifPresent(compiled -> bindings.put(
+                            assignment.output(),
+                            compiledPreboundMask(call.arguments(), compiled, assignments)));
+        }
+        return Map.copyOf(bindings);
+    }
+
+    private static CompiledPreboundMask compiledPreboundMask(
+            List<Reference> arguments,
+            ProjectionMaskCompiler.CompiledMask compiled,
+            Map<Variable, Assignment> assignments)
+    {
+        List<Reference> excludedComponents = compiled.excludedComponents().stream()
+                .map(component -> new Reference(
+                        arguments.get(component.argumentIndex()).producer(),
+                        component.stream()))
+                .filter(component -> !(component.producer() instanceof Variable variable &&
+                        assignments.get(variable) != null &&
+                        assignments.get(variable).operation() instanceof Literal))
+                .toList();
+        return new CompiledPreboundMask(arguments, excludedComponents, compiled);
+    }
+
+    private static ProjectionArgument projectionArgument(
+            Reference reference,
+            Map<Variable, Assignment> assignments)
+    {
+        if (reference.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+            return ProjectionArgument.input();
+        }
+        if (reference.producer() instanceof Variable variable) {
+            Assignment assignment = assignments.get(variable);
+            if (assignment != null && assignment.operation() instanceof Literal literal) {
+                return ProjectionArgument.literal(literal.value());
+            }
+        }
+        return ProjectionArgument.computed();
     }
 
     private static Set<Allocator.Context> primitiveAllocationContexts(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
@@ -1370,10 +1425,10 @@ public final class PlanEvaluator
 
     private boolean tryEvaluatePrimitiveMaskInPlace(Reference reference, Mask mask, boolean selectTrue)
     {
-        Mask directInputMask = tryResolvePrimitiveDirectInputMask(reference, mask, selectTrue);
-        if (directInputMask != null) {
-            if (directInputMask != mask) {
-                mask.copyFrom(directInputMask);
+        Mask preboundMask = tryEvaluatePreboundMask(reference, mask, selectTrue);
+        if (preboundMask != null) {
+            if (preboundMask != mask) {
+                mask.copyFrom(preboundMask);
             }
             return true;
         }
@@ -1390,16 +1445,31 @@ public final class PlanEvaluator
                 : invocation.function().tryEvaluateFalseMaskInPlace(invocation.inputs(), mask, executionContext);
     }
 
-    private Mask tryResolvePrimitiveDirectInputMask(Reference reference, Mask mask, boolean selectTrue)
+    private Mask tryEvaluatePreboundMask(Reference reference, Mask mask, boolean selectTrue)
     {
         if (!DIRECT_PRIMITIVE_INPUT_MASK || reference.stream() != Stream.VALUES ||
                 !(reference.producer() instanceof Variable variable)) {
             return null;
         }
-        Reference directInput = directMaskInputs.get(variable);
-        if (directInput == null) {
+        PreboundMask preboundMask = preboundMasks.get(variable);
+        if (preboundMask == null) {
             return null;
         }
+        if (preboundMask instanceof CompiledPreboundMask compiled) {
+            compiled.inputs().clear();
+            for (Reference argument : compiled.arguments()) {
+                compiled.inputs().add(evaluateArgument(
+                        argument, mask, PrimitiveFunction.VALUES_INPUT_STREAMS, true));
+            }
+            if (!compiled.compiled().evaluate(compiled.inputs(), mask, selectTrue)) {
+                return null;
+            }
+            for (Reference component : compiled.excludedComponents()) {
+                excludeComponent(component, mask);
+            }
+            return mask;
+        }
+        Reference directInput = ((DirectPreboundMask) preboundMask).input();
         if (directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
             Mask inputMask = tryResolveInputMask(directInput, mask, selectTrue);
             if (inputMask != null) {
@@ -1415,6 +1485,37 @@ public final class PlanEvaluator
         return selectTrue
                 ? classifyTrueBooleanMask(values, null, null, mask)
                 : classifyFalseBooleanMask(values, null, null, mask);
+    }
+
+    private void excludeComponent(Reference componentReference, Mask mask)
+    {
+        if (mask.none()) {
+            return;
+        }
+        if (componentReference.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
+            // VALUES was resolved immediately before this call. Sources that decode companion components together
+            // can therefore hand back the already-resident component without a second reader or a temporary mask.
+            Vector available = input.resolve(componentReference, mask);
+            if (available == null) {
+                return;
+            }
+            retainComponentFalse(mask, available);
+            return;
+        }
+        retainComponentFalse(mask, evaluate(componentReference, mask).get(componentReference.stream()));
+    }
+
+    private static void retainComponentFalse(Mask mask, Vector component)
+    {
+        if (VectorAccess.isAllFalseNulls(component)) {
+            return;
+        }
+        if (component instanceof BooleanVector booleans) {
+            mask.retainBooleans(booleans.values(), false);
+            return;
+        }
+        VectorAccess.BooleanValues values = VectorAccess.booleanValues(component);
+        mask.retainIf(position -> !values.value(position));
     }
 
     private Mask tryEvaluateSubstringInSetMask(Reference reference, Mask mask, boolean selectMatches)
@@ -2823,6 +2924,53 @@ public final class PlanEvaluator
     }
 
     private record IndexedTerm(int index, MaskExpression term) {}
+
+    private sealed interface PreboundMask
+            permits DirectPreboundMask, CompiledPreboundMask {}
+
+    private record DirectPreboundMask(Reference input)
+            implements PreboundMask {}
+
+    private static final class CompiledPreboundMask
+            implements PreboundMask
+    {
+        private final List<Reference> arguments;
+        private final List<Reference> excludedComponents;
+        private final ProjectionMaskCompiler.CompiledMask compiled;
+        private final ArrayList<Streams> inputs;
+
+        private CompiledPreboundMask(
+                List<Reference> arguments,
+                List<Reference> excludedComponents,
+                ProjectionMaskCompiler.CompiledMask compiled)
+        {
+            this.arguments = List.copyOf(arguments);
+            this.excludedComponents = List.copyOf(excludedComponents);
+            this.compiled = compiled;
+            checkArgument(arguments.size() == compiled.argumentCount(), "Compiled mask argument count does not match call");
+            this.inputs = new ArrayList<>(arguments.size());
+        }
+
+        private List<Reference> arguments()
+        {
+            return arguments;
+        }
+
+        private List<Reference> excludedComponents()
+        {
+            return excludedComponents;
+        }
+
+        private ProjectionMaskCompiler.CompiledMask compiled()
+        {
+            return compiled;
+        }
+
+        private ArrayList<Streams> inputs()
+        {
+            return inputs;
+        }
+    }
 
     private static final class TermOrderFrames
     {
