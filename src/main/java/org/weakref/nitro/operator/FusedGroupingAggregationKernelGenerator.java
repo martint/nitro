@@ -24,6 +24,7 @@ import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.constant.ConstantDescs.CD_Object;
 import static java.lang.constant.ConstantDescs.CD_int;
@@ -31,7 +32,7 @@ import static java.lang.constant.ConstantDescs.CD_long;
 import static java.lang.constant.ConstantDescs.CD_void;
 
 /**
- * Generates, once per accumulator-set shape, a {@link FusedGroupingKernel} whose hot loop is emitted
+ * Generates, once per accumulator-set shape and resource owner, a {@link FusedGroupingKernel} whose hot loop is emitted
  * as JVM bytecode with the {@code java.lang.classfile} API. The generated {@code accumulate} inlines
  * the single-long open-addressed probe and, per accumulator, a single {@code increment(group, value)}
  * call against its state vector — so there is no group-id vector round-trip and every increment call
@@ -40,9 +41,8 @@ import static java.lang.constant.ConstantDescs.CD_void;
  * fusible aggregates grows by accumulators, not by changes here.
  */
 final class FusedGroupingAggregationKernelGenerator
+        implements AutoCloseable
 {
-    private FusedGroupingAggregationKernelGenerator() {}
-
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.FusedGroupingKernel");
     private static final ClassDesc CD_GROUPING_STATE = ClassDesc.of("org.weakref.nitro.operator.GroupingState");
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
@@ -83,9 +83,11 @@ final class FusedGroupingAggregationKernelGenerator
     private static final int INPUT_ARRAY_BASE = 31;
     private static final int ID_INDEXED_GROUP_MASK = 0x03FF_FFFF;
 
-    private static final ConcurrentHashMap<String, FusedGroupingKernel> KERNELS = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, FusedGroupingKernel> kernels = new ConcurrentHashMap<>();
+    private final AtomicInteger nextClassId = new AtomicInteger();
+    private boolean closed;
 
-    static FusedGroupingKernel create(
+    FusedGroupingKernel create(
             List<FusedAccumulatorSpec> specs,
             boolean writeGroups,
             boolean intKey,
@@ -100,8 +102,9 @@ final class FusedGroupingAggregationKernelGenerator
             boolean[] inputUsesKeyIds,
             boolean[] inputNullUsesKeyIds)
     {
+        checkOpen();
         String physicalShape = (intKey ? "i" : "l") + ":km=" + keyMapped + ":runs=" + runCache + ":constantRuns=" + constantRuns + ":direct=" + directGrouping + ":idIndexed=" + idIndexedGrouping + Arrays.toString(intInputs) + Arrays.toString(mappedInputs) + Arrays.toString(mappedInputNulls) + Arrays.toString(inputUsesKeyIds) + Arrays.toString(inputNullUsesKeyIds);
-        return KERNELS.computeIfAbsent(
+        return kernels.computeIfAbsent(
                 cacheKey(specs) + ":groups=" + writeGroups + ":physical=" + physicalShape,
                 key -> generate(specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
     }
@@ -115,7 +118,7 @@ final class FusedGroupingAggregationKernelGenerator
         return key.toString();
     }
 
-    private static FusedGroupingKernel generate(
+    private FusedGroupingKernel generate(
             List<FusedAccumulatorSpec> specs,
             boolean writeGroups,
             boolean intKey,
@@ -130,7 +133,7 @@ final class FusedGroupingAggregationKernelGenerator
             boolean[] inputUsesKeyIds,
             boolean[] inputNullUsesKeyIds)
     {
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedFusedGroupingKernel" + (KERNELS.size() + 1));
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedFusedGroupingKernel" + nextClassId.incrementAndGet());
         MethodTypeDesc accumulateType = MethodTypeDesc.of(
                 CD_long,
                 CD_INT_ARRAY, CD_int, CD_Object, CD_INT_ARRAY,
@@ -161,6 +164,20 @@ final class FusedGroupingAggregationKernelGenerator
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to generate fused grouping kernel", e);
+        }
+    }
+
+    @Override
+    public void close()
+    {
+        closed = true;
+        kernels.clear();
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("Fused grouping kernel generator is closed");
         }
     }
 

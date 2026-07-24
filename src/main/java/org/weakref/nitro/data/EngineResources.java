@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.operator.OperatorCodeGenerationResources;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -32,12 +34,17 @@ public final class EngineResources
 
     private final PrimitiveArrayPool primitiveArrays;
     private final PrimitiveArrayPool nativeBuffers;
+    private final OperatorCodeGenerationResources operatorCodeGeneration;
     private boolean closed;
 
-    public EngineResources(PrimitiveArrayPool primitiveArrays, PrimitiveArrayPool nativeBuffers)
+    public EngineResources(
+            PrimitiveArrayPool primitiveArrays,
+            PrimitiveArrayPool nativeBuffers,
+            OperatorCodeGenerationResources operatorCodeGeneration)
     {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
+        this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
     }
 
     /**
@@ -53,7 +60,8 @@ public final class EngineResources
                         Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
                 new PrimitiveArrayPool(
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
-                        Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)));
+                        Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
+                new OperatorCodeGenerationResources());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -68,6 +76,12 @@ public final class EngineResources
         return nativeBuffers;
     }
 
+    public OperatorCodeGenerationResources operatorCodeGeneration()
+    {
+        checkOpen();
+        return operatorCodeGeneration;
+    }
+
     @Override
     public void close()
     {
@@ -79,6 +93,7 @@ public final class EngineResources
         if (nativeBuffers != primitiveArrays) {
             nativeBuffers.close();
         }
+        operatorCodeGeneration.close();
     }
 
     private void checkOpen()

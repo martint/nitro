@@ -555,7 +555,7 @@ public class GroupedAggregationOperator
         physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
         physicalShape = physicalShape * 31 + (idIndexedGrouping ? 1 : 0);
         if (fusedPhysicalShape != physicalShape) {
-            fusedKernel = FusedGroupingAggregationKernelGenerator.create(
+            fusedKernel = allocator.engineResources().operatorCodeGeneration().fusedGrouping().create(
                     List.of(fusedSpecs),
                     filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
                     intKey,

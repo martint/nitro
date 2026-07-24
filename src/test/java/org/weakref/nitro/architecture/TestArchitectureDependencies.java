@@ -174,6 +174,14 @@ class TestArchitectureDependencies
                 .isFalse();
     }
 
+    @Test
+    void testOperatorKernelCachesAreExplicitlyOwned()
+    {
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/FusedGroupingAggregationKernelGenerator.java")))
+                .as("generated operator kernels belong to OperatorCodeGenerationResources")
+                .doesNotContain("static final ConcurrentHashMap", "static final AtomicInteger");
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();
