@@ -164,6 +164,16 @@ class TestArchitectureDependencies
                 .doesNotContain("OutputDebug");
     }
 
+    @Test
+    void testPrimitiveCallSiteGenerationIsExplicitlyOwned()
+    {
+        assertThat(matches(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/evaluator/PrimitiveCallSiteBinder.java"),
+                Pattern.compile("static\\s+(?:final\\s+)?AtomicInteger")))
+                .as("generated call-site identity and lifetime belong to the constructed binder")
+                .isFalse();
+    }
+
     private static boolean matches(Path path, Pattern pattern)
     {
         return pattern.matcher(read(path)).find();

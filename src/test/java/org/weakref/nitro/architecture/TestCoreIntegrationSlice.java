@@ -90,7 +90,7 @@ class TestCoreIntegrationSlice
 
         PrimitiveFunction isolatedAdd = isolatedAdd();
         assertThat(isolatedAdd.getClass().getClassLoader()).isNotSameAs(getClass().getClassLoader());
-        PrimitiveFunction boundAdd = PrimitiveCallSiteBinder.bind(isolatedAdd);
+        PrimitiveFunction boundAdd = new PrimitiveCallSiteBinder().bind(isolatedAdd);
         assertThat(boundAdd.getClass().getDeclaredField("target").getType()).isEqualTo(PrimitiveFunction.class);
         assertThat(boundAdd.getClass().getName()).doesNotContain(isolatedAdd.getClass().getName());
 

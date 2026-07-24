@@ -32,7 +32,6 @@ import static java.util.Objects.requireNonNull;
 /// plugin class loader.
 public final class PrimitiveCallSiteBinder
 {
-    private static final AtomicInteger NEXT_CLASS_ID = new AtomicInteger();
     private static final ClassDesc CD_OBJECT = ClassDesc.of("java.lang.Object");
     private static final ClassDesc CD_LIST = ClassDesc.of("java.util.List");
     private static final ClassDesc CD_SET = ClassDesc.of("java.util.Set");
@@ -47,12 +46,12 @@ public final class PrimitiveCallSiteBinder
     private static final MethodTypeDesc BOOLEAN_TYPE = MethodTypeDesc.of(CD_boolean);
     private static final MethodTypeDesc SET_TYPE = MethodTypeDesc.of(CD_SET);
 
-    private PrimitiveCallSiteBinder() {}
+    private final AtomicInteger nextClassId = new AtomicInteger();
 
-    public static PrimitiveFunction bind(PrimitiveFunction target)
+    public PrimitiveFunction bind(PrimitiveFunction target)
     {
         requireNonNull(target, "target is null");
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.evaluator.GeneratedPrimitiveCallSite" + NEXT_CLASS_ID.incrementAndGet());
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.evaluator.GeneratedPrimitiveCallSite" + nextClassId.incrementAndGet());
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_OBJECT);
             builder.withInterfaceSymbols(CD_PRIMITIVE);
