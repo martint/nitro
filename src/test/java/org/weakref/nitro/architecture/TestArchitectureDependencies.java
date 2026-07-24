@@ -109,7 +109,8 @@ class TestArchitectureDependencies
     {
         Pattern ambientPool = Pattern.compile(
                 "PrimitiveArrayPool\\.(?:shared|sharedNativeBuffers)\\(|" +
-                        "static\\s+(?:final\\s+)?PrimitiveArrayPool\\s+\\w+\\s*(?:=|;)");
+                        "static\\s+(?:final\\s+)?PrimitiveArrayPool\\s+\\w+\\s*(?:=|;)|" +
+                        "static\\s+final\\s+AtomicLong\\s+NEXT_SCOPE_ID");
         List<Path> violations;
         try (var files = Files.walk(MAIN_SOURCES.resolve("org/weakref/nitro"))) {
             violations = files.filter(path -> path.toString().endsWith(".java"))
@@ -138,6 +139,19 @@ class TestArchitectureDependencies
         assertThat(compilerSources)
                 .as("function/type registries and generated-class caches are integration-owned compiler dependencies")
                 .noneMatch(path -> matches(path, ambientCompilerResource));
+    }
+
+    @Test
+    void testFunctionImplementationsDoNotOwnStaticCaches()
+    {
+        Pattern ambientFunctionCache = Pattern.compile(
+                "static\\s+final\\s+[^;\\n]*(?:ConcurrentHashMap|\\bCACHE\\b|\\bPATTERNS\\b)\\s*(?:=|;)");
+
+        assertThat(matches(
+                MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/LikeUtf8.java"),
+                ambientFunctionCache))
+                .as("function implementation caches belong to the dynamically constructed function instance or registry")
+                .isFalse();
     }
 
     private static boolean matches(Path path, Pattern pattern)

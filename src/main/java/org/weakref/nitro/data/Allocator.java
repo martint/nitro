@@ -28,7 +28,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -1864,13 +1863,11 @@ public class Allocator
         void releaseLeased(Vector vector);
     }
 
-    public record Context(String name, long scopeId, Object poolGroup, Object compatibilityGroup)
+    public record Context(String name, Object scopeId, Object poolGroup, Object compatibilityGroup)
     {
-        private static final AtomicLong NEXT_SCOPE_ID = new AtomicLong();
-
         public Context(String name)
         {
-            this(name, NEXT_SCOPE_ID.incrementAndGet());
+            this(name, new Object());
         }
 
         public Context(String name, long scopeId)
@@ -1880,14 +1877,14 @@ public class Allocator
 
         public Context(String name, Object poolGroup)
         {
-            this(name, NEXT_SCOPE_ID.incrementAndGet(), requireNonNull(poolGroup, "poolGroup is null"), poolGroup);
+            this(name, new Object(), requireNonNull(poolGroup, "poolGroup is null"), poolGroup);
         }
 
         public Context(String name, Object poolGroup, Object compatibilityGroup)
         {
             this(
                     name,
-                    NEXT_SCOPE_ID.incrementAndGet(),
+                    new Object(),
                     requireNonNull(poolGroup, "poolGroup is null"),
                     requireNonNull(compatibilityGroup, "compatibilityGroup is null"));
         }

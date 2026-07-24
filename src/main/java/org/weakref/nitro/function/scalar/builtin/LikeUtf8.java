@@ -43,15 +43,15 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class LikeUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LikeUtf8");
-    private static final ConcurrentHashMap<String, Pattern> PATTERNS = new ConcurrentHashMap<>();
-    private static final boolean BOYER_MOORE_HORSPOOL =
+    private final Allocator.Context allocationContext = new Allocator.Context("LikeUtf8");
+    private final ConcurrentHashMap<String, Pattern> patterns = new ConcurrentHashMap<>();
+    private final boolean boyerMooreHorspool =
             Boolean.parseBoolean(System.getProperty("nitro.like.boyerMooreHorspool", "true"));
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -79,7 +79,7 @@ public final class LikeUtf8
                 result = result.with(Stream.NULLS, inputNulls);
             }
             else {
-                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), ALLOCATION_CONTEXT, null, requiredLength);
+                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), allocationContext, null, requiredLength);
                 java.util.Arrays.fill(nulls.values(), 0, nulls.length(), false);
                 result = result.with(Stream.NULLS, nulls);
             }
@@ -90,7 +90,7 @@ public final class LikeUtf8
 
         BooleanVector values = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null ? output.getOrNull(Stream.VALUES) : null,
                 requiredLength);
         boolean[] outputValues = values.values();
@@ -144,13 +144,13 @@ public final class LikeUtf8
         };
     }
 
-    private static Pattern parsePattern(byte[] pattern)
+    private Pattern parsePattern(byte[] pattern)
     {
         String text = new String(pattern, StandardCharsets.UTF_8);
-        return PATTERNS.computeIfAbsent(text, LikeUtf8::parsePattern);
+        return patterns.computeIfAbsent(text, this::parsePattern);
     }
 
-    private static Pattern parsePattern(String text)
+    private Pattern parsePattern(String text)
     {
         checkArgument(text.indexOf('_') < 0, "like_utf8 does not support the _ wildcard: %s", text);
         boolean anchoredStart = !text.startsWith("%");
@@ -161,10 +161,10 @@ public final class LikeUtf8
                 segments.add(new Segment(segment.getBytes(StandardCharsets.UTF_8)));
             }
         }
-        return new Pattern(anchoredStart, anchoredEnd, segments);
+        return new Pattern(anchoredStart, anchoredEnd, segments, boyerMooreHorspool);
     }
 
-    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments)
+    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments, boolean boyerMooreHorspool)
     {
         boolean matches(byte[] data, int offset, int length)
         {
@@ -211,11 +211,11 @@ public final class LikeUtf8
             return true;
         }
 
-        private static int indexOf(byte[] data, int from, int end, Segment segment)
+        private int indexOf(byte[] data, int from, int end, Segment segment)
         {
             byte[] bytes = segment.bytes;
             int limit = end - bytes.length;
-            if (BOYER_MOORE_HORSPOOL && bytes.length >= 4) {
+            if (boyerMooreHorspool && bytes.length >= 4) {
                 int last = bytes.length - 1;
                 int start = from;
                 while (start <= limit) {
