@@ -20,7 +20,7 @@ import java.util.Map;
 public final class IrNormalizer
 {
     private static final IrNormalizer STANDARD = new IrNormalizer(List.of(
-            new IfNormalizationRule(),
+            new ConditionalNormalizationRule(),
             new CoalesceNormalizationRule()));
 
     private final List<IrNormalizationRule> rules;

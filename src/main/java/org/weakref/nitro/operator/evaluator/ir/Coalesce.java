@@ -13,7 +13,18 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits Call, Coalesce, Conditional, Copy, Literal, Merge, StructField
+import static java.util.Objects.requireNonNull;
+
+/**
+ * Structural two-argument coalesce expression. Evaluation order and short-circuiting belong to the engine rather than
+ * to a dynamically resolved scalar function.
+ */
+public record Coalesce(Reference first, Reference second)
+        implements Operation
 {
+    public Coalesce
+    {
+        first = requireNonNull(first, "first is null");
+        second = requireNonNull(second, "second is null");
+    }
 }

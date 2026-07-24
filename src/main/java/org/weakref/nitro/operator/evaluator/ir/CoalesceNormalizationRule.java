@@ -15,26 +15,21 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
 public final class CoalesceNormalizationRule
         implements IrNormalizationRule
 {
     @Override
     public boolean matches(Assignment assignment)
     {
-        return assignment.operation() instanceof Call(String name, List<Reference> ignored, _) && name.equals("coalesce");
+        return assignment.operation() instanceof Coalesce;
     }
 
     @Override
     public void apply(Assignment assignment, IrNormalizer.Context context)
     {
-        Call call = (Call) assignment.operation();
-        List<Reference> arguments = call.arguments();
-        checkArgument(arguments.size() == 2, "coalesce requires 2 arguments");
-
-        Reference first = arguments.get(0);
-        Reference second = arguments.get(1);
+        Coalesce coalesce = (Coalesce) assignment.operation();
+        Reference first = coalesce.first();
+        Reference second = coalesce.second();
         Reference firstNulls = new Reference(first.producer(), Stream.NULLS);
         MaskExpression firstIsNull = new ReferenceMask(firstNulls);
         MaskExpression firstIsPresent = new NotMask(firstIsNull);

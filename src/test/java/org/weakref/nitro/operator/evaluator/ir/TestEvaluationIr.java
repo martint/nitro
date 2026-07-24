@@ -81,10 +81,10 @@ public class TestEvaluationIr
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         result,
-                        new Call("if", List.of(
+                        new Conditional(
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(new Input(1), Stream.VALUES),
-                                new Reference(new Input(2), Stream.VALUES))),
+                                new Reference(new Input(2), Stream.VALUES)),
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
@@ -106,9 +106,9 @@ public class TestEvaluationIr
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         result,
-                        new Call("coalesce", List.of(
+                        new Coalesce(
                                 new Reference(new Input(0), Stream.VALUES),
-                                new Reference(new Input(1), Stream.VALUES))),
+                                new Reference(new Input(1), Stream.VALUES)),
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)),
                 Map.of(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED));

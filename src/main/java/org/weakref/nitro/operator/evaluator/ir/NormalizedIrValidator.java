@@ -14,19 +14,15 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.List;
-import java.util.Set;
 
 public final class NormalizedIrValidator
 {
-    private static final Set<String> SPECIAL_FORMS = Set.of("if", "coalesce", "try", "and", "or");
-
     private NormalizedIrValidator() {}
 
     public static boolean isNormalized(EvaluationPlan plan)
     {
         return plan.assignments().stream()
-                .noneMatch(assignment -> assignment.operation() instanceof Call call && SPECIAL_FORMS.contains(call.name()))
-                && plan.assignments().stream().allMatch(assignment -> isNormalizedMask(assignment.mask()) && isNormalizedOperation(assignment.operation()));
+                .allMatch(assignment -> isNormalizedMask(assignment.mask()) && isNormalizedOperation(assignment.operation()));
     }
 
     public static void validate(EvaluationPlan plan)
@@ -39,6 +35,7 @@ public final class NormalizedIrValidator
     private static boolean isNormalizedOperation(Operation operation)
     {
         return switch (operation) {
+            case Coalesce _, Conditional _ -> false;
             case Merge merge -> isNormalizedMask(merge.condition());
             case StructField _ -> true;
             default -> true;

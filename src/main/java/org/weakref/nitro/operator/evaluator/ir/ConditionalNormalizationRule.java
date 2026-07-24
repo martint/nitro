@@ -15,27 +15,22 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkArgument;
-
-public final class IfNormalizationRule
+public final class ConditionalNormalizationRule
         implements IrNormalizationRule
 {
     @Override
     public boolean matches(Assignment assignment)
     {
-        return assignment.operation() instanceof Call(String name, List<Reference> ignored, _) && name.equals("if");
+        return assignment.operation() instanceof Conditional;
     }
 
     @Override
     public void apply(Assignment assignment, IrNormalizer.Context context)
     {
-        Call call = (Call) assignment.operation();
-        List<Reference> arguments = call.arguments();
-        checkArgument(arguments.size() == 3, "if requires 3 arguments");
-
-        Reference condition = arguments.get(0);
-        Reference whenTrue = arguments.get(1);
-        Reference whenFalse = arguments.get(2);
+        Conditional conditional = (Conditional) assignment.operation();
+        Reference condition = conditional.condition();
+        Reference whenTrue = conditional.whenTrue();
+        Reference whenFalse = conditional.whenFalse();
 
         Variable thenVariable = context.nextVariable();
         Variable elseVariable = context.nextVariable();

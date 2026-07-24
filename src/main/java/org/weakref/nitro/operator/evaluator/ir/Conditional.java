@@ -13,7 +13,19 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits Call, Coalesce, Conditional, Copy, Literal, Merge, StructField
+import static java.util.Objects.requireNonNull;
+
+/**
+ * Structural conditional expression. Unlike a {@link Call}, this operation has engine-defined control-flow semantics
+ * and does not resolve through the dynamic function registry.
+ */
+public record Conditional(Reference condition, Reference whenTrue, Reference whenFalse)
+        implements Operation
 {
+    public Conditional
+    {
+        condition = requireNonNull(condition, "condition is null");
+        whenTrue = requireNonNull(whenTrue, "whenTrue is null");
+        whenFalse = requireNonNull(whenFalse, "whenFalse is null");
+    }
 }

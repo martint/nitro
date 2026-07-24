@@ -317,6 +317,7 @@ public final class PlanEvaluator
             case Call call -> evaluateCall(reference, call, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
             case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
+            default -> throw new IllegalArgumentException("Unsupported operation in normalized evaluator");
         };
     }
 

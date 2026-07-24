@@ -202,6 +202,23 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testIrNormalizerHasNoFunctionVocabulary()
+    {
+        Path ir = MAIN_SOURCES.resolve("org/weakref/nitro/operator/evaluator/ir");
+
+        assertThat(read(ir.resolve("ConditionalNormalizationRule.java")))
+                .doesNotContain("Call")
+                .doesNotContain("\"if\"");
+        assertThat(read(ir.resolve("CoalesceNormalizationRule.java")))
+                .doesNotContain("Call")
+                .doesNotContain("\"coalesce\"");
+        assertThat(read(ir.resolve("NormalizedIrValidator.java")))
+                .doesNotContain("SPECIAL_FORMS")
+                .doesNotContain("call.name()");
+        assertThat(ir.resolve("IfNormalizationRule.java")).doesNotExist();
+    }
+
+    @Test
     void testFunctionImplementationsDoNotOwnStaticCaches()
     {
         Pattern ambientFunctionCache = Pattern.compile(
