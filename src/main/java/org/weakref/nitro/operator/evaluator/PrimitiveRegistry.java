@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
+import org.weakref.nitro.core.function.ResolvedCall;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 
 import java.util.LinkedHashMap;
@@ -35,6 +36,18 @@ public final class PrimitiveRegistry
     public void register(ScalarDescriptor descriptor)
     {
         register(descriptor.name(), descriptor.implementation());
+    }
+
+    public void register(ResolvedCall call)
+    {
+        requireNonNull(call, "call is null");
+        if (!(call.invocation() instanceof PrimitiveInvocationBinding binding)) {
+            throw new IllegalArgumentException("Resolved call does not provide a primitive invocation: " + call.identity());
+        }
+        if (call.semantics().deterministic() != binding.function().deterministic()) {
+            throw new IllegalArgumentException("Resolved call determinism does not match its primitive invocation: " + call.identity());
+        }
+        register(call.identity().value(), binding.function());
     }
 
     public PrimitiveFunction get(String name)

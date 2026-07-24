@@ -1803,9 +1803,13 @@ final class TpchParquetSupport
     {
         return switch (operation) {
             case Literal literal -> literal;
-            case Call(String functionName, List<Reference> arguments) -> new Call(functionName, arguments.stream()
-                    .map(argument -> remap(argument, variableOffset))
-                    .toList());
+            case Call(String functionName, List<Reference> arguments, var resolvedCall) ->
+                    new Call(
+                            functionName,
+                            arguments.stream()
+                                    .map(argument -> remap(argument, variableOffset))
+                                    .toList(),
+                            resolvedCall);
             default -> throw new IllegalArgumentException("Unsupported operation in filter spec: " + operation);
         };
     }

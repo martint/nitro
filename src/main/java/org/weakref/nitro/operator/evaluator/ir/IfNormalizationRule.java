@@ -23,7 +23,7 @@ public final class IfNormalizationRule
     @Override
     public boolean matches(Assignment assignment)
     {
-        return assignment.operation() instanceof Call(String name, List<Reference> ignored) && name.equals("if");
+        return assignment.operation() instanceof Call(String name, List<Reference> ignored, _) && name.equals("if");
     }
 
     @Override

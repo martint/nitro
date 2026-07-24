@@ -11256,7 +11256,8 @@ final class TpcdsParquetSupport
     {
         return switch (operation) {
             case Literal literal -> literal;
-            case Call(String functionName, List<Reference> arguments) -> new Call(functionName, remapReferences(arguments, variableOffset));
+            case Call(String functionName, List<Reference> arguments, var resolvedCall) ->
+                    new Call(functionName, remapReferences(arguments, variableOffset), resolvedCall);
             case org.weakref.nitro.operator.evaluator.ir.Copy(Reference source) -> new org.weakref.nitro.operator.evaluator.ir.Copy(remap(source, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.StructField(Reference source, String fieldName) -> new org.weakref.nitro.operator.evaluator.ir.StructField(remap(source, variableOffset), fieldName);
             case org.weakref.nitro.operator.evaluator.ir.Merge _ -> throw new UnsupportedOperationException("Merge remapping is not implemented for TPC-DS helper filters");

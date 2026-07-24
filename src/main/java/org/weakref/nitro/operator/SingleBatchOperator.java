@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 
 import java.util.function.Supplier;
@@ -22,14 +23,19 @@ import static java.util.Objects.requireNonNull;
 public final class SingleBatchOperator
         implements Operator
 {
-    private final int outputCount;
+    private final Schema outputSchema;
     private final Supplier<Output[]> outputsSupplier;
     private Mask currentMask;
     private boolean emitted;
 
     public SingleBatchOperator(int outputCount, Mask mask, Supplier<Output[]> outputsSupplier)
     {
-        this.outputCount = outputCount;
+        this(Schema.unspecified(outputCount), mask, outputsSupplier);
+    }
+
+    public SingleBatchOperator(Schema outputSchema, Mask mask, Supplier<Output[]> outputsSupplier)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.currentMask = requireNonNull(mask, "mask is null");
         this.outputsSupplier = requireNonNull(outputsSupplier, "outputsSupplier is null");
     }
@@ -37,7 +43,13 @@ public final class SingleBatchOperator
     @Override
     public int outputCount()
     {
-        return outputCount;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

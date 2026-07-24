@@ -226,7 +226,7 @@ public class TestEvaluationIr
             @Override
             public boolean matches(Assignment candidate)
             {
-                return candidate.operation() instanceof Call(String name, List<Reference> ignored) && name.equals("identity");
+                return candidate.operation() instanceof Call(String name, List<Reference> ignored, _) && name.equals("identity");
             }
 
             @Override
@@ -278,7 +278,7 @@ public class TestEvaluationIr
             @Override
             public boolean matches(Assignment candidate)
             {
-                return candidate.operation() instanceof Call(String name, List<Reference> ignored) && name.equals("identity");
+                return candidate.operation() instanceof Call(String name, List<Reference> ignored, _) && name.equals("identity");
             }
 
             @Override

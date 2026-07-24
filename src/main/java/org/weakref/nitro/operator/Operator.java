@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 
 /**
@@ -37,6 +38,15 @@ public interface Operator
      * Returns the number of logical outputs this operator exposes in each batch.
      */
     int outputCount();
+
+    /// Returns the immutable logical output schema known before execution.
+    ///
+    /// The default is a migration bridge for legacy factories. New factories must supply bound
+    /// logical types rather than infer them from the first batch.
+    default Schema outputSchema()
+    {
+        return Schema.unspecified(outputCount());
+    }
 
     /**
      * Returns {@code true} if another batch is available.

@@ -13,13 +13,31 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.core.function.ResolvedCall;
+
 import java.util.List;
 
-public record Call(String name, List<Reference> arguments)
+import static java.util.Objects.requireNonNull;
+
+public record Call(String name, List<Reference> arguments, ResolvedCall resolvedCall)
         implements Operation
 {
+    public Call(String name, List<Reference> arguments)
+    {
+        this(name, arguments, null);
+    }
+
+    public Call(ResolvedCall resolvedCall, List<Reference> arguments)
+    {
+        this(requireNonNull(resolvedCall, "resolvedCall is null").identity().value(), arguments, resolvedCall);
+    }
+
     public Call
     {
+        name = requireNonNull(name, "name is null");
         arguments = List.copyOf(arguments);
+        if (resolvedCall != null && !name.equals(resolvedCall.identity().value())) {
+            throw new IllegalArgumentException("name does not match resolved call identity");
+        }
     }
 }

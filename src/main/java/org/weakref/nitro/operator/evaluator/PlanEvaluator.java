@@ -170,6 +170,7 @@ public final class PlanEvaluator
         this.allocator = allocator;
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
+        registerResolvedCalls(plan, primitiveRegistry);
         this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
         this.explicitProjectedStreamsByProducer = streamsByProducer(plan.outputs());
@@ -984,6 +985,15 @@ public final class PlanEvaluator
             }
         }
         return Set.copyOf(contexts);
+    }
+
+    private static void registerResolvedCalls(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry)
+    {
+        for (Assignment assignment : plan.assignments()) {
+            if (assignment.operation() instanceof Call call && call.resolvedCall() != null) {
+                primitiveRegistry.register(call.resolvedCall());
+            }
+        }
     }
 
     private Set<Stream> computeRequestedStreams(Reference reference)
@@ -2689,7 +2699,7 @@ public final class PlanEvaluator
             return null;
         }
         Assignment assignment = assignments.get(variable);
-        if (assignment == null || !(assignment.operation() instanceof Call(String name, List<Reference> arguments)) ||
+        if (assignment == null || !(assignment.operation() instanceof Call(String name, List<Reference> arguments, _)) ||
                 !name.equals("lt") || arguments.size() != 2) {
             return null;
         }

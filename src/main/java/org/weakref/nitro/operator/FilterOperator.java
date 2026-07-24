@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
@@ -95,7 +96,7 @@ public class FilterOperator
         }
         Assignment predicateAssignment = assignment(plan, predicate);
         if (predicateAssignment == null || predicateAssignment.mask() != AllMask.ALL
-                || !(predicateAssignment.operation() instanceof Call(String name, var arguments))
+                || !(predicateAssignment.operation() instanceof Call(String name, var arguments, _))
                 || !name.equals("eq") || arguments.size() != 2) {
             return Optional.empty();
         }
@@ -132,6 +133,12 @@ public class FilterOperator
     public int outputCount()
     {
         return source.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return source.outputSchema();
     }
 
     @Override

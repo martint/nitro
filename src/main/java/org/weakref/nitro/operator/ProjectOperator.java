@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -36,6 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 public class ProjectOperator
         implements Operator
 {
@@ -56,6 +59,7 @@ public class ProjectOperator
 
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
+    private final Schema outputSchema;
 
     private final EvaluationPlan evaluationPlan;
     private final PrimitiveRegistry primitiveRegistry;
@@ -76,11 +80,20 @@ public class ProjectOperator
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
     {
+        this(allocator, evaluationPlan, primitiveRegistry, source, Schema.unspecified(evaluationPlan.outputs().size()));
+    }
+
+    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, Schema outputSchema)
+    {
         this.allocator = allocator;
         this.source = source;
         this.evaluationPlan = evaluationPlan;
         this.primitiveRegistry = primitiveRegistry;
         this.outputReferences = evaluationPlan.outputs();
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        if (outputSchema.size() != outputReferences.size()) {
+            throw new IllegalArgumentException("output schema does not match projection output count");
+        }
         this.passThroughProjection = outputReferences.stream().allMatch(reference -> reference.producer() instanceof Input);
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.reusablePlanEvaluator = REUSE_PLAN_EVALUATOR ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
@@ -99,6 +112,12 @@ public class ProjectOperator
     public int outputCount()
     {
         return outputReferences.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

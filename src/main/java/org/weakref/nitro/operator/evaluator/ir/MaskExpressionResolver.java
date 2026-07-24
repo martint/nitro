@@ -57,15 +57,15 @@ public final class MaskExpressionResolver
         }
 
         return switch (assignment.operation()) {
-            case Call(String name, List<Reference> arguments) when name.equals("and") ->
+            case Call(String name, List<Reference> arguments, _) when name.equals("and") ->
                     new AndMask(arguments.stream()
                             .map(this::resolve)
                             .toList());
-            case Call(String name, List<Reference> arguments) when name.equals("or") ->
+            case Call(String name, List<Reference> arguments, _) when name.equals("or") ->
                     new OrMask(arguments.stream()
                             .map(this::resolve)
                             .toList());
-            case Call(String name, List<Reference> arguments) when name.equals("not") -> {
+            case Call(String name, List<Reference> arguments, _) when name.equals("not") -> {
                 checkArgument(arguments.size() == 1, "not requires 1 argument");
                 yield new NotMask(resolve(arguments.getFirst()));
             }

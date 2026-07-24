@@ -1260,9 +1260,12 @@ public final class ClickBenchHitsSupport
     {
         return switch (operation) {
             case Literal literal -> literal;
-            case Call call -> new Call(call.name(), call.arguments().stream()
-                    .map(reference -> remapReference(reference, variableOffset))
-                    .toList());
+            case Call call -> new Call(
+                    call.name(),
+                    call.arguments().stream()
+                            .map(reference -> remapReference(reference, variableOffset))
+                            .toList(),
+                    call.resolvedCall());
             default -> throw new IllegalArgumentException("Unsupported filter operation for remap: " + operation.getClass().getSimpleName());
         };
     }
