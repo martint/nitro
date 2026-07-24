@@ -23,6 +23,8 @@ import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
+import org.weakref.nitro.function.scalar.builtin.EqualI64;
+import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
 import org.weakref.nitro.operator.Streams;
@@ -101,6 +103,15 @@ public class TestScalarRegistry
                 .findFirst()
                 .orElseThrow();
         assertThat(provider).isInstanceOf(EqualF64Optimization.class);
+    }
+
+    @Test
+    void testLongMaskExecutionComesFromCapabilityMetadata()
+    {
+        ScalarDescriptor descriptor = new ScalarRegistry().register(EqualI64.class);
+
+        assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
+        assertThat(descriptor.capabilities()).anyMatch(EqualI64Optimization.class::isInstance);
     }
 
     @ScalarFunction(name = "add")

@@ -375,6 +375,36 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testProviderAuthoredLongMaskSupportsAllocatingAndInPlaceModes()
+    {
+        Variable one = new Variable(0);
+        Variable equal = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(equal, new Call("eq", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of());
+        PlanEvaluator evaluator = new PlanEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 1, 2, 2}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+        ReferenceMask predicate = new ReferenceMask(new Reference(equal, Stream.VALUES));
+
+        assertThat(evaluator.evaluate(predicate, Mask.all(4))).containsExactly(0);
+        assertThat(evaluator.evaluate(new NotMask(predicate), Mask.all(4))).containsExactly(2);
+
+        Mask inPlace = Mask.all(4);
+        assertThat(evaluator.evaluateInPlace(predicate, inPlace)).isSameAs(inPlace);
+        assertThat(inPlace).containsExactly(0);
+    }
+
+    @Test
     void testProviderAuthoredDoubleComparisonMaskPreservesNullSemantics()
     {
         Variable two = new Variable(0);

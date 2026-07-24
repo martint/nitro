@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.data.BinaryDispatchSupport;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;

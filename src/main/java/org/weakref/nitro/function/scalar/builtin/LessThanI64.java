@@ -15,14 +15,13 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.I64BinaryDispatch;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
-import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -34,7 +33,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "lt", capabilities = LessThanI64RangeOptimization.class)
 public final class LessThanI64
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
+        implements PrimitiveFunction
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanI64");
 
@@ -48,12 +47,6 @@ public final class LessThanI64
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
     {
         return PrimitiveFunction.valuesAlwaysNullsWhenRequested(requestedOutputStreams);
-    }
-
-    @Override
-    public Set<Stream> requiredMaskInputStreams(int inputIndex)
-    {
-        return PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS;
     }
 
     @Override
@@ -110,44 +103,6 @@ public final class LessThanI64
     private static void applyNulls(Vector leftNulls, Vector rightNulls, Mask mask, BooleanVector outputNulls)
     {
         VectorAccess.combineNullsOr(leftNulls, rightNulls, mask, outputNulls);
-    }
-
-    @Override
-    public MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply);
-    }
-
-    @Override
-    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
-    }
-
-    @Override
-    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, context.allocationContext("LessThanI64"), LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
-    }
-
-    @Override
-    public boolean requiresCompletedInputCompanionStreamsForMask()
-    {
-        // The comparison reads null/error streams directly (absent == all-false), so it does not need the
-        // evaluator to materialize an all-false companion stream per operand per batch (e.g. for a constant).
-        return false;
-    }
-
-    @Override
-    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return LongComparisonMaskSupport.tryEvaluateTrueMaskInPlace(inputs, mask, LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
-    }
-
-    @Override
-    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
-    {
-        return LongComparisonMaskSupport.tryEvaluateFalseMaskInPlace(inputs, mask, LessThanI64::apply, Mask.ComparisonOperator.LESS_THAN);
     }
 
     private static boolean apply(long leftValue, long rightValue)

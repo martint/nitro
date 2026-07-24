@@ -11,14 +11,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
-
-import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.Vector;
+package org.weakref.nitro.data;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-final class BinaryDispatchSupport
+public final class BinaryDispatchSupport
 {
     private BinaryDispatchSupport() {}
 

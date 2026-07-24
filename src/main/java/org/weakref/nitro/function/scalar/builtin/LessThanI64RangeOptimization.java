@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -38,7 +38,7 @@ import java.util.Optional;
  * semantics and the carrier-specific fused kernel; neither is part of the evaluator's vocabulary.
  */
 public final class LessThanI64RangeOptimization
-        implements RangeBoundProvider, RangeConstraint.Kernel, ProjectionCodeProvider
+        implements RangeBoundProvider, RangeConstraint.Kernel, MaskCodeProvider
 {
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)

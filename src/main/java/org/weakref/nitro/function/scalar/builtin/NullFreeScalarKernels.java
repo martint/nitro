@@ -16,6 +16,7 @@ package org.weakref.nitro.function.scalar.builtin;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I64BinaryDispatch;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;

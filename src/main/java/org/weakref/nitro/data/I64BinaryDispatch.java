@@ -11,41 +11,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
+package org.weakref.nitro.data;
 
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.data.VectorAccess;
-
-final class I64BinaryDispatch
+public final class I64BinaryDispatch
 {
     private I64BinaryDispatch() {}
 
     @FunctionalInterface
-    interface LongBinaryKernel
+    public interface LongBinaryKernel
     {
         long apply(long left, long right);
     }
 
     @FunctionalInterface
-    interface BooleanBinaryKernel
+    public interface BooleanBinaryKernel
     {
         boolean apply(long left, long right);
     }
 
     @FunctionalInterface
-    interface LongErrorKernel
+    public interface LongErrorKernel
     {
         void apply(long left, long right, long[] values, boolean[] errors, int position);
     }
 
     @FunctionalInterface
-    interface LongPairConsumer
+    public interface LongPairConsumer
     {
         void accept(long left, long right, int position);
     }
@@ -137,7 +128,7 @@ final class I64BinaryDispatch
         return new RleVector(counts, errorsOutput);
     }
 
-    static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
+    public static void forEachPair(Vector left, Vector right, Mask mask, LongPairConsumer consumer)
     {
         BinaryDispatchSupport.validateLength(left, mask);
         BinaryDispatchSupport.validateLength(right, mask);

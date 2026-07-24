@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
@@ -25,7 +25,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 
 public final class EqualI64Optimization
-        implements StaticLongEqualityProvider, ProjectionCodeProvider
+        implements StaticLongEqualityProvider, MaskCodeProvider
 {
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)

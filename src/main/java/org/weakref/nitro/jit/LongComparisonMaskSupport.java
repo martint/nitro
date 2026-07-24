@@ -11,11 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
+package org.weakref.nitro.jit;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64BinaryDispatch;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;

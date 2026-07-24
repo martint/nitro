@@ -211,6 +211,7 @@ class TestArchitectureDependencies
                 "FusedMultiProjection.java",
                 "FusedProjectionCompiler.java",
                 "InMemoryCompiler.java",
+                "LongComparisonMaskSupport.java",
                 "ProjectionMaskCompiler.java",
                 "ProjectionProgramBuilder.java");
     }

@@ -1400,6 +1400,15 @@ public final class PlanEvaluator
 
     private MaskOutcome tryEvaluatePrimitiveMaskOutcome(Reference reference, Mask mask)
     {
+        CompiledPreboundMask compiled = compiledPreboundMask(reference);
+        if (compiled != null) {
+            prepareCompiledMaskInputs(compiled, mask);
+            MaskOutcome outcome = compiled.compiled().evaluateOutcome(
+                    compiled.inputs(), mask, executionContext, allocationContext);
+            if (outcome != null) {
+                return applyExcludedOutcomeComponents(compiled, outcome, mask);
+            }
+        }
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
         if (invocation == null) {
             return null;
@@ -1412,6 +1421,19 @@ public final class PlanEvaluator
         Mask substringInSetMask = tryEvaluateSubstringInSetMask(reference, mask, selectTrue);
         if (substringInSetMask != null) {
             return substringInSetMask;
+        }
+
+        CompiledPreboundMask compiled = compiledPreboundMask(reference);
+        if (compiled != null) {
+            prepareCompiledMaskInputs(compiled, mask);
+            Mask result = compiled.compiled().evaluateMask(
+                    compiled.inputs(), mask, selectTrue, executionContext, allocationContext);
+            if (result != null) {
+                for (Reference component : compiled.excludedComponents()) {
+                    excludeComponent(component, result);
+                }
+                return result;
+            }
         }
 
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
@@ -1456,11 +1478,7 @@ public final class PlanEvaluator
             return null;
         }
         if (preboundMask instanceof CompiledPreboundMask compiled) {
-            compiled.inputs().clear();
-            for (Reference argument : compiled.arguments()) {
-                compiled.inputs().add(evaluateArgument(
-                        argument, mask, PrimitiveFunction.VALUES_INPUT_STREAMS, true));
-            }
+            prepareCompiledMaskInputs(compiled, mask);
             if (!compiled.compiled().evaluate(compiled.inputs(), mask, selectTrue)) {
                 return null;
             }
@@ -1487,22 +1505,71 @@ public final class PlanEvaluator
                 : classifyFalseBooleanMask(values, null, null, mask);
     }
 
+    private CompiledPreboundMask compiledPreboundMask(Reference reference)
+    {
+        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
+            return null;
+        }
+        return preboundMasks.get(variable) instanceof CompiledPreboundMask compiled ? compiled : null;
+    }
+
+    private void prepareCompiledMaskInputs(CompiledPreboundMask compiled, Mask mask)
+    {
+        compiled.inputs().clear();
+        for (int index = 0; index < compiled.arguments().size(); index++) {
+            compiled.inputs().add(evaluateArgument(
+                    compiled.arguments().get(index),
+                    mask,
+                    compiled.compiled().requiredInputStreams(index),
+                    true));
+        }
+    }
+
     private void excludeComponent(Reference componentReference, Mask mask)
     {
         if (mask.none()) {
             return;
         }
+        Vector component = resolveAvailableComponent(componentReference, mask);
+        if (component == null) {
+            return;
+        }
+        retainComponentFalse(mask, component);
+    }
+
+    private MaskOutcome applyExcludedOutcomeComponents(
+            CompiledPreboundMask compiled,
+            MaskOutcome outcome,
+            Mask domain)
+    {
+        Mask errorMask = outcome.errorMask();
+        for (Reference componentReference : compiled.excludedComponents()) {
+            checkArgument(componentReference.stream() == Stream.ERRORS, "Unsupported compiled outcome exclusion: %s", componentReference.stream());
+            Vector component = resolveAvailableComponent(componentReference, domain);
+            if (component == null || VectorAccess.isAllFalseNulls(component)) {
+                continue;
+            }
+
+            Mask componentMask = classifyTrueBooleanMask(component, null, null, domain);
+            retainComponentFalse(outcome.trueMask(), component);
+            retainComponentFalse(outcome.nullMask(), component);
+            errorMask = errorMask.none()
+                    ? componentMask
+                    : allocator.unionMask(allocationContext, errorMask, componentMask);
+        }
+        return errorMask == outcome.errorMask()
+                ? outcome
+                : new MaskOutcome(outcome.trueMask(), outcome.nullMask(), errorMask);
+    }
+
+    private Vector resolveAvailableComponent(Reference componentReference, Mask mask)
+    {
         if (componentReference.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
             // VALUES was resolved immediately before this call. Sources that decode companion components together
             // can therefore hand back the already-resident component without a second reader or a temporary mask.
-            Vector available = input.resolve(componentReference, mask);
-            if (available == null) {
-                return;
-            }
-            retainComponentFalse(mask, available);
-            return;
+            return input.resolve(componentReference, mask);
         }
-        retainComponentFalse(mask, evaluate(componentReference, mask).get(componentReference.stream()));
+        return evaluateAvailableReference(componentReference, mask).getOrNull(componentReference.stream());
     }
 
     private static void retainComponentFalse(Mask mask, Vector component)
