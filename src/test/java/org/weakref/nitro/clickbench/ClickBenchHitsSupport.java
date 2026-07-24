@@ -22,7 +22,6 @@ import org.apache.parquet.io.LocalInputFile;
 import org.apache.parquet.io.LocalOutputFile;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
-import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -1146,9 +1145,9 @@ public final class ClickBenchHitsSupport
 
     private static FilterSpec and(FilterSpec first, FilterSpec second, FilterSpec... rest)
     {
-        FilterSpec result = combineBoolean("and", first, second);
+        FilterSpec result = combineAnd(first, second);
         for (FilterSpec filterSpec : rest) {
-            result = combineBoolean("and", result, filterSpec);
+            result = combineAnd(result, filterSpec);
         }
         return result;
     }
@@ -1222,21 +1221,29 @@ public final class ClickBenchHitsSupport
 
     private static FilterSpec trafficSourceIn(int inputIndex)
     {
-        return combineBoolean("or", equalTo(inputIndex, -1), equalTo(inputIndex, 6));
+        return combineOr(equalTo(inputIndex, -1), equalTo(inputIndex, 6));
     }
 
-    private static FilterSpec combineBoolean(String functionName, FilterSpec left, FilterSpec right)
+    private static FilterSpec combineAnd(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, true);
+    }
+
+    private static FilterSpec combineOr(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, false);
+    }
+
+    private static FilterSpec combineMasks(FilterSpec left, FilterSpec right, boolean conjunction)
     {
         FilterSpec remappedLeft = remap(left, 0);
         FilterSpec remappedRight = remap(right, maxVariableId(remappedLeft.plan()) + 1);
         java.util.ArrayList<Assignment> assignments = new java.util.ArrayList<>();
         assignments.addAll(remappedLeft.plan().assignments());
         assignments.addAll(remappedRight.plan().assignments());
-        MaskExpression predicate = switch (functionName) {
-            case "and" -> new AndMask(List.of(remappedLeft.predicate(), remappedRight.predicate()));
-            case "or" -> new OrMask(List.of(remappedLeft.predicate(), remappedRight.predicate()));
-            default -> throw new IllegalArgumentException("Unsupported filter composition: " + functionName);
-        };
+        MaskExpression predicate = conjunction
+                ? new AndMask(List.of(remappedLeft.predicate(), remappedRight.predicate()))
+                : new OrMask(List.of(remappedLeft.predicate(), remappedRight.predicate()));
         return new FilterSpec(new EvaluationPlan(assignments, List.of()), predicate);
     }
 
@@ -1381,9 +1388,5 @@ public final class ClickBenchHitsSupport
 
     private record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
     {
-        FilterSpec
-        {
-            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
-        }
     }
 }

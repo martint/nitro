@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.tpch;
 
-import org.weakref.nitro.LegacyLogicalMaskAdapter;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
@@ -42,12 +41,15 @@ import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
+import org.weakref.nitro.operator.evaluator.ir.NotMask;
+import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
@@ -634,7 +636,7 @@ final class TpchParquetSupport
             int offset = maxVariableId(assignments) + 1;
             List<Assignment> remapped = remap(branch.plan().assignments(), offset);
             assignments.addAll(remapped);
-            branchPredicates.add(new Reference(remapped.getLast().output(), Stream.VALUES));
+            branchPredicates.add(remap(branch.materializedValue(), offset));
         }
 
         Variable zero = new Variable(maxVariableId(assignments) + 1);
@@ -686,7 +688,7 @@ final class TpchParquetSupport
     {
         FilterSpec result = first;
         for (FilterSpec spec : rest) {
-            result = combineBoolean("or", result, spec);
+            result = combineOr(result, spec);
         }
         return result;
     }
@@ -1208,8 +1210,6 @@ final class TpchParquetSupport
 
     private static FilterSpec notLikeUtf8(int inputIndex, String pattern)
     {
-        // The negation lives in the VALUE stream (a "not" call), not a NotMask, so the spec composes
-        // through the boolean combinators (combineBoolean reads the last assignment as the predicate).
         Variable literal = new Variable(0);
         Variable like = new Variable(1);
         Variable result = new Variable(2);
@@ -1220,7 +1220,10 @@ final class TpchParquetSupport
                         new Reference(literal, Stream.VALUES))), AllMask.ALL),
                 new Assignment(result, new Call("not", List.of(
                         new Reference(like, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                new NotMask(new ReferenceMask(new Reference(like, Stream.VALUES))),
+                new Reference(result, Stream.VALUES));
     }
 
     private static FilterSpec notEqualUtf8(int inputIndex, String constant)
@@ -1235,7 +1238,10 @@ final class TpchParquetSupport
                         new Reference(literal, Stream.VALUES))), AllMask.ALL),
                 new Assignment(result, new Call("not", List.of(
                         new Reference(equals, Stream.VALUES))), AllMask.ALL)), List.of());
-        return new FilterSpec(plan, new ReferenceMask(new Reference(result, Stream.VALUES)));
+        return new FilterSpec(
+                plan,
+                new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))),
+                new Reference(result, Stream.VALUES));
     }
 
     private static FilterSpec inI64(int inputIndex, List<Long> values)
@@ -1243,7 +1249,7 @@ final class TpchParquetSupport
         FilterSpec result = null;
         for (long value : values) {
             FilterSpec equals = comparison("eq", inputIndex, new Literal(value));
-            result = result == null ? equals : combineBoolean("or", result, equals);
+            result = result == null ? equals : combineOr(result, equals);
         }
         return result;
     }
@@ -1738,11 +1744,19 @@ final class TpchParquetSupport
         return new FilterOperator(source, filterSpec.plan(), primitiveRegistry, filterSpec.predicate(), allocator);
     }
 
-    record FilterSpec(EvaluationPlan plan, MaskExpression predicate)
+    record FilterSpec(EvaluationPlan plan, MaskExpression predicate, Reference materializedValue)
     {
-        FilterSpec
+        FilterSpec(EvaluationPlan plan, MaskExpression predicate)
         {
-            predicate = LegacyLogicalMaskAdapter.resolve(plan, predicate);
+            this(plan, predicate, materializedReference(predicate));
+        }
+
+        private static Reference materializedReference(MaskExpression predicate)
+        {
+            if (predicate instanceof ReferenceMask(Reference reference)) {
+                return reference;
+            }
+            throw new IllegalArgumentException("A composite filter predicate requires an explicit materialized value");
         }
     }
 
@@ -1785,22 +1799,41 @@ final class TpchParquetSupport
     {
         FilterSpec result = first;
         for (FilterSpec spec : rest) {
-            result = combineBoolean("and", result, spec);
+            result = combineAnd(result, spec);
         }
         return result;
     }
 
-    private static FilterSpec combineBoolean(String functionName, FilterSpec left, FilterSpec right)
+    private static FilterSpec combineAnd(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, true);
+    }
+
+    private static FilterSpec combineOr(FilterSpec left, FilterSpec right)
+    {
+        return combineMasks(left, right, false);
+    }
+
+    private static FilterSpec combineMasks(FilterSpec left, FilterSpec right, boolean conjunction)
     {
         int rightOffset = maxVariableId(left.plan().assignments()) + 1;
         List<Assignment> assignments = new ArrayList<>(left.plan().assignments());
         assignments.addAll(remap(right.plan().assignments(), rightOffset));
-
+        Reference leftValue = left.materializedValue();
+        Reference rightValue = remap(right.materializedValue(), rightOffset);
         Variable result = new Variable(maxVariableId(assignments) + 1);
-        Reference leftReference = new Reference(left.plan().assignments().getLast().output(), Stream.VALUES);
-        Reference rightReference = new Reference(new Variable(right.plan().assignments().getLast().output().id() + rightOffset), Stream.VALUES);
-        assignments.add(new Assignment(result, new Call(functionName, List.of(leftReference, rightReference)), AllMask.ALL));
-        return new FilterSpec(new EvaluationPlan(assignments, List.of()), new ReferenceMask(new Reference(result, Stream.VALUES)));
+        assignments.add(new Assignment(
+                result,
+                new Call(conjunction ? "and" : "or", List.of(leftValue, rightValue)),
+                AllMask.ALL));
+        MaskExpression rightPredicate = remap(right.predicate(), rightOffset);
+        MaskExpression predicate = conjunction
+                ? new AndMask(List.of(left.predicate(), rightPredicate))
+                : new OrMask(List.of(left.predicate(), rightPredicate));
+        return new FilterSpec(
+                new EvaluationPlan(assignments, List.of()),
+                predicate,
+                new Reference(result, Stream.VALUES));
     }
 
     private static List<Assignment> remap(List<Assignment> assignments, int variableOffset)
@@ -1809,7 +1842,7 @@ final class TpchParquetSupport
                 .map(assignment -> new Assignment(
                         new Variable(assignment.output().id() + variableOffset),
                         remap(assignment.operation(), variableOffset),
-                        assignment.mask()))
+                        remap(assignment.mask(), variableOffset)))
                 .toList();
     }
 
@@ -1834,6 +1867,21 @@ final class TpchParquetSupport
             case Input ignored -> reference;
             case Variable variable -> new Reference(new Variable(variable.id() + variableOffset), reference.stream());
             default -> reference;
+        };
+    }
+
+    private static MaskExpression remap(MaskExpression expression, int variableOffset)
+    {
+        return switch (expression) {
+            case AllMask _ -> expression;
+            case ReferenceMask reference -> new ReferenceMask(remap(reference.reference(), variableOffset));
+            case NotMask not -> new NotMask(remap(not.source(), variableOffset));
+            case AndMask and -> new AndMask(and.terms().stream()
+                    .map(term -> remap(term, variableOffset))
+                    .toList());
+            case OrMask or -> new OrMask(or.terms().stream()
+                    .map(term -> remap(term, variableOffset))
+                    .toList());
         };
     }
 

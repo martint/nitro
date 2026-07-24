@@ -104,6 +104,27 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testMigratedHarnessesCarryFilterStructureExplicitly()
+    {
+        String tpch = read(Path.of("src/test/java/org/weakref/nitro/tpch/TpchParquetSupport.java"));
+        String clickBench = read(Path.of("src/test/java/org/weakref/nitro/clickbench/ClickBenchHitsSupport.java"));
+
+        assertThat(tpch)
+                .doesNotContain("LegacyLogicalMaskAdapter")
+                .doesNotContain("combineBoolean(")
+                .doesNotContain("remapped.getLast().output()");
+        assertThat(tpch)
+                .as("materialized boolean values may use registry calls, but filter control flow must be explicit")
+                .contains("new AndMask(")
+                .contains("new OrMask(")
+                .contains("new NotMask(")
+                .contains("branch.materializedValue()");
+        assertThat(clickBench)
+                .doesNotContain("LegacyLogicalMaskAdapter")
+                .doesNotContain("combineBoolean(");
+    }
+
+    @Test
     void testPrimitivePoolsAreExplicitlyOwned()
             throws IOException
     {
