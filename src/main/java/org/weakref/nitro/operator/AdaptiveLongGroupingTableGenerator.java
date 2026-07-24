@@ -42,8 +42,8 @@ final class AdaptiveLongGroupingTableGenerator
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_LONG_ARRAY_2D = CD_LONG_ARRAY.arrayType();
     private static final ClassDesc CD_BYTE_ARRAY = CD_byte.arrayType();
-    private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.function.scalar.builtin.VectorAccess$LongValues");
-    private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.function.scalar.builtin.VectorAccess$BooleanValues");
+    private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
+    private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_LONG_VALUES_ARRAY = CD_LONG_VALUES.arrayType();
     private static final ClassDesc CD_BOOLEAN_VALUES_ARRAY = CD_BOOLEAN_VALUES.arrayType();
 

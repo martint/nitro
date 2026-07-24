@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.jit.FusedProjectionCompiler;
+
 /**
  * Engine-owned generated operator kernels.
  *
@@ -22,6 +24,7 @@ package org.weakref.nitro.operator;
 public final class OperatorCodeGenerationResources
         implements AutoCloseable
 {
+    private final FusedProjectionCompiler fusedProjection = new FusedProjectionCompiler();
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
     private final MultiLongGroupingTableGenerator multiLongGrouping = new MultiLongGroupingTableGenerator();
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
@@ -29,6 +32,12 @@ public final class OperatorCodeGenerationResources
     private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
     private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
     private boolean closed;
+
+    FusedProjectionCompiler fusedProjection()
+    {
+        checkOpen();
+        return fusedProjection;
+    }
 
     FusedGroupingAggregationKernelGenerator fusedGrouping()
     {
@@ -73,6 +82,7 @@ public final class OperatorCodeGenerationResources
             return;
         }
         closed = true;
+        fusedProjection.close();
         fusedGrouping.close();
         multiLongGrouping.close();
         adaptiveLongGrouping.close();

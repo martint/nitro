@@ -41,8 +41,8 @@ final class DictionaryHashBatchKernelGenerator
             Math.max(1, Integer.getInteger("nitro.group.generatedDictionaryHashProbeTileRows", 72));
 
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryHashBatchKernel");
-    private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.function.scalar.builtin.VectorAccess$BooleanValues");
-    private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.function.scalar.builtin.VectorAccess$LongValues");
+    private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
+    private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
     private static final ClassDesc CD_TABLE = ClassDesc.of("org.weakref.nitro.operator.FlatGroupingTable");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
     private static final ClassDesc CD_LONG_BOX = ClassDesc.of("java.lang.Long");

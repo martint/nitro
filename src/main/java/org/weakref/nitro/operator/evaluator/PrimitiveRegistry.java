@@ -14,10 +14,12 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.core.function.ResolvedCall;
+import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
@@ -55,5 +57,20 @@ public final class PrimitiveRegistry
         PrimitiveFunction function = functions.get(name);
         checkArgument(function != null, "Unknown primitive function: %s", name);
         return function;
+    }
+
+    public Optional<ProjectionCodeProvider> projectionCodeProvider(String name)
+    {
+        PrimitiveFunction function = functions.get(name);
+        return function instanceof ProjectionCodeProvider provider ? Optional.of(provider) : Optional.empty();
+    }
+
+    public Optional<ProjectionCodeProvider> projectionCodeProvider(ResolvedCall call)
+    {
+        requireNonNull(call, "call is null");
+        if (!(call.invocation() instanceof PrimitiveInvocationBinding binding)) {
+            return Optional.empty();
+        }
+        return binding.function() instanceof ProjectionCodeProvider provider ? Optional.of(provider) : Optional.empty();
     }
 }

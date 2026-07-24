@@ -24,7 +24,7 @@ public class BooleanVector
     // Reset to null on clearForReuse since the producer may write new values after reuse. Producers that
     // directly mutate {@link #values()} after publication invalidate this cache; in the Nitro codebase
     // BooleanVector instances are treated as immutable after they're exposed via {@link Streams}, so this
-    // is safe. See {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}.
+    // is safe. See {@link VectorAccess#isAllFalseNulls}.
     private Boolean isAllFalseCache;
     private Boolean isAllTrueCache;
 
@@ -95,7 +95,7 @@ public class BooleanVector
      * Nitro treats a {@link BooleanVector} as immutable once it has been published through
      * {@link org.weakref.nitro.operator.Streams}; this lets producers of a known all-false stream make
      * {@link #isAllFalse()} (and hence
-     * {@link org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}) O(1).
+     * {@link VectorAccess#isAllFalseNulls}) O(1).
      */
     public void markAllFalse()
     {

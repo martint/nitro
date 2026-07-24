@@ -32,7 +32,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
@@ -3111,7 +3111,7 @@ public class HashJoinOperator
      * O(1), no per-position id array -- keeping the stream present (its presence is a fixed schema
      * contract, so it cannot simply be dropped) while avoiding the dictionary wrap. Downstream null
      * propagation recognizes the all-false RLE shape (see {@link
-     * org.weakref.nitro.function.scalar.builtin.VectorAccess#isAllFalseNulls}). Otherwise the stream is
+     * VectorAccess#isAllFalseNulls}). Otherwise the stream is
      * wrapped as a dictionary over the matched logical positions, like the values alongside it.
      */
     private Vector wrapInnerSideStream(Vector source)

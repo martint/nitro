@@ -180,7 +180,25 @@ class TestArchitectureDependencies
         assertThat(files).containsExactlyInAnyOrder(
                 "FusedMultiProjection.java",
                 "FusedProjectionCompiler.java",
-                "InMemoryCompiler.java");
+                "InMemoryCompiler.java",
+                "ProjectionProgramBuilder.java");
+    }
+
+    @Test
+    void testProjectionCompilerHasNoFunctionVocabulary()
+    {
+        Path compiler = MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java");
+        String source = read(compiler);
+
+        assertThat(source)
+                .doesNotContain("function.scalar.builtin")
+                .doesNotContain("BuiltinProjectionPrograms")
+                .doesNotContain("validateInstructionShape")
+                .doesNotContain("call.name().equals")
+                .doesNotContain("switch (call.name())");
+        assertThat(MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin/BuiltinProjectionPrograms.java"))
+                .as("projection lowering belongs to the dynamically registered provider, not a central catalog")
+                .doesNotExist();
     }
 
     @Test
@@ -225,7 +243,8 @@ class TestArchitectureDependencies
                 MAIN_SOURCES.resolve("org/weakref/nitro/operator/AdaptiveLongGroupingTableGenerator.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/operator/DictionaryHashBatchKernelGenerator.java"),
                 MAIN_SOURCES.resolve("org/weakref/nitro/operator/MixedComposite3GroupingKernelGenerator.java"),
-                MAIN_SOURCES.resolve("org/weakref/nitro/operator/DictionaryRecordEqualityKernelGenerator.java"));
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/DictionaryRecordEqualityKernelGenerator.java"),
+                MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java"));
 
         assertThat(generators.stream().map(TestArchitectureDependencies::read))
                 .as("generated operator kernels belong to OperatorCodeGenerationResources")

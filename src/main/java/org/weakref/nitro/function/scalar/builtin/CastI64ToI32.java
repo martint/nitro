@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;

@@ -14,9 +14,21 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.Assignment;
+import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
+import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
 
@@ -25,6 +37,45 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestOperatorCodeGenerationResources
 {
+    @Test
+    void testProjectionCompilerIsOwnerScoped()
+    {
+        OperatorCodeGenerationResources first = new OperatorCodeGenerationResources();
+        OperatorCodeGenerationResources second = new OperatorCodeGenerationResources();
+        PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
+        Variable one = new Variable(0);
+        Variable incremented = new Variable(1);
+        Variable doubled = new Variable(2);
+        Reference output = new Reference(doubled, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1.0), AllMask.ALL),
+                        new Assignment(incremented, new Call("add_f64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(doubled, new Call("multiply_f64", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(output));
+
+        FusedProjectionCompiler firstCompiler = first.fusedProjection();
+        Class<?> firstKernel = firstCompiler.tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
+        Class<?> reusedKernel = firstCompiler.tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
+        Class<?> isolatedKernel = second.fusedProjection().tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
+
+        assertThat(reusedKernel).isSameAs(firstKernel);
+        assertThat(isolatedKernel).isNotSameAs(firstKernel);
+
+        first.close();
+        assertThatThrownBy(first::fusedProjection)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Operator code-generation resources are closed");
+        assertThatThrownBy(() -> firstCompiler.tryCompile(plan, registry, List.of(output)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Fused projection compiler is closed");
+        second.close();
+    }
+
     @Test
     void testGroupingGeneratorsAreOwnerScoped()
     {

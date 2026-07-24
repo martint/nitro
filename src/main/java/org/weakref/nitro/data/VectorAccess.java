@@ -11,19 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function.scalar.builtin;
-
-import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.BinaryVector;
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.ConcatenatedBooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.F64Vector;
-import org.weakref.nitro.data.I32Vector;
-import org.weakref.nitro.data.I64Vector;
-import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.RleVector;
-import org.weakref.nitro.data.Vector;
+package org.weakref.nitro.data;
 
 public final class VectorAccess
 {

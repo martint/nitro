@@ -15,7 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AccumulatorFusion;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;

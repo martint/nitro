@@ -13,6 +13,20 @@
  */
 package org.weakref.nitro.jit;
 
+import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder.ValueType;
+import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
+import org.weakref.nitro.core.function.projection.ProjectionProgram;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanConstant;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.BooleanNot;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Conditional;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Expression;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -40,36 +54,35 @@ import java.util.concurrent.atomic.AtomicInteger;
  * interpreter pays walking a subtree and invoking one atomic batch primitive per node.
  * <p>
  * Values are computed with three-valued (value, is-null) pairs so nullable inputs are handled without a separate
- * boolean-vector pipeline. Scope: integer inputs (read as {@code long}, I32 widened once), double inputs (read as
- * {@code double}), and UTF-8 input-to-literal categorical equality; the {@code long}/{@code double} arithmetic,
- * comparison, boolean and {@code if_i64}/{@code if_f64} operator set; and {@code long}-typed (I64) or
- * {@code double}-typed (F64) outputs. Any output outside that set is left to the interpreter, so this is a
- * speedup-only substitution behind the same ABI.
+ * boolean-vector pipeline. Functions dynamically registered in the primitive registry may provide an opaque physical
+ * projection program through the projection-code SPI. This compiler only composes and renders those programs; it has
+ * no function-name, function-arity, or function-specific null-semantics vocabulary. Programs outside the supported
+ * physical representation are left to the interpreter, so this is a speedup-only substitution behind the same ABI.
  */
 public final class FusedProjectionCompiler
+        implements AutoCloseable
 {
     private static final String PACKAGE = "org.weakref.nitro.jit.generated";
-    private static final boolean COMPILE_UTF8_IN =
-            Boolean.parseBoolean(System.getProperty("nitro.project.compileUtf8In", "true"));
     private static final boolean POOLED_DICTIONARY_SCRATCH =
             Boolean.parseBoolean(System.getProperty("nitro.project.pooledDictionaryScratch", "true"));
     private static final boolean MAPPED_DICTIONARY_DOUBLE_INPUTS =
             Boolean.parseBoolean(System.getProperty("nitro.project.mappedDictionaryDoubleInputs", "true"));
-    private static final AtomicInteger COUNTER = new AtomicInteger();
+    private final AtomicInteger counter = new AtomicInteger();
     // Kernels are stateless, so identical projection shapes share one compiled class (amortizing javac cost across
     // operators / benchmark iterations). Keyed by the fully-rendered source with a stable placeholder class name.
-    private static final Map<String, FusedMultiProjection> CACHE = new ConcurrentHashMap<>();
+    private final Map<String, FusedMultiProjection> cache = new ConcurrentHashMap<>();
+    private boolean closed;
 
-    private FusedProjectionCompiler() {}
+    public FusedProjectionCompiler() {}
 
-    private enum ValueType { LONG, DOUBLE, BOOL, UTF8 }
+    private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8 }
 
     private sealed interface Operand
             permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant, Utf8Constant {}
 
-    private record ColumnOperand(int slot, ValueType type) implements Operand {}
+    private record ColumnOperand(int slot, PhysicalType type) implements Operand {}
 
-    private record StepOperand(int stepId, ValueType type) implements Operand {}
+    private record StepOperand(int stepId, PhysicalType type) implements Operand {}
 
     private record LongConstant(long value) implements Operand {}
 
@@ -80,10 +93,10 @@ public final class FusedProjectionCompiler
     private record Utf8Constant(String value) implements Operand {}
 
     /** One shared assignment in the fused program: {@code step<id> = op(operands)}. */
-    private record Step(int id, String op, List<Operand> operands, ValueType type) {}
+    private record Step(int id, Program program, List<Operand> operands, PhysicalType type) {}
 
     /** The compiled shape: the ordered source columns (with their Java type) to feed, the shared steps, the roots. */
-    private record Slice(List<Integer> columns, List<ValueType> columnTypes, List<Step> steps, List<Operand> roots) {}
+    private record Slice(List<Integer> columns, List<PhysicalType> columnTypes, List<Step> steps, List<Operand> roots) {}
 
     /** A fused multi-output kernel, the ordered source columns it expects, and the outputs it produces (in order). */
     public record CompiledMultiProjection(FusedMultiProjection kernel, List<Integer> columns, List<Reference> outputs) {}
@@ -94,8 +107,14 @@ public final class FusedProjectionCompiler
      * and it is worth fusing (its slice has at least two operations -- a single-op projection is left to the
      * interpreter, where fusion would only add call overhead without saving an intermediate).
      */
-    public static Optional<CompiledMultiProjection> tryCompile(EvaluationPlan plan, List<Reference> candidateOutputs)
+    public Optional<CompiledMultiProjection> tryCompile(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            List<Reference> candidateOutputs)
     {
+        if (closed) {
+            throw new IllegalStateException("Fused projection compiler is closed");
+        }
         Map<Integer, Assignment> assignments = new LinkedHashMap<>();
         for (Assignment assignment : plan.assignments()) {
             assignments.put(assignment.output().id(), assignment);
@@ -107,10 +126,10 @@ public final class FusedProjectionCompiler
                 continue;
             }
             try {
-                SliceBuilder trial = new SliceBuilder(assignments);
+                SliceBuilder trial = new SliceBuilder(assignments, primitiveRegistry);
                 Operand root = trial.operand(candidate, null);
-                ValueType rootType = operandType(root);
-                if ((rootType == ValueType.LONG || rootType == ValueType.DOUBLE) && worthFusing(trial.steps())) {
+                PhysicalType rootType = operandType(root);
+                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE) && worthFusing(trial.steps())) {
                     fusible.add(candidate);
                 }
             }
@@ -122,15 +141,15 @@ public final class FusedProjectionCompiler
             return Optional.empty();
         }
 
-        SliceBuilder combined = new SliceBuilder(assignments);
+        SliceBuilder combined = new SliceBuilder(assignments, primitiveRegistry);
         List<Operand> roots = new ArrayList<>();
         for (Reference output : fusible) {
             roots.add(combined.operand(output, null));
         }
         Slice slice = new Slice(combined.columns(), combined.columnTypes(), combined.steps(), roots);
 
-        FusedMultiProjection kernel = CACHE.computeIfAbsent(render(slice, "K"), ignored -> {
-            String simpleName = "FusedProj_" + COUNTER.incrementAndGet();
+        FusedMultiProjection kernel = cache.computeIfAbsent(render(slice, "K"), ignored -> {
+            String simpleName = "FusedProj_" + counter.incrementAndGet();
             String source = render(slice, simpleName);
             try {
                 Class<?> compiled = InMemoryCompiler.compile(PACKAGE + "." + simpleName, source);
@@ -141,6 +160,16 @@ public final class FusedProjectionCompiler
             }
         });
         return Optional.of(new CompiledMultiProjection(kernel, List.copyOf(slice.columns()), List.copyOf(fusible)));
+    }
+
+    @Override
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        cache.clear();
     }
 
     private static boolean worthFusing(List<Step> steps)
@@ -164,16 +193,18 @@ public final class FusedProjectionCompiler
     private static final class SliceBuilder
     {
         private final Map<Integer, Assignment> assignments;
+        private final PrimitiveRegistry primitiveRegistry;
         private final List<Integer> columns = new ArrayList<>();
         private final Map<Integer, Integer> columnSlots = new LinkedHashMap<>();
-        private final Map<Integer, ValueType> columnTypeBySlot = new LinkedHashMap<>();
+        private final Map<Integer, PhysicalType> columnTypeBySlot = new LinkedHashMap<>();
         private final Map<Integer, Operand> variableSteps = new LinkedHashMap<>();
         private final List<Step> steps = new ArrayList<>();
         private final AtomicInteger nextStep = new AtomicInteger();
 
-        SliceBuilder(Map<Integer, Assignment> assignments)
+        SliceBuilder(Map<Integer, Assignment> assignments, PrimitiveRegistry primitiveRegistry)
         {
             this.assignments = assignments;
+            this.primitiveRegistry = primitiveRegistry;
         }
 
         List<Integer> columns()
@@ -181,9 +212,9 @@ public final class FusedProjectionCompiler
             return columns;
         }
 
-        List<ValueType> columnTypes()
+        List<PhysicalType> columnTypes()
         {
-            List<ValueType> types = new ArrayList<>(columns.size());
+            List<PhysicalType> types = new ArrayList<>(columns.size());
             for (int slot = 0; slot < columns.size(); slot++) {
                 types.add(columnTypeBySlot.get(slot));
             }
@@ -200,14 +231,14 @@ public final class FusedProjectionCompiler
          * root, whose type is whatever its operator produces). An input column is typed by its consumer; if two
          * consumers disagree on a column's type the slice is not fusible.
          */
-        Operand operand(Reference reference, ValueType expected)
+        Operand operand(Reference reference, PhysicalType expected)
         {
             if (reference.stream() != Stream.VALUES) {
                 throw new Unsupported();
             }
             Producer producer = reference.producer();
             if (producer instanceof Input input) {
-                if (expected == null || expected == ValueType.BOOL) {
+                if (expected == null || expected == PhysicalType.BOOL) {
                     // A raw column can feed a numeric or UTF-8 operator; bool-typed column input is out of scope.
                     throw new Unsupported();
                 }
@@ -215,7 +246,7 @@ public final class FusedProjectionCompiler
                     columns.add(index);
                     return columns.size() - 1;
                 });
-                ValueType existing = columnTypeBySlot.putIfAbsent(slot, expected);
+                PhysicalType existing = columnTypeBySlot.putIfAbsent(slot, expected);
                 if (existing != null && existing != expected) {
                     throw new Unsupported();
                 }
@@ -246,56 +277,47 @@ public final class FusedProjectionCompiler
                 return literalOperand(literal.value());
             }
             if (operation instanceof Call call) {
-                String op = call.name();
-                if (op.equals("in_utf8") && !COMPILE_UTF8_IN) {
-                    throw new Unsupported();
-                }
-                ValueType type = resultType(op);
-                List<ValueType> argTypes = op.equals("in_utf8")
-                        ? java.util.Collections.nCopies(call.arguments().size(), ValueType.UTF8)
-                        : argumentTypes(op);
-                if (call.arguments().size() != argTypes.size()) {
-                    throw new Unsupported();
+                ProjectionCodeProvider provider = (call.resolvedCall() == null
+                        ? primitiveRegistry.projectionCodeProvider(call.name())
+                        : primitiveRegistry.projectionCodeProvider(call.resolvedCall()))
+                        .orElseThrow(Unsupported::new);
+                ProjectionProgramBuilder builder = new ProjectionProgramBuilder();
+                List<ProjectionArgument> argumentShapes = call.arguments().stream()
+                        .map(this::projectionArgument)
+                        .toList();
+                ProjectionProgram generated = provider.generate(builder, argumentShapes)
+                        .orElseThrow(Unsupported::new);
+                Program program = builder.requireProgram(generated);
+                List<PhysicalType> argumentTypes = program.argumentTypes().stream()
+                        .map(FusedProjectionCompiler::physicalType)
+                        .toList();
+                if (call.arguments().size() != argumentTypes.size()) {
+                    throw new IllegalArgumentException("projection program signature does not match call arity");
                 }
                 List<Operand> operands = new ArrayList<>();
                 for (int index = 0; index < call.arguments().size(); index++) {
-                    operands.add(operand(call.arguments().get(index), argTypes.get(index)));
-                }
-                if (op.equals("eq_utf8") && !isUtf8ColumnLiteralEquality(operands)) {
-                    // Rendering deliberately supports categorical column-to-literal tests only. Reject other
-                    // syntactically valid UTF-8 equalities here so tryCompile cleanly falls back instead of failing
-                    // later while rendering an otherwise accepted slice.
-                    throw new Unsupported();
-                }
-                if (op.equals("in_utf8") && !isUtf8ColumnLiteralSet(operands)) {
-                    // The generated categorical dispatch is intentionally column-to-constant only. This covers the
-                    // common SQL IN-list shape while preserving the interpreter fallback for dynamic list members.
-                    throw new Unsupported();
+                    operands.add(operand(call.arguments().get(index), argumentTypes.get(index)));
                 }
                 int id = nextStep.getAndIncrement();
-                steps.add(new Step(id, op, operands, type));
-                return new StepOperand(id, type);
+                PhysicalType resultType = physicalType(program.value().type());
+                steps.add(new Step(id, program, operands, resultType));
+                return new StepOperand(id, resultType);
             }
             throw new Unsupported();
         }
 
-        private static boolean isUtf8ColumnLiteralEquality(List<Operand> operands)
+        private ProjectionArgument projectionArgument(Reference reference)
         {
-            return (operands.get(0) instanceof ColumnOperand && operands.get(1) instanceof Utf8Constant) ||
-                    (operands.get(1) instanceof ColumnOperand && operands.get(0) instanceof Utf8Constant);
-        }
-
-        private static boolean isUtf8ColumnLiteralSet(List<Operand> operands)
-        {
-            if (operands.size() < 2 || !(operands.getFirst() instanceof ColumnOperand)) {
-                return false;
+            if (reference.producer() instanceof Input) {
+                return ProjectionArgument.input();
             }
-            for (int index = 1; index < operands.size(); index++) {
-                if (!(operands.get(index) instanceof Utf8Constant)) {
-                    return false;
+            if (reference.producer() instanceof Variable variable) {
+                Assignment assignment = assignments.get(variable.id());
+                if (assignment != null && assignment.operation() instanceof Literal literal) {
+                    return ProjectionArgument.literal(literal.value());
                 }
             }
-            return true;
+            return ProjectionArgument.computed();
         }
 
         private static Operand literalOperand(Object value)
@@ -322,52 +344,31 @@ public final class FusedProjectionCompiler
         }
     }
 
-    private static ValueType resultType(String op)
+    private static PhysicalType physicalType(ValueType type)
     {
-        return switch (op) {
-            case "add", "subtract", "multiply", "if_i64" -> ValueType.LONG;
-            case "add_f64", "subtract_f64", "multiply_f64", "if_f64" -> ValueType.DOUBLE;
-            case "lt", "gt", "lte", "gte", "eq",
-                 "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64",
-                 "eq_utf8", "in_utf8", "and", "or", "not" -> ValueType.BOOL;
-            default -> throw new Unsupported();
+        return switch (type) {
+            case I64 -> PhysicalType.LONG;
+            case F64 -> PhysicalType.DOUBLE;
+            case BOOLEAN -> PhysicalType.BOOL;
+            case UTF8 -> PhysicalType.UTF8;
         };
     }
 
-    /** The operand types each operator requires, in order (also fixes its arity). */
-    private static List<ValueType> argumentTypes(String op)
-    {
-        return switch (op) {
-            case "add", "subtract", "multiply", "lt", "gt", "lte", "gte", "eq" -> List.of(ValueType.LONG, ValueType.LONG);
-            case "add_f64", "subtract_f64", "multiply_f64", "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64" ->
-                    List.of(ValueType.DOUBLE, ValueType.DOUBLE);
-            case "and", "or" -> List.of(ValueType.BOOL, ValueType.BOOL);
-            case "not" -> List.of(ValueType.BOOL);
-            case "eq_utf8" -> List.of(ValueType.UTF8, ValueType.UTF8);
-            case "if_i64" -> List.of(ValueType.BOOL, ValueType.LONG, ValueType.LONG);
-            case "if_f64" -> List.of(ValueType.BOOL, ValueType.DOUBLE, ValueType.DOUBLE);
-            default -> throw new Unsupported();
-        };
-    }
-
-    private static ValueType operandType(Operand operand)
+    private static PhysicalType operandType(Operand operand)
     {
         return switch (operand) {
             case ColumnOperand column -> column.type();
             case StepOperand step -> step.type();
-            case LongConstant ignored -> ValueType.LONG;
-            case DoubleConstant ignored -> ValueType.DOUBLE;
-            case BoolConstant ignored -> ValueType.BOOL;
-            case Utf8Constant ignored -> ValueType.UTF8;
+            case LongConstant ignored -> PhysicalType.LONG;
+            case DoubleConstant ignored -> PhysicalType.DOUBLE;
+            case BoolConstant ignored -> PhysicalType.BOOL;
+            case Utf8Constant ignored -> PhysicalType.UTF8;
         };
     }
 
     /**
-     * Whether an operand's value is provably non-null regardless of runtime data. Constants are non-null; a column may
-     * carry nulls (unknown at compile time); a step is non-null when its null-producing inputs are non-null -- notably
-     * {@code if_*} is non-null iff both branches are (the condition's nullity only steers which branch is chosen, and a
-     * null condition falls to the else branch). Matches the interpreter, which emits no NULLS stream for a null-free
-     * result so the consumer keeps its null-free fast path.
+     * Whether an operand's provider-supplied null program is provably false. This is a generic boolean possibility
+     * analysis over the physical expression graph; the compiler does not infer a function's null convention.
      */
     private static boolean alwaysNonNull(Operand operand, List<Step> steps)
     {
@@ -379,20 +380,82 @@ public final class FusedProjectionCompiler
             case ColumnOperand ignored -> false;
             case StepOperand stepOperand -> {
                 Step step = steps.get(stepOperand.stepId());
-                List<Operand> args = step.operands();
-                yield switch (step.op()) {
-                    case "if_i64", "if_f64" -> alwaysNonNull(args.get(1), steps) && alwaysNonNull(args.get(2), steps);
-                    default -> {
-                        for (Operand argument : args) {
-                            if (!alwaysNonNull(argument, steps)) {
-                                yield false;
-                            }
-                        }
-                        yield true;
-                    }
-                };
+                yield !truthPossibilities(step.program().isNull(), step.operands(), steps).canBeTrue();
             }
         };
+    }
+
+    private static TruthPossibilities truthPossibilities(
+            Expression expression,
+            List<Operand> operands,
+            List<Step> steps)
+    {
+        return switch (expression) {
+            case ArgumentNull argument ->
+                    alwaysNonNull(operands.get(argument.index()), steps)
+                            ? TruthPossibilities.FALSE
+                            : TruthPossibilities.BOTH;
+            case ArgumentValue argument -> {
+                Operand operand = operands.get(argument.index());
+                yield operand instanceof BoolConstant constant
+                        ? TruthPossibilities.of(constant.value())
+                        : TruthPossibilities.BOTH;
+            }
+            case BooleanConstant constant -> TruthPossibilities.of(constant.value());
+            case Binary binary -> switch (binary.operation()) {
+                case BOOLEAN_AND -> truthPossibilities(binary.left(), operands, steps)
+                        .and(truthPossibilities(binary.right(), operands, steps));
+                case BOOLEAN_OR -> truthPossibilities(binary.left(), operands, steps)
+                        .or(truthPossibilities(binary.right(), operands, steps));
+                case LESS_THAN, GREATER_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN_OR_EQUAL, EQUAL ->
+                        TruthPossibilities.BOTH;
+                case ADD, SUBTRACT, MULTIPLY ->
+                        throw new IllegalArgumentException("numeric expression used as a boolean");
+            };
+            case BooleanNot not -> truthPossibilities(not.value(), operands, steps).not();
+            case Conditional conditional -> {
+                TruthPossibilities condition = truthPossibilities(conditional.condition(), operands, steps);
+                TruthPossibilities whenTrue = truthPossibilities(conditional.whenTrue(), operands, steps);
+                TruthPossibilities whenFalse = truthPossibilities(conditional.whenFalse(), operands, steps);
+                yield new TruthPossibilities(
+                        (condition.canBeTrue() && whenTrue.canBeTrue()) ||
+                                (condition.canBeFalse() && whenFalse.canBeTrue()),
+                        (condition.canBeTrue() && whenTrue.canBeFalse()) ||
+                                (condition.canBeFalse() && whenFalse.canBeFalse()));
+            }
+            case Utf8Equal _ -> TruthPossibilities.BOTH;
+        };
+    }
+
+    private record TruthPossibilities(boolean canBeTrue, boolean canBeFalse)
+    {
+        private static final TruthPossibilities TRUE = new TruthPossibilities(true, false);
+        private static final TruthPossibilities FALSE = new TruthPossibilities(false, true);
+        private static final TruthPossibilities BOTH = new TruthPossibilities(true, true);
+
+        static TruthPossibilities of(boolean value)
+        {
+            return value ? TRUE : FALSE;
+        }
+
+        TruthPossibilities and(TruthPossibilities other)
+        {
+            return new TruthPossibilities(
+                    canBeTrue && other.canBeTrue,
+                    canBeFalse || other.canBeFalse);
+        }
+
+        TruthPossibilities or(TruthPossibilities other)
+        {
+            return new TruthPossibilities(
+                    canBeTrue || other.canBeTrue,
+                    canBeFalse && other.canBeFalse);
+        }
+
+        TruthPossibilities not()
+        {
+            return new TruthPossibilities(canBeFalse, canBeTrue);
+        }
     }
 
     // ---- code generation -------------------------------------------------------------------------------------------
@@ -401,7 +464,7 @@ public final class FusedProjectionCompiler
     {
         int outputCount = slice.roots().size();
         boolean[] nullable = new boolean[outputCount];
-        ValueType[] outputType = new ValueType[outputCount];
+        PhysicalType[] outputType = new PhysicalType[outputCount];
         for (int output = 0; output < outputCount; output++) {
             nullable[output] = !alwaysNonNull(slice.roots().get(output), slice.steps());
             outputType[output] = operandType(slice.roots().get(output));
@@ -441,7 +504,7 @@ public final class FusedProjectionCompiler
         if (POOLED_DICTIONARY_SCRATCH) {
             out.append("    var scratchContext = context.allocationContext(\"FusedProjectionScratch\");\n");
             for (int slot = 0; slot < slice.columns().size(); slot++) {
-                if (slice.columnTypes().get(slot) == ValueType.DOUBLE) {
+                if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE) {
                     if (MAPPED_DICTIONARY_DOUBLE_INPUTS) {
                         out.append("    I32Vector scratchIds").append(slot).append(" = null;\n");
                     }
@@ -449,7 +512,7 @@ public final class FusedProjectionCompiler
                         out.append("    F64Vector scratchValues").append(slot).append(" = null;\n");
                     }
                 }
-                else if (slice.columnTypes().get(slot) != ValueType.UTF8) {
+                else if (slice.columnTypes().get(slot) != PhysicalType.UTF8) {
                     out.append("    I64Vector scratchValues").append(slot).append(" = null;\n");
                 }
                 out.append("    BooleanVector scratchNulls").append(slot).append(" = null;\n");
@@ -460,10 +523,10 @@ public final class FusedProjectionCompiler
         // Hoist each source column to a monomorphic long[]/double[] view once plus a nulls[]. If any input is an
         // unsupported flat layout, bail to null so the caller runs the interpreter for this batch.
         for (int slot = 0; slot < slice.columns().size(); slot++) {
-            if (slice.columnTypes().get(slot) == ValueType.DOUBLE) {
+            if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE) {
                 appendDoubleColumn(out, slot);
             }
-            else if (slice.columnTypes().get(slot) == ValueType.UTF8) {
+            else if (slice.columnTypes().get(slot) == PhysicalType.UTF8) {
                 appendUtf8Column(out, slot);
             }
             else {
@@ -474,7 +537,7 @@ public final class FusedProjectionCompiler
             // into a per-row boolean[] so the loop stays monomorphic; bail on any other layout.
             out.append("    Vector nv").append(slot).append(" = inputs.get(").append(slot).append(").getOrNull(N);\n");
             out.append("    boolean[] nul").append(slot).append(";\n");
-            out.append("    if (org.weakref.nitro.function.scalar.builtin.VectorAccess.isAllFalseNulls(nv").append(slot)
+            out.append("    if (org.weakref.nitro.data.VectorAccess.isAllFalseNulls(nv").append(slot)
                     .append(")) { nul").append(slot).append(" = null; }\n");
             out.append("    else if (nv").append(slot).append(" instanceof BooleanVector bv").append(slot)
                     .append(") { nul").append(slot).append(" = bv").append(slot).append(".values(); }\n");
@@ -490,7 +553,7 @@ public final class FusedProjectionCompiler
                     .append(POOLED_DICTIONARY_SCRATCH
                             ? " = (scratchNulls" + slot + " = context.allocator().allocatePooled(scratchContext, BooleanVector.class, nlen, false, BooleanVector.class, org.weakref.nitro.data.Allocator.growthCapacity(nlen), BooleanVector::new)).values();"
                             : " = new boolean[nlen];")
-                    .append(" var na = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nv")
+                    .append(" var na = org.weakref.nitro.data.VectorAccess.booleanValues(nv")
                     .append(slot).append("); for (int j = 0; j < nlen; j++) { nul").append(slot)
                     .append("[j] = na.value(j); } }\n");
         }
@@ -498,7 +561,7 @@ public final class FusedProjectionCompiler
         out.append("    int required = mask.maxPosition() + 1;\n");
         out.append("    boolean wantNulls = requestedStreams.contains(N);\n");
         for (int output = 0; output < outputCount; output++) {
-            if (outputType[output] == ValueType.DOUBLE) {
+            if (outputType[output] == PhysicalType.DOUBLE) {
                 out.append("    F64Vector out").append(output).append(" = context.allocator().allocate("
                         + "context.allocationContext(\"FusedProjection\"), F64Vector.class, required, F64Vector::new);\n");
                 out.append("    double[] o").append(output).append(" = out").append(output).append(".values();\n");
@@ -539,8 +602,8 @@ public final class FusedProjectionCompiler
         if (POOLED_DICTIONARY_SCRATCH) {
             out.append("    } finally {\n");
             for (int slot = 0; slot < slice.columns().size(); slot++) {
-                if (slice.columnTypes().get(slot) != ValueType.UTF8) {
-                    if (slice.columnTypes().get(slot) == ValueType.DOUBLE && MAPPED_DICTIONARY_DOUBLE_INPUTS) {
+                if (slice.columnTypes().get(slot) != PhysicalType.UTF8) {
+                    if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE && MAPPED_DICTIONARY_DOUBLE_INPUTS) {
                         out.append("      if (scratchIds").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchIds").append(slot).append("); }\n");
                     }
                     else {
@@ -577,7 +640,7 @@ public final class FusedProjectionCompiler
                         ? " = (scratchValues" + slot + " = context.allocator().allocatePooled(scratchContext, I64Vector.class, len, false, I64Vector.class, org.weakref.nitro.data.Allocator.growthCapacity(len), I64Vector::new)).values();"
                         : " = new long[len];")
                 .append(" var a = ")
-                .append("org.weakref.nitro.function.scalar.builtin.VectorAccess.longValues(vals").append(slot)
+                .append("org.weakref.nitro.data.VectorAccess.longValues(vals").append(slot)
                 .append("); for (int j = 0; j < len; j++) { col").append(slot).append("[j] = a.value(j); } }\n");
         out.append("    else { return null; }\n");
     }
@@ -620,8 +683,8 @@ public final class FusedProjectionCompiler
     private static void appendUtf8Column(StringBuilder out, int slot)
     {
         out.append("    Vector vals").append(slot).append(" = inputs.get(").append(slot).append(").values();\n");
-        out.append("    org.weakref.nitro.function.scalar.builtin.VectorAccess.BinaryValues bin").append(slot)
-                .append("; try { bin").append(slot).append(" = org.weakref.nitro.function.scalar.builtin.VectorAccess.binaryValues(vals")
+        out.append("    org.weakref.nitro.data.VectorAccess.BinaryValues bin").append(slot)
+                .append("; try { bin").append(slot).append(" = org.weakref.nitro.data.VectorAccess.binaryValues(vals")
                 .append(slot).append("); } catch (IllegalArgumentException e) { return null; }\n");
     }
 
@@ -630,7 +693,7 @@ public final class FusedProjectionCompiler
     {
         StringBuilder body = new StringBuilder();
         for (int slot = 0; slot < slice.columnTypes().size(); slot++) {
-            if (slice.columnTypes().get(slot) == ValueType.UTF8) {
+            if (slice.columnTypes().get(slot) == PhysicalType.UTF8) {
                 body.append("        var bx").append(slot).append(" = bin").append(slot).append(".value(i);\n");
                 body.append("        byte[] bd").append(slot).append(" = bx").append(slot).append(".data();\n");
                 body.append("        int bs").append(slot).append(" = bx").append(slot).append(".offset();\n");
@@ -658,7 +721,7 @@ public final class FusedProjectionCompiler
             // A step's is-null local is only needed when some output (or a downstream step) reads it; the null-free
             // outputs still need the internal nulls of their inputs (e.g. a null condition steering an if), so the
             // is-null locals are always emitted -- the JIT drops the dead ones.
-            body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step)).append(";\n");
+            body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step, utf8Constants)).append(";\n");
         }
         List<Operand> roots = slice.roots();
         for (int output = 0; output < roots.size(); output++) {
@@ -672,53 +735,65 @@ public final class FusedProjectionCompiler
 
     private static String valueExpr(Step step, Map<String, Integer> utf8Constants)
     {
-        List<Operand> args = step.operands();
-        return switch (step.op()) {
-            case "add", "add_f64" -> "(" + value(args.get(0)) + " + " + value(args.get(1)) + ")";
-            case "subtract", "subtract_f64" -> "(" + value(args.get(0)) + " - " + value(args.get(1)) + ")";
-            case "multiply", "multiply_f64" -> "(" + value(args.get(0)) + " * " + value(args.get(1)) + ")";
-            case "lt", "lt_f64" -> "(" + value(args.get(0)) + " < " + value(args.get(1)) + ")";
-            case "gt", "gt_f64" -> "(" + value(args.get(0)) + " > " + value(args.get(1)) + ")";
-            case "lte", "lte_f64" -> "(" + value(args.get(0)) + " <= " + value(args.get(1)) + ")";
-            case "gte", "gte_f64" -> "(" + value(args.get(0)) + " >= " + value(args.get(1)) + ")";
-            case "eq", "eq_f64" -> "(" + value(args.get(0)) + " == " + value(args.get(1)) + ")";
-            case "eq_utf8" -> utf8Equals(args.get(0), args.get(1), utf8Constants);
-            case "in_utf8" -> utf8In(args, utf8Constants);
-            case "and" -> "(" + value(args.get(0)) + " && " + value(args.get(1)) + ")";
-            case "or" -> "(" + value(args.get(0)) + " || " + value(args.get(1)) + ")";
-            case "not" -> "(!" + value(args.get(0)) + ")";
-            // if_*: SQL CASE -- the true branch is taken only when the condition is non-null AND true.
-            case "if_i64", "if_f64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + value(args.get(1)) + " : " + value(args.get(2)) + ")";
-            default -> throw new Unsupported();
+        return renderExpression(step.program().value(), step.operands(), utf8Constants);
+    }
+
+    private static String nullExpr(Step step, Map<String, Integer> utf8Constants)
+    {
+        return renderExpression(step.program().isNull(), step.operands(), utf8Constants);
+    }
+
+    private static String renderExpression(
+            Expression expression,
+            List<Operand> operands,
+            Map<String, Integer> utf8Constants)
+    {
+        return switch (expression) {
+            case ArgumentValue argument -> value(operands.get(argument.index()));
+            case ArgumentNull argument -> isNull(operands.get(argument.index()));
+            case BooleanConstant constant -> Boolean.toString(constant.value());
+            case Binary binary -> {
+                String left = renderExpression(binary.left(), operands, utf8Constants);
+                String right = renderExpression(binary.right(), operands, utf8Constants);
+                String operator = switch (binary.operation()) {
+                    case ADD -> "+";
+                    case SUBTRACT -> "-";
+                    case MULTIPLY -> "*";
+                    case LESS_THAN -> "<";
+                    case GREATER_THAN -> ">";
+                    case LESS_THAN_OR_EQUAL -> "<=";
+                    case GREATER_THAN_OR_EQUAL -> ">=";
+                    case EQUAL -> "==";
+                    case BOOLEAN_AND -> "&&";
+                    case BOOLEAN_OR -> "||";
+                };
+                yield "(" + left + " " + operator + " " + right + ")";
+            }
+            case BooleanNot not ->
+                    "(!" + renderExpression(not.value(), operands, utf8Constants) + ")";
+            case Conditional conditional ->
+                    "(" + renderExpression(conditional.condition(), operands, utf8Constants) +
+                            " ? " + renderExpression(conditional.whenTrue(), operands, utf8Constants) +
+                            " : " + renderExpression(conditional.whenFalse(), operands, utf8Constants) + ")";
+            case Utf8Equal equal -> utf8Equals(
+                    resolveOperand(equal.left(), operands),
+                    resolveOperand(equal.right(), operands),
+                    utf8Constants);
         };
     }
 
-    private static String nullExpr(Step step)
+    private static Operand resolveOperand(Expression expression, List<Operand> operands)
     {
-        List<Operand> args = step.operands();
-        return switch (step.op()) {
-            case "add", "subtract", "multiply", "add_f64", "subtract_f64", "multiply_f64",
-                 "lt", "gt", "lte", "gte", "eq", "lt_f64", "gt_f64", "lte_f64", "gte_f64", "eq_f64" ->
-                    "(" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + ")";
-            case "eq_utf8" -> "(" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + ")";
-            // The accepted IN shape has one nullable column followed only by non-null constants.
-            case "in_utf8" -> isNull(args.getFirst());
-            // Three-valued AND: false if either operand is (non-null) false; else null if any operand is null.
-            case "and" -> "(!((!" + isNull(args.get(0)) + " && !" + value(args.get(0)) + ") || (!" + isNull(args.get(1)) + " && !" + value(args.get(1)) + "))"
-                    + " && (" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + "))";
-            // Three-valued OR: true if either operand is (non-null) true; else null if any operand is null.
-            case "or" -> "(!((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") || (!" + isNull(args.get(1)) + " && " + value(args.get(1)) + "))"
-                    + " && (" + isNull(args.get(0)) + " || " + isNull(args.get(1)) + "))";
-            case "not" -> isNull(args.get(0));
-            case "if_i64", "if_f64" -> "((!" + isNull(args.get(0)) + " && " + value(args.get(0)) + ") ? " + isNull(args.get(1)) + " : " + isNull(args.get(2)) + ")";
-            default -> throw new Unsupported();
-        };
+        if (expression instanceof ArgumentValue argument) {
+            return operands.get(argument.index());
+        }
+        throw new IllegalArgumentException("UTF-8 equality requires direct call arguments");
     }
 
     private static String value(Operand operand)
     {
         return switch (operand) {
-            case ColumnOperand column -> MAPPED_DICTIONARY_DOUBLE_INPUTS && column.type() == ValueType.DOUBLE
+            case ColumnOperand column -> MAPPED_DICTIONARY_DOUBLE_INPUTS && column.type() == PhysicalType.DOUBLE
                     ? "col" + column.slot() + "[map" + column.slot() + " == null ? i : map" + column.slot() + "[i]]"
                     : "col" + column.slot() + "[i]";
             case StepOperand step -> "sv" + step.stepId();
@@ -752,20 +827,6 @@ public final class FusedProjectionCompiler
         throw new Unsupported();
     }
 
-    private static String utf8In(List<Operand> operands, Map<String, Integer> constants)
-    {
-        ColumnOperand column = (ColumnOperand) operands.getFirst();
-        StringBuilder expression = new StringBuilder("(");
-        for (int index = 1; index < operands.size(); index++) {
-            if (index > 1) {
-                expression.append(" || ");
-            }
-            expression.append("bt").append(column.slot()).append(" == ")
-                    .append(constants.get(((Utf8Constant) operands.get(index)).value()));
-        }
-        return expression.append(')').toString();
-    }
-
     private static Map<String, Integer> utf8Constants(Slice slice)
     {
         Map<String, Integer> constants = new LinkedHashMap<>();
@@ -783,39 +844,52 @@ public final class FusedProjectionCompiler
     {
         Map<Integer, List<Integer>> categories = new LinkedHashMap<>();
         for (Step step : slice.steps()) {
-            if (!step.op().equals("eq_utf8") && !step.op().equals("in_utf8")) {
-                continue;
-            }
-            if (step.op().equals("in_utf8")) {
-                ColumnOperand column = (ColumnOperand) step.operands().getFirst();
-                List<Integer> columnCategories = categories.computeIfAbsent(column.slot(), _ -> new ArrayList<>());
-                for (int index = 1; index < step.operands().size(); index++) {
-                    int category = constants.get(((Utf8Constant) step.operands().get(index)).value());
-                    if (!columnCategories.contains(category)) {
-                        columnCategories.add(category);
-                    }
-                }
-                continue;
-            }
-            ColumnOperand column;
-            Utf8Constant constant;
-            if (step.operands().get(0) instanceof ColumnOperand candidateColumn && step.operands().get(1) instanceof Utf8Constant candidateConstant) {
-                column = candidateColumn;
-                constant = candidateConstant;
-            }
-            else if (step.operands().get(1) instanceof ColumnOperand candidateColumn && step.operands().get(0) instanceof Utf8Constant candidateConstant) {
-                column = candidateColumn;
-                constant = candidateConstant;
-            }
-            else {
-                throw new Unsupported();
-            }
-            List<Integer> columnCategories = categories.computeIfAbsent(column.slot(), _ -> new ArrayList<>());
-            int category = constants.get(constant.value());
-            if (!columnCategories.contains(category)) {
-                columnCategories.add(category);
-            }
+            collectUtf8Categories(step.program().value(), step.operands(), constants, categories);
+            collectUtf8Categories(step.program().isNull(), step.operands(), constants, categories);
         }
         return categories;
+    }
+
+    private static void collectUtf8Categories(
+            Expression expression,
+            List<Operand> operands,
+            Map<String, Integer> constants,
+            Map<Integer, List<Integer>> categories)
+    {
+        switch (expression) {
+            case ArgumentValue _, ArgumentNull _, BooleanConstant _ -> {}
+            case Binary binary -> {
+                collectUtf8Categories(binary.left(), operands, constants, categories);
+                collectUtf8Categories(binary.right(), operands, constants, categories);
+            }
+            case BooleanNot not -> collectUtf8Categories(not.value(), operands, constants, categories);
+            case Conditional conditional -> {
+                collectUtf8Categories(conditional.condition(), operands, constants, categories);
+                collectUtf8Categories(conditional.whenTrue(), operands, constants, categories);
+                collectUtf8Categories(conditional.whenFalse(), operands, constants, categories);
+            }
+            case Utf8Equal equal -> {
+                Operand left = resolveOperand(equal.left(), operands);
+                Operand right = resolveOperand(equal.right(), operands);
+                ColumnOperand column;
+                Utf8Constant constant;
+                if (left instanceof ColumnOperand candidateColumn && right instanceof Utf8Constant candidateConstant) {
+                    column = candidateColumn;
+                    constant = candidateConstant;
+                }
+                else if (right instanceof ColumnOperand candidateColumn && left instanceof Utf8Constant candidateConstant) {
+                    column = candidateColumn;
+                    constant = candidateConstant;
+                }
+                else {
+                    throw new Unsupported();
+                }
+                List<Integer> columnCategories = categories.computeIfAbsent(column.slot(), _ -> new ArrayList<>());
+                int category = constants.get(constant.value());
+                if (!columnCategories.contains(category)) {
+                    columnCategories.add(category);
+                }
+            }
+        }
     }
 }

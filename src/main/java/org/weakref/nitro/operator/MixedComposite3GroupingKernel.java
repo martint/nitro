@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 
 interface MixedComposite3GroupingKernel
 {

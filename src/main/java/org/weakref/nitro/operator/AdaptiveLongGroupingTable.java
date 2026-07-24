@@ -17,7 +17,7 @@ import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import org.weakref.nitro.data.PrimitiveArrayPool;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
 

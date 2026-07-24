@@ -23,7 +23,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;

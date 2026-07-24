@@ -19,7 +19,6 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.jit.FusedProjectionCompiler.CompiledMultiProjection;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -98,7 +97,9 @@ public class ProjectOperator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.reusablePlanEvaluator = REUSE_PLAN_EVALUATOR ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
         CompiledMultiProjection compiled = COMPILE_EXPRESSIONS
-                ? FusedProjectionCompiler.tryCompile(evaluationPlan, outputReferences).orElse(null)
+                ? allocator.engineResources().operatorCodeGeneration().fusedProjection()
+                        .tryCompile(evaluationPlan, primitiveRegistry, outputReferences)
+                        .orElse(null)
                 : null;
         this.fusedProjection = compiled;
         if (compiled != null) {

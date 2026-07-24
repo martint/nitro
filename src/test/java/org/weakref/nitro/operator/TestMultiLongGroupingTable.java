@@ -16,7 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.PrimitiveArrayPool;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 
 import java.util.HashMap;
 import java.util.Map;

@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 
 /**
  * Shape-neutral contract between the grouping operator and a physical table compiled for a structural

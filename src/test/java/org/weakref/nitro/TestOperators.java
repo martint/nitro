@@ -18,6 +18,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
+import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
+import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -29,6 +33,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -65,6 +70,8 @@ import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
+import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -88,6 +95,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -665,7 +673,9 @@ public class TestOperators
                                 new Reference(two, Stream.VALUES))), AllMask.ALL)),
                 List.of(result));
 
-        assertThat(FusedProjectionCompiler.tryCompile(plan, List.of(result))).isPresent();
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, primitiveRegistry(), List.of(result))).isPresent();
+        }
         try (ProjectOperator operator = new ProjectOperator(allocator, plan, primitiveRegistry(), source);
                 Batch batch = operator.next()) {
             assertThat(((F64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(82.0, 62.0, 22.0);
@@ -698,7 +708,9 @@ public class TestOperators
                                 new Reference(zero, Stream.VALUES))), AllMask.ALL)),
                 List.of(selectedReference));
 
-        assertThat(FusedProjectionCompiler.tryCompile(plan, List.of(selectedReference))).isPresent();
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, primitiveRegistry(), List.of(selectedReference))).isPresent();
+        }
         try (ProjectOperator operator = new ProjectOperator(
                 allocator,
                 plan,
@@ -706,6 +718,63 @@ public class TestOperators
                 new ConstantTableOperator(allocator, 1, List.of(row("apple"), row("pear"), row((Object) null))));
                 Batch batch = operator.next()) {
             assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(1L, 0L, 0L);
+        }
+    }
+
+    @Test
+    void testFusedProjectionUsesDynamicallyRegisteredProviderWithoutFunctionVocabulary()
+    {
+        class DynamicallyNamedFunction
+                implements PrimitiveFunction, ProjectionCodeProvider
+        {
+            @Override
+            public Optional<ProjectionProgram> generate(
+                    ProjectionCodeBuilder builder,
+                    List<ProjectionArgument> arguments)
+            {
+                if (arguments.size() != 2) {
+                    return Optional.empty();
+                }
+                var left = builder.argument(0, ProjectionCodeBuilder.ValueType.I64);
+                var right = builder.argument(1, ProjectionCodeBuilder.ValueType.I64);
+                return Optional.of(builder.program(
+                        List.of(ProjectionCodeBuilder.ValueType.I64, ProjectionCodeBuilder.ValueType.I64),
+                        builder.add(left, right),
+                        builder.or(builder.isNull(0), builder.isNull(1))));
+            }
+
+            @Override
+            public Streams apply(
+                    List<Streams> inputs,
+                    Mask mask,
+                    Set<Stream> requestedStreams,
+                    Streams output,
+                    PrimitiveExecutionContext context)
+            {
+                throw new UnsupportedOperationException();
+            }
+        }
+
+        String dynamicName = "provider_name_unknown_to_engine";
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register(dynamicName, new DynamicallyNamedFunction());
+        Variable one = new Variable(0);
+        Variable first = new Variable(1);
+        Variable second = new Variable(2);
+        Reference result = new Reference(second, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(first, new Call(dynamicName, List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(second, new Call(dynamicName, List.of(
+                                new Reference(first, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, registry, List.of(result))).isPresent();
         }
     }
 
@@ -1726,7 +1795,7 @@ public class TestOperators
                                 row(22L, 2L))))) {
             Batch batch = operator.next();
             Vector errors = batch.output(0).borrow(Stream.ERRORS);
-            org.weakref.nitro.function.scalar.builtin.VectorAccess.BooleanValues errorValues = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(errors);
+            VectorAccess.BooleanValues errorValues = VectorAccess.booleanValues(errors);
             int count = batch.borrowMask().count();
             boolean[] decoded = new boolean[count];
             int cursor = 0;
@@ -1850,7 +1919,7 @@ public class TestOperators
                                 row(22L, 2L))))) {
             Batch batch = operator.next();
             Vector nulls = batch.output(0).borrow(Stream.NULLS);
-            org.weakref.nitro.function.scalar.builtin.VectorAccess.BooleanValues nullValues = org.weakref.nitro.function.scalar.builtin.VectorAccess.booleanValues(nulls);
+            VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
             int count = batch.borrowMask().count();
             boolean[] decoded = new boolean[count];
             int cursor = 0;

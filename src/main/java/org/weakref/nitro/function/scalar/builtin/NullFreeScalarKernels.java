@@ -20,6 +20,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 /**
  * Monomorphic null-free fast paths for the binary numeric scalar kernels. When both operands are flat arrays (or a

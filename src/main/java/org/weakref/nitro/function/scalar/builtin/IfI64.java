@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
+import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
+import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -21,6 +25,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -29,15 +34,37 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "if_i64")
 public final class IfI64
-        implements PrimitiveFunction
+        implements PrimitiveFunction, ProjectionCodeProvider
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IfI64");
+
+    @Override
+    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
+    {
+        if (arguments.size() != 3) {
+            return Optional.empty();
+        }
+        var condition = builder.and(
+                builder.not(builder.isNull(0)),
+                builder.argument(0, ProjectionCodeBuilder.ValueType.BOOLEAN));
+        return Optional.of(builder.program(
+                List.of(
+                        ProjectionCodeBuilder.ValueType.BOOLEAN,
+                        ProjectionCodeBuilder.ValueType.I64,
+                        ProjectionCodeBuilder.ValueType.I64),
+                builder.conditional(
+                        condition,
+                        builder.argument(1, ProjectionCodeBuilder.ValueType.I64),
+                        builder.argument(2, ProjectionCodeBuilder.ValueType.I64)),
+                builder.conditional(condition, builder.isNull(1), builder.isNull(2))));
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()

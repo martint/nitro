@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
+import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
+import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.function.scalar.ScalarFunction;
@@ -23,16 +27,37 @@ import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
 @ScalarFunction(name = "eq_utf8")
 public final class EqualUtf8
-        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction, ProjectionCodeProvider
 {
     private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("EqualUtf8");
     private static final boolean IN_PLACE_MASK = Boolean.parseBoolean(System.getProperty("nitro.utf8.equalsInPlaceMask", "true"));
+
+    @Override
+    public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
+    {
+        if (arguments.size() != 2 ||
+                !((arguments.get(0).kind() == ProjectionArgument.Kind.INPUT &&
+                        arguments.get(1).kind() == ProjectionArgument.Kind.LITERAL &&
+                        arguments.get(1).literal() instanceof String) ||
+                        (arguments.get(1).kind() == ProjectionArgument.Kind.INPUT &&
+                                arguments.get(0).kind() == ProjectionArgument.Kind.LITERAL &&
+                                arguments.get(0).literal() instanceof String))) {
+            return Optional.empty();
+        }
+        return Optional.of(builder.program(
+                List.of(ProjectionCodeBuilder.ValueType.UTF8, ProjectionCodeBuilder.ValueType.UTF8),
+                builder.utf8Equal(
+                        builder.argument(0, ProjectionCodeBuilder.ValueType.UTF8),
+                        builder.argument(1, ProjectionCodeBuilder.ValueType.UTF8)),
+                builder.or(builder.isNull(0), builder.isNull(1))));
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()

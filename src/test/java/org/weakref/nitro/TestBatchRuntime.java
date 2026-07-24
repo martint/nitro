@@ -28,7 +28,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.function.scalar.builtin.VectorAccess;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
