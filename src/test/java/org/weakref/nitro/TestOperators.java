@@ -1011,6 +1011,169 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionCompilesVariableWidthConditional()
+    {
+        Variable zero = new Variable(0);
+        Variable leftEquals = new Variable(1);
+        Variable rightEquals = new Variable(2);
+        Variable bothEqual = new Variable(3);
+        Variable empty = new Variable(4);
+        Variable selected = new Variable(5);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(leftEquals, new Call("eq", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(rightEquals, new Call("eq", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(bothEqual, new Call("and", List.of(
+                                new Reference(leftEquals, Stream.VALUES),
+                                new Reference(rightEquals, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(empty, new Literal(""), AllMask.ALL),
+                        new Assignment(selected, new Call("if_utf8", List.of(
+                                new Reference(bothEqual, Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(empty, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        PrimitiveRegistry registry = primitiveRegistry();
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, registry, List.of(result))).isPresent();
+        }
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(
+                        allocator,
+                        3,
+                        List.of(
+                                row(0L, 0L, "selected"),
+                                row(0L, 1L, "not-selected"),
+                                row(null, 0L, "null-condition"))));
+                Batch batch = operator.next()) {
+            BinaryVector values = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(new String(values.copyBytes(0), UTF_8)).isEqualTo("selected");
+            assertThat(new String(values.copyBytes(1), UTF_8)).isEmpty();
+            assertThat(new String(values.copyBytes(2), UTF_8)).isEmpty();
+        }
+    }
+
+    @Test
+    void testFusedProjectionWritesVariableWidthOutputForSparseMask()
+    {
+        Variable zero = new Variable(0);
+        Variable leftEquals = new Variable(1);
+        Variable rightEquals = new Variable(2);
+        Variable bothEqual = new Variable(3);
+        Variable empty = new Variable(4);
+        Variable selected = new Variable(5);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(leftEquals, new Call("eq", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(rightEquals, new Call("eq", List.of(
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(bothEqual, new Call("and", List.of(
+                                new Reference(leftEquals, Stream.VALUES),
+                                new Reference(rightEquals, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(empty, new Literal(""), AllMask.ALL),
+                        new Assignment(selected, new Call("if_utf8", List.of(
+                                new Reference(bothEqual, Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES),
+                                new Reference(empty, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        BinaryVector input = new BinaryVector(4, 29);
+        input.setBytes(0, "ignored".getBytes(UTF_8));
+        input.setBytes(1, "alpha".getBytes(UTF_8));
+        input.setBytes(2, "also-ignored".getBytes(UTF_8));
+        input.setBytes(3, "omega".getBytes(UTF_8));
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 3;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                return new Batch(
+                        Mask.sparse(new int[] {1, 3}, 4),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {9, 0, 9, 0}))),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {9, 0, 9, 0}))),
+                        Output.of(Streams.builder()
+                                .put(Stream.VALUES, input)
+                                .put(Stream.NULLS, new BooleanVector(new boolean[] {false, false, false, true}))
+                                .build()));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (ProjectOperator operator = new ProjectOperator(allocator, plan, primitiveRegistry(), source);
+                Batch batch = operator.next()) {
+            assertThat(batch.borrowMask()).containsExactly(1, 3);
+            BinaryVector values = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
+            assertThat(values.offsets()).containsExactly(0, 0, 5, 5, 5);
+            assertThat(new String(values.copyBytes(0), UTF_8)).isEmpty();
+            assertThat(new String(values.copyBytes(1), UTF_8)).isEqualTo("alpha");
+            assertThat(new String(values.copyBytes(2), UTF_8)).isEmpty();
+            assertThat(new String(values.copyBytes(3), UTF_8)).isEmpty();
+            assertThat(((BooleanVector) batch.output(0).borrow(Stream.NULLS)).values())
+                    .containsExactly(false, false, false, true);
+        }
+    }
+
+    @Test
+    void testFusedProjectionLeavesShortVariableWidthSliceToInterpreter()
+    {
+        Variable zero = new Variable(0);
+        Variable equals = new Variable(1);
+        Variable sentinel = new Variable(2);
+        Variable selected = new Variable(3);
+        Reference result = new Reference(selected, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(equals, new Call("eq", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(sentinel, new Literal("sentinel"), AllMask.ALL),
+                        new Assignment(selected, new Call("if_utf8", List.of(
+                                new Reference(equals, Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(sentinel, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            assertThat(compiler.tryCompile(plan, primitiveRegistry(), List.of(result))).isEmpty();
+        }
+    }
+
+    @Test
     void testLessThanPropagatesNulls()
     {
         PrimitiveRegistry primitiveRegistry = primitiveRegistry();
@@ -1036,7 +1199,10 @@ public class TestOperators
                                 row(20L, (Object) null),
                                 row(30L, 2L))))) {
             try (Batch batch = operator.next()) {
-                assertThat(((BooleanVector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(true, false, false);
+                boolean[] values = ((BooleanVector) batch.output(0).borrow(Stream.VALUES)).values();
+                // A value at a null position is deliberately unspecified and can contain pooled storage state.
+                assertThat(values[0]).isTrue();
+                assertThat(values[2]).isFalse();
                 assertThat(((BooleanVector) batch.output(1).borrow(Stream.NULLS)).values()).containsExactly(false, true, false);
             }
         }

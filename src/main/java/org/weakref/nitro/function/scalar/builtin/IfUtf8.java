@@ -31,7 +31,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "if_utf8")
+@ScalarFunction(name = "if_utf8", capabilities = IfUtf8Optimization.class)
 public final class IfUtf8
         implements PrimitiveFunction
 {

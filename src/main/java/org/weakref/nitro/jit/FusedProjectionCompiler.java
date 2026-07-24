@@ -77,6 +77,8 @@ public final class FusedProjectionCompiler
 
     private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8, NULLS_ONLY }
 
+    private enum Utf8Component { DATA, START, LENGTH }
+
     private sealed interface Operand
             permits ColumnOperand, StepOperand, LongConstant, DoubleConstant, BoolConstant, Utf8Constant {}
 
@@ -103,7 +105,8 @@ public final class FusedProjectionCompiler
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
-     * qualifies. An output qualifies when its whole SSA slice is in the supported set, its result is I64- or F64-typed,
+     * qualifies. An output qualifies when its whole SSA slice is in the supported set, its result has a supported
+     * physical output representation,
      * and it is worth fusing (its slice has at least two operations -- a single-op projection is left to the
      * interpreter, where fusion would only add call overhead without saving an intermediate).
      */
@@ -129,8 +132,8 @@ public final class FusedProjectionCompiler
                 SliceBuilder trial = new SliceBuilder(assignments, primitiveRegistry);
                 Operand root = trial.operand(candidate, null);
                 PhysicalType rootType = operandType(root);
-                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE) &&
-                        worthFusing(trial.steps(), trial.columnTypes())) {
+                if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE || rootType == PhysicalType.UTF8) &&
+                        worthFusing(rootType, trial.steps(), trial.columnTypes())) {
                     fusible.add(candidate);
                 }
             }
@@ -173,12 +176,21 @@ public final class FusedProjectionCompiler
         cache.clear();
     }
 
-    private static boolean worthFusing(List<Step> steps, List<PhysicalType> columnTypes)
+    private static boolean worthFusing(
+            PhysicalType rootType,
+            List<Step> steps,
+            List<PhysicalType> columnTypes)
     {
         // A slice with a single operation writes one output from one primitive; the interpreter already does that with
         // no intermediate vector, so fusing only adds javac + call overhead. Two or more operations means the
         // interpreter materializes at least one intermediate vector that fusion keeps in a register.
         if (steps.size() < 2) {
+            return false;
+        }
+        // Variable-width output requires a sizing pass before the write pass. Two operations do not amortize that
+        // second traversal even when it reduces retired work; three operations is the minimum qualified physical
+        // shape. This is independent of the provider/function that produced the UTF-8 value.
+        if (rootType == PhysicalType.UTF8 && steps.size() < 3) {
             return false;
         }
         // A two-step slice that reads only null streams saves one small boolean intermediate but pays for a generated
@@ -485,6 +497,7 @@ public final class FusedProjectionCompiler
         }
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
+        out.append("import org.weakref.nitro.data.BinaryVector;\n");
         out.append("import org.weakref.nitro.data.BooleanVector;\n");
         out.append("import org.weakref.nitro.data.F64Vector;\n");
         out.append("import org.weakref.nitro.data.I32Vector;\n");
@@ -575,11 +588,29 @@ public final class FusedProjectionCompiler
 
         out.append("    int required = mask.maxPosition() + 1;\n");
         out.append("    boolean wantNulls = requestedStreams.contains(N);\n");
+        String sizingBody = sizingLoopBody(slice, utf8Constants);
+        if (!sizingBody.isEmpty()) {
+            for (int output = 0; output < outputCount; output++) {
+                if (outputType[output] == PhysicalType.UTF8) {
+                    out.append("    int bytes").append(output).append(" = 0;\n");
+                }
+            }
+            appendPositionLoop(out, sizingBody);
+        }
         for (int output = 0; output < outputCount; output++) {
             if (outputType[output] == PhysicalType.DOUBLE) {
                 out.append("    F64Vector out").append(output).append(" = context.allocator().allocate("
                         + "context.allocationContext(\"FusedProjection\"), F64Vector.class, required, F64Vector::new);\n");
                 out.append("    double[] o").append(output).append(" = out").append(output).append(".values();\n");
+            }
+            else if (outputType[output] == PhysicalType.UTF8) {
+                out.append("    BinaryVector out").append(output).append(" = BinaryVector.allocate("
+                        + "context.allocator(), context.allocationContext(\"FusedProjection\"), required, bytes").append(output).append(");\n");
+                out.append("    out").append(output).append(".addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);\n");
+                out.append("    byte[] od").append(output).append(" = out").append(output).append(".data();\n");
+                out.append("    int[] oo").append(output).append(" = out").append(output).append(".offsets();\n");
+                out.append("    int ob").append(output).append(" = 0;\n");
+                out.append("    int op").append(output).append(" = 0;\n");
             }
             else {
                 out.append("    I64Vector out").append(output).append(" = context.allocator().allocate("
@@ -594,13 +625,13 @@ public final class FusedProjectionCompiler
         }
 
         String body = loopBody(slice, nullable, utf8Constants);
-        out.append("    if (mask.all()) {\n");
-        out.append("      int n = mask.count();\n");
-        out.append("      for (int i = 0; i < n; i++) {\n").append(body).append("      }\n");
-        out.append("    } else {\n");
-        out.append("      int n = mask.count();\n");
-        out.append("      for (int k = 0; k < n; k++) { int i = mask.position(k);\n").append(body).append("      }\n");
-        out.append("    }\n");
+        appendPositionLoop(out, body);
+        for (int output = 0; output < outputCount; output++) {
+            if (outputType[output] == PhysicalType.UTF8) {
+                out.append("    java.util.Arrays.fill(oo").append(output).append(", op").append(output)
+                        .append(", required + 1, ob").append(output).append(");\n");
+            }
+        }
 
         // A null-free output emits no NULLS stream (like the interpreter), so the consumer keeps its null-free fast
         // path. The supported op set never raises, so ERRORS is left absent (synthesized all-false downstream if asked).
@@ -704,8 +735,38 @@ public final class FusedProjectionCompiler
                 .append(slot).append("); } catch (IllegalArgumentException e) { return null; }\n");
     }
 
-    /** The per-position body: one local (value, is-null) pair per shared step, then each output's writes. */
-    private static String loopBody(Slice slice, boolean[] nullable, Map<String, Integer> utf8Constants)
+    private static void appendPositionLoop(StringBuilder out, String body)
+    {
+        out.append("    if (mask.all()) {\n");
+        out.append("      int n = mask.count();\n");
+        out.append("      for (int i = 0; i < n; i++) {\n").append(body).append("      }\n");
+        out.append("    } else {\n");
+        out.append("      int n = mask.count();\n");
+        out.append("      for (int k = 0; k < n; k++) { int i = mask.position(k);\n").append(body).append("      }\n");
+        out.append("    }\n");
+    }
+
+    private static String sizingLoopBody(Slice slice, Map<String, Integer> utf8Constants)
+    {
+        boolean hasUtf8Output = slice.roots().stream()
+                .anyMatch(root -> operandType(root) == PhysicalType.UTF8);
+        if (!hasUtf8Output) {
+            return "";
+        }
+        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants));
+        for (int output = 0; output < slice.roots().size(); output++) {
+            Operand root = slice.roots().get(output);
+            if (operandType(root) == PhysicalType.UTF8) {
+                body.append("        bytes").append(output).append(" += ")
+                        .append(isNull(root)).append(" ? 0 : ")
+                        .append(utf8Component(root, Utf8Component.LENGTH, utf8Constants)).append(";\n");
+            }
+        }
+        return body.toString();
+    }
+
+    /** The per-position computation shared by the variable-width sizing pass and the output pass. */
+    private static String stepBody(Slice slice, Map<String, Integer> utf8Constants)
     {
         StringBuilder body = new StringBuilder();
         for (int slot = 0; slot < slice.columnTypes().size(); slot++) {
@@ -727,6 +788,16 @@ public final class FusedProjectionCompiler
             }
         }
         for (Step step : slice.steps()) {
+            if (step.type() == PhysicalType.UTF8) {
+                body.append("        byte[] svd").append(step.id()).append(" = ")
+                        .append(renderUtf8Expression(step.program().value(), step.operands(), Utf8Component.DATA, utf8Constants)).append(";\n");
+                body.append("        int svs").append(step.id()).append(" = ")
+                        .append(renderUtf8Expression(step.program().value(), step.operands(), Utf8Component.START, utf8Constants)).append(";\n");
+                body.append("        int svl").append(step.id()).append(" = ")
+                        .append(renderUtf8Expression(step.program().value(), step.operands(), Utf8Component.LENGTH, utf8Constants)).append(";\n");
+                body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step, utf8Constants)).append(";\n");
+                continue;
+            }
             String javaType = switch (step.type()) {
                 case LONG -> "long";
                 case DOUBLE -> "double";
@@ -739,11 +810,34 @@ public final class FusedProjectionCompiler
             // is-null locals are always emitted -- the JIT drops the dead ones.
             body.append("        boolean sn").append(step.id()).append(" = ").append(nullExpr(step, utf8Constants)).append(";\n");
         }
+        return body.toString();
+    }
+
+    /** The per-position body: one local (value, is-null) pair per shared step, then each output's writes. */
+    private static String loopBody(Slice slice, boolean[] nullable, Map<String, Integer> utf8Constants)
+    {
+        StringBuilder body = new StringBuilder(stepBody(slice, utf8Constants));
         List<Operand> roots = slice.roots();
         for (int output = 0; output < roots.size(); output++) {
-            body.append("        o").append(output).append("[i] = ").append(value(roots.get(output))).append(";\n");
+            Operand root = roots.get(output);
+            if (operandType(root) == PhysicalType.UTF8) {
+                String data = utf8Component(root, Utf8Component.DATA, utf8Constants);
+                String start = utf8Component(root, Utf8Component.START, utf8Constants);
+                String length = "(" + isNull(root) + " ? 0 : " +
+                        utf8Component(root, Utf8Component.LENGTH, utf8Constants) + ")";
+                body.append("        java.util.Arrays.fill(oo").append(output).append(", op").append(output)
+                        .append(", i + 1, ob").append(output).append(");\n");
+                body.append("        System.arraycopy(").append(data).append(", ").append(start)
+                        .append(", od").append(output).append(", ob").append(output).append(", ").append(length).append(");\n");
+                body.append("        ob").append(output).append(" += ").append(length).append(";\n");
+                body.append("        oo").append(output).append("[i + 1] = ob").append(output).append(";\n");
+                body.append("        op").append(output).append(" = i + 1;\n");
+            }
+            else {
+                body.append("        o").append(output).append("[i] = ").append(value(root)).append(";\n");
+            }
             if (nullable[output]) {
-                body.append("        if (wantNulls) { on").append(output).append("[i] = ").append(isNull(roots.get(output))).append("; }\n");
+                body.append("        if (wantNulls) { on").append(output).append("[i] = ").append(isNull(root)).append("; }\n");
             }
         }
         return body.toString();
@@ -795,6 +889,64 @@ public final class FusedProjectionCompiler
                     resolveOperand(equal.left(), operands),
                     resolveOperand(equal.right(), operands),
                     utf8Constants);
+        };
+    }
+
+    private static String renderUtf8Expression(
+            Expression expression,
+            List<Operand> operands,
+            Utf8Component component,
+            Map<String, Integer> utf8Constants)
+    {
+        return switch (expression) {
+            case ArgumentValue argument ->
+                    utf8Component(operands.get(argument.index()), component, utf8Constants);
+            case Conditional conditional ->
+                    "(" + renderExpression(conditional.condition(), operands, utf8Constants) +
+                            " ? " + renderUtf8Expression(conditional.whenTrue(), operands, component, utf8Constants) +
+                            " : " + renderUtf8Expression(conditional.whenFalse(), operands, component, utf8Constants) + ")";
+            default -> throw new Unsupported();
+        };
+    }
+
+    private static String utf8Component(
+            Operand operand,
+            Utf8Component component,
+            Map<String, Integer> utf8Constants)
+    {
+        return switch (operand) {
+            case ColumnOperand column -> {
+                if (column.type() != PhysicalType.UTF8) {
+                    throw new Unsupported();
+                }
+                yield switch (component) {
+                    case DATA -> "bd" + column.slot();
+                    case START -> "bs" + column.slot();
+                    case LENGTH -> "bl" + column.slot();
+                };
+            }
+            case StepOperand step -> {
+                if (step.type() != PhysicalType.UTF8) {
+                    throw new Unsupported();
+                }
+                yield switch (component) {
+                    case DATA -> "svd" + step.stepId();
+                    case START -> "svs" + step.stepId();
+                    case LENGTH -> "svl" + step.stepId();
+                };
+            }
+            case Utf8Constant constant -> {
+                Integer category = utf8Constants.get(constant.value());
+                if (category == null) {
+                    throw new Unsupported();
+                }
+                yield switch (component) {
+                    case DATA -> "U" + category;
+                    case START -> "0";
+                    case LENGTH -> "U" + category + ".length";
+                };
+            }
+            case LongConstant _, DoubleConstant _, BoolConstant _ -> throw new Unsupported();
         };
     }
 
