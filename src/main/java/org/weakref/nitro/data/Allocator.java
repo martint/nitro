@@ -1238,7 +1238,7 @@ public class Allocator
             return;
         }
         if (bytes > residentBytes) {
-            throw new IllegalStateException("released more resident memory than allocated");
+            throw new IllegalStateException("released %s resident bytes with only %s allocated".formatted(bytes, residentBytes));
         }
         residentBytes -= bytes;
         if (memoryReservation != null) {
@@ -1322,7 +1322,7 @@ public class Allocator
     }
 
     private static final class ContextState
-            implements BufferLeaseOwner
+            implements BufferLeaseOwner, Mask.CapacityListener
     {
         private final Allocator allocator;
         private final Stats stats = new Stats();
@@ -1334,7 +1334,6 @@ public class Allocator
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
         private Mask inUseMasksHead;
         private boolean borrowedVectorResident;
-        private boolean borrowedMaskResident;
 
         private ContextState(Allocator allocator, PoolState pool, PoolState compatibilityPool)
         {
@@ -1473,10 +1472,8 @@ public class Allocator
         public Mask borrowMask(int requiredCapacity)
         {
             Mask mask = borrowMask(pool, requiredCapacity);
-            borrowedMaskResident = mask != null;
             if (mask == null && compatibilityActive()) {
                 mask = borrowMask(compatibilityPool, requiredCapacity);
-                borrowedMaskResident = mask != null;
             }
             return mask;
         }
@@ -1497,12 +1494,12 @@ public class Allocator
 
         public void trackMask(Mask mask, boolean reused)
         {
-            if (!borrowedMaskResident) {
+            if (!mask.residentTracked()) {
                 allocator.reserveResident(maskBytes(mask));
+                mask.markResidentTracked(this);
             }
-            borrowedMaskResident = false;
             if (!mask.trackedInUse()) {
-                mask.markTrackedInUse();
+                mask.markTrackedInUse(this);
                 mask.trackedPrevious(null);
                 mask.trackedNext(inUseMasksHead);
                 if (inUseMasksHead != null) {
@@ -1515,7 +1512,7 @@ public class Allocator
 
         public boolean transferMask(Mask mask)
         {
-            if (!mask.trackedInUse()) {
+            if (!mask.trackedBy(this)) {
                 return false;
             }
             unlinkTrackedMask(mask);
@@ -1525,7 +1522,7 @@ public class Allocator
 
         public void releaseMask(Mask mask)
         {
-            if (!mask.trackedInUse()) {
+            if (!mask.trackedBy(this)) {
                 return;
             }
             unlinkTrackedMask(mask);
@@ -1569,7 +1566,7 @@ public class Allocator
             Mask mask = inUseMasksHead;
             while (mask != null) {
                 Mask next = mask.trackedNext();
-                allocator.releaseResident(maskBytes(mask));
+                discardMaskResident(mask);
                 mask.clearTrackedInUse();
                 mask = next;
             }
@@ -1727,15 +1724,36 @@ public class Allocator
                             .computeIfAbsent(excess.capacity(), _ -> new ArrayDeque<>());
                     compatibleBucket.addLast(excess);
                     while (compatibleBucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
-                        allocator.releaseResident(maskBytes(compatibleBucket.removeFirst()));
+                        discardMaskResident(compatibleBucket.removeFirst());
                     }
                 }
                 else {
-                    allocator.releaseResident(maskBytes(excess));
+                    discardMaskResident(excess);
                 }
             }
             if (bucket.isEmpty()) {
                 pool.maskPool.remove(mask.capacity());
+            }
+        }
+
+        private void discardMaskResident(Mask mask)
+        {
+            if (!mask.residentTracked()) {
+                return;
+            }
+            mask.clearResidentTracked();
+            allocator.releaseResident(maskBytes(mask));
+        }
+
+        @Override
+        public void capacityChanged(int oldCapacity, int newCapacity)
+        {
+            long delta = (long) (newCapacity - oldCapacity) * Integer.BYTES;
+            if (delta > 0) {
+                allocator.reserveResident(delta);
+            }
+            else {
+                allocator.releaseResident(-delta);
             }
         }
 

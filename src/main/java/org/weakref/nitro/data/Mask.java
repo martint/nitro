@@ -24,6 +24,7 @@ import java.util.NoSuchElementException;
 import java.util.function.IntPredicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 public class Mask
         implements Iterable<Integer>
@@ -38,7 +39,9 @@ public class Mask
 
     private Mask trackedPrevious;
     private Mask trackedNext;
-    private boolean trackedInUse;
+    private Object trackedOwner;
+    private boolean residentTracked;
+    private CapacityListener capacityListener;
     private int size;
     private int selectedCount;
     private boolean allSelected;
@@ -301,7 +304,7 @@ public class Mask
         selectedCount = outputIndex;
         allSelected = outputIndex == size;
         if (allSelected) {
-            positions = EMPTY_POSITIONS;
+            replacePositions(EMPTY_POSITIONS);
         }
     }
 
@@ -364,7 +367,7 @@ public class Mask
         selectedCount = outputIndex;
         allSelected = outputIndex == size;
         if (allSelected) {
-            positions = EMPTY_POSITIONS;
+            replacePositions(EMPTY_POSITIONS);
         }
     }
 
@@ -1457,7 +1460,16 @@ public class Mask
         if (positions.length >= capacity) {
             return;
         }
-        positions = Arrays.copyOf(positions, capacity);
+        replacePositions(Arrays.copyOf(positions, capacity));
+    }
+
+    private void replacePositions(int[] replacement)
+    {
+        int oldCapacity = positions.length;
+        positions = replacement;
+        if (capacityListener != null && oldCapacity != replacement.length) {
+            capacityListener.capacityChanged(oldCapacity, replacement.length);
+        }
     }
 
     int capacity()
@@ -1527,14 +1539,19 @@ public class Mask
             }
             selected[outputIndex++] = position;
         }
-        positions = selected;
+        replacePositions(selected);
         positionCount = selectedCount;
         excludedPositions = false;
     }
 
     boolean trackedInUse()
     {
-        return trackedInUse;
+        return trackedOwner != null;
+    }
+
+    boolean trackedBy(Object owner)
+    {
+        return trackedOwner == owner;
     }
 
     Mask trackedPrevious()
@@ -1557,16 +1574,39 @@ public class Mask
         this.trackedNext = trackedNext;
     }
 
-    void markTrackedInUse()
+    void markTrackedInUse(Object owner)
     {
-        trackedInUse = true;
+        trackedOwner = requireNonNull(owner, "owner is null");
     }
 
     void clearTrackedInUse()
     {
-        trackedInUse = false;
+        trackedOwner = null;
         trackedPrevious = null;
         trackedNext = null;
+    }
+
+    boolean residentTracked()
+    {
+        return residentTracked;
+    }
+
+    void markResidentTracked(CapacityListener capacityListener)
+    {
+        residentTracked = true;
+        this.capacityListener = requireNonNull(capacityListener, "capacityListener is null");
+    }
+
+    void clearResidentTracked()
+    {
+        residentTracked = false;
+        capacityListener = null;
+    }
+
+    @FunctionalInterface
+    interface CapacityListener
+    {
+        void capacityChanged(int oldCapacity, int newCapacity);
     }
 
     int[] positionsArray(int requiredCapacity)

@@ -135,6 +135,42 @@ class TestAllocator
     }
 
     @Test
+    void testMaskCannotBeReleasedThroughAnotherContext()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context owner = new Allocator.Context("owner");
+            Allocator.Context other = new Allocator.Context("other");
+            Mask mask = allocator.allocateRangeMask(owner, 1, 10_000);
+            long residentBytes = allocator.residentBytes();
+
+            allocator.release(other, mask);
+            assertThat(allocator.residentBytes()).isEqualTo(residentBytes);
+
+            allocator.release(owner, mask);
+            assertThat(allocator.allocateRangeMask(owner, 2, 10_000)).isSameAs(mask);
+        }
+    }
+
+    @Test
+    void testResidentMemoryTracksInPlaceMaskCapacityGrowth()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            Allocator.Context context = new Allocator.Context("test");
+            Mask mask = allocator.allocateAllMask(context, 10_000);
+            assertThat(allocator.residentBytes()).isZero();
+
+            mask.retainIf(position -> (position & 1) == 0);
+            assertThat(allocator.residentBytes()).isEqualTo(40_000);
+            assertThat(memory.reservedBytes()).isEqualTo(40_000);
+
+            allocator.release(context, mask);
+            assertThat(allocator.residentBytes()).isEqualTo(40_000);
+        }
+        assertThat(memory.reservedBytes()).isZero();
+    }
+
+    @Test
     void testCompatibleVectorPoolRequiresThreeRegisteredGroups()
     {
         Object compatibilityGroup = new Object();
