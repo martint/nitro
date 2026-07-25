@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.ColumnView;
@@ -28,6 +28,8 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.SourceOperatorIngress;
 
 import java.util.List;
 import java.util.Set;

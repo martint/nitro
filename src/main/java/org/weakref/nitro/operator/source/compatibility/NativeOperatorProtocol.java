@@ -11,12 +11,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.operator.DynamicFilter;
+import org.weakref.nitro.core.source.SourceProtocol;
 
-/// Compatibility protocol that retargets an engine-native runtime filter to a source ordinal.
-interface NativeRuntimeFilterAccess
+/// Typed key for the internal native-operator compatibility protocol.
+enum NativeOperatorProtocol
+        implements SourceProtocol<NativeOperatorAccess>
 {
-    DynamicFilter retarget(int column);
+    NATIVE_OPERATOR;
+
+    @Override
+    public Class<NativeOperatorAccess> valueType()
+    {
+        return NativeOperatorAccess.class;
+    }
 }

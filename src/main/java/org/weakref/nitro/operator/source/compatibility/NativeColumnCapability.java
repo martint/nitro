@@ -11,13 +11,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.core.batch.ColumnCapability;
 
-/// Ownership-transfer protocol for a source that already supplies a native Nitro batch.
-@FunctionalInterface
-interface NativeBatchAccess
+/// Compatibility capability for a native lazy output.
+enum NativeColumnCapability
+        implements ColumnCapability<NativeColumnAccess>
 {
-    Batch transfer();
+    NATIVE_COLUMN;
+
+    @Override
+    public Class<NativeColumnAccess> valueType()
+    {
+        return NativeColumnAccess.class;
+    }
 }

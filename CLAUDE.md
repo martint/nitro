@@ -110,7 +110,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   per owned handle, and foreign/provider handles are never inspected by the engine.
   `BatchSourceOperator` receives a constructed `SourceOperatorIngress`; native,
   generated-column, or host-boundary adaptation policy does not belong in the
-  source operator or connector implementation.
+  source operator or connector implementation. Transitional operator-backed
+  source, batch, selection, and runtime-filter adapters are quarantined under
+  `operator.source.compatibility`; that package is not connector SPI.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,

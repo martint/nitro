@@ -15,7 +15,6 @@ package org.weakref.nitro.operator.source;
 
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
-import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
@@ -116,7 +115,7 @@ public final class BatchSourceOperator
             return;
         }
         if (staged != null) {
-            staged.select(new MaskSelection(mask));
+            staged.select(ingress.selection(mask));
             return;
         }
         if (currentBatch == null) {
@@ -167,16 +166,17 @@ public final class BatchSourceOperator
             return;
         }
         var handle = source.column(column);
-        source.addRuntimeFilter(new RuntimeFilter(
-                handle,
-                new NativeRuntimeFilterDomain(handle.type(), filter),
-                false));
+        source.addRuntimeFilter(ingress.runtimeFilter(handle, filter));
     }
 
     @Override
     public boolean supportsDynamicFilterPushdown(int column)
     {
-        return column >= 0 && column < outputCount() && source.supportsRuntimeFilter(source.column(column));
+        if (column < 0 || column >= outputCount()) {
+            return false;
+        }
+        var handle = source.column(column);
+        return ingress.supportsRuntimeFilter(source, handle) && source.supportsRuntimeFilter(handle);
     }
 
     @Override

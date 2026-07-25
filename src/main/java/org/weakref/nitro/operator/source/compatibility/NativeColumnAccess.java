@@ -11,19 +11,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.core.batch.ColumnCapability;
+import org.weakref.nitro.operator.Output;
 
-/// Compatibility capability for a native lazy output.
-enum NativeColumnCapability
-        implements ColumnCapability<NativeColumnAccess>
+/// Read-only access to one native lazy output.
+@FunctionalInterface
+interface NativeColumnAccess
 {
-    NATIVE_COLUMN;
-
-    @Override
-    public Class<NativeColumnAccess> valueType()
-    {
-        return NativeColumnAccess.class;
-    }
+    Output output();
 }

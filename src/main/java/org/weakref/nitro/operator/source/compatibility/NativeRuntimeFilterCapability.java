@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
 import org.weakref.nitro.core.source.DomainCapability;
 

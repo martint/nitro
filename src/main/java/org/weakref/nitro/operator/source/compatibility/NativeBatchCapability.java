@@ -11,12 +11,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.core.batch.BatchCapability;
 
-/// Internal compatibility protocol used to collapse an operator-to-source-to-operator round trip.
-interface NativeOperatorAccess
+/// Compatibility capability for zero-copy native ingress.
+enum NativeBatchCapability
+        implements BatchCapability<NativeBatchAccess>
 {
-    Operator operator();
+    NATIVE_BATCH;
+
+    @Override
+    public Class<NativeBatchAccess> valueType()
+    {
+        return NativeBatchAccess.class;
+    }
 }

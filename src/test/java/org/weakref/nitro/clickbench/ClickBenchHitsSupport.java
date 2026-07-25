@@ -63,8 +63,8 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
-import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
-import org.weakref.nitro.operator.source.OperatorBatchSource;
+import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
+import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.io.IOException;

@@ -11,12 +11,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
+import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.source.SourceOperatorIngress;
 
 import java.util.Optional;
 
@@ -41,5 +47,30 @@ public final class NativeSourceOperatorIngress
         NativeBatchAccess nativeBatch = batch.capability(NativeBatchCapability.NATIVE_BATCH)
                 .orElseThrow(() -> new IllegalArgumentException("source does not expose a native batch"));
         return nativeBatch.transfer();
+    }
+
+    @Override
+    public Selection selection(Mask mask)
+    {
+        return new MaskSelection(requireNonNull(mask, "mask is null"));
+    }
+
+    @Override
+    public boolean supportsRuntimeFilter(BatchSource source, SourceColumnHandle column)
+    {
+        requireNonNull(source, "source is null");
+        requireNonNull(column, "column is null");
+        return source.protocol(NativeOperatorProtocol.NATIVE_OPERATOR).isPresent();
+    }
+
+    @Override
+    public RuntimeFilter runtimeFilter(SourceColumnHandle column, DynamicFilter filter)
+    {
+        requireNonNull(column, "column is null");
+        requireNonNull(filter, "filter is null");
+        return new RuntimeFilter(
+                column,
+                new NativeRuntimeFilterDomain(column.type(), filter),
+                false);
     }
 }

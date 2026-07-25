@@ -11,13 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.DynamicFilter;
 
-/// Read-only access to one native lazy output.
-@FunctionalInterface
-interface NativeColumnAccess
+/// Compatibility protocol that retargets an engine-native runtime filter to a source ordinal.
+interface NativeRuntimeFilterAccess
 {
-    Output output();
+    DynamicFilter retarget(int column);
 }

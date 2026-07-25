@@ -11,19 +11,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source;
+package org.weakref.nitro.operator.source.compatibility;
 
-import org.weakref.nitro.core.source.SourceProtocol;
+import org.weakref.nitro.operator.Batch;
 
-/// Typed key for the internal native-operator compatibility protocol.
-enum NativeOperatorProtocol
-        implements SourceProtocol<NativeOperatorAccess>
+/// Ownership-transfer protocol for a source that already supplies a native Nitro batch.
+@FunctionalInterface
+interface NativeBatchAccess
 {
-    NATIVE_OPERATOR;
-
-    @Override
-    public Class<NativeOperatorAccess> valueType()
-    {
-        return NativeOperatorAccess.class;
-    }
+    Batch transfer();
 }
