@@ -65,6 +65,7 @@ import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.io.IOException;
@@ -763,7 +764,11 @@ public final class ClickBenchHitsSupport
             // The Nitro reader is multi-file aware, so it takes the whole directory's files directly.
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<String> columnNames = List.of(columns);
-            Operator decoder = new NitroParquetScanOperator(allocator, paths, columnNames);
+            Operator decoder = new NitroParquetScanOperator(
+                    new NitroParquetScanResources(),
+                    allocator,
+                    paths,
+                    columnNames);
             return new BatchSourceOperator(new OperatorBatchSource(
                     decoder,
                     SCHEMAS.parquet(paths.getFirst(), columnNames)),

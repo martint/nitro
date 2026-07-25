@@ -33,6 +33,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -78,6 +79,7 @@ import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.parquet.ColumnReader;
@@ -106,6 +108,25 @@ public class TestParquetOperator
 
     @TempDir
     java.nio.file.Path tempDirectory;
+
+    @Test
+    void testNitroParquetScanUsesExplicitConnectorResourcesWithAllocationOnlyAllocator()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-explicit-source-resources.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, true, 200L)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                Operator scan = new NitroParquetScanOperator(
+                        new NitroParquetScanResources(),
+                        allocator,
+                        List.of(file),
+                        List.of("x"))) {
+            assertThat(operator(scan)).matchesExactly(List.of(Row.row(10L), Row.row(20L)));
+        }
+    }
 
     @Test
     void testNitroParquetScanFilterProjectCrossesSourcePort()

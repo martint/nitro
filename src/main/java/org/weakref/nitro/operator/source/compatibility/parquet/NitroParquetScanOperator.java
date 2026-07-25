@@ -325,18 +325,50 @@ public final class NitroParquetScanOperator
 
     public NitroParquetScanOperator(Allocator allocator, List<Path> paths, List<String> columns)
     {
+        this(
+                allocator,
+                paths,
+                columns,
+                BUFFER_POOL,
+                DECOMPRESSED_PAGE_CACHE,
+                DIRECT_NUMERIC_BATCH_DECODE_ADMISSION);
+    }
+
+    public NitroParquetScanOperator(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Path> paths,
+            List<String> columns)
+    {
+        this(
+                allocator,
+                paths,
+                columns,
+                requireNonNull(resources, "resources is null").batchBufferPool(),
+                resources.decompressedPageCache(),
+                resources.directNumericBatchDecodeAdmission());
+    }
+
+    private NitroParquetScanOperator(
+            Allocator allocator,
+            List<Path> paths,
+            List<String> columns,
+            Object batchBufferPoolKey,
+            Object decompressedPageCacheKey,
+            Object directNumericBatchDecodeAdmissionKey)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
-        this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", BUFFER_POOL);
+        this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
         this.decompressedPageCacheLease = SHARED_DECOMPRESSED_PAGES
                 ? allocator.acquireSharedResource(
-                        DECOMPRESSED_PAGE_CACHE,
+                        decompressedPageCacheKey,
                         () -> new DecompressedPageCache(allocator.nativeBuffers()))
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
-                DIRECT_NUMERIC_BATCH_DECODE_ADMISSION, DirectNumericBatchDecodeAdmission::new);
+                directNumericBatchDecodeAdmissionKey, DirectNumericBatchDecodeAdmission::new);
         this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
         checkArgument(!paths.isEmpty(), "paths is empty");
