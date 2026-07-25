@@ -176,7 +176,11 @@ public final class PlanEvaluator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
-        this.preboundMasks = bindPreboundMasks(plan, primitiveRegistry, assignments);
+        this.preboundMasks = bindPreboundMasks(
+                plan,
+                primitiveRegistry,
+                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                assignments);
         this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
         this.explicitProjectedStreamsByProducer = streamsByProducer(plan.outputs());
@@ -983,6 +987,7 @@ public final class PlanEvaluator
     private static Map<Variable, PreboundMask> bindPreboundMasks(
             EvaluationPlan plan,
             PrimitiveRegistry primitiveRegistry,
+            ProjectionMaskCompiler projectionMaskCompiler,
             Map<Variable, Assignment> assignments)
     {
         Map<Variable, PreboundMask> bindings = new HashMap<>();
@@ -1020,7 +1025,7 @@ public final class PlanEvaluator
             List<ProjectionArgument> argumentShapes = call.arguments().stream()
                     .map(argument -> projectionArgument(argument, assignments))
                     .toList();
-            ProjectionMaskCompiler.tryCompile(provider, argumentShapes)
+            projectionMaskCompiler.tryCompile(provider, argumentShapes)
                     .ifPresent(compiled -> bindings.put(
                             assignment.output(),
                             compiledPreboundMask(call.arguments(), compiled, assignments)));

@@ -13,7 +13,9 @@
  */
 package org.weakref.nitro.jit;
 
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.VectorAccess;
 
 /**
  * Engine-owned raw-buffer protocol for generated UTF-8 mask kernels.
@@ -30,4 +32,18 @@ interface Utf8DynamicMaskKernel
     void retainDictionaryFlat(byte[] leftData, int[] leftOffsets, int[] leftIds, boolean[] leftNulls, byte[] rightData, int[] rightOffsets, int[] rightIds, boolean[] rightNulls, Mask mask, boolean selectMatches);
 
     void retainFlatDictionary(byte[] leftData, int[] leftOffsets, int[] leftIds, boolean[] leftNulls, byte[] rightData, int[] rightOffsets, int[] rightIds, boolean[] rightNulls, Mask mask, boolean selectMatches);
+
+    void retainNestedDictionaryDictionary(
+            byte[] leftData,
+            int[] leftOffsets,
+            DictionaryVector leftDictionary,
+            int leftDepth,
+            VectorAccess.BooleanValues leftNulls,
+            byte[] rightData,
+            int[] rightOffsets,
+            DictionaryVector rightDictionary,
+            int rightDepth,
+            VectorAccess.BooleanValues rightNulls,
+            Mask mask,
+            boolean selectMatches);
 }

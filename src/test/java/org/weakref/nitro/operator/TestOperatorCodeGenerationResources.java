@@ -70,6 +70,9 @@ class TestOperatorCodeGenerationResources
         assertThatThrownBy(first::fusedProjection)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Operator code-generation resources are closed");
+        assertThatThrownBy(first::projectionMask)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Operator code-generation resources are closed");
         assertThatThrownBy(() -> firstCompiler.tryCompile(plan, registry, List.of(output)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Fused projection compiler is closed");

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.jit.FusedProjectionCompiler;
+import org.weakref.nitro.jit.ProjectionMaskCompiler;
 
 /**
  * Engine-owned generated operator kernels.
@@ -25,6 +26,7 @@ public final class OperatorCodeGenerationResources
         implements AutoCloseable
 {
     private final FusedProjectionCompiler fusedProjection = new FusedProjectionCompiler();
+    private final ProjectionMaskCompiler projectionMask = new ProjectionMaskCompiler();
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
     private final MultiLongGroupingTableGenerator multiLongGrouping = new MultiLongGroupingTableGenerator();
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
@@ -37,6 +39,12 @@ public final class OperatorCodeGenerationResources
     {
         checkOpen();
         return fusedProjection;
+    }
+
+    public ProjectionMaskCompiler projectionMask()
+    {
+        checkOpen();
+        return projectionMask;
     }
 
     FusedGroupingAggregationKernelGenerator fusedGrouping()

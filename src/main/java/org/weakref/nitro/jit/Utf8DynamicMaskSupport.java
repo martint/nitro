@@ -23,6 +23,8 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Physical execution support for a compiled two-input UTF-8 equality expression.
  *
@@ -31,7 +33,12 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
  */
 final class Utf8DynamicMaskSupport
 {
-    private final Utf8DynamicMaskKernel kernel = Utf8DynamicMaskKernelGenerator.generate();
+    private final Utf8DynamicMaskKernel kernel;
+
+    Utf8DynamicMaskSupport(Utf8DynamicMaskKernel kernel)
+    {
+        this.kernel = requireNonNull(kernel, "kernel is null");
+    }
 
     boolean evaluate(Streams leftInput, Streams rightInput, Mask mask, boolean selectMatches)
     {
@@ -42,6 +49,29 @@ final class Utf8DynamicMaskSupport
         }
         Vector leftNullVector = leftInput.getOrNull(Stream.NULLS);
         Vector rightNullVector = rightInput.getOrNull(Stream.NULLS);
+        if (left instanceof DictionaryVector leftEncoded &&
+                leftEncoded.baseValues() instanceof BinaryVector leftBase &&
+                right instanceof DictionaryVector rightEncoded &&
+                rightEncoded.baseValues() instanceof BinaryVector rightBase &&
+                (leftEncoded.dictionaryDepth() > 1 ||
+                        rightEncoded.dictionaryDepth() > 1 ||
+                        (leftNullVector != null && !(leftNullVector instanceof BooleanVector)) ||
+                        (rightNullVector != null && !(rightNullVector instanceof BooleanVector)))) {
+            kernel.retainNestedDictionaryDictionary(
+                    leftBase.data(),
+                    leftBase.offsets(),
+                    leftEncoded,
+                    leftEncoded.dictionaryDepth(),
+                    leftNullVector == null ? null : VectorAccess.booleanValues(leftNullVector),
+                    rightBase.data(),
+                    rightBase.offsets(),
+                    rightEncoded,
+                    rightEncoded.dictionaryDepth(),
+                    rightNullVector == null ? null : VectorAccess.booleanValues(rightNullVector),
+                    mask,
+                    selectMatches);
+            return true;
+        }
         if ((leftNullVector != null && !(leftNullVector instanceof BooleanVector)) ||
                 (rightNullVector != null && !(rightNullVector instanceof BooleanVector))) {
             retainGeneral(left, right, leftNullVector, rightNullVector, mask, selectMatches);

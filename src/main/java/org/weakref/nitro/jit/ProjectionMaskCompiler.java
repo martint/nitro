@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Compiles provider-authored projection semantics to engine-owned mask programs.
@@ -43,9 +44,20 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  */
 public final class ProjectionMaskCompiler
 {
-    private ProjectionMaskCompiler() {}
+    private final DynamicKernelFactory dynamicKernelFactory;
+    private volatile Utf8DynamicMaskKernel utf8DynamicKernel;
 
-    public static Optional<CompiledMask> tryCompile(
+    public ProjectionMaskCompiler()
+    {
+        this(Utf8DynamicMaskKernelGenerator::generate);
+    }
+
+    ProjectionMaskCompiler(DynamicKernelFactory dynamicKernelFactory)
+    {
+        this.dynamicKernelFactory = requireNonNull(dynamicKernelFactory, "dynamicKernelFactory is null");
+    }
+
+    public Optional<CompiledMask> tryCompile(
             MaskCodeProvider provider,
             List<ProjectionArgument> arguments)
     {
@@ -84,7 +96,7 @@ public final class ProjectionMaskCompiler
         };
     }
 
-    private static Optional<CompiledMask> compileUtf8LiteralEquality(
+    private Optional<CompiledMask> compileUtf8LiteralEquality(
             Program program,
             Utf8Equal equality,
             List<ProjectionArgument> arguments)
@@ -119,7 +131,8 @@ public final class ProjectionMaskCompiler
                     List.of(streams, streams),
                     List.of(
                             new ArgumentComponent(0, Stream.ERRORS),
-                            new ArgumentComponent(1, Stream.ERRORS))));
+                            new ArgumentComponent(1, Stream.ERRORS)),
+                    utf8DynamicKernel()));
         }
 
         List<Set<Stream>> requiredStreams = inputIndex == 0
@@ -189,6 +202,29 @@ public final class ProjectionMaskCompiler
     private static boolean isArgumentNull(ProjectionProgramBuilder.Expression expression, int index)
     {
         return expression instanceof ArgumentNull argumentNull && argumentNull.index() == index;
+    }
+
+    private Utf8DynamicMaskKernel utf8DynamicKernel()
+    {
+        Utf8DynamicMaskKernel kernel = utf8DynamicKernel;
+        if (kernel != null) {
+            return kernel;
+        }
+        return createUtf8DynamicKernel();
+    }
+
+    private synchronized Utf8DynamicMaskKernel createUtf8DynamicKernel()
+    {
+        if (utf8DynamicKernel == null) {
+            utf8DynamicKernel = dynamicKernelFactory.create();
+        }
+        return utf8DynamicKernel;
+    }
+
+    @FunctionalInterface
+    interface DynamicKernelFactory
+    {
+        Utf8DynamicMaskKernel create();
     }
 
     public abstract static class CompiledMask
@@ -355,13 +391,15 @@ public final class ProjectionMaskCompiler
     private static final class Utf8DynamicMask
             extends CompiledMask
     {
-        private final Utf8DynamicMaskSupport support = new Utf8DynamicMaskSupport();
+        private final Utf8DynamicMaskSupport support;
 
         private Utf8DynamicMask(
                 List<Set<Stream>> requiredInputStreams,
-                List<ArgumentComponent> excludedComponents)
+                List<ArgumentComponent> excludedComponents,
+                Utf8DynamicMaskKernel kernel)
         {
             super(2, requiredInputStreams, excludedComponents);
+            support = new Utf8DynamicMaskSupport(kernel);
         }
 
         @Override

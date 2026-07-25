@@ -31,12 +31,15 @@ import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64Optimization;
 import org.weakref.nitro.operator.Streams;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestProjectionMaskCompiler
 {
+    private final ProjectionMaskCompiler compiler = new ProjectionMaskCompiler();
+
     private static final List<ProjectionArgument> F64_ARGUMENTS =
             List.of(ProjectionArgument.input(), ProjectionArgument.literal(1.0));
     private static final List<ProjectionArgument> I64_ARGUMENTS =
@@ -45,19 +48,19 @@ class TestProjectionMaskCompiler
     @Test
     void testCompilesProviderAuthoredDoubleComparisons()
     {
-        assertThat(ProjectionMaskCompiler.tryCompile(new EqualF64Optimization(), F64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new LessThanF64Optimization(), F64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new LessThanOrEqualF64Optimization(), F64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new GreaterThanF64Optimization(), F64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new GreaterThanOrEqualF64Optimization(), F64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new EqualF64Optimization(), F64_ARGUMENTS).orElseThrow().argumentCount())
+        assertThat(compiler.tryCompile(new EqualF64Optimization(), F64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new LessThanF64Optimization(), F64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new LessThanOrEqualF64Optimization(), F64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new GreaterThanF64Optimization(), F64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new GreaterThanOrEqualF64Optimization(), F64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new EqualF64Optimization(), F64_ARGUMENTS).orElseThrow().argumentCount())
                 .isEqualTo(2);
     }
 
     @Test
     void testRejectsUnsupportedArity()
     {
-        assertThat(ProjectionMaskCompiler.tryCompile(
+        assertThat(compiler.tryCompile(
                 new EqualF64Optimization(), List.of(ProjectionArgument.input())))
                 .isEmpty();
     }
@@ -65,14 +68,14 @@ class TestProjectionMaskCompiler
     @Test
     void testCompilesProviderAuthoredLongComparisons()
     {
-        assertThat(ProjectionMaskCompiler.tryCompile(new EqualI64Optimization(), I64_ARGUMENTS)).isPresent();
-        assertThat(ProjectionMaskCompiler.tryCompile(new LessThanI64RangeOptimization(), I64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new EqualI64Optimization(), I64_ARGUMENTS)).isPresent();
+        assertThat(compiler.tryCompile(new LessThanI64RangeOptimization(), I64_ARGUMENTS)).isPresent();
     }
 
     @Test
     void testCompilesProviderAuthoredUtf8LiteralEquality()
     {
-        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
                 new EqualUtf8ProjectionOptimization(),
                 List.of(ProjectionArgument.input(), ProjectionArgument.literal("BUILDING")))
                 .orElseThrow();
@@ -96,7 +99,7 @@ class TestProjectionMaskCompiler
     @Test
     void testCompiledUtf8LiteralEqualityUsesDictionaryEncoding()
     {
-        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
                 new EqualUtf8ProjectionOptimization(),
                 List.of(ProjectionArgument.literal("Brand#45"), ProjectionArgument.input()))
                 .orElseThrow();
@@ -115,7 +118,7 @@ class TestProjectionMaskCompiler
     @Test
     void testCompilesProviderAuthoredUtf8InputEquality()
     {
-        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
                 new EqualUtf8ProjectionOptimization(),
                 List.of(ProjectionArgument.input(), ProjectionArgument.input()))
                 .orElseThrow();
@@ -142,9 +145,24 @@ class TestProjectionMaskCompiler
     }
 
     @Test
+    void testReusesDynamicKernelWithinCompilerLifetime()
+    {
+        AtomicInteger generatedKernels = new AtomicInteger();
+        ProjectionMaskCompiler compiler = new ProjectionMaskCompiler(() -> {
+            generatedKernels.incrementAndGet();
+            return Utf8DynamicMaskKernelGenerator.generate();
+        });
+
+        List<ProjectionArgument> arguments = List.of(ProjectionArgument.input(), ProjectionArgument.input());
+        assertThat(compiler.tryCompile(new EqualUtf8ProjectionOptimization(), arguments)).isPresent();
+        assertThat(compiler.tryCompile(new EqualUtf8ProjectionOptimization(), arguments)).isPresent();
+        assertThat(generatedKernels).hasValue(1);
+    }
+
+    @Test
     void testCompiledUtf8InputEqualityFusesNulls()
     {
-        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
                 new EqualUtf8ProjectionOptimization(),
                 List.of(ProjectionArgument.input(), ProjectionArgument.input()))
                 .orElseThrow();
@@ -157,6 +175,52 @@ class TestProjectionMaskCompiler
                 mask,
                 true)).isTrue();
         assertThat(mask).containsExactly(0);
+    }
+
+    @Test
+    void testCompiledUtf8InputEqualityTraversesNestedDictionariesAndEncodedNulls()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.input()))
+                .orElseThrow();
+
+        DictionaryVector left = new DictionaryVector(
+                new int[] {5, 2, 0, 3, 1, 4},
+                new DictionaryVector(
+                        new int[] {3, 1, 0, 2, 1, 3},
+                        new DictionaryVector(
+                                new int[] {2, 0, 3, 1},
+                                utf8("A", "B", "C", "D"))));
+        DictionaryVector right = new DictionaryVector(
+                new int[] {0, 1, 3, 2, 0, 2},
+                new DictionaryVector(
+                        new int[] {1, 2, 0, 3},
+                        utf8("A", "B", "C", "X")));
+        DictionaryVector leftNulls = new DictionaryVector(
+                new int[] {0, 1, 0, 0, 0, 0},
+                new BooleanVector(new boolean[] {false, true}));
+        DictionaryVector rightNulls = new DictionaryVector(
+                new int[] {0, 0, 0, 0, 0, 1},
+                new BooleanVector(new boolean[] {false, true}));
+
+        Mask trueMask = Mask.all(6);
+        assertThat(compiled.evaluate(
+                List.of(
+                        Streams.of(left, leftNulls, null),
+                        Streams.of(right, rightNulls, null)),
+                trueMask,
+                true)).isTrue();
+        assertThat(trueMask).containsExactly(0);
+
+        Mask falseMask = Mask.sparse(new int[] {0, 2, 3, 5}, 6);
+        assertThat(compiled.evaluate(
+                List.of(
+                        Streams.of(left, leftNulls, null),
+                        Streams.of(right, rightNulls, null)),
+                falseMask,
+                false)).isTrue();
+        assertThat(falseMask).containsExactly(2, 3);
     }
 
     private static BinaryVector utf8(String... values)
