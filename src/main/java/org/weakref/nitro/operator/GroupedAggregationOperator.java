@@ -23,8 +23,6 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
-import org.weakref.nitro.operator.aggregation.AccumulatorFusion;
-import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
 import org.weakref.nitro.operator.aggregation.FusedAggregator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
@@ -64,12 +62,8 @@ public class GroupedAggregationOperator
             Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.sparseConstrainedResults", "true"));
     private static final boolean GROUP_PARTITIONED_LONG_DISTINCT =
             Boolean.parseBoolean(System.getProperty("nitro.distinct.groupPartitionedLong", "true"));
-    private static final boolean ACCUMULATOR_FUSION =
-            Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.accumulatorFusion", "true"));
-    private static final boolean PARTIAL_ACCUMULATOR_FUSION =
-            Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.partialAccumulatorFusion", "true"));
-    private static final boolean FUSED_COUNT_COLUMN =
-            Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedCountColumn", "true"));
+    private static final boolean PARTIAL_GENERATED_GROUPING =
+            Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.partialGeneratedGrouping", "true"));
     private static final boolean FUSED_DICTIONARY_INPUT =
             Boolean.parseBoolean(System.getProperty("nitro.groupedAggregation.fusedDictionaryInput", "true"));
     private static final boolean FUSED_LONG_RUN_CACHE =
@@ -185,10 +179,7 @@ public class GroupedAggregationOperator
                 .toArray();
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
-        // Apply the same declarative accumulator planner used by scalar aggregation. Recognized
-        // cooperating accumulators (for example min/max over one input) share their input pass;
-        // this operator still drives only the general Accumulator contract.
-        this.aggregations = (ACCUMULATOR_FUSION ? AccumulatorFusion.fuse(aggregations) : aggregations).toArray(Accumulator[]::new);
+        this.aggregations = aggregations.toArray(Accumulator[]::new);
         DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(this.aggregations);
         this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();
         this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
@@ -353,8 +344,8 @@ public class GroupedAggregationOperator
                 // A filtered-only aggregation can still use a generated grouping-only pass that writes
                 // group IDs for the explicit masked stage.
                 && (plainAggregationIndexes.length > 0 || filteredAggregationIndexes.length > 0)
-                && (filteredAggregationIndexes.length == 0 || PARTIAL_ACCUMULATOR_FUSION)
-                && (distinctAggregationGroups.length == 0 || PARTIAL_ACCUMULATOR_FUSION)
+                && (filteredAggregationIndexes.length == 0 || PARTIAL_GENERATED_GROUPING)
+                && (distinctAggregationGroups.length == 0 || PARTIAL_GENERATED_GROUPING)
                 && inlineGroupingState.usesSingleLongGrouping()
                 && allPlainAggregationsFusible();
         if (!fusedEligible) {
@@ -380,8 +371,7 @@ public class GroupedAggregationOperator
     private boolean allPlainAggregationsFusible()
     {
         for (int aggregationIndex : plainAggregationIndexes) {
-            if (!(aggregations[aggregationIndex] instanceof FusedAggregator)
-                    || (!FUSED_COUNT_COLUMN && aggregations[aggregationIndex] instanceof CountColumn)) {
+            if (!(aggregations[aggregationIndex] instanceof FusedAggregator)) {
                 return false;
             }
         }

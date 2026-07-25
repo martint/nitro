@@ -17,7 +17,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
-import org.weakref.nitro.operator.aggregation.AccumulatorFusion;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
@@ -50,11 +49,7 @@ public class AggregationOperator
                 "AggregationOperator",
                 allocator.engineResources().aggregationOperator().bufferPoolGroup());
         this.source = source;
-        // AccumulatorFusion rewrites recognized pairs (e.g. Min + Max on the same column) into
-        // cooperating accumulators that share a single input scan per batch. The operator's main
-        // loop remains fully generic; any operation-specific fast path lives in the aggregation
-        // package.
-        this.aggregations = AccumulatorFusion.fuse(aggregations);
+        this.aggregations = List.copyOf(aggregations);
 
         reusableResults = new Streams[this.aggregations.size()];
     }

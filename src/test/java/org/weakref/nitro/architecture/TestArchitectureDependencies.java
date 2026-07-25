@@ -243,6 +243,26 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testExecutionOperatorsDoNotRewriteAggregateFunctionCombinations()
+    {
+        Path aggregation = MAIN_SOURCES.resolve("org/weakref/nitro/operator/aggregation");
+
+        assertThat(aggregation.resolve("AccumulatorFusion.java")).doesNotExist();
+        assertThat(aggregation.resolve("FusedConditionalSums.java")).doesNotExist();
+        assertThat(aggregation.resolve("FusedCountAvgStddevI64.java")).doesNotExist();
+        assertThat(aggregation.resolve("FusedMinMaxI64.java")).doesNotExist();
+        assertThat(aggregation.resolve("FusedSumAvgF64.java")).doesNotExist();
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/AggregationOperator.java")))
+                .doesNotContain("AccumulatorFusion.fuse(", "import org.weakref.nitro.operator.aggregation.AccumulatorFusion;");
+        assertThat(read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/GroupedAggregationOperator.java")))
+                .doesNotContain(
+                        "AccumulatorFusion.fuse(",
+                        "import org.weakref.nitro.operator.aggregation.AccumulatorFusion;",
+                        "import org.weakref.nitro.operator.aggregation.CountColumn;",
+                        "instanceof CountColumn");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(

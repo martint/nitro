@@ -33,9 +33,7 @@ import static java.lang.Math.toIntExact;
 
 /**
  * SQL {@code sum(if(discriminator = literal, value, 0))} without requiring the conditional value vector to be
- * materialized. Multiple compatible instances are fused by {@link AccumulatorFusion} into one discriminator scan.
- * The declaration is representation-neutral; the fused implementation resolves the concrete vector shape once per
- * batch and may hoist dictionary equality to the dictionary boundary.
+ * materialized. The declaration is representation-neutral and resolves the concrete vector shape once per batch.
  */
 public final class ConditionalSum
         implements Accumulator

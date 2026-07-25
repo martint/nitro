@@ -1413,7 +1413,7 @@ public class TestOperators
     }
 
     @Test
-    void testFusedConditionalSumsPreserveSqlNullAndZeroSemanticsForBinaryDiscriminator()
+    void testConditionalSumsPreserveSqlNullAndZeroSemanticsForBinaryDiscriminator()
     {
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
@@ -1439,7 +1439,7 @@ public class TestOperators
     }
 
     @Test
-    void testFusedConditionalSumsSupportLongDiscriminator()
+    void testConditionalSumsSupportLongDiscriminator()
     {
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
@@ -2752,7 +2752,7 @@ public class TestOperators
     }
 
     @Test
-    void testFusedF64SumAvgPreservesIndependentResultsAndNulls()
+    void testF64SumAvgPreserveIndependentResultsAndNulls()
     {
         Operator global = new AggregationOperator(
                 allocator,
@@ -2764,7 +2764,7 @@ public class TestOperators
         assertThat(operator(global))
                 .matchesExactly(List.of(row(8.0, 8.0 / 3)));
 
-        // Reverse accumulator order exercises an AVG scanner writing its SUM follower's state.
+        // Reverse accumulator order verifies that output order does not affect independent state.
         Operator grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -2785,9 +2785,9 @@ public class TestOperators
     }
 
     @Test
-    void testFusedCountAvgStddevPreservesIndependentResultsAndNulls()
+    void testCountAvgStddevPreserveIndependentResultsAndNulls()
     {
-        // Put STDDEV first so the scanner role is independent of accumulator kind and output order.
+        // Put STDDEV first to verify that independent aggregate state is insensitive to output order.
         Operator grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -3267,10 +3267,9 @@ public class TestOperators
     }
 
     @Test
-    void testFusedMinMaxLargeGroupedNullableResults()
+    void testMinMaxLargeGroupedNullableResults()
     {
-        // More than the shared-state admission floor exercises the fused follower's independent
-        // result ownership. Some groups remain SQL NULL while the others receive multiple values.
+        // Some groups remain SQL NULL while the others receive multiple values.
         List<org.weakref.nitro.data.Row> input = new ArrayList<>();
         List<org.weakref.nitro.data.Row> expected = new ArrayList<>();
         for (long group = 0; group < 100; group++) {
