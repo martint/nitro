@@ -214,6 +214,9 @@ class TestArchitectureDependencies
                 "LongComparisonMaskSupport.java",
                 "ProjectionMaskCompiler.java",
                 "ProjectionProgramBuilder.java",
+                "Utf8DynamicMaskSupport.java",
+                "Utf8DynamicMaskKernel.java",
+                "Utf8DynamicMaskKernelGenerator.java",
                 "Utf8LiteralMaskSupport.java",
                 "Utf8LiteralMatcher.java",
                 "Utf8LiteralMatcherGenerator.java");
@@ -226,6 +229,8 @@ class TestArchitectureDependencies
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java")),
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/ProjectionMaskCompiler.java")),
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/DoubleComparisonMaskSupport.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8DynamicMaskSupport.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8DynamicMaskKernelGenerator.java")),
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8LiteralMaskSupport.java")),
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8LiteralMatcherGenerator.java")));
 

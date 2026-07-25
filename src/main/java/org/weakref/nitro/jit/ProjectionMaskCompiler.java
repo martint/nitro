@@ -114,7 +114,12 @@ public final class ProjectionMaskCompiler
             literal = value;
         }
         else {
-            return Optional.empty();
+            Set<Stream> streams = Set.of(Stream.VALUES, Stream.NULLS);
+            return Optional.of(new Utf8DynamicMask(
+                    List.of(streams, streams),
+                    List.of(
+                            new ArgumentComponent(0, Stream.ERRORS),
+                            new ArgumentComponent(1, Stream.ERRORS))));
         }
 
         List<Set<Stream>> requiredStreams = inputIndex == 0
@@ -344,6 +349,25 @@ public final class ProjectionMaskCompiler
         public boolean evaluate(List<Streams> inputs, Mask mask, boolean selectTrue)
         {
             return support.evaluate(inputs.get(inputIndex), mask, selectTrue);
+        }
+    }
+
+    private static final class Utf8DynamicMask
+            extends CompiledMask
+    {
+        private final Utf8DynamicMaskSupport support = new Utf8DynamicMaskSupport();
+
+        private Utf8DynamicMask(
+                List<Set<Stream>> requiredInputStreams,
+                List<ArgumentComponent> excludedComponents)
+        {
+            super(2, requiredInputStreams, excludedComponents);
+        }
+
+        @Override
+        public boolean evaluate(List<Streams> inputs, Mask mask, boolean selectTrue)
+        {
+            return support.evaluate(inputs.get(0), inputs.get(1), mask, selectTrue);
         }
     }
 }

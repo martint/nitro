@@ -171,6 +171,27 @@ class TestAllocator
     }
 
     @Test
+    void testUninitializedSparseMaskSupportsAllRowsSelected()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("test");
+            Mask mask = allocator.allocateUninitializedSparseMask(context, 4, 4);
+            int[] positions = mask.positionsArrayForOverwrite(4);
+            for (int position = 0; position < 4; position++) {
+                positions[position] = position;
+            }
+
+            assertThat(mask.all()).isTrue();
+            assertThat(mask).containsExactly(0, 1, 2, 3);
+
+            allocator.release(context, mask);
+            Mask reused = allocator.allocateUninitializedSparseMask(context, 4, 4);
+            assertThat(reused).isSameAs(mask);
+            assertThat(reused.all()).isTrue();
+        }
+    }
+
+    @Test
     void testCompatibleVectorPoolRequiresThreeRegisteredGroups()
     {
         Object compatibilityGroup = new Object();

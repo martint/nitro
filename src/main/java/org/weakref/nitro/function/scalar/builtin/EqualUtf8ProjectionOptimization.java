@@ -30,13 +30,7 @@ public final class EqualUtf8ProjectionOptimization
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)
     {
-        if (arguments.size() != 2 ||
-                !((arguments.get(0).kind() == ProjectionArgument.Kind.INPUT &&
-                        arguments.get(1).kind() == ProjectionArgument.Kind.LITERAL &&
-                        arguments.get(1).literal() instanceof String) ||
-                        (arguments.get(1).kind() == ProjectionArgument.Kind.INPUT &&
-                                arguments.get(0).kind() == ProjectionArgument.Kind.LITERAL &&
-                                arguments.get(0).literal() instanceof String))) {
+        if (arguments.size() != 2) {
             return Optional.empty();
         }
         return Optional.of(builder.program(

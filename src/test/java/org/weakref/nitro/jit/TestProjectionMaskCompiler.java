@@ -16,6 +16,7 @@ package org.weakref.nitro.jit;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Utf8Traits;
@@ -109,6 +110,53 @@ class TestProjectionMaskCompiler
                 mask,
                 true)).isTrue();
         assertThat(mask).containsExactly(0, 2);
+    }
+
+    @Test
+    void testCompilesProviderAuthoredUtf8InputEquality()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.input()))
+                .orElseThrow();
+
+        DictionaryVector left = new DictionaryVector(
+                new int[] {0, 1, 2, 1},
+                utf8("A", "B", "C"));
+        DictionaryVector right = new DictionaryVector(
+                new int[] {1, 1, 0, 2},
+                utf8("C", "A", "B"));
+        Mask trueMask = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(left), Streams.ofValues(right)),
+                trueMask,
+                true)).isTrue();
+        assertThat(trueMask).containsExactly(0, 2, 3);
+
+        Mask falseMask = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(left), Streams.ofValues(right)),
+                falseMask,
+                false)).isTrue();
+        assertThat(falseMask).containsExactly(1);
+    }
+
+    @Test
+    void testCompiledUtf8InputEqualityFusesNulls()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.input()))
+                .orElseThrow();
+
+        Mask mask = Mask.all(3);
+        assertThat(compiled.evaluate(
+                List.of(
+                        Streams.ofValuesAndNulls(utf8("A", "B", "C"), new BooleanVector(new boolean[] {false, true, false})),
+                        Streams.ofValuesAndNulls(utf8("A", "B", "X"), new BooleanVector(new boolean[] {false, false, true}))),
+                mask,
+                true)).isTrue();
+        assertThat(mask).containsExactly(0);
     }
 
     private static BinaryVector utf8(String... values)

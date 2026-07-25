@@ -487,6 +487,16 @@ public class Allocator
         ContextState state = state(context);
         Mask mask = state.borrowMask(selectedCount);
         boolean reused = mask != null;
+        if (selectedCount == totalPositions) {
+            if (!reused) {
+                mask = Mask.all(totalPositions);
+            }
+            else {
+                mask.selectAll(totalPositions);
+            }
+            state.trackMask(mask, reused);
+            return mask;
+        }
         if (!reused) {
             mask = Mask.sparse(new int[selectedCount], totalPositions);
         }
