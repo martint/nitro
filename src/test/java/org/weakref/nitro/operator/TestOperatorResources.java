@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 
 import java.util.List;
@@ -74,6 +75,7 @@ class TestOperatorResources
                 OperatorResources operatorResources = OperatorResources.createDefault();
                 Allocator allocator = new Allocator(allocationResources);
                 Operator groupSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator filterSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator aggregationSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator groupedAggregationSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator distinctSource = new ConstantTableOperator(allocator, 0, List.of());
@@ -83,6 +85,13 @@ class TestOperatorResources
                 Operator joinOuter = new ConstantTableOperator(allocator, 0, List.of());
                 Operator joinInner = new ConstantTableOperator(allocator, 0, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
+                Operator filter = new FilterOperator(
+                        filterSource,
+                        new EvaluationPlan(List.of(), List.of()),
+                        new PrimitiveRegistry(),
+                        AllMask.ALL,
+                        allocator,
+                        operatorResources.codeGeneration().projectionMask());
                 Operator aggregation = new AggregationOperator(allocator, List.of(), aggregationSource, operatorResources);
                 Operator groupedAggregation = new GroupedAggregationOperator(
                         allocator,
@@ -103,6 +112,7 @@ class TestOperatorResources
                         operatorResources);
                 Operator hashJoin = new HashJoinOperator(operatorResources, allocator, joinOuter, 0, joinInner, 0)) {
             assertThat(group.outputCount()).isEqualTo(1);
+            assertThat(filter.outputCount()).isZero();
             assertThat(aggregation.outputCount()).isZero();
             assertThat(groupedAggregation.outputCount()).isEqualTo(1);
             assertThat(distinct.outputCount()).isZero();

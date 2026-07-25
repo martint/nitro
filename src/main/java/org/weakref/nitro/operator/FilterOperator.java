@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
@@ -58,7 +59,41 @@ public class FilterOperator
         this(source, evaluationPlan, primitiveRegistry, MaskExpressionResolver.resolve(evaluationPlan, predicateReference), allocator);
     }
 
+    public FilterOperator(
+            Operator source,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
+            Reference predicateReference,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler)
+    {
+        this(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                MaskExpressionResolver.resolve(evaluationPlan, predicateReference),
+                allocator,
+                projectionMaskCompiler);
+    }
+
     public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, MaskExpression predicateMask, Allocator allocator)
+    {
+        this(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                predicateMask,
+                allocator,
+                allocator.engineResources().operatorCodeGeneration().projectionMask());
+    }
+
+    public FilterOperator(
+            Operator source,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
+            MaskExpression predicateMask,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler)
     {
         this.source = source;
         this.allocator = allocator;
@@ -81,7 +116,7 @@ public class FilterOperator
                     default -> null;
                 };
             }
-        }, allocator);
+        }, allocator, projectionMaskCompiler);
         this.predicateMask = RangeConstraintLowerer.lower(evaluationPlan, primitiveRegistry, predicateMask);
         if (PUSH_STATIC_LONG_EQUALITY) {
             staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
