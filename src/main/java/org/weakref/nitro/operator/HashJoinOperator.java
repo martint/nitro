@@ -287,23 +287,20 @@ public class HashJoinOperator
     private static final int ERRORS_FLAG = 1 << 2;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
-    private static final boolean SHARE_BUFFER_POOL_ACROSS_OPERATORS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"));
-    private static final Object SHARED_BUFFER_POOL_GROUP = new Object();
     private final Allocator allocator;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
     // than returning the still-live build vector to the shared pool. The two contexts deliberately share a pool so
     // their compatible buffers can still be recycled once the owning lifetime has ended. Independent join instances
-    // use the same allocator-local compatibility key by default: a released sibling/subtree generation can feed the
-    // next join without either context gaining authority over the other's live buffers. The Allocator itself owns the
-    // pool, so the static key never shares storage between queries or Allocator instances.
+    // use the same engine-owner compatibility key by default: a released sibling/subtree generation can feed the next
+    // join without either context gaining authority over the other's live buffers. The Allocator itself owns the pool,
+    // so the compatibility key never shares storage between queries or Allocator instances.
     private final Object allocationPoolGroup = new Object();
-    private final Object allocationCompatibilityGroup = SHARE_BUFFER_POOL_ACROSS_OPERATORS ? SHARED_BUFFER_POOL_GROUP : allocationPoolGroup;
+    private final Object allocationCompatibilityGroup;
     // Keep the established profile name for output buffers; allocation telemetry and external diagnostics aggregate
     // contexts by this stable name. Build ownership is still isolated below by a distinct scope and name.
-    private final Allocator.Context allocationContext = new Allocator.Context("HashJoinOperator", allocationPoolGroup, allocationCompatibilityGroup);
-    private final Allocator.Context buildAllocationContext = new Allocator.Context("HashJoinOperatorBuild", allocationPoolGroup, allocationCompatibilityGroup);
+    private final Allocator.Context allocationContext;
+    private final Allocator.Context buildAllocationContext;
     private final Operator outer;
     private Operator probeSource;
     private final Operator inner;
@@ -524,6 +521,17 @@ public class HashJoinOperator
         }
 
         this.allocator = allocator;
+        this.allocationCompatibilityGroup = allocator.engineResources()
+                .hashJoinOperator()
+                .bufferPoolCompatibilityGroup(allocationPoolGroup);
+        this.allocationContext = new Allocator.Context(
+                "HashJoinOperator",
+                allocationPoolGroup,
+                allocationCompatibilityGroup);
+        this.buildAllocationContext = new Allocator.Context(
+                "HashJoinOperatorBuild",
+                allocationPoolGroup,
+                allocationCompatibilityGroup);
         this.arrayPool = allocator.primitiveArrays();
         allocator.register(allocationContext);
         allocator.register(buildAllocationContext);

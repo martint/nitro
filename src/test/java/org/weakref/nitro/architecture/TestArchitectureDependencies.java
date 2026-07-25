@@ -177,6 +177,20 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testHashJoinCompatibilityDomainIsExplicitlyOwned()
+            throws IOException
+    {
+        String hashJoinOperator = Files.readString(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/HashJoinOperator.java"));
+
+        assertThat(hashJoinOperator)
+                .doesNotContain("static final Object SHARED_BUFFER_POOL_GROUP")
+                .doesNotContain("SHARE_BUFFER_POOL_ACROSS_OPERATORS")
+                .contains(".hashJoinOperator()")
+                .contains(".bufferPoolCompatibilityGroup(allocationPoolGroup)");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(

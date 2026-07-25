@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.AggregationOperatorResources;
+import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
 
@@ -39,6 +40,7 @@ public final class EngineResources
     private final OperatorCodeGenerationResources operatorCodeGeneration;
     private final ProjectOperatorResources projectOperator;
     private final AggregationOperatorResources aggregationOperator;
+    private final HashJoinOperatorResources hashJoinOperator;
     private boolean closed;
 
     public EngineResources(
@@ -46,13 +48,15 @@ public final class EngineResources
             PrimitiveArrayPool nativeBuffers,
             OperatorCodeGenerationResources operatorCodeGeneration,
             ProjectOperatorResources projectOperator,
-            AggregationOperatorResources aggregationOperator)
+            AggregationOperatorResources aggregationOperator,
+            HashJoinOperatorResources hashJoinOperator)
     {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
         this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
         this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
         this.aggregationOperator = requireNonNull(aggregationOperator, "aggregationOperator is null");
+        this.hashJoinOperator = requireNonNull(hashJoinOperator, "hashJoinOperator is null");
     }
 
     /**
@@ -71,7 +75,9 @@ public final class EngineResources
                         Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
                 new OperatorCodeGenerationResources(),
                 new ProjectOperatorResources(),
-                new AggregationOperatorResources());
+                new AggregationOperatorResources(),
+                new HashJoinOperatorResources(Boolean.parseBoolean(
+                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"))));
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -102,6 +108,12 @@ public final class EngineResources
     {
         checkOpen();
         return aggregationOperator;
+    }
+
+    public HashJoinOperatorResources hashJoinOperator()
+    {
+        checkOpen();
+        return hashJoinOperator;
     }
 
     @Override
