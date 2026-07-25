@@ -62,6 +62,7 @@ public class ProjectOperator
 
     private final EvaluationPlan evaluationPlan;
     private final PrimitiveRegistry primitiveRegistry;
+    private final OperatorResources operatorResources;
     private final List<Reference> outputReferences;
     // A projection made exclusively of direct input references does not own or recompute any vectors: its outputs
     // are forwarded views of the source batch. Such a projection can safely inherit the source's retention contract.
@@ -84,7 +85,24 @@ public class ProjectOperator
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, Schema outputSchema)
     {
+        this(allocator, evaluationPlan, primitiveRegistry, source, outputSchema, allocator.engineResources().operatorResources());
+    }
+
+    public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, evaluationPlan, primitiveRegistry, source, Schema.unspecified(evaluationPlan.outputs().size()), operatorResources);
+    }
+
+    public ProjectOperator(
+            Allocator allocator,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
+            Operator source,
+            Schema outputSchema,
+            OperatorResources operatorResources)
+    {
         this.allocator = allocator;
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.source = source;
         this.evaluationPlan = evaluationPlan;
         this.primitiveRegistry = primitiveRegistry;
@@ -97,7 +115,7 @@ public class ProjectOperator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.reusablePlanEvaluator = REUSE_PLAN_EVALUATOR ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
         CompiledMultiProjection compiled = COMPILE_EXPRESSIONS
-                ? allocator.engineResources().operatorCodeGeneration().fusedProjection()
+                ? operatorResources.codeGeneration().fusedProjection()
                         .tryCompile(evaluationPlan, primitiveRegistry, outputReferences)
                         .orElse(null)
                 : null;
@@ -282,9 +300,17 @@ public class ProjectOperator
                         primitiveRegistry,
                         inputResolver,
                         allocator,
-                        allocator.engineResources().projectOperator().evaluatorBufferPoolGroup(),
+                        operatorResources.codeGeneration().projectionMask(),
+                        operatorResources.project().evaluatorBufferPoolGroup(),
                         true)
-                : new PlanEvaluator(evaluationPlan, primitiveRegistry, inputResolver, allocator, new Object(), true);
+                : new PlanEvaluator(
+                        evaluationPlan,
+                        primitiveRegistry,
+                        inputResolver,
+                        allocator,
+                        operatorResources.codeGeneration().projectionMask(),
+                        new Object(),
+                        true);
     }
 
     // Compute an output's whole stream bundle once: try the fused kernel (a single monomorphic loop over the source

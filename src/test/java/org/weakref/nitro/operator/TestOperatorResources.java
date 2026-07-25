@@ -14,6 +14,12 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.AllocationResources;
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
@@ -38,5 +44,22 @@ class TestOperatorResources
                 .withMessage("Operator resources are closed");
         assertThat(second.codeGeneration()).isNotNull();
         second.close();
+    }
+
+    @Test
+    void testProjectConstructionDoesNotDiscoverServicesThroughAllocator()
+    {
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                OperatorResources operatorResources = OperatorResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                Operator source = new ConstantTableOperator(allocator, 0, List.of());
+                Operator project = new ProjectOperator(
+                        allocator,
+                        new EvaluationPlan(List.of(), List.of()),
+                        new PrimitiveRegistry(),
+                        source,
+                        operatorResources)) {
+            assertThat(project.outputCount()).isZero();
+        }
     }
 }
