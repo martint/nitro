@@ -332,7 +332,7 @@ public final class NitroParquetScanOperator
         this.decompressedPageCacheLease = SHARED_DECOMPRESSED_PAGES
                 ? allocator.acquireSharedResource(
                         DECOMPRESSED_PAGE_CACHE,
-                        () -> new DecompressedPageCache(allocator.engineResources().nativeBuffers()))
+                        () -> new DecompressedPageCache(allocator.nativeBuffers()))
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(

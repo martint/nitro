@@ -73,6 +73,7 @@ public class Allocator
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final AllocationResources allocationResources;
     private final EngineResources engineResources;
     private final PrimitiveArrayPool primitiveArrays;
     private final MemoryReservation memoryReservation;
@@ -90,7 +91,8 @@ public class Allocator
     public Allocator(EngineResources engineResources, MemoryReservation memoryReservation)
     {
         this.engineResources = requireNonNull(engineResources, "engineResources is null");
-        this.primitiveArrays = engineResources.allocationResources().primitiveArrays();
+        this.allocationResources = engineResources.allocationResources();
+        this.primitiveArrays = allocationResources.primitiveArrays();
         this.memoryReservation = memoryReservation;
     }
 
@@ -102,7 +104,8 @@ public class Allocator
     public Allocator(AllocationResources allocationResources, MemoryReservation memoryReservation)
     {
         this.engineResources = null;
-        this.primitiveArrays = requireNonNull(allocationResources, "allocationResources is null").primitiveArrays();
+        this.allocationResources = requireNonNull(allocationResources, "allocationResources is null");
+        this.primitiveArrays = allocationResources.primitiveArrays();
         this.memoryReservation = memoryReservation;
     }
 
@@ -117,6 +120,11 @@ public class Allocator
     public PrimitiveArrayPool primitiveArrays()
     {
         return primitiveArrays;
+    }
+
+    public PrimitiveArrayPool nativeBuffers()
+    {
+        return allocationResources.nativeBuffers();
     }
 
     public VectorAllocator vectorAllocator(Context context)

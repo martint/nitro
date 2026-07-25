@@ -30,6 +30,7 @@ class TestScopedVectorAllocator
             assertThatIllegalStateException()
                     .isThrownBy(allocator::engineResources)
                     .withMessage("Engine resources are not configured for this allocator");
+            assertThat(allocator.nativeBuffers()).isSameAs(resources.nativeBuffers());
 
             I64Vector released = vectors.allocate(I64Vector.class, 4, I64Vector::new);
             assertThat(allocator.currentBytes(context)).isPositive();
