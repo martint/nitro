@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
-import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
 
 import java.util.List;
@@ -25,7 +25,7 @@ import java.util.Optional;
  * Registry-owned projection lowering for UTF-8 equality.
  */
 public final class EqualUtf8ProjectionOptimization
-        implements ProjectionCodeProvider
+        implements MaskCodeProvider
 {
     @Override
     public Optional<ProjectionProgram> generate(ProjectionCodeBuilder builder, List<ProjectionArgument> arguments)

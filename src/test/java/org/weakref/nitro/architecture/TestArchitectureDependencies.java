@@ -213,7 +213,10 @@ class TestArchitectureDependencies
                 "InMemoryCompiler.java",
                 "LongComparisonMaskSupport.java",
                 "ProjectionMaskCompiler.java",
-                "ProjectionProgramBuilder.java");
+                "ProjectionProgramBuilder.java",
+                "Utf8LiteralMaskSupport.java",
+                "Utf8LiteralMatcher.java",
+                "Utf8LiteralMatcherGenerator.java");
     }
 
     @Test
@@ -222,7 +225,9 @@ class TestArchitectureDependencies
         List<String> compilerSources = List.of(
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/FusedProjectionCompiler.java")),
                 read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/ProjectionMaskCompiler.java")),
-                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/DoubleComparisonMaskSupport.java")));
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/DoubleComparisonMaskSupport.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8LiteralMaskSupport.java")),
+                read(MAIN_SOURCES.resolve("org/weakref/nitro/jit/Utf8LiteralMatcherGenerator.java")));
 
         assertThat(compilerSources)
                 .allMatch(source ->

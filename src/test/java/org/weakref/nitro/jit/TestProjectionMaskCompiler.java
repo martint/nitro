@@ -15,16 +15,23 @@ package org.weakref.nitro.jit;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
+import org.weakref.nitro.function.scalar.builtin.EqualUtf8ProjectionOptimization;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64Optimization;
+import org.weakref.nitro.operator.Streams;
 
 import java.util.List;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestProjectionMaskCompiler
@@ -59,5 +66,68 @@ class TestProjectionMaskCompiler
     {
         assertThat(ProjectionMaskCompiler.tryCompile(new EqualI64Optimization(), I64_ARGUMENTS)).isPresent();
         assertThat(ProjectionMaskCompiler.tryCompile(new LessThanI64RangeOptimization(), I64_ARGUMENTS)).isPresent();
+    }
+
+    @Test
+    void testCompilesProviderAuthoredUtf8LiteralEquality()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.literal("BUILDING")))
+                .orElseThrow();
+
+        BinaryVector values = utf8("BUILDING", "AUTOMOBILE", "BUILDING");
+        Mask trueMask = Mask.all(3);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(values), Streams.empty()),
+                trueMask,
+                true)).isTrue();
+        assertThat(trueMask).containsExactly(0, 2);
+
+        Mask falseMask = Mask.all(3);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(values), Streams.empty()),
+                falseMask,
+                false)).isTrue();
+        assertThat(falseMask).containsExactly(1);
+    }
+
+    @Test
+    void testCompiledUtf8LiteralEqualityUsesDictionaryEncoding()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = ProjectionMaskCompiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.literal("Brand#45"), ProjectionArgument.input()))
+                .orElseThrow();
+
+        DictionaryVector values = new DictionaryVector(
+                new int[] {1, 0, 1, 2},
+                utf8("Brand#12", "Brand#45", "Brand#23"));
+        Mask mask = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(Streams.empty(), Streams.ofValues(values)),
+                mask,
+                true)).isTrue();
+        assertThat(mask).containsExactly(0, 2);
+    }
+
+    private static BinaryVector utf8(String... values)
+    {
+        int[] offsets = new int[values.length + 1];
+        int length = 0;
+        for (int index = 0; index < values.length; index++) {
+            length += values[index].getBytes(UTF_8).length;
+            offsets[index + 1] = length;
+        }
+        byte[] data = new byte[length];
+        int offset = 0;
+        for (String value : values) {
+            byte[] bytes = value.getBytes(UTF_8);
+            System.arraycopy(bytes, 0, data, offset, bytes.length);
+            offset += bytes.length;
+        }
+        BinaryVector vector = new BinaryVector(values.length, offsets, data);
+        vector.addTrait(Utf8Traits.UTF8_STRING);
+        return vector;
     }
 }

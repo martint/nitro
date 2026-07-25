@@ -22,6 +22,7 @@ import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BinaryOperation;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
+import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
@@ -30,6 +31,8 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * Compiles provider-authored projection semantics to engine-owned mask programs.
@@ -56,17 +59,22 @@ public final class ProjectionMaskCompiler
         }
         if (program.argumentTypes().size() != 2 ||
                 program.argumentTypes().get(0) != program.argumentTypes().get(1) ||
-                !(program.value() instanceof Binary comparison) ||
+                !(program.isNull() instanceof Binary nulls) ||
+                nulls.operation() != BinaryOperation.BOOLEAN_OR ||
+                !isArgumentNull(nulls.left(), 0) ||
+                !isArgumentNull(nulls.right(), 1)) {
+            return Optional.empty();
+        }
+        if (program.value() instanceof Utf8Equal equality) {
+            return compileUtf8LiteralEquality(program, equality, arguments);
+        }
+        if (!(program.value() instanceof Binary comparison) ||
                 !(comparison.left() instanceof ArgumentValue left) ||
                 !(comparison.right() instanceof ArgumentValue right) ||
                 left.index() != 0 ||
                 right.index() != 1 ||
                 left.type() != program.argumentTypes().get(0) ||
-                right.type() != program.argumentTypes().get(1) ||
-                !(program.isNull() instanceof Binary nulls) ||
-                nulls.operation() != BinaryOperation.BOOLEAN_OR ||
-                !isArgumentNull(nulls.left(), 0) ||
-                !isArgumentNull(nulls.right(), 1)) {
+                right.type() != program.argumentTypes().get(1)) {
             return Optional.empty();
         }
         return switch (program.argumentTypes().get(0)) {
@@ -74,6 +82,51 @@ public final class ProjectionMaskCompiler
             case I64 -> compileLongComparison(comparison.operation());
             default -> Optional.empty();
         };
+    }
+
+    private static Optional<CompiledMask> compileUtf8LiteralEquality(
+            Program program,
+            Utf8Equal equality,
+            List<ProjectionArgument> arguments)
+    {
+        if (program.argumentTypes().getFirst() != ProjectionProgramBuilder.ValueType.UTF8 ||
+                !(equality.left() instanceof ArgumentValue left) ||
+                !(equality.right() instanceof ArgumentValue right) ||
+                left.index() != 0 ||
+                right.index() != 1 ||
+                left.type() != ProjectionProgramBuilder.ValueType.UTF8 ||
+                right.type() != ProjectionProgramBuilder.ValueType.UTF8) {
+            return Optional.empty();
+        }
+
+        int inputIndex;
+        String literal;
+        if (arguments.get(0).kind() == ProjectionArgument.Kind.INPUT &&
+                arguments.get(1).kind() == ProjectionArgument.Kind.LITERAL &&
+                arguments.get(1).literal() instanceof String value) {
+            inputIndex = 0;
+            literal = value;
+        }
+        else if (arguments.get(1).kind() == ProjectionArgument.Kind.INPUT &&
+                arguments.get(0).kind() == ProjectionArgument.Kind.LITERAL &&
+                arguments.get(0).literal() instanceof String value) {
+            inputIndex = 1;
+            literal = value;
+        }
+        else {
+            return Optional.empty();
+        }
+
+        List<Set<Stream>> requiredStreams = inputIndex == 0
+                ? List.of(Set.of(Stream.VALUES), Set.of())
+                : List.of(Set.of(), Set.of(Stream.VALUES));
+        return Optional.of(new Utf8LiteralMask(
+                inputIndex,
+                requiredStreams,
+                List.of(
+                        new ArgumentComponent(inputIndex, Stream.NULLS),
+                        new ArgumentComponent(inputIndex, Stream.ERRORS)),
+                literal.getBytes(UTF_8)));
     }
 
     private static Optional<CompiledMask> compileDoubleComparison(BinaryOperation operation)
@@ -267,6 +320,30 @@ public final class ProjectionMaskCompiler
                 Allocator.Context allocationContext)
         {
             return LongComparisonMaskSupport.tryEvaluateMaskOutcome(inputs, mask, context, allocationContext, kernel);
+        }
+    }
+
+    private static final class Utf8LiteralMask
+            extends CompiledMask
+    {
+        private final int inputIndex;
+        private final Utf8LiteralMaskSupport support;
+
+        private Utf8LiteralMask(
+                int inputIndex,
+                List<Set<Stream>> requiredInputStreams,
+                List<ArgumentComponent> excludedComponents,
+                byte[] literal)
+        {
+            super(2, requiredInputStreams, excludedComponents);
+            this.inputIndex = inputIndex;
+            support = new Utf8LiteralMaskSupport(literal);
+        }
+
+        @Override
+        public boolean evaluate(List<Streams> inputs, Mask mask, boolean selectTrue)
+        {
+            return support.evaluate(inputs.get(inputIndex), mask, selectTrue);
         }
     }
 }
