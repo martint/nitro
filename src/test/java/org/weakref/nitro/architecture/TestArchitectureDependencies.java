@@ -224,6 +224,18 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testSyntheticTypedSourcesAreNotProductionOperators()
+    {
+        Path operators = MAIN_SOURCES.resolve("org/weakref/nitro/operator");
+
+        assertThat(operators.resolve("ConstantTableOperator.java")).doesNotExist();
+        assertThat(operators.resolve("GeneratorOperator.java")).doesNotExist();
+        assertThat(operators.resolve("generator/ConstantGenerator.java")).doesNotExist();
+        assertThat(operators.resolve("generator/I64Generator.java")).doesNotExist();
+        assertThat(operators.resolve("generator/SequenceGenerator.java")).doesNotExist();
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
