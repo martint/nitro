@@ -18,7 +18,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.tpcds.JoinMaterializationProfile;
@@ -61,9 +60,7 @@ public final class QueryDriver
             JoinMaterializationProfile profile = new JoinMaterializationProfile();
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += HashJoinOperator.withMaterializationProfile(
-                        profile,
-                        () -> consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables)));
+                sink += consume(query(query, profile.newAllocator(), registry, tables));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);

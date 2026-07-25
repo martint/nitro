@@ -24,15 +24,29 @@ import static java.util.Objects.requireNonNull;
 public final class HashJoinOperatorResources
 {
     private final boolean shareBufferPoolAcrossOperators;
+    private final HashJoinMaterializationListener materializationListener;
     private final Object sharedBufferPoolGroup = new Object();
 
     public HashJoinOperatorResources(boolean shareBufferPoolAcrossOperators)
     {
+        this(shareBufferPoolAcrossOperators, null);
+    }
+
+    public HashJoinOperatorResources(
+            boolean shareBufferPoolAcrossOperators,
+            HashJoinMaterializationListener materializationListener)
+    {
         this.shareBufferPoolAcrossOperators = shareBufferPoolAcrossOperators;
+        this.materializationListener = materializationListener;
     }
 
     Object bufferPoolCompatibilityGroup(Object localPoolGroup)
     {
         return shareBufferPoolAcrossOperators ? sharedBufferPoolGroup : requireNonNull(localPoolGroup, "localPoolGroup is null");
+    }
+
+    HashJoinMaterializationListener materializationListener()
+    {
+        return materializationListener;
     }
 }

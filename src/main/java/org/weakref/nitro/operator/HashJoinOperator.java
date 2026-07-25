@@ -41,7 +41,6 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Supplier;
 
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -138,11 +137,6 @@ public class HashJoinOperator
                     false,
                     true);
         }
-    }
-
-    public interface MaterializationProfile
-    {
-        void record(String operatorName, int outputIndex, Streams streams, int rowCount, long nanos);
     }
 
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
@@ -287,9 +281,9 @@ public class HashJoinOperator
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
-    private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
     private final Allocator allocator;
     private final OperatorResources operatorResources;
+    private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
     // than returning the still-live build vector to the shared pool. The two contexts deliberately share a pool so
@@ -463,23 +457,6 @@ public class HashJoinOperator
     private boolean dynamicFilterPushed;
     private int expectedIndexedInnerRows = -1;
 
-    public static <T> T withMaterializationProfile(MaterializationProfile profile, Supplier<T> supplier)
-    {
-        MaterializationProfile previous = CURRENT_MATERIALIZATION_PROFILE.get();
-        CURRENT_MATERIALIZATION_PROFILE.set(profile);
-        try {
-            return supplier.get();
-        }
-        finally {
-            if (previous == null) {
-                CURRENT_MATERIALIZATION_PROFILE.remove();
-            }
-            else {
-                CURRENT_MATERIALIZATION_PROFILE.set(previous);
-            }
-        }
-    }
-
     public HashJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
         this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, false, new JoinFilter[0]);
@@ -550,6 +527,7 @@ public class HashJoinOperator
 
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
         this.allocationContext = new Allocator.Context(
@@ -2204,9 +2182,8 @@ public class HashJoinOperator
         long start = System.nanoTime();
         if (RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT && allRowsHaveNoMatch()) {
             Vector nulls = allTrueBooleanStream(currentOutputCount);
-            MaterializationProfile profile = CURRENT_MATERIALIZATION_PROFILE.get();
-            if (profile != null) {
-                profile.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
+            if (materializationListener != null) {
+                materializationListener.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
             }
             return nulls;
         }
@@ -2231,9 +2208,8 @@ public class HashJoinOperator
                 }
             }
         }
-        MaterializationProfile profile = CURRENT_MATERIALIZATION_PROFILE.get();
-        if (profile != null) {
-            profile.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
+        if (materializationListener != null) {
+            materializationListener.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
         }
         return nulls;
     }
@@ -2342,9 +2318,8 @@ public class HashJoinOperator
         Streams materialized = outputIndex < outerOutputCount
                 ? materializeOuterOutput(outputIndex)
                 : materializeInnerOutput(outputIndex - outerOutputCount);
-        MaterializationProfile profile = CURRENT_MATERIALIZATION_PROFILE.get();
-        if (profile != null) {
-            profile.record(profileName != null ? profileName : "hash_join", outputIndex, materialized, currentOutputCount, System.nanoTime() - start);
+        if (materializationListener != null) {
+            materializationListener.record(profileName != null ? profileName : "hash_join", outputIndex, materialized, currentOutputCount, System.nanoTime() - start);
         }
         currentOutputs[outputIndex] = materialized;
         return materialized;

@@ -16,6 +16,8 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -114,6 +116,25 @@ class TestOperatorResources
                     1);
             assertThat(state.values()).isNotNull();
             allocator.release(accumulatorContext);
+        }
+    }
+
+    @Test
+    void testHashJoinDiagnosticsAreOwnedByInjectedResources()
+    {
+        int[] materializations = new int[1];
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                OperatorResources operatorResources = OperatorResources.createDefault(
+                        (operatorName, outputIndex, streams, rowCount, nanos) -> materializations[0]++);
+                Allocator allocator = new Allocator(allocationResources);
+                Operator outer = new ConstantTableOperator(allocator, 1, List.of(Row.row(1L)));
+                Operator inner = new ConstantTableOperator(allocator, 1, List.of(Row.row(1L)));
+                Operator join = new HashJoinOperator(operatorResources, allocator, outer, 0, inner, 0)) {
+            assertThat(join.hasNext()).isTrue();
+            try (Batch batch = join.next()) {
+                assertThat(batch.output(0).borrow(Stream.VALUES).length()).isEqualTo(1);
+            }
+            assertThat(materializations[0]).isEqualTo(1);
         }
     }
 }

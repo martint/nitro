@@ -18,7 +18,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -79,7 +78,7 @@ public final class QueryDriver
             JoinMaterializationProfile profile = new JoinMaterializationProfile();
             long start = System.nanoTime();
             for (int i = 0; i < measured; i++) {
-                sink += HashJoinOperator.withMaterializationProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
+                sink += runUnchecked(method, registry, tables, rowSink, profile);
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, rows-sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -124,6 +123,25 @@ public final class QueryDriver
     {
         try {
             return run(method, registry, tables, rowSink);
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static long runUnchecked(
+            Method method,
+            PrimitiveRegistry registry,
+            TpcdsParquetTables tables,
+            boolean rowSink,
+            JoinMaterializationProfile profile)
+    {
+        try {
+            Operator operator = (Operator) method.invoke(null, profile.newAllocator(), registry, tables);
+            if (rowSink) {
+                return org.weakref.nitro.OperatorAssertions.OperatorAssert.toRows(operator).size();
+            }
+            return consume(operator);
         }
         catch (Exception e) {
             throw new RuntimeException(e);

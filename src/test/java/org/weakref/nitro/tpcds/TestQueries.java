@@ -27,7 +27,6 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -1053,11 +1052,8 @@ public class TestQueries
             }
         }
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        try (Operator query = TpcdsParquetSupport.query24(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables)) {
-            HashJoinOperator.withMaterializationProfile(profile, () -> {
-                consumeOperator(query);
-                return null;
-            });
+        try (Operator query = TpcdsParquetSupport.query24(profile.newAllocator(), primitiveRegistry, tables)) {
+            consumeOperator(query);
         }
         System.out.println(profile.formatReport());
     }
@@ -1161,11 +1157,8 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        try (Operator query = TpcdsParquetSupport.query64(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables)) {
-            HashJoinOperator.withMaterializationProfile(profile, () -> {
-                consumeOperator(query);
-                return null;
-            });
+        try (Operator query = TpcdsParquetSupport.query64(profile.newAllocator(), primitiveRegistry, tables)) {
+            consumeOperator(query);
         }
 
         System.out.println(profile.formatReport());
@@ -1247,11 +1240,8 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         JoinMaterializationProfile profile = new JoinMaterializationProfile();
-        try (Operator query = TpcdsParquetSupport.query80(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables)) {
-            HashJoinOperator.withMaterializationProfile(profile, () -> {
-                consumeOperator(query);
-                return null;
-            });
+        try (Operator query = TpcdsParquetSupport.query80(profile.newAllocator(), primitiveRegistry, tables)) {
+            consumeOperator(query);
         }
 
         System.out.println(profile.formatReport());

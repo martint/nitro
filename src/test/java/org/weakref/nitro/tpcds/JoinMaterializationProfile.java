@@ -13,13 +13,17 @@
  */
 package org.weakref.nitro.tpcds;
 
+import org.weakref.nitro.data.AllocationResources;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.HashJoinOperator;
+import org.weakref.nitro.operator.HashJoinMaterializationListener;
+import org.weakref.nitro.operator.OperatorResources;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -30,9 +34,16 @@ import java.util.Map;
 import static java.lang.String.format;
 
 public final class JoinMaterializationProfile
-        implements HashJoinOperator.MaterializationProfile
+        implements HashJoinMaterializationListener
 {
     private final Map<String, Metric> metrics = new LinkedHashMap<>();
+
+    public Allocator newAllocator()
+    {
+        return new Allocator(new EngineResources(
+                AllocationResources.createDefault(),
+                OperatorResources.createDefault(this)));
+    }
 
     @Override
     public void record(String operatorName, int outputIndex, Streams streams, int rowCount, long nanos)

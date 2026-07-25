@@ -50,12 +50,21 @@ public final class OperatorResources
      */
     public static OperatorResources createDefault()
     {
+        return createDefault(null);
+    }
+
+    /**
+     * Constructs a fresh, isolated owner with engine-selected hash-join diagnostics.
+     */
+    public static OperatorResources createDefault(HashJoinMaterializationListener hashJoinMaterializationListener)
+    {
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
                 new ProjectOperatorResources(),
                 new AggregationOperatorResources(),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"))),
+                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
+                        hashJoinMaterializationListener),
                 new GroupingStateResources(Boolean.parseBoolean(
                         System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))));
     }
