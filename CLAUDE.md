@@ -127,6 +127,9 @@ with `Sum`, `SumF64`, `Min`, `Max`, `MinUtf8`, `Avg`, `First`, `CountAll`,
 physical plan without recognizing or rewriting combinations of aggregate functions. Providers may
 optionally publish a `GeneratedGroupedAccumulatorUpdate`; generated engine code invokes opaque provider
 state through the classloader-safe `LongStateUpdate` SPI rather than referencing a builtin state class.
+The generated single-long grouping backend receives reusable `GeneratedLongGroupingBindings`; physical
+I32/I64, dictionary, and null-stream inspection lives in that data-layer adapter rather than in the operator.
+Typed state-update targets are rebound only when aggregate state is allocated or grown, not per input batch.
 
 ### Evaluator (`org.weakref.nitro.operator.evaluator`)
 

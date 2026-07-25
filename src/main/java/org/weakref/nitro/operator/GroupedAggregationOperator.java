@@ -16,8 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -112,18 +111,9 @@ public class GroupedAggregationOperator
     private FusedGroupingKernel fusedKernel;
     private GeneratedGroupedAccumulatorUpdate[] fusedSpecs;
     private int[] fusedAggregationIndexes;
-    private Object[] fusedInputs;
-    private int[] fusedKeyIds;
-    private int[][] fusedInputIds;
-    private boolean[][] fusedInputNulls;
-    private int[][] fusedInputNullIds;
+    private GeneratedLongGroupingBindings fusedBindings;
     private LongStateUpdate[] fusedStateVectors;
-    private boolean[] fusedIntInputs;
-    private boolean[] fusedMappedInputs;
-    private boolean[] fusedMappedInputNulls;
-    private boolean[] fusedInputUsesKeyIds;
-    private boolean[] fusedInputNullUsesKeyIds;
-    private boolean fusedKeyMapped;
+    private boolean fusedStateVectorsBound;
     private int fusedPhysicalShape = -1;
     private boolean debugFusedLimitPrinted;
     private boolean debugFusedReuseContinuationPrinted;
@@ -357,16 +347,8 @@ public class GroupedAggregationOperator
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
             fusedSpecs[index] = ((GeneratedGroupedAccumulator) aggregations[fusedAggregationIndexes[index]]).generatedGroupedUpdate();
         }
-        fusedInputs = new Object[fusedSpecs.length];
-        fusedInputIds = new int[fusedSpecs.length][];
-        fusedInputNulls = new boolean[fusedSpecs.length][];
-        fusedInputNullIds = new int[fusedSpecs.length][];
+        fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, FUSED_DICTIONARY_INPUT);
         fusedStateVectors = new LongStateUpdate[fusedSpecs.length];
-        fusedIntInputs = new boolean[fusedSpecs.length];
-        fusedMappedInputs = new boolean[fusedSpecs.length];
-        fusedMappedInputNulls = new boolean[fusedSpecs.length];
-        fusedInputUsesKeyIds = new boolean[fusedSpecs.length];
-        fusedInputNullUsesKeyIds = new boolean[fusedSpecs.length];
     }
 
     private boolean allPlainAggregationsFusible()
@@ -401,36 +383,17 @@ public class GroupedAggregationOperator
         }
         Output keyOutput = batch.output(groupByColumns[0]);
         Vector keyVector = keyOutput.borrow(Stream.VALUES);
-        Object keyValues;
-        boolean intKey;
-        fusedKeyIds = null;
-        fusedKeyMapped = false;
-        if (keyVector instanceof DictionaryVector dictionary && dictionary.dictionaryDepth() == 1) {
-            if (!FUSED_DICTIONARY_INPUT) {
-                return false;
-            }
-            fusedKeyIds = dictionary.ids();
-            fusedKeyMapped = true;
-            keyVector = dictionary.values();
-        }
-        if (keyVector instanceof I64Vector values) {
-            keyValues = values.values();
-            intKey = false;
-        }
-        else if (keyVector instanceof I32Vector values) {
-            keyValues = values.values();
-            intKey = true;
-        }
-        else {
+        if (!fusedBindings.bindKey(keyVector, keyOutput.borrowOrNull(Stream.NULLS))) {
             return false;
         }
-        if (!VectorAccess.isAllFalseNulls(keyOutput.borrowOrNull(Stream.NULLS))) {
-            return false;
-        }
+        Object keyValues = fusedBindings.keyValues();
+        int[] keyIds = fusedBindings.keyIds();
+        boolean intKey = fusedBindings.intKey();
+        boolean keyMapped = fusedBindings.keyMapped();
         boolean directGrouping = FUSED_LONG_DIRECT_GROUPING
-                && fusedKeyMapped
-                && inlineGroupingState.prepareSingleLongDirectGrouping(mask, keyValues, intKey, fusedKeyIds);
-        long runSample = FUSED_LONG_RUN_CACHE ? sampleFusedKeyRuns(mask, keyValues, intKey, fusedKeyIds) : 0;
+                && keyMapped
+                && inlineGroupingState.prepareSingleLongDirectGrouping(mask, keyValues, intKey, keyIds);
+        long runSample = FUSED_LONG_RUN_CACHE ? fusedBindings.sampleKeyRuns(mask) : 0;
         int runComparisons = (int) (runSample >>> 32);
         int runHits = (int) runSample;
         boolean runCache = runComparisons >= 4 && runHits * 2 >= runComparisons;
@@ -445,113 +408,45 @@ public class GroupedAggregationOperator
         if (DEBUG_FUSED_GROUPING && constantRuns && !debugFusedConstantRunsPrinted) {
             debugFusedConstantRunsPrinted = true;
             System.err.printf("[fused-grouping-constant-runs] groups=%d rows=%d keyMapped=%s runHits=%d/%d%n",
-                    inlineGroupingState.groupCount(), mask.count(), fusedKeyMapped, runHits, runComparisons);
+                    inlineGroupingState.groupCount(), mask.count(), keyMapped, runHits, runComparisons);
         }
         if (DEBUG_FUSED_GROUPING && !debugFusedLimitPrinted && inlineGroupingState.groupCount() >= FUSE_GROUP_LIMIT) {
             debugFusedLimitPrinted = true;
             System.err.printf("[fused-grouping] groups=%d rows=%d max=%d all=%s accumulators=%d keyMapped=%s runCache=%s direct=%s%n",
-                    inlineGroupingState.groupCount(), mask.count(), mask.maxPosition(), mask.all(), fusedSpecs.length, fusedKeyMapped, runCache, directGrouping);
+                    inlineGroupingState.groupCount(), mask.count(), mask.maxPosition(), mask.all(), fusedSpecs.length, keyMapped, runCache, directGrouping);
         }
         // The ordinary fused limit protects random high-cardinality flat state probes. Continue to the larger bound
         // only when a mapped key keeps the physical input compact or adjacent keys prove that they reuse a group.
-        if (inlineGroupingState.groupCount() >= FUSE_GROUP_LIMIT && !fusedKeyMapped && !runCache) {
+        if (inlineGroupingState.groupCount() >= FUSE_GROUP_LIMIT && !keyMapped && !runCache) {
             return false;
         }
         // Beyond the established local boundary require adjacent reuse plus a second physical reason to keep the
         // generated pass: compact mapped-key access or an input-independent state update that can be coalesced by
         // run. Flat value-reading state retains staged locality; mapped-only q64 likewise stays staged.
         if (inlineGroupingState.groupCount() >= FUSE_MAPPED_ONLY_GROUP_LIMIT
-                && (!runCache || (!fusedKeyMapped && !inputIndependentAccumulators))) {
+                && (!runCache || (!keyMapped && !inputIndependentAccumulators))) {
             return false;
         }
         if (DEBUG_FUSED_GROUPING && !debugFusedReuseContinuationPrinted && inlineGroupingState.groupCount() >= (1 << 16)) {
             debugFusedReuseContinuationPrinted = true;
             System.err.printf("[fused-grouping-reuse-continuation] groups=%d rows=%d keyMapped=%s runCache=%s%n",
-                    inlineGroupingState.groupCount(), mask.count(), fusedKeyMapped, runCache);
+                    inlineGroupingState.groupCount(), mask.count(), keyMapped, runCache);
         }
         for (int index = 0; index < fusedSpecs.length; index++) {
             GeneratedGroupedAccumulatorUpdate spec = fusedSpecs[index];
             if (!spec.readsInput()) {
-                fusedInputs[index] = null;
-                fusedInputIds[index] = null;
-                fusedInputNulls[index] = null;
-                fusedInputNullIds[index] = null;
-                fusedMappedInputs[index] = false;
-                fusedMappedInputNulls[index] = false;
+                fusedBindings.clearInput(index);
                 continue;
             }
             Output valueOutput = batch.output(spec.inputColumn());
-            if (spec.readsValue()) {
-                Vector valueVector = valueOutput.borrow(Stream.VALUES);
-                fusedInputIds[index] = null;
-                fusedMappedInputs[index] = false;
-                if (valueVector instanceof DictionaryVector dictionary && dictionary.dictionaryDepth() == 1) {
-                    if (!FUSED_DICTIONARY_INPUT) {
-                        return false;
-                    }
-                    fusedInputIds[index] = dictionary.ids();
-                    fusedMappedInputs[index] = true;
-                    valueVector = dictionary.values();
-                }
-                if (valueVector instanceof I64Vector values) {
-                    fusedInputs[index] = values.values();
-                    fusedIntInputs[index] = false;
-                }
-                else if (valueVector instanceof I32Vector values) {
-                    fusedInputs[index] = values.values();
-                    fusedIntInputs[index] = true;
-                }
-                else {
-                    return false;
-                }
-            }
-            else {
-                fusedInputs[index] = null;
-                fusedInputIds[index] = null;
-                fusedIntInputs[index] = false;
-                fusedMappedInputs[index] = false;
-            }
-            Vector valueNulls = valueOutput.borrowOrNull(Stream.NULLS);
-            if (VectorAccess.isAllFalseNulls(valueNulls)) {
-                fusedInputNulls[index] = null;
-                fusedInputNullIds[index] = null;
-                fusedMappedInputNulls[index] = false;
-            }
-            else {
-                fusedInputNullIds[index] = null;
-                fusedMappedInputNulls[index] = false;
-                if (valueNulls instanceof DictionaryVector dictionary && dictionary.dictionaryDepth() == 1) {
-                    if (!FUSED_DICTIONARY_INPUT) {
-                        return false;
-                    }
-                    fusedInputNullIds[index] = dictionary.ids();
-                    fusedMappedInputNulls[index] = true;
-                    valueNulls = dictionary.values();
-                }
-                if (valueNulls instanceof BooleanVector flatNulls) {
-                    fusedInputNulls[index] = flatNulls.values();
-                }
-                else {
-                    return false;
-                }
+            Vector values = spec.readsValue() ? valueOutput.borrow(Stream.VALUES) : null;
+            if (!fusedBindings.bindInput(index, values, valueOutput.borrowOrNull(Stream.NULLS), spec.readsValue())) {
+                return false;
             }
         }
 
-        int physicalShape = intKey ? 1 : 0;
-        physicalShape = physicalShape * 31 + (fusedKeyMapped ? 1 : 0);
-        for (int index = 0; index < fusedSpecs.length; index++) {
-            fusedInputUsesKeyIds[index] = fusedKeyMapped && fusedMappedInputs[index] && fusedInputIds[index] == fusedKeyIds;
-            fusedInputNullUsesKeyIds[index] = fusedKeyMapped && fusedMappedInputNulls[index] && fusedInputNullIds[index] == fusedKeyIds;
-            if (fusedSpecs[index].readsValue()) {
-                physicalShape = physicalShape * 31 + (fusedIntInputs[index] ? 1 : 0);
-                physicalShape = physicalShape * 31 + (fusedMappedInputs[index] ? 1 : 0);
-                physicalShape = physicalShape * 31 + (fusedInputUsesKeyIds[index] ? 1 : 0);
-            }
-            if (fusedSpecs[index].readsInput()) {
-                physicalShape = physicalShape * 31 + (fusedMappedInputNulls[index] ? 1 : 0);
-                physicalShape = physicalShape * 31 + (fusedInputNullUsesKeyIds[index] ? 1 : 0);
-            }
-        }
+        fusedBindings.finish();
+        int physicalShape = fusedBindings.physicalShape();
         physicalShape = physicalShape * 31 + (runCache ? 1 : 0);
         physicalShape = physicalShape * 31 + (constantRuns ? 1 : 0);
         physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
@@ -561,16 +456,16 @@ public class GroupedAggregationOperator
                     List.of(fusedSpecs),
                     filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
                     intKey,
-                    fusedKeyMapped,
+                    keyMapped,
                     runCache,
                     constantRuns,
                     directGrouping,
                     idIndexedGrouping,
-                    fusedIntInputs,
-                    fusedMappedInputs,
-                    fusedMappedInputNulls,
-                    fusedInputUsesKeyIds,
-                    fusedInputNullUsesKeyIds);
+                    fusedBindings.intInputs(),
+                    fusedBindings.mappedInputs(),
+                    fusedBindings.mappedInputNulls(),
+                    fusedBindings.inputUsesKeyIds(),
+                    fusedBindings.inputNullUsesKeyIds());
             fusedPhysicalShape = physicalShape;
         }
 
@@ -585,31 +480,28 @@ public class GroupedAggregationOperator
         // Pre-reserve so the inlined probe needs no rehash branch and no per-row state growth.
         // A dictionary's value count is a safe upper bound on new groups in this batch. Reserving by logical row
         // count instead can substantially over-allocate state for a low-cardinality encoded key.
-        int additionalGroups = fusedKeyMapped ? Math.min(count, keyVector.length()) : count;
+        int additionalGroups = fusedBindings.additionalGroupUpperBound(count);
         inlineGroupingState.reserveSingleLongTable(additionalGroups);
         ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount() + additionalGroups));
         if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
             reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
-        }
-        for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedStateVectors[index] = (LongStateUpdate) states[fusedAggregationIndexes[index]].values();
         }
 
         long nextId = fusedKernel.accumulate(
                 mask.selectedPositions(),
                 count,
                 keyValues,
-                fusedKeyIds,
+                keyIds,
                 inlineGroupingState.longGroupKeys,
                 inlineGroupingState.longGroupIds,
                 inlineGroupingState.longGroupMask,
                 inlineGroupingState.longKeysByGroup,
                 inlineGroupingState.nextGroupId,
                 filteredAggregationIndexes.length == 0 && distinctAggregationGroups.length == 0 ? null : reusableGroups.values(),
-                fusedInputs,
-                fusedInputIds,
-                fusedInputNulls,
-                fusedInputNullIds,
+                fusedBindings.inputs(),
+                fusedBindings.inputIds(),
+                fusedBindings.inputNulls(),
+                fusedBindings.inputNullIds(),
                 fusedStateVectors);
 
         inlineGroupingState.nextGroupId = nextId;
@@ -631,30 +523,6 @@ public class GroupedAggregationOperator
         return found;
     }
 
-    private static long sampleFusedKeyRuns(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
-    {
-        int comparisons = 0;
-        int hits = 0;
-        boolean havePrevious = false;
-        long previous = 0;
-        for (int position : mask) {
-            int keyPosition = keyIds == null ? position : keyIds[position];
-            long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
-            if (havePrevious) {
-                comparisons++;
-                if (key == previous) {
-                    hits++;
-                }
-                if (comparisons == 64) {
-                    break;
-                }
-            }
-            havePrevious = true;
-            previous = key;
-        }
-        return ((long) comparisons << 32) | (hits & 0xFFFF_FFFFL);
-    }
-
     private void ensureFusedStateCapacity(int needed)
     {
         if (states[0] == null) {
@@ -664,9 +532,13 @@ public class GroupedAggregationOperator
                 aggregations[index].initialize(states[index], 0, capacity);
             }
             stateCapacity = capacity;
+            refreshFusedStateVectors();
             return;
         }
         if (stateCapacity >= needed) {
+            if (!fusedStateVectorsBound) {
+                refreshFusedStateVectors();
+            }
             return;
         }
         int capacity = computeFusedStateCapacity(needed);
@@ -675,12 +547,21 @@ public class GroupedAggregationOperator
             aggregations[index].initialize(states[index], stateCapacity, capacity - stateCapacity);
         }
         stateCapacity = capacity;
+        refreshFusedStateVectors();
+    }
+
+    private void refreshFusedStateVectors()
+    {
+        for (int index = 0; index < fusedAggregationIndexes.length; index++) {
+            fusedStateVectors[index] = (LongStateUpdate) states[fusedAggregationIndexes[index]].values();
+        }
+        fusedStateVectorsBound = true;
     }
 
     private int computeFusedStateCapacity(int needed)
     {
         if (!FUSED_MAPPED_CONTINUATION_POWER_OF_TWO_STATE_CAPACITY
-                || !fusedKeyMapped
+                || !fusedBindings.keyMapped()
                 || needed <= FUSE_GROUP_LIMIT) {
             return Allocator.computeCapacity(Math.max(16, needed));
         }

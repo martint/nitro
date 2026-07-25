@@ -282,6 +282,35 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testGeneratedGroupingRepresentationBindingLivesBelowTheOperator()
+    {
+        String operator = read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/GroupedAggregationOperator.java"));
+        String bindings = read(MAIN_SOURCES.resolve("org/weakref/nitro/data/GeneratedLongGroupingBindings.java"));
+        String generatedBatchPath = operator.substring(
+                operator.indexOf("private boolean tryFusedSingleLongAggregation"),
+                operator.indexOf("private boolean canBatchInputIndependentFusedAccumulator"));
+
+        assertThat(operator)
+                .contains("GeneratedLongGroupingBindings")
+                .doesNotContain(
+                        "instanceof DictionaryVector",
+                        "instanceof I32Vector",
+                        "dictionary.dictionaryDepth()");
+        assertThat(generatedBatchPath)
+                .doesNotContain("fusedStateVectors[index] =");
+        assertThat(operator)
+                .contains(
+                        "private void refreshFusedStateVectors()",
+                        "fusedStateVectors[index] = (LongStateUpdate)");
+        assertThat(bindings)
+                .contains(
+                        "instanceof DictionaryVector",
+                        "instanceof I32Vector",
+                        "instanceof I64Vector",
+                        "instanceof BooleanVector");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
