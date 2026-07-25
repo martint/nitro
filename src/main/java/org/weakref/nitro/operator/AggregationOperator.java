@@ -29,12 +29,12 @@ public class AggregationOperator
 {
     private static final boolean DEFER_RESULT_MATERIALIZATION =
             Boolean.parseBoolean(System.getProperty("nitro.aggregate.deferResultMaterialization", "true"));
-    private static final Object ALLOCATION_POOL = new Object();
     private final Allocator allocator;
-    // Every live operator owns an independent lease scope. Instances still share ALLOCATION_POOL so a closed
-    // aggregate's buffers can be recycled by a later aggregate, but closing a nested aggregate must never release
-    // the state or result vectors of an outer aggregate that is still consuming its source.
-    private final Allocator.Context allocationContext = new Allocator.Context("AggregationOperator", ALLOCATION_POOL);
+    // Every live operator owns an independent lease scope. Instances under the same engine resource owner still
+    // share a compatibility domain so a closed aggregate's buffers can be recycled by a later aggregate, but closing
+    // a nested aggregate must never release the state or result vectors of an outer aggregate that is still consuming
+    // its source.
+    private final Allocator.Context allocationContext;
 
     private final Operator source;
     private final List<Accumulator> aggregations;
@@ -46,6 +46,9 @@ public class AggregationOperator
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
         this.allocator = allocator;
+        this.allocationContext = new Allocator.Context(
+                "AggregationOperator",
+                allocator.engineResources().aggregationOperator().bufferPoolGroup());
         this.source = source;
         // AccumulatorFusion rewrites recognized pairs (e.g. Min + Max on the same column) into
         // cooperating accumulators that share a single input scan per batch. The operator's main

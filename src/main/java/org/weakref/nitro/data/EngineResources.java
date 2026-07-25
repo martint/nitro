@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
 
@@ -37,18 +38,21 @@ public final class EngineResources
     private final PrimitiveArrayPool nativeBuffers;
     private final OperatorCodeGenerationResources operatorCodeGeneration;
     private final ProjectOperatorResources projectOperator;
+    private final AggregationOperatorResources aggregationOperator;
     private boolean closed;
 
     public EngineResources(
             PrimitiveArrayPool primitiveArrays,
             PrimitiveArrayPool nativeBuffers,
             OperatorCodeGenerationResources operatorCodeGeneration,
-            ProjectOperatorResources projectOperator)
+            ProjectOperatorResources projectOperator,
+            AggregationOperatorResources aggregationOperator)
     {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
         this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
         this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
+        this.aggregationOperator = requireNonNull(aggregationOperator, "aggregationOperator is null");
     }
 
     /**
@@ -66,7 +70,8 @@ public final class EngineResources
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
                         Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
                 new OperatorCodeGenerationResources(),
-                new ProjectOperatorResources());
+                new ProjectOperatorResources(),
+                new AggregationOperatorResources());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -91,6 +96,12 @@ public final class EngineResources
     {
         checkOpen();
         return projectOperator;
+    }
+
+    public AggregationOperatorResources aggregationOperator()
+    {
+        checkOpen();
+        return aggregationOperator;
     }
 
     @Override

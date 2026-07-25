@@ -165,6 +165,18 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testAggregationCompatibilityDomainIsExplicitlyOwned()
+            throws IOException
+    {
+        String aggregationOperator = Files.readString(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/AggregationOperator.java"));
+
+        assertThat(aggregationOperator)
+                .doesNotContain("static final Object ALLOCATION_POOL")
+                .contains("allocator.engineResources().aggregationOperator().bufferPoolGroup()");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
