@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator.source;
 
-import org.weakref.nitro.core.batch.ColumnStream;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -66,7 +65,7 @@ public final class VectorColumnViewOperatorIngress
     {
         ColumnView view = view(column, stream);
         Vector vector = requireNonNull(
-                view.borrow(columnStream(stream)),
+                view.borrow(stream),
                 "column returned null vector");
         validate(stream, vector);
         return vector;
@@ -76,7 +75,7 @@ public final class VectorColumnViewOperatorIngress
     {
         ColumnView view = view(column, stream);
         Vector vector = requireNonNull(
-                view.take(columnStream(stream)),
+                view.take(stream),
                 "column returned null transferred vector");
         validate(stream, vector);
         return vector;
@@ -92,18 +91,9 @@ public final class VectorColumnViewOperatorIngress
     private static ColumnView view(Supplier<ColumnView> column, Stream stream)
     {
         ColumnView view = requireNonNull(column.get(), "column supplier returned null");
-        if (!requireNonNull(view.streams(), "column returned null streams").contains(columnStream(stream))) {
+        if (!requireNonNull(view.streams(), "column returned null streams").contains(stream)) {
             throw new IllegalArgumentException("source column does not expose declared stream: " + stream);
         }
         return view;
-    }
-
-    private static ColumnStream columnStream(Stream stream)
-    {
-        return switch (stream) {
-            case VALUES -> ColumnStream.VALUES;
-            case NULLS -> ColumnStream.NULLS;
-            case ERRORS -> ColumnStream.ERRORS;
-        };
     }
 }

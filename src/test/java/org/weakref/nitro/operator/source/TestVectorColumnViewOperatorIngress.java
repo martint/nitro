@@ -15,7 +15,6 @@ package org.weakref.nitro.operator.source;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.ColumnEncoding;
-import org.weakref.nitro.core.batch.ColumnStream;
 import org.weakref.nitro.core.batch.ColumnTraits;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.type.Field;
@@ -113,15 +112,15 @@ class TestVectorColumnViewOperatorIngress
         }
 
         @Override
-        public Set<ColumnStream> streams()
+        public Set<Stream> streams()
         {
             return nulls == null
-                    ? Set.of(ColumnStream.VALUES)
-                    : Set.of(ColumnStream.VALUES, ColumnStream.NULLS);
+                    ? Set.of(Stream.VALUES)
+                    : Set.of(Stream.VALUES, Stream.NULLS);
         }
 
         @Override
-        public Vector borrow(ColumnStream stream)
+        public Vector borrow(Stream stream)
         {
             return switch (stream) {
                 case VALUES -> values;
@@ -131,7 +130,7 @@ class TestVectorColumnViewOperatorIngress
         }
 
         @Override
-        public Vector take(ColumnStream stream)
+        public Vector take(Stream stream)
         {
             Vector vector = borrow(stream);
             switch (stream) {

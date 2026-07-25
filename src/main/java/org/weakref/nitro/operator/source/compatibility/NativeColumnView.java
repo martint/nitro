@@ -14,7 +14,6 @@
 package org.weakref.nitro.operator.source.compatibility;
 
 import org.weakref.nitro.core.batch.ColumnCapability;
-import org.weakref.nitro.core.batch.ColumnStream;
 import org.weakref.nitro.core.batch.ColumnTraits;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -64,31 +63,31 @@ final class NativeColumnView
     }
 
     @Override
-    public Set<ColumnStream> streams()
+    public Set<Stream> streams()
     {
-        EnumSet<ColumnStream> streams = EnumSet.noneOf(ColumnStream.class);
+        EnumSet<Stream> streams = EnumSet.noneOf(Stream.class);
         if (output.hasValues()) {
-            streams.add(ColumnStream.VALUES);
+            streams.add(Stream.VALUES);
         }
         if (output.hasNulls()) {
-            streams.add(ColumnStream.NULLS);
+            streams.add(Stream.NULLS);
         }
         if (output.hasErrors()) {
-            streams.add(ColumnStream.ERRORS);
+            streams.add(Stream.ERRORS);
         }
         return Set.copyOf(streams);
     }
 
     @Override
-    public Vector borrow(ColumnStream stream)
+    public Vector borrow(Stream stream)
     {
-        return output.borrow(stream(stream));
+        return output.borrow(requireNonNull(stream, "stream is null"));
     }
 
     @Override
-    public Vector take(ColumnStream stream)
+    public Vector take(Stream stream)
     {
-        return output.take(stream(stream));
+        return output.take(requireNonNull(stream, "stream is null"));
     }
 
     @Override
@@ -98,14 +97,5 @@ final class NativeColumnView
             return Optional.of(capability.valueType().cast((NativeColumnAccess) () -> output));
         }
         return Optional.empty();
-    }
-
-    private static Stream stream(ColumnStream stream)
-    {
-        return switch (requireNonNull(stream, "stream is null")) {
-            case VALUES -> Stream.VALUES;
-            case NULLS -> Stream.NULLS;
-            case ERRORS -> Stream.ERRORS;
-        };
     }
 }
