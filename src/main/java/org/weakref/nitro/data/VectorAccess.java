@@ -17,9 +17,6 @@ public final class VectorAccess
 {
     private static final boolean DIRECT_DENSE_BOOLEAN_COPY =
             Boolean.parseBoolean(System.getProperty("nitro.scalar.directDenseIsNullBooleanCopy", "true"));
-    private static final boolean DEBUG_DIRECT_DENSE_BOOLEAN_COPY =
-            Boolean.getBoolean("nitro.debug.directDenseIsNullBooleanCopy");
-    private static boolean debugDirectDenseDictionaryCopyPrinted;
 
     private VectorAccess() {}
 
@@ -51,10 +48,6 @@ public final class VectorAccess
             boolean[] dictionaryFlags = dictionaryValues.values();
             for (int position = 0; position < mask.size(); position++) {
                 output[position] = dictionaryFlags[ids[position]];
-            }
-            if (DEBUG_DIRECT_DENSE_BOOLEAN_COPY && !debugDirectDenseDictionaryCopyPrinted) {
-                debugDirectDenseDictionaryCopyPrinted = true;
-                System.err.printf("[direct-dense-boolean-copy] rows=%d dictionary=%d%n", mask.size(), dictionaryValues.length());
             }
             return;
         }
