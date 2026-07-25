@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -38,6 +39,7 @@ import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
+import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -72,23 +74,26 @@ public class TestPlanEvaluator
     @Test
     void testFlatBooleanReferenceCompactsOwnedMaskInPlaceWithoutTemporaryMask()
     {
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        Reference valuesReference = new Reference(new Input(0), Stream.VALUES);
-        PlanEvaluator evaluator = new PlanEvaluator(
-                new EvaluationPlan(List.of(), List.of()),
-                primitiveRegistry(),
-                inputResolver(Map.of(valuesReference, new BooleanVector(new boolean[] {false, true, true, false, true, false}))),
-                allocator);
-        Mask owned = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Reference valuesReference = new Reference(new Input(0), Stream.VALUES);
+            PlanEvaluator evaluator = new PlanEvaluator(
+                    new EvaluationPlan(List.of(), List.of()),
+                    primitiveRegistry(),
+                    inputResolver(Map.of(valuesReference, new BooleanVector(new boolean[] {false, true, true, false, true, false}))),
+                    allocator,
+                    new ProjectionMaskCompiler());
+            Mask owned = Mask.sparse(new int[] {0, 1, 2, 4, 5}, 6);
 
-        Mask result = evaluator.evaluateInPlace(new ReferenceMask(valuesReference), owned);
+            Mask result = evaluator.evaluateInPlace(new ReferenceMask(valuesReference), owned);
 
-        assertThat(result).isSameAs(owned);
-        assertThat(result.selectedCount()).isEqualTo(3);
-        assertThat(result.position(0)).isEqualTo(1);
-        assertThat(result.position(1)).isEqualTo(2);
-        assertThat(result.position(2)).isEqualTo(4);
-        assertThat(allocator.totalBytes(new Allocator.Context("PlanEvaluator"))).isZero();
+            assertThat(result).isSameAs(owned);
+            assertThat(result.selectedCount()).isEqualTo(3);
+            assertThat(result.position(0)).isEqualTo(1);
+            assertThat(result.position(1)).isEqualTo(2);
+            assertThat(result.position(2)).isEqualTo(4);
+            assertThat(allocator.totalBytes(new Allocator.Context("PlanEvaluator"))).isZero();
+        }
     }
 
     @Test

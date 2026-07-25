@@ -69,6 +69,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 public final class PlanEvaluator
 {
@@ -148,7 +149,12 @@ public final class PlanEvaluator
 
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator)
     {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"));
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler(allocator));
+    }
+
+    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, ProjectionMaskCompiler projectionMaskCompiler)
+    {
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler);
     }
 
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup)
@@ -158,15 +164,29 @@ public final class PlanEvaluator
 
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup, boolean requireProjectedCompanionStreams)
     {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams);
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams, projectionMaskCompiler(allocator));
     }
 
-    private PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Allocator.Context allocationContext)
+    public PlanEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            InputResolver input,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler,
+            Object poolGroup,
+            boolean requireProjectedCompanionStreams)
     {
-        this(plan, primitiveRegistry, input, allocator, allocationContext, false);
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams, projectionMaskCompiler);
     }
 
-    private PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Allocator.Context allocationContext, boolean requireProjectedCompanionStreams)
+    private PlanEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            InputResolver input,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            boolean requireProjectedCompanionStreams,
+            ProjectionMaskCompiler projectionMaskCompiler)
     {
         this.allocationContext = allocationContext;
         this.plan = plan;
@@ -179,7 +199,7 @@ public final class PlanEvaluator
         this.preboundMasks = bindPreboundMasks(
                 plan,
                 primitiveRegistry,
-                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                requireNonNull(projectionMaskCompiler, "projectionMaskCompiler is null"),
                 assignments);
         this.primitiveAllocationContexts = primitiveAllocationContexts(plan, primitiveRegistry);
         this.memoizedProducers = memoizedProducers(plan.streamPlans());
@@ -187,6 +207,11 @@ public final class PlanEvaluator
         this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
         this.requireProjectedCompanionStreams = requireProjectedCompanionStreams;
         this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
+    }
+
+    private static ProjectionMaskCompiler projectionMaskCompiler(Allocator allocator)
+    {
+        return allocator.engineResources().operatorCodeGeneration().projectionMask();
     }
 
     public Streams evaluate(Reference reference, Mask mask)

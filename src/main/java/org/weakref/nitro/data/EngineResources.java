@@ -17,6 +17,7 @@ import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.GroupingStateResources;
 import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
+import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
 
 import static java.util.Objects.requireNonNull;
@@ -32,11 +33,7 @@ public final class EngineResources
         implements AutoCloseable
 {
     private final AllocationResources allocationResources;
-    private final OperatorCodeGenerationResources operatorCodeGeneration;
-    private final ProjectOperatorResources projectOperator;
-    private final AggregationOperatorResources aggregationOperator;
-    private final HashJoinOperatorResources hashJoinOperator;
-    private final GroupingStateResources groupingState;
+    private final OperatorResources operatorResources;
     private boolean closed;
 
     public EngineResources(
@@ -50,11 +47,12 @@ public final class EngineResources
     {
         this(
                 new AllocationResources(primitiveArrays, nativeBuffers),
-                operatorCodeGeneration,
-                projectOperator,
-                aggregationOperator,
-                hashJoinOperator,
-                groupingState);
+                new OperatorResources(
+                        operatorCodeGeneration,
+                        projectOperator,
+                        aggregationOperator,
+                        hashJoinOperator,
+                        groupingState));
     }
 
     public EngineResources(
@@ -65,12 +63,20 @@ public final class EngineResources
             HashJoinOperatorResources hashJoinOperator,
             GroupingStateResources groupingState)
     {
+        this(
+                allocationResources,
+                new OperatorResources(
+                        operatorCodeGeneration,
+                        projectOperator,
+                        aggregationOperator,
+                        hashJoinOperator,
+                        groupingState));
+    }
+
+    public EngineResources(AllocationResources allocationResources, OperatorResources operatorResources)
+    {
         this.allocationResources = requireNonNull(allocationResources, "allocationResources is null");
-        this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
-        this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
-        this.aggregationOperator = requireNonNull(aggregationOperator, "aggregationOperator is null");
-        this.hashJoinOperator = requireNonNull(hashJoinOperator, "hashJoinOperator is null");
-        this.groupingState = requireNonNull(groupingState, "groupingState is null");
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
     }
 
     /**
@@ -82,13 +88,7 @@ public final class EngineResources
     {
         return new EngineResources(
                 AllocationResources.createDefault(),
-                new OperatorCodeGenerationResources(),
-                new ProjectOperatorResources(),
-                new AggregationOperatorResources(),
-                new HashJoinOperatorResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"))),
-                new GroupingStateResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))));
+                OperatorResources.createDefault());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -112,31 +112,37 @@ public final class EngineResources
     public OperatorCodeGenerationResources operatorCodeGeneration()
     {
         checkOpen();
-        return operatorCodeGeneration;
+        return operatorResources.codeGeneration();
     }
 
     public ProjectOperatorResources projectOperator()
     {
         checkOpen();
-        return projectOperator;
+        return operatorResources.project();
     }
 
     public AggregationOperatorResources aggregationOperator()
     {
         checkOpen();
-        return aggregationOperator;
+        return operatorResources.aggregation();
     }
 
     public HashJoinOperatorResources hashJoinOperator()
     {
         checkOpen();
-        return hashJoinOperator;
+        return operatorResources.hashJoin();
     }
 
     public GroupingStateResources groupingState()
     {
         checkOpen();
-        return groupingState;
+        return operatorResources.grouping();
+    }
+
+    public OperatorResources operatorResources()
+    {
+        checkOpen();
+        return operatorResources;
     }
 
     @Override
@@ -147,7 +153,7 @@ public final class EngineResources
         }
         closed = true;
         allocationResources.close();
-        operatorCodeGeneration.close();
+        operatorResources.close();
     }
 
     private void checkOpen()
