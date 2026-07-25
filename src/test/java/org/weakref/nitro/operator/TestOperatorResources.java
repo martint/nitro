@@ -62,4 +62,27 @@ class TestOperatorResources
             assertThat(project.outputCount()).isZero();
         }
     }
+
+    @Test
+    void testGroupingAndAggregationConstructionDoNotDiscoverServicesThroughAllocator()
+    {
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                OperatorResources operatorResources = OperatorResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                Operator groupSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator aggregationSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator groupedAggregationSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
+                Operator aggregation = new AggregationOperator(allocator, List.of(), aggregationSource, operatorResources);
+                Operator groupedAggregation = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        List.of(),
+                        groupedAggregationSource,
+                        operatorResources)) {
+            assertThat(group.outputCount()).isEqualTo(1);
+            assertThat(aggregation.outputCount()).isZero();
+            assertThat(groupedAggregation.outputCount()).isEqualTo(1);
+        }
+    }
 }

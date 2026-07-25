@@ -22,6 +22,7 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.data.Stream.VALUES;
 
 public class AggregationOperator
@@ -45,10 +46,16 @@ public class AggregationOperator
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
+        this(allocator, aggregations, source, allocator.engineResources().operatorResources());
+    }
+
+    public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
+    {
         this.allocator = allocator;
+        operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.allocationContext = new Allocator.Context(
                 "AggregationOperator",
-                allocator.engineResources().aggregationOperator().bufferPoolGroup());
+                operatorResources.aggregation().bufferPoolGroup());
         this.source = source;
         this.aggregations = List.copyOf(aggregations);
 

@@ -22,6 +22,8 @@ import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
 
+import static java.util.Objects.requireNonNull;
+
 public class GroupOperator
         implements Operator, GroupedKeySource
 {
@@ -43,11 +45,22 @@ public class GroupOperator
 
     public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source)
     {
+        this(allocator, groupByColumns, source, allocator.engineResources().operatorResources());
+    }
+
+    public GroupOperator(Allocator allocator, int groupByColumn, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, new int[] {groupByColumn}, source, operatorResources);
+    }
+
+    public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source, OperatorResources operatorResources)
+    {
         this.allocator = allocator;
+        operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.groupingState = new GroupingState(
                 allocator.primitiveArrays(),
-                allocator.engineResources().operatorCodeGeneration(),
-                allocator.engineResources().groupingState());
+                operatorResources.codeGeneration(),
+                operatorResources.grouping());
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.groupValues = new Vector[groupByColumns.length];

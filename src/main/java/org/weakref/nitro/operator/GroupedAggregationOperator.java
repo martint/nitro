@@ -38,6 +38,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static java.lang.Math.toIntExact;
+import static java.util.Objects.requireNonNull;
 
 public class GroupedAggregationOperator
         implements Operator
@@ -81,6 +82,7 @@ public class GroupedAggregationOperator
 
     private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
+    private final OperatorResources operatorResources;
 
     private final int groupColumn;
     private final int[] groupedColumns;
@@ -122,12 +124,22 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, List.of(), aggregations, source, null, null, null);
+        this(allocator, groupColumn, aggregations, source, allocator.engineResources().operatorResources());
+    }
+
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, groupColumn, List.of(), aggregations, source, null, null, null, operatorResources);
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, groupedColumns, aggregations, source, null, null, null);
+        this(allocator, groupColumn, groupedColumns, aggregations, source, allocator.engineResources().operatorResources());
+    }
+
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, groupColumn, groupedColumns, aggregations, source, null, null, null, operatorResources);
     }
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Accumulator> aggregations, Operator source)
@@ -135,7 +147,23 @@ public class GroupedAggregationOperator
         this(allocator, groupByColumns, groupByColumns, aggregations, source);
     }
 
+    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, groupByColumns, groupByColumns, aggregations, source, operatorResources);
+    }
+
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
+    {
+        this(allocator, groupByColumns, groupedColumns, aggregations, source, allocator.engineResources().operatorResources());
+    }
+
+    public GroupedAggregationOperator(
+            Allocator allocator,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            List<Accumulator> aggregations,
+            Operator source,
+            OperatorResources operatorResources)
     {
         this(
                 allocator,
@@ -147,8 +175,9 @@ public class GroupedAggregationOperator
                 mapGroupedKeyIndexes(groupByColumns, groupedColumns),
                 new GroupingState(
                         allocator.primitiveArrays(),
-                        allocator.engineResources().operatorCodeGeneration(),
-                        allocator.engineResources().groupingState()));
+                        operatorResources.codeGeneration(),
+                        operatorResources.grouping()),
+                requireNonNull(operatorResources, "operatorResources is null"));
     }
 
     private GroupedAggregationOperator(
@@ -159,12 +188,14 @@ public class GroupedAggregationOperator
             Operator source,
             int[] groupByColumns,
             int[] groupedKeyIndexes,
-            GroupingState inlineGroupingState)
+            GroupingState inlineGroupingState,
+            OperatorResources operatorResources)
     {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
         }
         this.allocator = allocator;
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
@@ -453,7 +484,7 @@ public class GroupedAggregationOperator
         physicalShape = physicalShape * 31 + (directGrouping ? 1 : 0);
         physicalShape = physicalShape * 31 + (idIndexedGrouping ? 1 : 0);
         if (fusedPhysicalShape != physicalShape) {
-            fusedKernel = allocator.engineResources().operatorCodeGeneration().fusedGrouping().create(
+            fusedKernel = operatorResources.codeGeneration().fusedGrouping().create(
                     List.of(fusedSpecs),
                     filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0,
                     intKey,
@@ -698,7 +729,14 @@ public class GroupedAggregationOperator
     private void accumulateDistinctGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
         for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
-            Mask distinctMask = distinctAggregationGroup.select(groups, mask, streamAccessor, groupCount, allocator, allocationContext);
+            Mask distinctMask = distinctAggregationGroup.select(
+                    groups,
+                    mask,
+                    streamAccessor,
+                    groupCount,
+                    allocator,
+                    allocationContext,
+                    operatorResources.codeGeneration());
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
                     int filterColumn = aggregations[aggregationIndex].filterInputColumn();
@@ -1039,7 +1077,14 @@ public class GroupedAggregationOperator
             return aggregationIndexes;
         }
 
-        public Mask select(I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount, Allocator allocator, Allocator.Context allocationContext)
+        public Mask select(
+                I64Vector groups,
+                Mask mask,
+                org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor,
+                int groupCount,
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                OperatorCodeGenerationResources codeGeneration)
         {
             arrayPool = allocator.primitiveArrays();
             if (mask.none()) {
@@ -1060,8 +1105,8 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = GROUP_PARTITIONED_LONG_DISTINCT && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values, arrayPool, allocator.engineResources().operatorCodeGeneration())
-                            : DistinctKeySet.create(values, arrayPool, allocator.engineResources().operatorCodeGeneration());
+                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration)
+                            : DistinctKeySet.create(values, arrayPool, codeGeneration);
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
