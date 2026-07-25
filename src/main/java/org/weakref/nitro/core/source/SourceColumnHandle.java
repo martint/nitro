@@ -15,7 +15,10 @@ package org.weakref.nitro.core.source;
 
 import org.weakref.nitro.core.type.TypeBinding;
 
-/// Stable source-column identity supplied by a source adapter.
+/// Opaque stable source-column identity supplied by a source adapter.
+///
+/// The engine passes handles back only to the source that supplied them. It does not inspect an implementation,
+/// ordinal, connector object, or provider class.
 public interface SourceColumnHandle
 {
     TypeBinding type();

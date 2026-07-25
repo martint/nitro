@@ -25,11 +25,11 @@ public interface BatchSource
 {
     Schema schema();
 
-    /// Returns the source-local handle for an output field.
-    default SourceColumnHandle column(int outputIndex)
-    {
-        return new OrdinalSourceColumnHandle(outputIndex, schema().field(outputIndex).type());
-    }
+    /// Returns the stable source-local handle for an output field.
+    ///
+    /// Repeated calls for one output index must return the same handle identity. Sources use that identity to
+    /// reject handles owned by another source without exposing provider implementation classes to the engine.
+    SourceColumnHandle column(int outputIndex);
 
     Set<SourceCapability> capabilities();
 
@@ -55,7 +55,7 @@ public interface BatchSource
     /// Returns whether the source can accept a runtime filter for this source-local column.
     default boolean supportsRuntimeFilter(SourceColumnHandle column)
     {
-        return capabilities().contains(SourceCapability.RUNTIME_FILTER);
+        return false;
     }
 
     @Override

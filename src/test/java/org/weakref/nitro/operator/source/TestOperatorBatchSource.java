@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
@@ -99,9 +100,13 @@ class TestOperatorBatchSource
     {
         Schema schema = Schema.unspecified(List.of("probe_key", "payload"));
         CapturingSource decoder = new CapturingSource();
-        Operator source = new BatchSourceOperator(new OperatorBatchSource(decoder, schema));
+        OperatorBatchSource batchSource = new OperatorBatchSource(decoder, schema);
+        Operator source = new BatchSourceOperator(batchSource);
 
         assertThat(source.outputSchema()).isEqualTo(schema);
+        assertThat(batchSource.column(0)).isSameAs(batchSource.column(0));
+        assertThat(batchSource.supportsRuntimeFilter(batchSource.column(0))).isTrue();
+        assertThat(batchSource.supportsRuntimeFilter(new OrdinalSourceColumnHandle(0, schema.field(0).type()))).isFalse();
         assertThat(source.exactOutputRows()).isEqualTo(123);
         assertThat(source.supportsDynamicFilterPushdown(0)).isTrue();
         assertThat(source.supportsDynamicFilterPushdown(1)).isFalse();

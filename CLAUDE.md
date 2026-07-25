@@ -104,6 +104,10 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   `ConstantTableOperator`, `SingleBatchOperator`, and the Parquet scans
   (`ParquetScanOperator` base with `TrinoParquetScanOperator` and
   `HardwoodParquetScanOperator`).
+  The engine-facing connector contract is `core.source.BatchSource`, not these
+  format-specific classes. Each source constructs stable opaque
+  `SourceColumnHandle` instances; runtime-filter support is explicitly checked
+  per owned handle, and foreign/provider handles are never inspected by the engine.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,
