@@ -38,13 +38,13 @@ public final class QueryDriver
         Path hits = ClickBenchHitsSupport.requiredActualHitsDirectory();
         long sink = 0;
         for (int iteration = 0; iteration < warmup; iteration++) {
-            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, null));
         }
 
         if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits));
+                sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, null));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -54,31 +54,29 @@ public final class QueryDriver
         OperatorCpuProfile profile = new OperatorCpuProfile();
         long start = System.nanoTime();
         for (int iteration = 0; iteration < measured; iteration++) {
-            sink += consume(ClickBenchHitsSupport.withOperatorCpuProfile(
-                    profile,
-                    () -> query(query, new Allocator(EngineResources.createDefault()), hits)));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), hits, profile));
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
         System.out.println(profile.formatReport());
     }
 
-    private static Operator query(String query, Allocator allocator, Path hits)
+    private static Operator query(String query, Allocator allocator, Path hits, OperatorCpuProfile profile)
     {
         return switch (query) {
-            case "query05" -> ClickBenchHitsSupport.query05(allocator, hits);
+            case "query05" -> ClickBenchHitsSupport.query05(allocator, hits, profile);
             case "query06" -> ClickBenchHitsSupport.query06(allocator, hits);
-            case "query10" -> ClickBenchHitsSupport.query10(allocator, hits);
-            case "query12" -> ClickBenchHitsSupport.query12(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
-            case "query18" -> ClickBenchHitsSupport.query18(allocator, hits);
-            case "query22" -> ClickBenchHitsSupport.query22(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
+            case "query10" -> ClickBenchHitsSupport.query10(allocator, hits, profile);
+            case "query12" -> ClickBenchHitsSupport.query12(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
+            case "query18" -> ClickBenchHitsSupport.query18(allocator, hits, profile);
+            case "query22" -> ClickBenchHitsSupport.query22(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
             case "query29" -> ClickBenchHitsSupport.query29(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
             case "query30" -> ClickBenchHitsSupport.query30(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
-            case "query33" -> ClickBenchHitsSupport.query33(allocator, hits);
-            case "query34" -> ClickBenchHitsSupport.query34(allocator, hits);
-            case "query36" -> ClickBenchHitsSupport.query36(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
-            case "query40" -> ClickBenchHitsSupport.query40(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
-            case "query43" -> ClickBenchHitsSupport.query43(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits);
+            case "query33" -> ClickBenchHitsSupport.query33(allocator, hits, profile);
+            case "query34" -> ClickBenchHitsSupport.query34(allocator, hits, profile);
+            case "query36" -> ClickBenchHitsSupport.query36(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
+            case "query40" -> ClickBenchHitsSupport.query40(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
+            case "query43" -> ClickBenchHitsSupport.query43(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
             default -> throw new IllegalArgumentException("Unsupported query: " + query);
         };
     }

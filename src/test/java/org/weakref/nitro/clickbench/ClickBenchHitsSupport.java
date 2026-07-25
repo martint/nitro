@@ -76,7 +76,6 @@ import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Supplier;
 
 import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -87,7 +86,6 @@ import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 public final class ClickBenchHitsSupport
 {
     private static final BenchmarkSchemaRegistry SCHEMAS = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
-    private static final ThreadLocal<OperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
     static final long QUERY41_REFERER_HASH = 3_594_120_000_172_545_465L;
@@ -128,26 +126,8 @@ public final class ClickBenchHitsSupport
 
     private ClickBenchHitsSupport() {}
 
-    static <T> T withOperatorCpuProfile(OperatorCpuProfile profile, Supplier<T> supplier)
+    private static Operator profiled(OperatorCpuProfile profile, String name, Operator operator)
     {
-        OperatorCpuProfile previous = CURRENT_OPERATOR_CPU_PROFILE.get();
-        CURRENT_OPERATOR_CPU_PROFILE.set(profile);
-        try {
-            return supplier.get();
-        }
-        finally {
-            if (previous == null) {
-                CURRENT_OPERATOR_CPU_PROFILE.remove();
-            }
-            else {
-                CURRENT_OPERATOR_CPU_PROFILE.set(previous);
-            }
-        }
-    }
-
-    private static Operator profiled(String name, Operator operator)
-    {
-        OperatorCpuProfile profile = CURRENT_OPERATOR_CPU_PROFILE.get();
         return profile == null ? operator : profile.wrap(name, operator);
     }
 
@@ -301,9 +281,14 @@ public final class ClickBenchHitsSupport
 
     public static Operator query05(Allocator allocator, Path file)
     {
-        Operator scan = profiled("q05.scan", clickBenchScan(allocator, file, "UserID"));
-        Operator distinct = profiled("q05.distinct", new MarkDistinctOperator(allocator, 0, scan));
-        return profiled("q05.aggregate", new AggregationOperator(allocator, List.of(new CountAll()), distinct));
+        return query05(allocator, file, null);
+    }
+
+    static Operator query05(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q05.scan", clickBenchScan(allocator, file, "UserID"));
+        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan));
+        return profiled(profile, "q05.aggregate", new AggregationOperator(allocator, List.of(new CountAll()), distinct));
     }
 
     public static Operator query06(Allocator allocator, Path file)
@@ -342,12 +327,17 @@ public final class ClickBenchHitsSupport
 
     public static Operator query10(Allocator allocator, Path file)
     {
-        Operator scan = profiled("q10.scan", clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
-        Operator distinct = profiled("q10.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 3}, scan));
+        return query10(allocator, file, null);
+    }
+
+    static Operator query10(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q10.scan", clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
+        Operator distinct = profiled(profile, "q10.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 3}, scan));
         List<Accumulator> aggregations = List.of(new Sum(1), new CountAll(), new Avg(2), new FilteredAccumulator(new CountAll(), 4));
         Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(0), aggregations, distinct);
-        aggregated = profiled("q10.aggregate", aggregated);
-        return profiled("q10.topn", new TopNOperator(allocator, 10, 2, aggregated));
+        aggregated = profiled(profile, "q10.aggregate", aggregated);
+        return profiled(profile, "q10.topn", new TopNOperator(allocator, 10, 2, aggregated));
     }
 
     public static Operator query11(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -364,15 +354,20 @@ public final class ClickBenchHitsSupport
 
     public static Operator query12(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator scan = profiled("q12.scan", clickBenchScan(allocator, file, "MobilePhone", "MobilePhoneModel", "UserID"));
-        Operator filtered = profiled("q12.filter", filter(allocator, primitiveRegistry, scan, notEqualUtf8(1, "")));
-        Operator distinct = profiled("q12.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 1, 2}, filtered));
-        Operator aggregated = profiled("q12.group", new GroupedAggregationOperator(
+        return query12(allocator, primitiveRegistry, file, null);
+    }
+
+    static Operator query12(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q12.scan", clickBenchScan(allocator, file, "MobilePhone", "MobilePhoneModel", "UserID"));
+        Operator filtered = profiled(profile, "q12.filter", filter(allocator, primitiveRegistry, scan, notEqualUtf8(1, "")));
+        Operator distinct = profiled(profile, "q12.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 1, 2}, filtered));
+        Operator aggregated = profiled(profile, "q12.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new FilteredAccumulator(new CountAll(), 3)),
                 distinct));
-        return profiled("q12.topn", new TopNOperator(allocator, 10, 2, aggregated));
+        return profiled(profile, "q12.topn", new TopNOperator(allocator, 10, 2, aggregated));
     }
 
     public static Operator query21(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -385,16 +380,21 @@ public final class ClickBenchHitsSupport
 
     public static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator scan = profiled("q22.scan", clickBenchScan(allocator, file, "SearchPhrase", "URL"));
-        Operator filtered = profiled("q22.filter", filter(allocator, primitiveRegistry, scan, and(notEqualUtf8(0, ""), containsUtf8(1, "google"))));
+        return query22(allocator, primitiveRegistry, file, null);
+    }
+
+    static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q22.scan", clickBenchScan(allocator, file, "SearchPhrase", "URL"));
+        Operator filtered = profiled(profile, "q22.filter", filter(allocator, primitiveRegistry, scan, and(notEqualUtf8(0, ""), containsUtf8(1, "google"))));
         Operator grouped = new GroupOperator(allocator, 0, filtered);
-        Operator aggregated = profiled("q22.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "q22.aggregate", new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1),
                 List.of(new MinUtf8(2), new CountAll()),
                 grouped));
-        return profiled("q22.topn", new TopNOperator(allocator, 10, 2, aggregated));
+        return profiled(profile, "q22.topn", new TopNOperator(allocator, 10, 2, aggregated));
     }
 
     public static Operator query23(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -419,7 +419,7 @@ public final class ClickBenchHitsSupport
 
     public static Operator query13(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        return topUtf8Counts(allocator, primitiveRegistry, file, "SearchPhrase", true);
+        return topUtf8Counts(allocator, primitiveRegistry, file, "SearchPhrase", true, null);
     }
 
     public static Operator query14(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -464,17 +464,22 @@ public final class ClickBenchHitsSupport
 
     public static Operator query18(Allocator allocator, Path file)
     {
-        Operator scan = profiled("q18.scan", clickBenchScan(allocator, file, "UserID", "SearchPhrase"));
+        return query18(allocator, file, null);
+    }
+
+    static Operator query18(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q18.scan", clickBenchScan(allocator, file, "UserID", "SearchPhrase"));
         // Keep GroupOperator visible as GroupedKeySource to its consumer; the outer wrappers still expose inclusive
         // aggregation and scan costs, whose difference is the grouping/aggregation work.
         Operator grouped = new GroupOperator(allocator, new int[] {0, 1}, scan);
-        Operator aggregated = profiled("q18.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "q18.aggregate", new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1, 2),
                 List.of(new CountAll()),
                 grouped));
-        return profiled("q18.limit", new LimitOperator(allocator, 10, aggregated));
+        return profiled(profile, "q18.limit", new LimitOperator(allocator, 10, aggregated));
     }
 
     public static Operator query19(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -562,43 +567,58 @@ public final class ClickBenchHitsSupport
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchEngineID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"), notEqualUtf8(4, ""));
         Operator projected = projectInputs(allocator, new PrimitiveRegistry(), filtered, 0, 1, 2, 3);
-        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3);
+        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3, null);
     }
 
     public static Operator query32(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("WatchID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"), notEqualUtf8(4, ""));
         Operator projected = projectInputs(allocator, new PrimitiveRegistry(), filtered, 0, 1, 2, 3);
-        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3);
+        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3, null);
     }
 
     public static Operator query33(Allocator allocator, Path file)
     {
+        return query33(allocator, file, null);
+    }
+
+    static Operator query33(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
         Operator source = clickBenchScan(allocator, file, "WatchID", "ClientIP", "IsRefresh", "ResolutionWidth");
-        return topGroupedCountSumAvg(allocator, source, new int[] {0, 1}, 2, 3);
+        return topGroupedCountSumAvg(allocator, source, new int[] {0, 1}, 2, 3, profile);
     }
 
     public static Operator query34(Allocator allocator, Path file)
     {
-        return topUtf8Counts(allocator, null, file, "URL", false);
+        return query34(allocator, file, null);
+    }
+
+    static Operator query34(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
+        return topUtf8Counts(allocator, null, file, "URL", false, profile);
     }
 
     public static Operator query35(Allocator allocator, Path file)
     {
-        Operator topUrls = topUtf8Counts(allocator, null, file, "URL", false);
+        Operator topUrls = topUtf8Counts(allocator, null, file, "URL", false, null);
         return prependConstant(allocator, topUrls, 1);
     }
 
     public static Operator query36(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator scan = profiled("q36.scan", clickBenchScan(allocator, file, "ClientIP"));
-        Operator projected = profiled("q36.project", projectClientIpOffsets(allocator, primitiveRegistry, scan));
-        Operator aggregated = profiled("q36.aggregate", new GroupedAggregationOperator(
+        return query36(allocator, primitiveRegistry, file, null);
+    }
+
+    static Operator query36(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q36.scan", clickBenchScan(allocator, file, "ClientIP"));
+        Operator projected = profiled(profile, "q36.project", projectClientIpOffsets(allocator, primitiveRegistry, scan));
+        Operator aggregated = profiled(profile, "q36.aggregate", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3),
                 List.of(new CountAll()),
                 projected));
-        return profiled("q36.topn", new TopNOperator(allocator, 10, 4, aggregated));
+        return profiled(profile, "q36.topn", new TopNOperator(allocator, 10, 4, aggregated));
     }
 
     public static Operator query37(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -653,25 +673,30 @@ public final class ClickBenchHitsSupport
 
     public static Operator query40(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator scan = profiled("q40.scan", clickBenchScan(
+        return query40(allocator, primitiveRegistry, file, null);
+    }
+
+    static Operator query40(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q40.scan", clickBenchScan(
                 allocator,
                 file,
                 "TraficSourceID", "SearchEngineID", "AdvEngineID", "Referer", "URL", "CounterID", "EventDate", "IsRefresh"));
-        Operator filtered = profiled("q40.filter", filter(
+        Operator filtered = profiled(profile, "q40.filter", filter(
                 allocator,
                 primitiveRegistry,
                 scan,
                 counterAndJulyEventDateFilter(file, 5, 6, 7)));
-        Operator projected = profiled("q40.project", projectTrafficSourceCase(allocator, primitiveRegistry, filtered));
+        Operator projected = profiled(profile, "q40.project", projectTrafficSourceCase(allocator, primitiveRegistry, filtered));
         Operator grouped = new GroupOperator(allocator, new int[] {0, 1, 2, 3, 4}, projected);
-        Operator aggregated = profiled("q40.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "q40.aggregate", new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1, 2, 3, 4, 5),
                 List.of(new CountAll()),
                 grouped));
-        Operator ordered = profiled("q40.topn", new TopNOperator(allocator, 1_010, 5, aggregated));
-        return profiled("q40.offset", new OffsetOperator(allocator, 1_000, ordered));
+        Operator ordered = profiled(profile, "q40.topn", new TopNOperator(allocator, 1_010, 5, aggregated));
+        return profiled(profile, "q40.offset", new OffsetOperator(allocator, 1_000, ordered));
     }
 
     public static Operator query41(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -720,27 +745,32 @@ public final class ClickBenchHitsSupport
 
     public static Operator query43(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator scan = profiled("q43.scan", clickBenchScan(
+        return query43(allocator, primitiveRegistry, file, null);
+    }
+
+    static Operator query43(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, OperatorCpuProfile profile)
+    {
+        Operator scan = profiled(profile, "q43.scan", clickBenchScan(
                 allocator,
                 file,
                 "EventTime", "CounterID", "EventDate", "DontCountHits", "IsRefresh"));
-        Operator filtered = profiled("q43.filter", filter(
+        Operator filtered = profiled(profile, "q43.filter", filter(
                 allocator,
                 primitiveRegistry,
                 scan,
                 and(
                         counterAndEventDateFilter(file, 1, 2, 4, LocalDate.of(2013, 7, 14), LocalDate.of(2013, 7, 16)),
                         equalTo(3, 0))));
-        Operator projected = profiled("q43.project.minute", projectMinuteBucket(allocator, primitiveRegistry, filtered, 0));
+        Operator projected = profiled(profile, "q43.project.minute", projectMinuteBucket(allocator, primitiveRegistry, filtered, 0));
         Operator grouped = new GroupOperator(allocator, 0, projected);
-        Operator aggregated = profiled("q43.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "q43.aggregate", new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1),
                 List.of(new CountAll()),
                 grouped));
-        Operator ordered = profiled("q43.topn", new TopNOperator(allocator, 1_010, 0, false, aggregated));
-        return profiled("q43.offset", new OffsetOperator(allocator, 1_000, ordered));
+        Operator ordered = profiled(profile, "q43.topn", new TopNOperator(allocator, 1_010, 0, false, aggregated));
+        return profiled(profile, "q43.offset", new OffsetOperator(allocator, 1_000, ordered));
     }
 
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, List<String> columns, FilterSpec filterSpec)
@@ -859,11 +889,17 @@ public final class ClickBenchHitsSupport
         return new TopNOperator(allocator, 10, 1, aggregated);
     }
 
-    private static Operator topUtf8Counts(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file, String column, boolean filterEmpty)
+    private static Operator topUtf8Counts(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            Path file,
+            String column,
+            boolean filterEmpty,
+            OperatorCpuProfile profile)
     {
-        Operator source = profiled("topUtf8.scan", clickBenchScan(allocator, file, column));
+        Operator source = profiled(profile, "topUtf8.scan", clickBenchScan(allocator, file, column));
         if (filterEmpty) {
-            source = profiled("topUtf8.filter", new FilterOperator(
+            source = profiled(profile, "topUtf8.filter", new FilterOperator(
                     source,
                     notEqualUtf8(0, "").plan(),
                     primitiveRegistry,
@@ -871,13 +907,13 @@ public final class ClickBenchHitsSupport
                     allocator));
         }
         Operator grouped = new GroupOperator(allocator, 0, source);
-        Operator aggregated = profiled("topUtf8.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "topUtf8.aggregate", new GroupedAggregationOperator(
                 allocator,
                 0,
                 List.of(1),
                 List.of(new CountAll()),
                 grouped));
-        return profiled("topUtf8.topn", new TopNOperator(allocator, 10, 1, aggregated));
+        return profiled(profile, "topUtf8.topn", new TopNOperator(allocator, 10, 1, aggregated));
     }
 
     private static Operator projectInputs(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int... inputIndexes)
@@ -1058,14 +1094,20 @@ public final class ClickBenchHitsSupport
         return new ProjectOperator(allocator, plan, primitiveRegistry, source);
     }
 
-    private static Operator topGroupedCountSumAvg(Allocator allocator, Operator source, int[] groupColumns, int sumColumn, int avgColumn)
+    private static Operator topGroupedCountSumAvg(
+            Allocator allocator,
+            Operator source,
+            int[] groupColumns,
+            int sumColumn,
+            int avgColumn,
+            OperatorCpuProfile profile)
     {
-        Operator aggregated = profiled("topGrouped.aggregate", new GroupedAggregationOperator(
+        Operator aggregated = profiled(profile, "topGrouped.aggregate", new GroupedAggregationOperator(
                 allocator,
                 Arrays.stream(groupColumns).boxed().toList(),
                 List.of(new CountAll(), new Sum(sumColumn), new Avg(avgColumn)),
                 source));
-        return profiled("topGrouped.topn", new TopNOperator(allocator, 10, groupColumns.length, aggregated));
+        return profiled(profile, "topGrouped.topn", new TopNOperator(allocator, 10, groupColumns.length, aggregated));
     }
 
     private static FilterSpec notEqualI64(int inputIndex, long constant)
