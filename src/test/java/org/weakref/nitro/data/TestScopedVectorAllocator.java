@@ -24,8 +24,12 @@ class TestScopedVectorAllocator
     void testAllocatesReleasesAndTransfersWithoutExposingEngineResources()
     {
         Allocator.Context context = new Allocator.Context("connector");
-        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
             VectorAllocator vectors = allocator.vectorAllocator(context);
+            assertThatIllegalStateException()
+                    .isThrownBy(allocator::engineResources)
+                    .withMessage("Engine resources are not configured for this allocator");
 
             I64Vector released = vectors.allocate(I64Vector.class, 4, I64Vector::new);
             assertThat(allocator.currentBytes(context)).isPositive();

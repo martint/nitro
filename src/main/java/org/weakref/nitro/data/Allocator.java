@@ -90,12 +90,27 @@ public class Allocator
     public Allocator(EngineResources engineResources, MemoryReservation memoryReservation)
     {
         this.engineResources = requireNonNull(engineResources, "engineResources is null");
-        this.primitiveArrays = engineResources.primitiveArrays();
+        this.primitiveArrays = engineResources.allocationResources().primitiveArrays();
+        this.memoryReservation = memoryReservation;
+    }
+
+    public Allocator(AllocationResources allocationResources)
+    {
+        this(allocationResources, null);
+    }
+
+    public Allocator(AllocationResources allocationResources, MemoryReservation memoryReservation)
+    {
+        this.engineResources = null;
+        this.primitiveArrays = requireNonNull(allocationResources, "allocationResources is null").primitiveArrays();
         this.memoryReservation = memoryReservation;
     }
 
     public EngineResources engineResources()
     {
+        if (engineResources == null) {
+            throw new IllegalStateException("Engine resources are not configured for this allocator");
+        }
         return engineResources;
     }
 

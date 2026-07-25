@@ -23,7 +23,7 @@ import java.util.Map;
  *
  * <p>The vector allocator's pools are intentionally scoped to an allocator instance. Query-state arrays can use a
  * longer-lived owner so a fresh query can reuse the previous query's build storage, but that lifetime is selected by
- * the embedding engine and passed through {@link EngineResources}; it is never process-global. This pool uses exact
+ * the embedding engine and passed through {@link AllocationResources}; it is never process-global. This pool uses exact
  * capacity buckets and a hard FIFO byte ceiling. Arrays smaller than the configured minimum are left to the normal
  * allocator/GC path.
  */

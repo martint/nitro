@@ -31,13 +31,7 @@ import static java.util.Objects.requireNonNull;
 public final class EngineResources
         implements AutoCloseable
 {
-    private static final long MIN_DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
-    private static final long MAX_DEFAULT_MAX_RETAINED_BYTES = 1L << 30;
-    private static final long DEFAULT_MIN_RETAINED_BYTES = 256L << 10;
-    private static final long DEFAULT_MAX_RETAINED_NATIVE_BYTES = 256L << 20;
-
-    private final PrimitiveArrayPool primitiveArrays;
-    private final PrimitiveArrayPool nativeBuffers;
+    private final AllocationResources allocationResources;
     private final OperatorCodeGenerationResources operatorCodeGeneration;
     private final ProjectOperatorResources projectOperator;
     private final AggregationOperatorResources aggregationOperator;
@@ -54,8 +48,24 @@ public final class EngineResources
             HashJoinOperatorResources hashJoinOperator,
             GroupingStateResources groupingState)
     {
-        this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
-        this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
+        this(
+                new AllocationResources(primitiveArrays, nativeBuffers),
+                operatorCodeGeneration,
+                projectOperator,
+                aggregationOperator,
+                hashJoinOperator,
+                groupingState);
+    }
+
+    public EngineResources(
+            AllocationResources allocationResources,
+            OperatorCodeGenerationResources operatorCodeGeneration,
+            ProjectOperatorResources projectOperator,
+            AggregationOperatorResources aggregationOperator,
+            HashJoinOperatorResources hashJoinOperator,
+            GroupingStateResources groupingState)
+    {
+        this.allocationResources = requireNonNull(allocationResources, "allocationResources is null");
         this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
         this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
         this.aggregationOperator = requireNonNull(aggregationOperator, "aggregationOperator is null");
@@ -71,12 +81,7 @@ public final class EngineResources
     public static EngineResources createDefault()
     {
         return new EngineResources(
-                new PrimitiveArrayPool(
-                        Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", defaultMaxRetainedBytes()),
-                        Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
-                new PrimitiveArrayPool(
-                        Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
-                        Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
+                AllocationResources.createDefault(),
                 new OperatorCodeGenerationResources(),
                 new ProjectOperatorResources(),
                 new AggregationOperatorResources(),
@@ -89,13 +94,19 @@ public final class EngineResources
     public PrimitiveArrayPool primitiveArrays()
     {
         checkOpen();
-        return primitiveArrays;
+        return allocationResources.primitiveArrays();
     }
 
     public PrimitiveArrayPool nativeBuffers()
     {
         checkOpen();
-        return nativeBuffers;
+        return allocationResources.nativeBuffers();
+    }
+
+    public AllocationResources allocationResources()
+    {
+        checkOpen();
+        return allocationResources;
     }
 
     public OperatorCodeGenerationResources operatorCodeGeneration()
@@ -135,10 +146,7 @@ public final class EngineResources
             return;
         }
         closed = true;
-        primitiveArrays.close();
-        if (nativeBuffers != primitiveArrays) {
-            nativeBuffers.close();
-        }
+        allocationResources.close();
         operatorCodeGeneration.close();
     }
 
@@ -147,15 +155,5 @@ public final class EngineResources
         if (closed) {
             throw new IllegalStateException("Engine resources are closed");
         }
-    }
-
-    private static long defaultMaxRetainedBytes()
-    {
-        // Keep the original bounded footprint on small heaps, but let large analytic-query heaps retain enough of
-        // their actual primitive working set to avoid recreating it every invocation. The hard upper bound remains
-        // below one tenth of the 12 GiB publication heap, and the explicit property remains authoritative.
-        return Math.min(
-                MAX_DEFAULT_MAX_RETAINED_BYTES,
-                Math.max(MIN_DEFAULT_MAX_RETAINED_BYTES, Runtime.getRuntime().maxMemory() / 12));
     }
 }
