@@ -33,12 +33,13 @@ public class TestGroupingStatePoolReuse
     private final EngineResources engineResources = EngineResources.createDefault();
     private final PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
+    private final GroupingStateResources groupingResources = engineResources.groupingState();
 
     @Test
     public void testReleasedDirectIndexDoesNotExposeStaleGroups()
     {
         for (int execution = 0; execution < 2; execution++) {
-            GroupingState state = new GroupingState(arrayPool, codeGeneration);
+            GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
             int size = 10_000;
             long[] firstKeys = new long[size];
             long[] secondKeys = new long[size];
@@ -62,7 +63,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testSingleLongGroupingMigratesToDirectIndexAndBackWithoutChangingIds()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         int firstSize = 10_000;
         long[] firstKeys = new long[firstSize];
         for (int index = 0; index < firstSize; index++) {
@@ -104,7 +105,7 @@ public class TestGroupingStatePoolReuse
             firstKeys[index] = compressibleSparseKey(index);
         }
 
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(firstSize);
         state.assignGroups(new I64Vector(firstKeys), null, Mask.all(firstSize), firstGroups);
         assertThat(firstGroups.values()[0]).isZero();
@@ -137,7 +138,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntTripleGroupingPreservesKeysAndFirstSeenIds()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector groups = new I64Vector(5);
         state.assignGroups(
                 new Vector[] {
@@ -167,7 +168,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntTripleGroupingPromotesOnNullAndWideValue()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(2);
         state.assignGroups(
                 new Vector[] {
@@ -210,7 +211,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPreservesSignedKeysAndFirstSeenIds()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector groups = new I64Vector(4);
         state.assignGroups(
                 new Vector[] {
@@ -238,7 +239,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPromotesOnNullWithoutChangingIds()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(2);
         state.assignGroups(
                 new Vector[] {new I64Vector(new long[] {1, 3}), new I64Vector(new long[] {2, 4})},
@@ -271,7 +272,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPackedIntPairGroupingPromotesOnWideValue()
     {
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(1);
         state.assignGroups(
                 new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {2})},
@@ -310,7 +311,7 @@ public class TestGroupingStatePoolReuse
         DictionaryVector longInner = DictionaryVector.wrapNested(new int[] {1, 2, 0, 1}, 4, longLeaf);
 
         int[] outerIds = {1, 0, 3, 2, 1};
-        GroupingState state = new GroupingState(arrayPool, codeGeneration);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector groups = new I64Vector(outerIds.length);
         state.assignGroups(
                 new Vector[] {
@@ -334,7 +335,7 @@ public class TestGroupingStatePoolReuse
         BinaryVector secondValues = dictionaryValues(dictionarySize, "b");
         int[] firstIds = {0, 1, 2, 3, 4};
 
-        GroupingState first = new GroupingState(arrayPool, codeGeneration);
+        GroupingState first = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(firstIds.length);
         first.assignGroups(
                 new Vector[] {DictionaryVector.wrap(firstIds, firstValues), DictionaryVector.wrap(firstIds, secondValues)},
@@ -344,7 +345,7 @@ public class TestGroupingStatePoolReuse
         assertThat(firstGroups.values()).containsExactly(0, 1, 2, 3, 4);
         first.releaseBuffers();
 
-        GroupingState second = new GroupingState(arrayPool, codeGeneration);
+        GroupingState second = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector secondGroups = new I64Vector(1);
         int[] secondIds = {4};
         second.assignGroups(
@@ -361,7 +362,7 @@ public class TestGroupingStatePoolReuse
     @Test
     public void testPooledFlatRecordDoesNotReadNullVariableWidthPayload()
     {
-        GroupingState first = new GroupingState(arrayPool, codeGeneration);
+        GroupingState first = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector firstGroups = new I64Vector(1);
         first.assignGroups(
                 new Vector[] {binaryValue("prefix"), binaryValue("poison"), new I64Vector(new long[] {1})},
@@ -370,7 +371,7 @@ public class TestGroupingStatePoolReuse
                 firstGroups);
         first.releaseBuffers();
 
-        GroupingState second = new GroupingState(arrayPool, codeGeneration);
+        GroupingState second = new GroupingState(arrayPool, codeGeneration, groupingResources);
         I64Vector secondGroups = new I64Vector(1);
         second.assignGroups(
                 new Vector[] {binaryValue("x"), binaryValue("ignored"), new I64Vector(new long[] {2})},

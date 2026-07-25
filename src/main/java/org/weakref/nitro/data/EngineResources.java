@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.AggregationOperatorResources;
+import org.weakref.nitro.operator.GroupingStateResources;
 import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
@@ -41,6 +42,7 @@ public final class EngineResources
     private final ProjectOperatorResources projectOperator;
     private final AggregationOperatorResources aggregationOperator;
     private final HashJoinOperatorResources hashJoinOperator;
+    private final GroupingStateResources groupingState;
     private boolean closed;
 
     public EngineResources(
@@ -49,7 +51,8 @@ public final class EngineResources
             OperatorCodeGenerationResources operatorCodeGeneration,
             ProjectOperatorResources projectOperator,
             AggregationOperatorResources aggregationOperator,
-            HashJoinOperatorResources hashJoinOperator)
+            HashJoinOperatorResources hashJoinOperator,
+            GroupingStateResources groupingState)
     {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
@@ -57,6 +60,7 @@ public final class EngineResources
         this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
         this.aggregationOperator = requireNonNull(aggregationOperator, "aggregationOperator is null");
         this.hashJoinOperator = requireNonNull(hashJoinOperator, "hashJoinOperator is null");
+        this.groupingState = requireNonNull(groupingState, "groupingState is null");
     }
 
     /**
@@ -77,7 +81,9 @@ public final class EngineResources
                 new ProjectOperatorResources(),
                 new AggregationOperatorResources(),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"))));
+                        System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true"))),
+                new GroupingStateResources(Boolean.parseBoolean(
+                        System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))));
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -114,6 +120,12 @@ public final class EngineResources
     {
         checkOpen();
         return hashJoinOperator;
+    }
+
+    public GroupingStateResources groupingState()
+    {
+        checkOpen();
+        return groupingState;
     }
 
     @Override

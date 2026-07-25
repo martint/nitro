@@ -35,9 +35,6 @@ import static java.lang.Math.toIntExact;
 
 final class GroupingState
 {
-    private static final Object ZEROED_LONG_DIRECT_IDS_FAMILY = new Object();
-    private static final boolean ZEROED_LONG_DIRECT_IDS_POOL =
-            Boolean.parseBoolean(System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"));
     private static final VectorAccess.BooleanValues NEVER_NULL = _ -> false;
     private static final boolean DEBUG_GROUPING_SHAPES = Boolean.getBoolean("nitro.debug.groupingShapes");
     private static final boolean DEBUG_FLAT_PACKED_IDENTITY = Boolean.getBoolean("nitro.debug.flatPackedIdentity");
@@ -127,6 +124,7 @@ final class GroupingState
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
+    private final GroupingStateResources resources;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
     // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
     // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
@@ -170,8 +168,7 @@ final class GroupingState
     // Recycling a direct table through the dedicated zeroed family clears only occupied keys. That removes the
     // capacity-sized fill which made a somewhat wider sparse domain unprofitable, so admit up to 13 slots/group
     // with that lifecycle. The ordinary generic pool retains the established 11.5 slots/group threshold.
-    private int longDirectMaxRangePerGroupNumerator =
-            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupNumerator", ZEROED_LONG_DIRECT_IDS_POOL ? 26 : 23);
+    private final int longDirectMaxRangePerGroupNumerator;
     private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR =
             Integer.getInteger("nitro.group.longDirectMaxRangePerGroupDenominator", 2);
     private static final boolean DEBUG_LONG_DIRECT_GROUPING = Boolean.getBoolean("nitro.debug.longDirectGrouping");
@@ -234,10 +231,17 @@ final class GroupingState
     private boolean initialized;
     private LongGroupingTable multiLongTable;
 
-    GroupingState(PrimitiveArrayPool arrayPool, OperatorCodeGenerationResources codeGeneration)
+    GroupingState(
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            GroupingStateResources resources)
     {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
+        this.resources = resources;
+        this.longDirectMaxRangePerGroupNumerator = Integer.getInteger(
+                "nitro.group.longDirectMaxRangePerGroupNumerator",
+                resources.poolZeroedLongDirectIds() ? 26 : 23);
         groups.defaultReturnValue(-1);
     }
 
@@ -2092,12 +2096,12 @@ final class GroupingState
 
     private int[] borrowZeroedLongDirectIds(int capacity)
     {
-        if (!ZEROED_LONG_DIRECT_IDS_POOL) {
+        if (!resources.poolZeroedLongDirectIds()) {
             int[] ids = arrayPool.borrowInts(capacity);
             Arrays.fill(ids, 0);
             return ids;
         }
-        int[] ids = arrayPool.borrow(ZEROED_LONG_DIRECT_IDS_FAMILY, capacity, int[].class);
+        int[] ids = arrayPool.borrow(resources.zeroedLongDirectIdsFamily(), capacity, int[].class);
         return ids == null ? new int[capacity] : ids;
     }
 
@@ -2106,7 +2110,7 @@ final class GroupingState
         if (ids == null) {
             return;
         }
-        if (!direct || !ZEROED_LONG_DIRECT_IDS_POOL) {
+        if (!direct || !resources.poolZeroedLongDirectIds()) {
             arrayPool.release(ids);
             return;
         }
@@ -2123,7 +2127,7 @@ final class GroupingState
             }
         }
         arrayPool.retain(
-                ZEROED_LONG_DIRECT_IDS_FAMILY,
+                resources.zeroedLongDirectIdsFamily(),
                 ids.length,
                 (long) ids.length * Integer.BYTES,
                 ids);

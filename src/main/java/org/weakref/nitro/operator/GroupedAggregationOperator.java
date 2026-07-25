@@ -151,7 +151,18 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, -1, groupedColumns, aggregations, source, toArray(groupByColumns), mapGroupedKeyIndexes(groupByColumns, groupedColumns), new GroupingState(allocator.primitiveArrays(), allocator.engineResources().operatorCodeGeneration()));
+        this(
+                allocator,
+                -1,
+                groupedColumns,
+                aggregations,
+                source,
+                toArray(groupByColumns),
+                mapGroupedKeyIndexes(groupByColumns, groupedColumns),
+                new GroupingState(
+                        allocator.primitiveArrays(),
+                        allocator.engineResources().operatorCodeGeneration(),
+                        allocator.engineResources().groupingState()));
     }
 
     private GroupedAggregationOperator(

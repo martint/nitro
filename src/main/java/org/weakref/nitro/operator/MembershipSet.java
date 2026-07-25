@@ -187,7 +187,10 @@ final class MembershipSet
         {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
-            this.grouping = new GroupingState(allocator.primitiveArrays(), allocator.engineResources().operatorCodeGeneration());
+            this.grouping = new GroupingState(
+                    allocator.primitiveArrays(),
+                    allocator.engineResources().operatorCodeGeneration(),
+                    allocator.engineResources().groupingState());
         }
 
         @Override

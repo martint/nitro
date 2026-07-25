@@ -191,6 +191,20 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testGroupingPoolFamilyIsExplicitlyOwned()
+            throws IOException
+    {
+        String groupingState = Files.readString(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/GroupingState.java"));
+
+        assertThat(groupingState)
+                .doesNotContain("static final Object ZEROED_LONG_DIRECT_IDS_FAMILY")
+                .doesNotContain("ZEROED_LONG_DIRECT_IDS_POOL")
+                .contains("resources.zeroedLongDirectIdsFamily()")
+                .contains("resources.poolZeroedLongDirectIds()");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
