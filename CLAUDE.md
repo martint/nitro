@@ -119,6 +119,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   a constructed `ColumnViewOperatorIngressFactory` binds every schema field to
   its registry/code-generated physical importer. The generic assembler owns
   laziness, selection generations, and lifetime, never type or encoding cases.
+  `RegisteredColumnViewOperatorIngressFactory` is the immutable composition-root
+  registry for those providers; type identities are lookup keys, not engine
+  vocabulary, and no provider or cache is process-static.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,
