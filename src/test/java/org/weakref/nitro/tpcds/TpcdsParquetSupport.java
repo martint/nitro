@@ -70,6 +70,7 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.OperatorBatchSource;
 
 import java.time.LocalDate;
@@ -4354,7 +4355,9 @@ final class TpcdsParquetSupport
                 allocator,
                 tables.tableFiles(tableName),
                 columnNames);
-        return new BatchSourceOperator(new OperatorBatchSource(decoder, SCHEMAS.tpcds(tableName, columnNames)));
+        return new BatchSourceOperator(
+                new OperatorBatchSource(decoder, SCHEMAS.tpcds(tableName, columnNames)),
+                new NativeSourceOperatorIngress());
     }
 
     private static Operator customerScan(Allocator allocator, TpcdsParquetTables tables, String... columns)

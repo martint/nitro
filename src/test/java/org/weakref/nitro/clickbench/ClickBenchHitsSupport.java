@@ -63,6 +63,7 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
@@ -765,7 +766,8 @@ public final class ClickBenchHitsSupport
             Operator decoder = new NitroParquetScanOperator(allocator, paths, columnNames);
             return new BatchSourceOperator(new OperatorBatchSource(
                     decoder,
-                    SCHEMAS.parquet(paths.getFirst(), columnNames)));
+                    SCHEMAS.parquet(paths.getFirst(), columnNames)),
+                    new NativeSourceOperatorIngress());
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to inspect ClickBench hits file: " + file, exception);

@@ -14,7 +14,14 @@
 package org.weakref.nitro.operator.source;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.batch.ColumnView;
+import org.weakref.nitro.core.batch.Selection;
+import org.weakref.nitro.core.batch.SourceBatch;
+import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
+import org.weakref.nitro.core.source.SourceCapability;
+import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
@@ -23,12 +30,99 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TestOperatorBatchSource
 {
+    @Test
+    void testConstructedIngressOwnsArbitrarySourceBatchLifetime()
+    {
+        AtomicBoolean batchClosed = new AtomicBoolean();
+        SourceBatch sourceBatch = new SourceBatch()
+        {
+            @Override
+            public Schema schema()
+            {
+                return Schema.unspecified(0);
+            }
+
+            @Override
+            public Selection selection()
+            {
+                return new MaskSelection(Mask.all(0));
+            }
+
+            @Override
+            public ColumnView column(int index)
+            {
+                throw new IndexOutOfBoundsException(index);
+            }
+
+            @Override
+            public void select(Selection selection) {}
+
+            @Override
+            public void close()
+            {
+                batchClosed.set(true);
+            }
+        };
+        BatchSource batchSource = new BatchSource()
+        {
+            private boolean emitted;
+
+            @Override
+            public Schema schema()
+            {
+                return Schema.unspecified(0);
+            }
+
+            @Override
+            public SourceColumnHandle column(int outputIndex)
+            {
+                throw new IndexOutOfBoundsException(outputIndex);
+            }
+
+            @Override
+            public Set<SourceCapability> capabilities()
+            {
+                return Set.of();
+            }
+
+            @Override
+            public SourcePoll poll()
+            {
+                if (emitted) {
+                    return SourcePoll.Finished.FINISHED;
+                }
+                emitted = true;
+                return new SourcePoll.Ready(sourceBatch);
+            }
+
+            @Override
+            public void close() {}
+        };
+        SourceOperatorIngress ingress = batch -> new Batch(
+                Mask.all(0),
+                _ -> {},
+                mask -> mask,
+                _ -> {},
+                batch::close,
+                new Output[0]);
+        Operator source = new BatchSourceOperator(batchSource, ingress);
+
+        assertThat(source.hasNext()).isTrue();
+        try (Batch _ = source.next()) {
+            assertThat(batchClosed).isFalse();
+        }
+        assertThat(batchClosed).isTrue();
+        assertThat(source.hasNext()).isFalse();
+    }
+
     @Test
     void testAvailabilityPollDoesNotAdvanceDecoder()
     {
@@ -63,7 +157,7 @@ class TestOperatorBatchSource
             @Override
             public void close() {}
         };
-        Operator source = new BatchSourceOperator(new OperatorBatchSource(decoder));
+        Operator source = new BatchSourceOperator(new OperatorBatchSource(decoder), new NativeSourceOperatorIngress());
 
         assertThat(source.hasNext()).isTrue();
         assertThat(pulls).hasValue(0);
@@ -101,7 +195,7 @@ class TestOperatorBatchSource
         Schema schema = Schema.unspecified(List.of("probe_key", "payload"));
         CapturingSource decoder = new CapturingSource();
         OperatorBatchSource batchSource = new OperatorBatchSource(decoder, schema);
-        Operator source = new BatchSourceOperator(batchSource);
+        Operator source = new BatchSourceOperator(batchSource, new NativeSourceOperatorIngress());
 
         assertThat(source.outputSchema()).isEqualTo(schema);
         assertThat(batchSource.column(0)).isSameAs(batchSource.column(0));

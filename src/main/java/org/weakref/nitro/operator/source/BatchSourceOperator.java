@@ -35,17 +35,17 @@ public final class BatchSourceOperator
         implements Operator
 {
     private final BatchSource source;
+    private final SourceOperatorIngress ingress;
     private final Operator nativeSource;
     private SourceBatch staged;
-    private NativeBatchAccess stagedNativeBatch;
     private Batch currentBatch;
     private boolean finished;
 
-    public BatchSourceOperator(BatchSource source)
+    public BatchSourceOperator(BatchSource source, SourceOperatorIngress ingress)
     {
         this.source = requireNonNull(source, "source is null");
-        this.nativeSource = source.protocol(NativeOperatorProtocol.NATIVE_OPERATOR)
-                .map(NativeOperatorAccess::operator)
+        this.ingress = requireNonNull(ingress, "ingress is null");
+        this.nativeSource = ingress.directOperator(source)
                 .orElse(null);
     }
 
@@ -76,13 +76,7 @@ public final class BatchSourceOperator
         SourcePoll poll = source.poll();
         switch (poll) {
             case SourcePoll.Ready(var batch) -> {
-                NativeBatchAccess nativeBatch = batch.capability(NativeBatchCapability.NATIVE_BATCH).orElse(null);
-                if (nativeBatch == null) {
-                    batch.close();
-                    throw new IllegalArgumentException("source does not expose a native batch");
-                }
                 staged = batch;
-                stagedNativeBatch = nativeBatch;
                 return true;
             }
             case SourcePoll.Blocked _ -> throw new IllegalStateException("pull adapter cannot consume a blocked source");
@@ -102,11 +96,16 @@ public final class BatchSourceOperator
         if (!hasNext()) {
             throw new IllegalStateException("No more rows");
         }
-        currentBatch = stagedNativeBatch.transfer();
-        staged.close();
+        SourceBatch batch = staged;
         staged = null;
-        stagedNativeBatch = null;
-        return currentBatch;
+        try {
+            currentBatch = ingress.adapt(batch);
+            return currentBatch;
+        }
+        catch (RuntimeException | Error failure) {
+            batch.close();
+            throw failure;
+        }
     }
 
     @Override
@@ -186,7 +185,6 @@ public final class BatchSourceOperator
         if (staged != null) {
             staged.close();
             staged = null;
-            stagedNativeBatch = null;
         }
         source.close();
     }

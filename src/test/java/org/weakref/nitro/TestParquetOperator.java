@@ -78,6 +78,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
@@ -122,7 +123,7 @@ public class TestParquetOperator
                 new Field("maybe", BIGINT, true)));
         Operator ingress = new BatchSourceOperator(new OperatorBatchSource(
                 new NitroParquetScanOperator(allocator, List.of(file), List.of("x", "maybe")),
-                inputSchema));
+                inputSchema), new NativeSourceOperatorIngress());
         assertThat(ingress.outputSchema()).isEqualTo(inputSchema);
         assertThat(ingress.supportsDynamicFilterPushdown(0)).isTrue();
         ingress.pushDynamicFilter(DynamicFilter.fromRange(0, 10, 10));

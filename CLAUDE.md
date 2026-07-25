@@ -108,6 +108,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   format-specific classes. Each source constructs stable opaque
   `SourceColumnHandle` instances; runtime-filter support is explicitly checked
   per owned handle, and foreign/provider handles are never inspected by the engine.
+  `BatchSourceOperator` receives a constructed `SourceOperatorIngress`; native,
+  generated-column, or host-boundary adaptation policy does not belong in the
+  source operator or connector implementation.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,

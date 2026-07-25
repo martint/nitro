@@ -61,6 +61,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.OperatorBatchSource;
 
 import java.io.IOException;
@@ -144,7 +145,7 @@ class TestCoreIntegrationSlice
                         Mask.all(4),
                         () -> new Output[] {Output.of(Streams.ofValues(new I64Vector(new long[] {1, 2, 3, 4})))}),
                 sourceCloses);
-        Operator ingress = new BatchSourceOperator(new OperatorBatchSource(nativeSource));
+        Operator ingress = new BatchSourceOperator(new OperatorBatchSource(nativeSource), new NativeSourceOperatorIngress());
         Operator island = new ProjectOperator(
                 allocator,
                 projectPlan,

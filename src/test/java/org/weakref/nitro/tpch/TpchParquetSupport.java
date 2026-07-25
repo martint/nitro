@@ -55,6 +55,7 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.OperatorBatchSource;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
@@ -1722,7 +1723,9 @@ final class TpchParquetSupport
     {
         List<String> columnNames = List.of(columns);
         Operator decoder = new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), columnNames);
-        return new BatchSourceOperator(new OperatorBatchSource(decoder, SCHEMAS.tpch(tableName, columnNames)));
+        return new BatchSourceOperator(
+                new OperatorBatchSource(decoder, SCHEMAS.tpch(tableName, columnNames)),
+                new NativeSourceOperatorIngress());
     }
 
     private static Operator scannedTableWithLongRange(
