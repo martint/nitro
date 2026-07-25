@@ -32,10 +32,10 @@ import java.util.Set;
 public final class MarkDistinctMarkerOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MarkDistinctMarkerOperator");
     private static final int[] EMPTY_POSITIONS = new int[0];
 
     private final Allocator allocator;
+    private final Allocator.Context allocationContext;
     private final PrimitiveArrayPool arrayPool;
     private final int[] distinctColumns;
     private final boolean retainNulls;
@@ -65,6 +65,9 @@ public final class MarkDistinctMarkerOperator
             throw new IllegalArgumentException("distinctColumns is empty");
         }
         this.allocator = allocator;
+        this.allocationContext = new Allocator.Context(
+                "MarkDistinctMarkerOperator",
+                operatorResources.grouping().markDistinctMarkerBufferPool());
         this.arrayPool = allocator.primitiveArrays();
         this.codeGeneration = operatorResources.codeGeneration();
         this.distinctColumns = distinctColumns.clone();
@@ -115,7 +118,7 @@ public final class MarkDistinctMarkerOperator
                         reusableMarker = null;
                     }
                     batchState.marker = null;
-                    return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                    return allocator.transfer(allocationContext, vector);
                 },
                 (_, _) -> {},
                 null,
@@ -167,7 +170,7 @@ public final class MarkDistinctMarkerOperator
         Arrays.fill(values, null);
         Arrays.fill(nulls, null);
         reusableMarker = null;
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private Mask markerMask(BatchState batchState, Mask requestedMask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultContext)
@@ -186,7 +189,7 @@ public final class MarkDistinctMarkerOperator
         computeDistinctPositions(batchState);
         if (batchState.marker == null) {
             int size = batchState.originalMask.size();
-            reusableMarker = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableMarker, BooleanVector.class, size, BooleanVector::new);
+            reusableMarker = allocator.reallocateIfNecessary(allocationContext, reusableMarker, BooleanVector.class, size, BooleanVector::new);
             boolean[] marker = reusableMarker.values();
             Arrays.fill(marker, 0, size, false);
             for (int index = 0; index < batchState.distinctCount; index++) {

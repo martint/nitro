@@ -36,7 +36,6 @@ import java.util.function.Function;
 public class SemiJoinOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SemiJoinOperator");
     private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
     private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 13);
     private static final int SMALL_BINARY_SET_MAX_VALUES = Integer.getInteger("nitro.semiJoin.smallBinarySetMaxValues", 64);
@@ -48,6 +47,7 @@ public class SemiJoinOperator
     private final int outerJoinColumn;
     private final int innerJoinColumn;
     private final Allocator allocator;
+    private final Allocator.Context allocationContext;
     private final boolean includeMatches;
     private final boolean outputMatches;
     private final MembershipSet membership;
@@ -98,10 +98,13 @@ public class SemiJoinOperator
         this.outerJoinColumn = outerJoinColumn;
         this.innerJoinColumn = innerJoinColumn;
         this.allocator = allocator;
+        this.allocationContext = new Allocator.Context(
+                "SemiJoinOperator",
+                operatorResources.grouping().semiJoinBufferPool());
         this.selectionScratch = new PositionScratch(allocator.primitiveArrays());
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
-        this.membership = new MembershipSet(allocator, ALLOCATION_CONTEXT, operatorResources);
+        this.membership = new MembershipSet(allocator, allocationContext, operatorResources);
     }
 
     @Override
@@ -166,13 +169,13 @@ public class SemiJoinOperator
                         return batchState.borrowMatchMask(this, mask, selectTrue, resultAllocator, resultAllocationContext);
                     },
                     (stream, vector) -> vector,
-                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector),
                     null,
                     (existing, sourcePosition, outputPosition, size) -> {
                         BooleanVector matchValues = batchState.borrowMatchValues(this);
                         BooleanVector outputValues = VectorAccess.writableBooleanVector(
                                 allocator,
-                                ALLOCATION_CONTEXT,
+                                allocationContext,
                                 existing == null ? null : existing.getOrNull(Stream.VALUES),
                                 size);
                         outputValues.values()[outputPosition] = matchValues.values()[sourcePosition];
@@ -244,7 +247,7 @@ public class SemiJoinOperator
             smallBinaryMembership.releaseBuffers();
             smallBinaryMembership = null;
         }
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private void loadInnerIfNecessary()
@@ -353,7 +356,7 @@ public class SemiJoinOperator
 
     private Mask selectRows(Batch sourceBatch)
     {
-        return selectRows(sourceBatch, sourceBatch.borrowMask(), includeMatches, allocator, ALLOCATION_CONTEXT);
+        return selectRows(sourceBatch, sourceBatch.borrowMask(), includeMatches, allocator, allocationContext);
     }
 
     private Mask selectRows(Batch sourceBatch, Mask sourceMask, boolean includeMatches, Allocator resultAllocator, Allocator.Context resultAllocationContext)
@@ -1005,7 +1008,7 @@ public class SemiJoinOperator
         {
             Mask effectiveMask = requestedMask == null ? mask() : requestedMask;
             if (matchValues == null) {
-                matchValues = operator.allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask().size(), BooleanVector::new);
+                matchValues = operator.allocator.allocate(operator.allocationContext, BooleanVector.class, mask().size(), BooleanVector::new);
             }
             if (matchValuesComplete) {
                 return matchValues;
