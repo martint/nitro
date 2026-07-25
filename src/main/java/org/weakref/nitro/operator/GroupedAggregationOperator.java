@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -23,8 +24,8 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
-import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
-import org.weakref.nitro.operator.aggregation.FusedAggregator;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulator;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 
@@ -109,14 +110,14 @@ public class GroupedAggregationOperator
     private boolean fusedChecked;
     private boolean fusedPhysicalPathCommitted;
     private FusedGroupingKernel fusedKernel;
-    private FusedAccumulatorSpec[] fusedSpecs;
+    private GeneratedGroupedAccumulatorUpdate[] fusedSpecs;
     private int[] fusedAggregationIndexes;
     private Object[] fusedInputs;
     private int[] fusedKeyIds;
     private int[][] fusedInputIds;
     private boolean[][] fusedInputNulls;
     private int[][] fusedInputNullIds;
-    private Object[] fusedStateVectors;
+    private LongStateUpdate[] fusedStateVectors;
     private boolean[] fusedIntInputs;
     private boolean[] fusedMappedInputs;
     private boolean[] fusedMappedInputNulls;
@@ -352,15 +353,15 @@ public class GroupedAggregationOperator
             return;
         }
         fusedAggregationIndexes = plainAggregationIndexes.clone();
-        fusedSpecs = new FusedAccumulatorSpec[fusedAggregationIndexes.length];
+        fusedSpecs = new GeneratedGroupedAccumulatorUpdate[fusedAggregationIndexes.length];
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedSpecs[index] = ((FusedAggregator) aggregations[fusedAggregationIndexes[index]]).fusedSpec();
+            fusedSpecs[index] = ((GeneratedGroupedAccumulator) aggregations[fusedAggregationIndexes[index]]).generatedGroupedUpdate();
         }
         fusedInputs = new Object[fusedSpecs.length];
         fusedInputIds = new int[fusedSpecs.length][];
         fusedInputNulls = new boolean[fusedSpecs.length][];
         fusedInputNullIds = new int[fusedSpecs.length][];
-        fusedStateVectors = new Object[fusedSpecs.length];
+        fusedStateVectors = new LongStateUpdate[fusedSpecs.length];
         fusedIntInputs = new boolean[fusedSpecs.length];
         fusedMappedInputs = new boolean[fusedSpecs.length];
         fusedMappedInputNulls = new boolean[fusedSpecs.length];
@@ -371,7 +372,7 @@ public class GroupedAggregationOperator
     private boolean allPlainAggregationsFusible()
     {
         for (int aggregationIndex : plainAggregationIndexes) {
-            if (!(aggregations[aggregationIndex] instanceof FusedAggregator)) {
+            if (!(aggregations[aggregationIndex] instanceof GeneratedGroupedAccumulator)) {
                 return false;
             }
         }
@@ -469,7 +470,7 @@ public class GroupedAggregationOperator
                     inlineGroupingState.groupCount(), mask.count(), fusedKeyMapped, runCache);
         }
         for (int index = 0; index < fusedSpecs.length; index++) {
-            FusedAccumulatorSpec spec = fusedSpecs[index];
+            GeneratedGroupedAccumulatorUpdate spec = fusedSpecs[index];
             if (!spec.readsInput()) {
                 fusedInputs[index] = null;
                 fusedInputIds[index] = null;
@@ -591,7 +592,7 @@ public class GroupedAggregationOperator
             reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
         }
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedStateVectors[index] = states[fusedAggregationIndexes[index]].values();
+            fusedStateVectors[index] = (LongStateUpdate) states[fusedAggregationIndexes[index]].values();
         }
 
         long nextId = fusedKernel.accumulate(
@@ -619,7 +620,7 @@ public class GroupedAggregationOperator
     private boolean canBatchInputIndependentFusedAccumulator()
     {
         boolean found = false;
-        for (FusedAccumulatorSpec spec : fusedSpecs) {
+        for (GeneratedGroupedAccumulatorUpdate spec : fusedSpecs) {
             if (!spec.readsInput()) {
                 found = true;
             }

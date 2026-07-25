@@ -14,16 +14,16 @@
 package org.weakref.nitro.operator.aggregation;
 
 /**
- * Marks an {@link Accumulator} whose per-row update is a single {@code stateVector.increment(group,
- * amount)} call, so it can participate in the fused single-long-key grouped-aggregation kernel — one
+ * Marks an {@link Accumulator} whose state implements the long-update SPI and whose provider declares
+ * its per-row contribution, so it can participate in the generated single-long-key grouped-aggregation kernel — one
  * inlined pass that probes the group table and accumulates with no group-id vector and no per-row
  * accumulator dispatch.
  */
-public interface FusedAggregator
+public interface GeneratedGroupedAccumulator
         extends Accumulator
 {
     /**
-     * Declares how the fused kernel updates this accumulator's state per row.
+     * Declares the provider-supplied physical update that a generated grouping loop executes.
      */
-    FusedAccumulatorSpec fusedSpec();
+    GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate();
 }

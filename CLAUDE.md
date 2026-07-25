@@ -124,7 +124,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
 **Aggregation accumulators** (`operator/aggregation`): `Accumulator` interface
 with `Sum`, `SumF64`, `Min`, `Max`, `MinUtf8`, `Avg`, `First`, `CountAll`,
 `CountColumn`, and `StddevSamp`. Operators execute the accumulator sequence supplied by the
-physical plan without recognizing or rewriting combinations of aggregate functions.
+physical plan without recognizing or rewriting combinations of aggregate functions. Providers may
+optionally publish a `GeneratedGroupedAccumulatorUpdate`; generated engine code invokes opaque provider
+state through the classloader-safe `LongStateUpdate` SPI rather than referencing a builtin state class.
 
 ### Evaluator (`org.weakref.nitro.operator.evaluator`)
 

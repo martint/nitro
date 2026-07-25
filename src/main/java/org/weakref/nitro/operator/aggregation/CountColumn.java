@@ -27,7 +27,7 @@ import java.util.Arrays;
 import static java.lang.Math.toIntExact;
 
 public class CountColumn
-        implements FusedAggregator
+        implements GeneratedGroupedAccumulator
 {
     private final int inputColumn;
 
@@ -42,9 +42,9 @@ public class CountColumn
     }
 
     @Override
-    public FusedAccumulatorSpec fusedSpec()
+    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
     {
-        return FusedAccumulatorSpec.countNonNull(I64Vector.class, inputColumn);
+        return GeneratedGroupedAccumulatorUpdate.constantWhenNotNull(1, inputColumn);
     }
 
     @Override

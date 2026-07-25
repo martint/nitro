@@ -28,12 +28,12 @@ import java.util.Arrays;
 import static java.lang.Math.toIntExact;
 
 public class CountAll
-        implements FusedAggregator
+        implements GeneratedGroupedAccumulator
 {
     @Override
-    public FusedAccumulatorSpec fusedSpec()
+    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
     {
-        return new FusedAccumulatorSpec(CountStateVector.class, -1);
+        return GeneratedGroupedAccumulatorUpdate.constant(1);
     }
 
     @Override

@@ -26,7 +26,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import static java.lang.Math.toIntExact;
 
 public class Avg
-        implements Accumulator, FusedAggregator
+        implements Accumulator, GeneratedGroupedAccumulator
 {
     private final int inputColumn;
 
@@ -41,9 +41,9 @@ public class Avg
     }
 
     @Override
-    public FusedAccumulatorSpec fusedSpec()
+    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
     {
-        return new FusedAccumulatorSpec(AvgStateVector.class, inputColumn);
+        return GeneratedGroupedAccumulatorUpdate.inputValue(inputColumn);
     }
 
     @Override

@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+
 import java.util.Arrays;
 
 public class I64Vector
-        implements FlatVector
+        implements FlatVector, LongStateUpdate
 {
     private final long[] values;
     private long contentGeneration;
@@ -46,6 +48,12 @@ public class I64Vector
     public void increment(int index, long value)
     {
         values[index] += value;
+    }
+
+    @Override
+    public void update(int group, long value)
+    {
+        increment(group, value);
     }
 
     @Override

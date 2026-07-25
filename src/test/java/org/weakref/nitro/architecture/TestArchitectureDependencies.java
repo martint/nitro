@@ -263,6 +263,25 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testGeneratedAggregationUsesClassloaderSafeProviderMetadata()
+    {
+        Path aggregation = MAIN_SOURCES.resolve("org/weakref/nitro/operator/aggregation");
+        String generator = read(MAIN_SOURCES.resolve("org/weakref/nitro/operator/FusedGroupingAggregationKernelGenerator.java"));
+        String update = read(aggregation.resolve("GeneratedGroupedAccumulatorUpdate.java"));
+
+        assertThat(aggregation.resolve("FusedAggregator.java")).doesNotExist();
+        assertThat(aggregation.resolve("FusedAccumulatorSpec.java")).doesNotExist();
+        assertThat(generator)
+                .contains("CD_LONG_STATE_UPDATE_ARRAY")
+                .doesNotContain("stateVectorType()", "\"increment\"", "checkcast(CD_LONG_STATE_UPDATE)");
+        assertThat(update)
+                .doesNotContain("Class<?>", "stateUpdateMethod")
+                .contains("sealed interface Contribution");
+        assertThat(MAIN_SOURCES.resolve("org/weakref/nitro/core/function/aggregation/LongStateUpdate.java"))
+                .exists();
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(

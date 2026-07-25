@@ -13,10 +13,12 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+
 import java.util.Arrays;
 
 public final class SumStateVector
-        implements FlatVector
+        implements FlatVector, LongStateUpdate
 {
     private static final long MAX_POOLED_RETAINED_BYTES = 8L * 1024 * 1024;
 
@@ -141,6 +143,12 @@ public final class SumStateVector
             nulls[index] = false;
             nullGroupCount--;
         }
+    }
+
+    @Override
+    public void update(int group, long value)
+    {
+        increment(group, value);
     }
 
     public long sum(int index)

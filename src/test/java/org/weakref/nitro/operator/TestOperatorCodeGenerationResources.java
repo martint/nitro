@@ -15,10 +15,10 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
-import org.weakref.nitro.data.CountStateVector;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
-import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -163,10 +164,54 @@ class TestOperatorCodeGenerationResources
                 .hasMessage("Fused grouping kernel generator is closed");
     }
 
+    @Test
+    void testGeneratedGroupingUsesOpaqueProviderStateAndDeclaredConstant()
+    {
+        try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
+            FusedGroupingKernel kernel = resources.fusedGrouping().create(
+                    List.of(GeneratedGroupedAccumulatorUpdate.constant(3)),
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false},
+                    new boolean[] {false});
+            int[] tableIds = new int[8];
+            Arrays.fill(tableIds, -1);
+            ScaledState state = new ScaledState(2);
+
+            long nextGroup = kernel.accumulate(
+                    null,
+                    3,
+                    new long[] {1, 1, 2},
+                    null,
+                    new long[8],
+                    tableIds,
+                    7,
+                    new long[2],
+                    0,
+                    null,
+                    new Object[] {null},
+                    new int[1][],
+                    new boolean[1][],
+                    new int[1][],
+                    new LongStateUpdate[] {state});
+
+            assertThat(nextGroup).isEqualTo(2);
+            assertThat(state.values).containsExactly(6, 3);
+        }
+    }
+
     private static FusedGroupingKernel createCountKernel(FusedGroupingAggregationKernelGenerator generator)
     {
         return generator.create(
-                List.of(new FusedAccumulatorSpec(CountStateVector.class, -1)),
+                List.of(GeneratedGroupedAccumulatorUpdate.constant(1)),
                 false,
                 false,
                 false,
@@ -179,5 +224,22 @@ class TestOperatorCodeGenerationResources
                 new boolean[] {false},
                 new boolean[] {false},
                 new boolean[] {false});
+    }
+
+    public static final class ScaledState
+            implements LongStateUpdate
+    {
+        private final long[] values;
+
+        public ScaledState(int size)
+        {
+            values = new long[size];
+        }
+
+        @Override
+        public void update(int group, long value)
+        {
+            values[group] += value;
+        }
     }
 }

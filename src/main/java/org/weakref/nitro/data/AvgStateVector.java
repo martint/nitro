@@ -13,8 +13,10 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+
 public final class AvgStateVector
-        implements FlatVector
+        implements FlatVector, LongStateUpdate
 {
     private static final long MAX_POOLED_RETAINED_BYTES = 8L * 1024 * 1024;
     private static final int CHUNK_SHIFT = 12;
@@ -141,6 +143,12 @@ public final class AvgStateVector
     public void increment(int index, long value)
     {
         increment(index, value, 1);
+    }
+
+    @Override
+    public void update(int group, long value)
+    {
+        increment(group, value);
     }
 
     /**

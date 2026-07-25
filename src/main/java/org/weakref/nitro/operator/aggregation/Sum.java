@@ -29,7 +29,7 @@ import org.weakref.nitro.operator.evaluator.ir.Stream;
 import static java.lang.Math.toIntExact;
 
 public class Sum
-        implements FusedAggregator
+        implements GeneratedGroupedAccumulator
 {
     private final int inputColumn;
 
@@ -45,9 +45,9 @@ public class Sum
     }
 
     @Override
-    public FusedAccumulatorSpec fusedSpec()
+    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
     {
-        return new FusedAccumulatorSpec(SumStateVector.class, inputColumn);
+        return GeneratedGroupedAccumulatorUpdate.inputValue(inputColumn);
     }
 
     @Override

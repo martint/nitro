@@ -13,8 +13,10 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+
 public final class CountStateVector
-        implements FlatVector
+        implements FlatVector, LongStateUpdate
 {
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
@@ -96,6 +98,12 @@ public final class CountStateVector
     public void increment(int index, long count)
     {
         chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+    }
+
+    @Override
+    public void update(int group, long value)
+    {
+        increment(group, value);
     }
 
     public long value(int index)

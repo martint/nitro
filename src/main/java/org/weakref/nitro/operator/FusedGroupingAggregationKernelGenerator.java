@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.operator.aggregation.FusedAccumulatorSpec;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
@@ -34,23 +34,25 @@ import static java.lang.constant.ConstantDescs.CD_void;
 /**
  * Generates, once per accumulator-set shape and resource owner, a {@link FusedGroupingKernel} whose hot loop is emitted
  * as JVM bytecode with the {@code java.lang.classfile} API. The generated {@code accumulate} inlines
- * the single-long open-addressed probe and, per accumulator, a single {@code increment(group, value)}
- * call against its state vector — so there is no group-id vector round-trip and every increment call
- * site is monomorphic. The generator hard-codes no aggregate function: it emits exactly what each
- * {@link FusedAccumulatorSpec} declares (state-vector type + value column or constant), so the set of
- * fusible aggregates grows by accumulators, not by changes here.
+ * the single-long open-addressed probe and, per accumulator, a single state update through the
+ * classloader-safe long-state invocation convention — so there is no group-id vector round-trip.
+ * The generator hard-codes no aggregate function or provider state class: it emits exactly the contribution each
+ * {@link GeneratedGroupedAccumulatorUpdate} declares, and unsupported invocation conventions retain the ordinary
+ * accumulator fallback.
  */
 final class FusedGroupingAggregationKernelGenerator
         implements AutoCloseable
 {
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.FusedGroupingKernel");
     private static final ClassDesc CD_GROUPING_STATE = ClassDesc.of("org.weakref.nitro.operator.GroupingState");
+    private static final ClassDesc CD_LONG_STATE_UPDATE = ClassDesc.of("org.weakref.nitro.core.function.aggregation.LongStateUpdate");
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
     private static final ClassDesc CD_LONG_ARRAY = CD_long.arrayType();
     private static final ClassDesc CD_INT_ARRAY_2D = ClassDesc.ofDescriptor("[[I");
     private static final ClassDesc CD_BOOLEAN_ARRAY_2D = ClassDesc.ofDescriptor("[[Z");
     private static final ClassDesc CD_OBJECT_ARRAY = CD_Object.arrayType();
-    private static final MethodTypeDesc INCREMENT_TYPE = MethodTypeDesc.of(CD_void, CD_int, CD_long);
+    private static final ClassDesc CD_LONG_STATE_UPDATE_ARRAY = CD_LONG_STATE_UPDATE.arrayType();
+    private static final MethodTypeDesc STATE_UPDATE_TYPE = MethodTypeDesc.of(CD_void, CD_int, CD_long);
 
     // Parameter slots of FusedGroupingKernel.accumulate.
     private static final int POSITIONS = 1;
@@ -88,7 +90,7 @@ final class FusedGroupingAggregationKernelGenerator
     private boolean closed;
 
     FusedGroupingKernel create(
-            List<FusedAccumulatorSpec> specs,
+            List<GeneratedGroupedAccumulatorUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -109,17 +111,17 @@ final class FusedGroupingAggregationKernelGenerator
                 key -> generate(specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
     }
 
-    private static String cacheKey(List<FusedAccumulatorSpec> specs)
+    private static String cacheKey(List<GeneratedGroupedAccumulatorUpdate> specs)
     {
         StringBuilder key = new StringBuilder();
-        for (FusedAccumulatorSpec spec : specs) {
-            key.append(spec.stateVectorType().getName()).append(':').append(spec.update()).append('|');
+        for (GeneratedGroupedAccumulatorUpdate spec : specs) {
+            key.append(spec.contribution()).append('|');
         }
         return key.toString();
     }
 
     private FusedGroupingKernel generate(
-            List<FusedAccumulatorSpec> specs,
+            List<GeneratedGroupedAccumulatorUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -139,7 +141,7 @@ final class FusedGroupingAggregationKernelGenerator
                 CD_INT_ARRAY, CD_int, CD_Object, CD_INT_ARRAY,
                 CD_LONG_ARRAY, CD_INT_ARRAY, CD_int, CD_LONG_ARRAY,
                 CD_long, CD_LONG_ARRAY, CD_OBJECT_ARRAY, CD_INT_ARRAY_2D,
-                CD_BOOLEAN_ARRAY_2D, CD_INT_ARRAY_2D, CD_OBJECT_ARRAY);
+                CD_BOOLEAN_ARRAY_2D, CD_INT_ARRAY_2D, CD_LONG_STATE_UPDATE_ARRAY);
 
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_Object);
@@ -183,7 +185,7 @@ final class FusedGroupingAggregationKernelGenerator
 
     private static void emitAccumulate(
             CodeBuilder code,
-            List<FusedAccumulatorSpec> specs,
+            List<GeneratedGroupedAccumulatorUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -250,7 +252,7 @@ final class FusedGroupingAggregationKernelGenerator
     }
 
     // for (int index = 0; index < count; index++) { position = sparse ? positions[index] : index; <body> }
-    private static void emitLoop(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitLoop(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         code.loadConstant(0);
         code.istore(INDEX);
@@ -284,7 +286,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static void emitProbeAndAccumulate(CodeBuilder code, List<FusedAccumulatorSpec> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitProbeAndAccumulate(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         // long key = keys[position];
         code.aload(KEYS);
@@ -511,7 +513,7 @@ final class FusedGroupingAggregationKernelGenerator
             if (emitted[accumulator]) {
                 continue;
             }
-            FusedAccumulatorSpec spec = specs.get(accumulator);
+            GeneratedGroupedAccumulatorUpdate spec = specs.get(accumulator);
             if (!spec.readsInput()) {
                 if (!batchConstantRuns) {
                     emitIncrement(code, spec, accumulator, intInputs, mappedInputs, inputUsesKeyIds);
@@ -548,7 +550,7 @@ final class FusedGroupingAggregationKernelGenerator
             code.ifne(nextInput);
             code.labelBinding(increment);
             for (int candidate = accumulator; candidate < specs.size(); candidate++) {
-                FusedAccumulatorSpec candidateSpec = specs.get(candidate);
+                GeneratedGroupedAccumulatorUpdate candidateSpec = specs.get(candidate);
                 if (!emitted[candidate]
                         && candidateSpec.readsInput()
                         && candidateSpec.inputColumn() == spec.inputColumn()) {
@@ -560,13 +562,13 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static boolean batchesConstantRuns(List<FusedAccumulatorSpec> specs, boolean constantRuns)
+    private static boolean batchesConstantRuns(List<GeneratedGroupedAccumulatorUpdate> specs, boolean constantRuns)
     {
         if (!constantRuns) {
             return false;
         }
         boolean hasInputIndependent = false;
-        for (FusedAccumulatorSpec spec : specs) {
+        for (GeneratedGroupedAccumulatorUpdate spec : specs) {
             if (!spec.readsInput()) {
                 hasInputIndependent = true;
             }
@@ -579,40 +581,42 @@ final class FusedGroupingAggregationKernelGenerator
         return hasInputIndependent;
     }
 
-    private static int runGroupLocal(List<FusedAccumulatorSpec> specs)
+    private static int runGroupLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
     {
         return INPUT_ARRAY_BASE + specs.size();
     }
 
-    private static int runCountLocal(List<FusedAccumulatorSpec> specs)
+    private static int runCountLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
     {
         return runGroupLocal(specs) + 1;
     }
 
-    private static int idIndexedHashLocal(List<FusedAccumulatorSpec> specs)
+    private static int idIndexedHashLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
     {
         return runCountLocal(specs) + 1;
     }
 
     /** Coalesces input-independent constant updates across a physically adjacent key run. */
-    private static void emitConstantRunFlush(CodeBuilder code, List<FusedAccumulatorSpec> specs)
+    private static void emitConstantRunFlush(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs)
     {
         int runGroup = runGroupLocal(specs);
         int runCount = runCountLocal(specs);
         for (int accumulator = 0; accumulator < specs.size(); accumulator++) {
-            FusedAccumulatorSpec spec = specs.get(accumulator);
+            GeneratedGroupedAccumulatorUpdate spec = specs.get(accumulator);
             if (spec.readsInput()) {
                 continue;
             }
-            ClassDesc stateType = ClassDesc.of(spec.stateVectorType().getName());
             code.aload(STATES);
             code.loadConstant(accumulator);
             code.aaload();
-            code.checkcast(stateType);
             code.iload(runGroup);
             code.iload(runCount);
             code.i2l();
-            code.invokevirtual(stateType, "increment", INCREMENT_TYPE);
+            if (spec.constantValue() != 1) {
+                code.loadConstant(spec.constantValue());
+                code.lmul();
+            }
+            code.invokeinterface(CD_LONG_STATE_UPDATE, "update", STATE_UPDATE_TYPE);
         }
     }
 
@@ -631,17 +635,15 @@ final class FusedGroupingAggregationKernelGenerator
 
     private static void emitIncrement(
             CodeBuilder code,
-            FusedAccumulatorSpec spec,
+            GeneratedGroupedAccumulatorUpdate spec,
             int accumulator,
             boolean[] intInputs,
             boolean[] mappedInputs,
             boolean[] inputUsesKeyIds)
     {
-        ClassDesc stateType = ClassDesc.of(spec.stateVectorType().getName());
         code.aload(STATES);
         code.loadConstant(accumulator);
         code.aaload();
-        code.checkcast(stateType);
         code.iload(GROUP);
         if (spec.readsValue()) {
             code.aload(INPUT_ARRAY_BASE + accumulator);
@@ -667,8 +669,8 @@ final class FusedGroupingAggregationKernelGenerator
             }
         }
         else {
-            code.loadConstant(1L);
+            code.loadConstant(spec.constantValue());
         }
-        code.invokevirtual(stateType, "increment", INCREMENT_TYPE);
+        code.invokeinterface(CD_LONG_STATE_UPDATE, "update", STATE_UPDATE_TYPE);
     }
 }
