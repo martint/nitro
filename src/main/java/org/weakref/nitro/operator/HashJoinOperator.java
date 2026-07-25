@@ -289,6 +289,7 @@ public class HashJoinOperator
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private static final ThreadLocal<MaterializationProfile> CURRENT_MATERIALIZATION_PROFILE = new ThreadLocal<>();
     private final Allocator allocator;
+    private final OperatorResources operatorResources;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
     // than returning the still-live build vector to the shared pool. The two contexts deliberately share a pool so
@@ -484,6 +485,11 @@ public class HashJoinOperator
         this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, false, new JoinFilter[0]);
     }
 
+    public HashJoinOperator(OperatorResources operatorResources, Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
+    {
+        this(operatorResources, allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, false, new JoinFilter[0]);
+    }
+
     public HashJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn, JoinFilter... joinFilters)
     {
         this(allocator, outer, new int[] {outerJoinColumn}, inner, new int[] {innerJoinColumn}, false, joinFilters);
@@ -511,6 +517,27 @@ public class HashJoinOperator
 
     private HashJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns, boolean probeOuterJoin, JoinFilter[] joinFilters)
     {
+        this(
+                allocator.engineResources().operatorResources(),
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                probeOuterJoin,
+                joinFilters);
+    }
+
+    public HashJoinOperator(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            boolean probeOuterJoin,
+            JoinFilter... joinFilters)
+    {
         if (outerJoinColumns.length != innerJoinColumns.length) {
             throw new IllegalArgumentException("Join key counts must match");
         }
@@ -522,8 +549,8 @@ public class HashJoinOperator
         }
 
         this.allocator = allocator;
-        this.allocationCompatibilityGroup = allocator.engineResources()
-                .hashJoinOperator()
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
         this.allocationContext = new Allocator.Context(
                 "HashJoinOperator",
@@ -1995,7 +2022,7 @@ public class HashJoinOperator
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(
                 joinValues,
                 arrayPool,
-                allocator.engineResources().operatorCodeGeneration());
+                operatorResources.codeGeneration());
         if (layout != null) {
             return new FlatJoinIndex(layout, expectedSize);
         }

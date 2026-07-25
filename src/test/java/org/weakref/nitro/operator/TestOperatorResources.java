@@ -76,6 +76,8 @@ class TestOperatorResources
                 Operator markerSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator semiOuter = new ConstantTableOperator(allocator, 0, List.of());
                 Operator semiInner = new ConstantTableOperator(allocator, 0, List.of());
+                Operator joinOuter = new ConstantTableOperator(allocator, 0, List.of());
+                Operator joinInner = new ConstantTableOperator(allocator, 0, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
                 Operator aggregation = new AggregationOperator(allocator, List.of(), aggregationSource, operatorResources);
                 Operator groupedAggregation = new GroupedAggregationOperator(
@@ -94,13 +96,15 @@ class TestOperatorResources
                         0,
                         true,
                         false,
-                        operatorResources)) {
+                        operatorResources);
+                Operator hashJoin = new HashJoinOperator(operatorResources, allocator, joinOuter, 0, joinInner, 0)) {
             assertThat(group.outputCount()).isEqualTo(1);
             assertThat(aggregation.outputCount()).isZero();
             assertThat(groupedAggregation.outputCount()).isEqualTo(1);
             assertThat(distinct.outputCount()).isZero();
             assertThat(marker.outputCount()).isEqualTo(1);
             assertThat(semiJoin.outputCount()).isZero();
+            assertThat(hashJoin.outputCount()).isZero();
         }
     }
 }
