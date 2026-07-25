@@ -21,7 +21,7 @@ import static java.lang.Math.toIntExact;
 public class OffsetOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OffsetOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("OffsetOperator", OffsetOperator.class);
 
     private final Allocator allocator;
     private final long offset;
@@ -69,7 +69,7 @@ public class OffsetOperator
 
             int keepCount = sourceMask.selectedCount() - toIntExact(remainingSkip);
             currentBatch = sourceBatch;
-            currentMask = allocator.lastMask(ALLOCATION_CONTEXT, sourceMask, keepCount);
+            currentMask = allocator.lastMask(allocationContext, sourceMask, keepCount);
             skipped += remainingSkip;
             source.constrain(currentMask);
             sourceBatch.constrain(currentMask);
@@ -96,7 +96,7 @@ public class OffsetOperator
             currentBatch = null;
         }
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private boolean skipFullyConsumedBatches()
@@ -139,7 +139,7 @@ public class OffsetOperator
         @Override
         public Mask takeMask(Mask mask)
         {
-            return mask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, mask);
+            return mask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(allocationContext, mask);
         }
 
         @Override

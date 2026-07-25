@@ -21,7 +21,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 public class SortOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SortOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("SortOperator", SortOperator.class);
     private static final boolean COLUMNAR_BUFFER =
             Boolean.parseBoolean(System.getProperty("nitro.sort.columnarBuffer", "true"));
     private static final int COLUMNAR_BUFFER_MAX_COLUMNS =
@@ -49,7 +49,7 @@ public class SortOperator
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
-        this.state = new TopNState(columns, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), 256);
+        this.state = new TopNState(columns, descending, allocator, allocationContext, source.outputCount(), 256);
     }
 
     @Override
@@ -74,12 +74,12 @@ public class SortOperator
             outputs[outputIndex] = new Output(
                     state.outputStreams(output),
                     stream -> state.output(output).get(stream),
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
         return new Batch(
                 batchMask,
                 state::constrain,
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
                 _ -> {},
                 state::releaseFallbackBatch,
                 outputs);
@@ -151,7 +151,7 @@ public class SortOperator
         stableSort(orderedSlots, sortScratch, slotCount);
         state.setOrderedSlots(orderedSlots, slotCount);
         done = true;
-        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, slotCount);
+        return allocator.allocateRangeMask(allocationContext, 0, slotCount);
     }
 
     private void ensureSortCapacity(int required)
@@ -242,7 +242,7 @@ public class SortOperator
     public void close()
     {
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
         arrayPool.release(orderedSlots);
         arrayPool.release(sortScratch);
         arrayPool.release(sortKeys);

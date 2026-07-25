@@ -23,7 +23,7 @@ import java.util.PriorityQueue;
 public class TopNOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TopNOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("TopNOperator", TopNOperator.class);
     private final Allocator allocator;
 
     private final int n;
@@ -53,7 +53,7 @@ public class TopNOperator
         this.allocator = allocator;
         this.n = n;
         this.source = source;
-        state = new TopNState(columns, descending, allocator, ALLOCATION_CONTEXT, source.outputCount(), n);
+        state = new TopNState(columns, descending, allocator, allocationContext, source.outputCount(), n);
     }
 
     @Override
@@ -125,7 +125,7 @@ public class TopNOperator
         state.setOrderedSlots(orderedSlots(queue));
 
         done = true;
-        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, count);
+        return allocator.allocateRangeMask(allocationContext, 0, count);
     }
 
     @Override
@@ -138,12 +138,12 @@ public class TopNOperator
             outputs[outputIndex] = new Output(
                     state.outputStreams(output),
                     stream -> state.output(output).get(stream),
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
         return new Batch(
                 batchMask,
                 state::constrain,
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
                 _ -> {},
                 state::releaseFallbackBatch,
                 outputs);
@@ -174,7 +174,7 @@ public class TopNOperator
     public void close()
     {
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     record Entry(int position) {}

@@ -21,7 +21,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 public class BatchSliceOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("BatchSliceOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("BatchSliceOperator", BatchSliceOperator.class);
 
     private final Allocator allocator;
     private final int maxRowsPerBatch;
@@ -80,8 +80,8 @@ public class BatchSliceOperator
         return new Batch(
                 sliceMask,
                 _ -> {},
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                mask -> allocator.release(ALLOCATION_CONTEXT, mask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                mask -> allocator.release(allocationContext, mask),
                 () -> {
                     if (!lastSlice) {
                         return;
@@ -110,19 +110,19 @@ public class BatchSliceOperator
             currentBatch = null;
         }
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private Mask sliceMask(Mask sourceMask, int offset, int length)
     {
         if (length == 0) {
-            return allocator.allocateEmptyMask(ALLOCATION_CONTEXT, sourceMask.size());
+            return allocator.allocateEmptyMask(allocationContext, sourceMask.size());
         }
 
         int[] positions = new int[length];
         for (int index = 0; index < length; index++) {
             positions[index] = sourceMask.position(offset + index);
         }
-        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, positions, length, sourceMask.size());
+        return allocator.allocateSparseMask(allocationContext, positions, length, sourceMask.size());
     }
 }

@@ -21,7 +21,7 @@ import static java.lang.Math.toIntExact;
 public class LimitOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LimitOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("LimitOperator", LimitOperator.class);
 
     private final Allocator allocator;
     private final long limit;
@@ -52,7 +52,7 @@ public class LimitOperator
         Mask sourceMask = sourceBatch.borrowMask();
 
         int remaining = toIntExact(Math.min(limit - count, sourceMask.count()));
-        currentMask = allocator.firstMask(ALLOCATION_CONTEXT, sourceMask, remaining);
+        currentMask = allocator.firstMask(allocationContext, sourceMask, remaining);
         source.constrain(currentMask);
         sourceBatch.constrain(currentMask);
         count += remaining;
@@ -84,7 +84,7 @@ public class LimitOperator
             currentBatch = null;
         }
         source.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private final class BatchState
@@ -110,7 +110,7 @@ public class LimitOperator
         @Override
         public Mask takeMask(Mask mask)
         {
-            return mask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, mask);
+            return mask == sourceMask ? sourceBatch.takeMask() : allocator.transfer(allocationContext, mask);
         }
 
         @Override

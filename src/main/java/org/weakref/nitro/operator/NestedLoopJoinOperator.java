@@ -25,7 +25,7 @@ import java.util.Set;
 public class NestedLoopJoinOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NestedLoopJoinOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("NestedLoopJoinOperator", NestedLoopJoinOperator.class);
     private static final int BATCH_SIZE = Integer.getInteger("nitro.nestedloop.maxBatchRows", 10_000);
 
     private final Allocator allocator;
@@ -78,7 +78,7 @@ public class NestedLoopJoinOperator
         this.outer = outer;
         this.inner = inner;
         this.matcher = matcher;
-        this.buffers = new JoinBufferSupport(allocator, ALLOCATION_CONTEXT);
+        this.buffers = new JoinBufferSupport(allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
         this.currentOutputs = new Streams[outputCount()];
@@ -107,13 +107,13 @@ public class NestedLoopJoinOperator
             captureOuterSchemaIfAvailable();
             done = true;
             currentOutputCount = 0;
-            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+            return allocator.allocateAllMask(allocationContext, 0);
         }
 
         if (outerRemaining == 0) {
             if (!loadNextOuterBatch()) {
                 done = true;
-                return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+                return allocator.allocateAllMask(allocationContext, 0);
             }
         }
 
@@ -130,14 +130,14 @@ public class NestedLoopJoinOperator
         if (outerRemaining < innerRemaining) {
             int batchSize = joinWithOuterRow();
 
-            mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, batchSize);
+            mask = allocator.allocateAllMask(allocationContext, batchSize);
             innerProcessed = batchSize;
             outerProcessed = 1;
         }
         else {
             joinWithInnerRow();
 
-            mask = allocator.lastMask(ALLOCATION_CONTEXT, currentOuterMask, outerRemaining);
+            mask = allocator.lastMask(allocationContext, currentOuterMask, outerRemaining);
             innerProcessed = 1;
             outerProcessed = outerRemaining;
 
@@ -172,7 +172,7 @@ public class NestedLoopJoinOperator
             captureOuterSchemaIfAvailable();
             done = true;
             currentOutputCount = 0;
-            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+            return allocator.allocateAllMask(allocationContext, 0);
         }
 
         int outputPosition = 0;
@@ -219,10 +219,10 @@ public class NestedLoopJoinOperator
 
         if (outputPosition == 0) {
             currentOutputCount = 0;
-            return allocator.allocateAllMask(ALLOCATION_CONTEXT, 0);
+            return allocator.allocateAllMask(allocationContext, 0);
         }
         currentOutputCount = outputPosition;
-        return allocator.allocateRangeMask(ALLOCATION_CONTEXT, 0, outputPosition);
+        return allocator.allocateRangeMask(allocationContext, 0, outputPosition);
     }
 
     private boolean loadNextOuterBatch()
@@ -250,12 +250,12 @@ public class NestedLoopJoinOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = matcher.producesFullCrossProduct()
-                    ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, ALLOCATION_CONTEXT)
+                    ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, allocationContext)
                     : resultOutput(outputIndex);
         }
         return new Batch(
                 batchMask,
-                takenMask -> takenMask == currentOuterMask ? currentOuterBatch.takeMask() : allocator.transfer(ALLOCATION_CONTEXT, takenMask),
+                takenMask -> takenMask == currentOuterMask ? currentOuterBatch.takeMask() : allocator.transfer(allocationContext, takenMask),
                 outputs);
     }
 
@@ -295,7 +295,7 @@ public class NestedLoopJoinOperator
     {
         outer.close();
         inner.close();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private Output resultOutput(int outputIndex)
@@ -308,7 +308,7 @@ public class NestedLoopJoinOperator
                 });
             }
             Streams empty = buffers.emptyLike(schema);
-            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+            return new Output(empty.asMap().keySet(), empty::get, (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
 
         Set<Stream> streams = outputIndex < outer.outputCount()
@@ -317,7 +317,7 @@ public class NestedLoopJoinOperator
         return new Output(
                 streams,
                 stream -> materializeOutput(outputIndex).get(stream),
-                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                (stream, vector) -> allocator.transfer(allocationContext, vector));
     }
 
     private Streams outputSchema(int outputIndex)
@@ -449,7 +449,7 @@ public class NestedLoopJoinOperator
             }
         }
         innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 Arrays.copyOf(retainedInnerMaskPositionsScratch, uniqueCount),
                 innerBatch.retainedBatch().borrowMask().size()));
     }
@@ -466,7 +466,7 @@ public class NestedLoopJoinOperator
     private Mask matchedOuterMask()
     {
         if (currentOutputMask.none()) {
-            return allocator.allocateEmptyMask(ALLOCATION_CONTEXT, currentOuterMask.size());
+            return allocator.allocateEmptyMask(allocationContext, currentOuterMask.size());
         }
 
         int[] positions = new int[Math.min(currentOutputMask.count(), currentOuterMask.count())];
@@ -480,7 +480,7 @@ public class NestedLoopJoinOperator
                 previous = outerPosition;
             }
         }
-        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
+        return allocator.allocateSparseMask(allocationContext, java.util.Arrays.copyOf(positions, selectedCount), currentOuterMask.size());
     }
 
     private static long packRowReference(int batchIndex, int position)
