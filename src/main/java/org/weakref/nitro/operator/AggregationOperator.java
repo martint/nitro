@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
@@ -36,6 +37,7 @@ public class AggregationOperator
     // a nested aggregate must never release the state or result vectors of an outer aggregate that is still consuming
     // its source.
     private final Allocator.Context allocationContext;
+    private final AggregationExecutionContext aggregationExecutionContext;
 
     private final Operator source;
     private final List<Accumulator> aggregations;
@@ -56,6 +58,10 @@ public class AggregationOperator
         this.allocationContext = new Allocator.Context(
                 "AggregationOperator",
                 operatorResources.aggregation().bufferPoolGroup());
+        this.aggregationExecutionContext = new AggregationExecutionContext(
+                allocator,
+                allocationContext,
+                operatorResources.codeGeneration());
         this.source = source;
         this.aggregations = List.copyOf(aggregations);
 
@@ -114,7 +120,7 @@ public class AggregationOperator
 
             Streams[] state = new Streams[aggregations.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = aggregations.get(i).allocate(allocator, allocationContext, 1);
+                state[i] = aggregations.get(i).allocate(aggregationExecutionContext, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
             }
             if (!DEFER_RESULT_MATERIALIZATION) {

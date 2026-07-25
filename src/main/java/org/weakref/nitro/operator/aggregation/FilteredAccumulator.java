@@ -59,6 +59,12 @@ public final class FilteredAccumulator
     }
 
     @Override
+    public Streams allocate(AggregationExecutionContext context, int size)
+    {
+        return delegate.allocate(context, size);
+    }
+
+    @Override
     public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
     {
         return delegate.grow(allocator, allocationContext, state, size);

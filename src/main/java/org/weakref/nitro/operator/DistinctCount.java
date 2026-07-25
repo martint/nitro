@@ -24,6 +24,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 
 import java.util.Arrays;
@@ -53,6 +54,19 @@ public class DistinctCount
     {
         arrayPool = allocator.primitiveArrays();
         codeGeneration = allocator.engineResources().operatorCodeGeneration();
+        return allocateState(allocator, allocationContext, size);
+    }
+
+    @Override
+    public Streams allocate(AggregationExecutionContext context, int size)
+    {
+        arrayPool = context.allocator().primitiveArrays();
+        codeGeneration = context.codeGeneration();
+        return allocateState(context.allocator(), context.allocationContext(), size);
+    }
+
+    private static Streams allocateState(Allocator allocator, Allocator.Context allocationContext, int size)
+    {
         DistinctCountStateVector stateVector = new DistinctCountStateVector();
         stateVector.ensureGroupCapacity(size);
         return Streams.ofValues(allocator.adopt(allocationContext, stateVector));

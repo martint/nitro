@@ -25,6 +25,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulator;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
@@ -83,6 +84,7 @@ public class GroupedAggregationOperator
     private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
     private final Allocator allocator;
     private final OperatorResources operatorResources;
+    private final AggregationExecutionContext aggregationExecutionContext;
 
     private final int groupColumn;
     private final int[] groupedColumns;
@@ -196,6 +198,10 @@ public class GroupedAggregationOperator
         }
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.aggregationExecutionContext = new AggregationExecutionContext(
+                allocator,
+                allocationContext,
+                operatorResources.codeGeneration());
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
@@ -286,7 +292,7 @@ public class GroupedAggregationOperator
         this.maxGroup = toIntExact(maxObservedGroup);
         for (int i = 0; i < result.length; i++) {
             if (states[i] == null) {
-                states[i] = aggregations[i].allocate(allocator, allocationContext, 0);
+                states[i] = aggregations[i].allocate(aggregationExecutionContext, 0);
             }
             result[i] = null;
         }
@@ -560,7 +566,7 @@ public class GroupedAggregationOperator
         if (states[0] == null) {
             int capacity = computeFusedStateCapacity(needed);
             for (int index = 0; index < aggregations.length; index++) {
-                states[index] = aggregations[index].allocate(allocator, allocationContext, capacity);
+                states[index] = aggregations[index].allocate(aggregationExecutionContext, capacity);
                 aggregations[index].initialize(states[index], 0, capacity);
             }
             stateCapacity = capacity;
@@ -689,7 +695,7 @@ public class GroupedAggregationOperator
         for (int index = 0; index < aggregations.length; index++) {
             Accumulator accumulator = aggregations[index];
             if (states[index] == null) {
-                states[index] = accumulator.allocate(allocator, allocationContext, newCapacity);
+                states[index] = accumulator.allocate(aggregationExecutionContext, newCapacity);
             }
             else if (grow) {
                 states[index] = accumulator.grow(allocator, allocationContext, states[index], newCapacity);
@@ -775,7 +781,7 @@ public class GroupedAggregationOperator
         this.maxGroup = toIntExact(maxObservedGroup);
         for (int index = 0; index < result.length; index++) {
             if (states[index] == null) {
-                states[index] = aggregations[index].allocate(allocator, allocationContext, 0);
+                states[index] = aggregations[index].allocate(aggregationExecutionContext, 0);
             }
             result[index] = null;
         }

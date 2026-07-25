@@ -16,6 +16,8 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 
@@ -105,6 +107,13 @@ class TestOperatorResources
             assertThat(marker.outputCount()).isEqualTo(1);
             assertThat(semiJoin.outputCount()).isZero();
             assertThat(hashJoin.outputCount()).isZero();
+
+            Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");
+            Streams state = new DistinctCount(0).allocate(
+                    new AggregationExecutionContext(allocator, accumulatorContext, operatorResources.codeGeneration()),
+                    1);
+            assertThat(state.values()).isNotNull();
+            allocator.release(accumulatorContext);
         }
     }
 }
