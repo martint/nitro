@@ -118,7 +118,8 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
 - **Window**: `WindowOperator` plus running/partition window functions
   (`RunningSumI64`, `RunningMaxI64`, `PartitionSumI64`, `PartitionAverageI64`,
   `PartitionOffsetI64`, `RankWindowFunction`).
-- **Output**: `OutputOperator` / `Output`.
+- **Output values**: `Output` is the lazy column-stream contract carried by a
+  `Batch`. Result sinks belong to the harness or host-integration boundary.
 
 **Aggregation accumulators** (`operator/aggregation`): `Accumulator` interface
 with `Sum`, `SumF64`, `Min`, `Max`, `MinUtf8`, `Avg`, `First`, `CountAll`,

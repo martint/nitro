@@ -236,6 +236,13 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testTypeSwitchingConsoleSinkIsNotAProductionOperator()
+    {
+        assertThat(MAIN_SOURCES.resolve("org/weakref/nitro/operator/OutputOperator.java"))
+                .doesNotExist();
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
