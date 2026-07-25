@@ -121,46 +121,32 @@ public final class SkipDecodeScanOperator
     public static final class Profile
     {
         private static final int MAX = 32;
-        private static long fullRows;
-        private static long skipRows;
-        private static long rowsScanned;       // batch rows seen (= total fact rows scanned)
-        private static long survivorsEmitted;  // rows emitted after all filters
-        private static final long[] colFull = new long[MAX];   // full-decoded values per column index
-        private static final long[] colSkip = new long[MAX];   // skip-decoded values per column index
-        private static final long[] filterInput = new long[MAX];      // rows fed to the filter on column c
-        private static final long[] filterSurvivors = new long[MAX];  // rows surviving the filter on column c
+        private long fullRows;
+        private long skipRows;
+        private long rowsScanned;       // batch rows seen (= total fact rows scanned)
+        private long survivorsEmitted;  // rows emitted after all filters
+        private final long[] colFull = new long[MAX];   // full-decoded values per column index
+        private final long[] colSkip = new long[MAX];   // skip-decoded values per column index
+        private final long[] filterInput = new long[MAX];      // rows fed to the filter on column c
+        private final long[] filterSurvivors = new long[MAX];  // rows surviving the filter on column c
 
-        private Profile() {}
-
-        public static void reset()
-        {
-            fullRows = 0;
-            skipRows = 0;
-            rowsScanned = 0;
-            survivorsEmitted = 0;
-            java.util.Arrays.fill(colFull, 0);
-            java.util.Arrays.fill(colSkip, 0);
-            java.util.Arrays.fill(filterInput, 0);
-            java.util.Arrays.fill(filterSurvivors, 0);
-        }
-
-        public static long fullRows()
+        public long fullRows()
         {
             return fullRows;
         }
 
-        public static long skipRows()
+        public long skipRows()
         {
             return skipRows;
         }
 
-        static void recordFilter(int column, int input, int survivors)
+        private void recordFilter(int column, int input, int survivors)
         {
             filterInput[column] += input;
             filterSurvivors[column] += survivors;
         }
 
-        public static String summary()
+        public String summary()
         {
             StringBuilder out = new StringBuilder();
             out.append(String.format("rowsScanned=%,d survivorsEmitted=%,d fullDecoded=%,d skipDecoded=%,d totalDecoded=%,d%n",
@@ -180,6 +166,7 @@ public final class SkipDecodeScanOperator
     }
 
     private final Allocator allocator;
+    private final Profile profile;
     private final List<Path> files;
     private final List<String> columnNames;
     private final int columnCount;
@@ -243,7 +230,13 @@ public final class SkipDecodeScanOperator
     @SuppressWarnings("unchecked")
     public SkipDecodeScanOperator(Allocator allocator, List<Path> files, List<String> columnNames)
     {
+        this(allocator, files, columnNames, null);
+    }
+
+    public SkipDecodeScanOperator(Allocator allocator, List<Path> files, List<String> columnNames, Profile profile)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
+        this.profile = profile;
         this.files = List.copyOf(files);
         this.columnNames = List.copyOf(columnNames);
         this.columnCount = this.columnNames.size();
@@ -361,7 +354,9 @@ public final class SkipDecodeScanOperator
 
     private Batch produceBatch()
     {
-        Profile.rowsScanned += batchRows;
+        if (profile != null) {
+            profile.rowsScanned += batchRows;
+        }
         if (valueScratch == null) {
             valueScratch = new long[columnCount][SCRATCH_BATCH_SIZE];
             nullScratch = new boolean[columnCount][SCRATCH_BATCH_SIZE];
@@ -398,7 +393,9 @@ public final class SkipDecodeScanOperator
             nulls[column] = nullable[column] ? columnNulls : null;
             readPositions[column] = survivors;    // remembered for the final gather
 
-            Profile.recordFilter(column, count, kept);
+            if (profile != null) {
+                profile.recordFilter(column, count, kept);
+            }
             filterRowsSeen[column] += count;
             filterRowsKept[column] += kept;
             if (filtersByColumn[column] != null && filterRowsSeen[column] >= FILTER_WARMUP_ROWS
@@ -413,7 +410,9 @@ public final class SkipDecodeScanOperator
                 break;
             }
         }
-        Profile.survivorsEmitted += survivorCount;
+        if (profile != null) {
+            profile.survivorsEmitted += survivorCount;
+        }
 
         // Decode the remaining (non-filter) columns for the final survivors. Skip-decode when the survivors are a small
         // fraction of the batch; otherwise bulk-decode the whole batch and gather (skip-decode loses above ~8%).
@@ -657,12 +656,16 @@ public final class SkipDecodeScanOperator
     {
         alignTo(c);
         if (survivors == null) {
-            Profile.fullRows += count;
-            Profile.colFull[c] += count;
+            if (profile != null) {
+                profile.fullRows += count;
+                profile.colFull[c] += count;
+            }
             return readers[c].readPrimitive().getBlock();
         }
-        Profile.skipRows += count;
-        Profile.colSkip[c] += count;
+        if (profile != null) {
+            profile.skipRows += count;
+            profile.colSkip[c] += count;
+        }
         return readers[c].readSelected(survivors, count).getBlock();
     }
 

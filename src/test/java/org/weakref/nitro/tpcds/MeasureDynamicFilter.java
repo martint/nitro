@@ -59,11 +59,11 @@ public class MeasureDynamicFilter
 
         // Correctness: the skip-decode-scan tree must match the ordinary-scan tree exactly.
         long[] reference = run(() -> new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, true));
-        SkipDecodeScanOperator.Profile.reset();
-        long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS));
+        SkipDecodeScanOperator.Profile profile = new SkipDecodeScanOperator.Profile();
+        long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, profile));
         System.out.printf("reference rows=%d checksum=%d ; skipScan rows=%d checksum=%d ; match=%b ; %s%n",
                 reference[0], reference[1], skip[0], skip[1], reference[0] == skip[0] && reference[1] == skip[1],
-                SkipDecodeScanOperator.Profile.summary());
+                profile.summary());
 
         // Timing of the skip-decode-scan tree (2 warmup + min of 5).
         long best = Long.MAX_VALUE;

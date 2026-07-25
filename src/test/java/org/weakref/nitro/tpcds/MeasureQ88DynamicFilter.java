@@ -35,7 +35,6 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
 
 public class MeasureQ88DynamicFilter
 {
@@ -52,14 +51,12 @@ public class MeasureQ88DynamicFilter
         long referenceTime = timeQ88(tables, registry);
 
         System.setProperty("nitro.skipScan", "true");
-        SkipDecodeScanOperator.Profile.reset();
         long skipChecksum = runQ88(tables, registry);
-        String profile = SkipDecodeScanOperator.Profile.summary();
         long skipTime = timeQ88(tables, registry);
 
         System.out.printf("q88 reference checksum=%d (%.0f ms) ; skipScan checksum=%d (%.0f ms) ; match=%b%n",
                 referenceChecksum, referenceTime / 1e6, skipChecksum, skipTime / 1e6, referenceChecksum == skipChecksum);
-        System.out.printf("q88 decode: %s ; dynamic-filter speedup = %.2fx%n", profile, (double) referenceTime / skipTime);
+        System.out.printf("q88 dynamic-filter speedup = %.2fx%n", (double) referenceTime / skipTime);
     }
 
     private static long timeQ88(TpcdsParquetTables tables, PrimitiveRegistry registry)
