@@ -41,7 +41,6 @@ import static java.util.Objects.requireNonNull;
 public class ProjectOperator
         implements Operator
 {
-    private static final Object EVALUATOR_BUFFER_POOL = new Object();
     private static final boolean SHARE_EVALUATOR_BUFFER_POOL =
             Boolean.parseBoolean(System.getProperty("nitro.project.shareEvaluatorBufferPool", "true"));
     private static final boolean FORWARD_SINGLE_POSITION_ONLY = Boolean.getBoolean("nitro.project.forwardSinglePositionOnly");
@@ -277,7 +276,13 @@ public class ProjectOperator
     private PlanEvaluator newPlanEvaluator(PlanEvaluator.InputResolver inputResolver)
     {
         return SHARE_EVALUATOR_BUFFER_POOL
-                ? new PlanEvaluator(evaluationPlan, primitiveRegistry, inputResolver, allocator, EVALUATOR_BUFFER_POOL, true)
+                ? new PlanEvaluator(
+                        evaluationPlan,
+                        primitiveRegistry,
+                        inputResolver,
+                        allocator,
+                        allocator.engineResources().projectOperator().evaluatorBufferPoolGroup(),
+                        true)
                 : new PlanEvaluator(evaluationPlan, primitiveRegistry, inputResolver, allocator, new Object(), true);
     }
 

@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
+import org.weakref.nitro.operator.ProjectOperatorResources;
 
 import static java.util.Objects.requireNonNull;
 
@@ -35,16 +36,19 @@ public final class EngineResources
     private final PrimitiveArrayPool primitiveArrays;
     private final PrimitiveArrayPool nativeBuffers;
     private final OperatorCodeGenerationResources operatorCodeGeneration;
+    private final ProjectOperatorResources projectOperator;
     private boolean closed;
 
     public EngineResources(
             PrimitiveArrayPool primitiveArrays,
             PrimitiveArrayPool nativeBuffers,
-            OperatorCodeGenerationResources operatorCodeGeneration)
+            OperatorCodeGenerationResources operatorCodeGeneration,
+            ProjectOperatorResources projectOperator)
     {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
         this.operatorCodeGeneration = requireNonNull(operatorCodeGeneration, "operatorCodeGeneration is null");
+        this.projectOperator = requireNonNull(projectOperator, "projectOperator is null");
     }
 
     /**
@@ -61,7 +65,8 @@ public final class EngineResources
                 new PrimitiveArrayPool(
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
                         Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
-                new OperatorCodeGenerationResources());
+                new OperatorCodeGenerationResources(),
+                new ProjectOperatorResources());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -80,6 +85,12 @@ public final class EngineResources
     {
         checkOpen();
         return operatorCodeGeneration;
+    }
+
+    public ProjectOperatorResources projectOperator()
+    {
+        checkOpen();
+        return projectOperator;
     }
 
     @Override

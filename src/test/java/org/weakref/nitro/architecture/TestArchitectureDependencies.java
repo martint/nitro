@@ -153,6 +153,18 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testProjectEvaluatorCompatibilityDomainIsExplicitlyOwned()
+            throws IOException
+    {
+        String projectOperator = Files.readString(
+                MAIN_SOURCES.resolve("org/weakref/nitro/operator/ProjectOperator.java"));
+
+        assertThat(projectOperator)
+                .doesNotContain("static final Object EVALUATOR_BUFFER_POOL")
+                .contains("allocator.engineResources().projectOperator().evaluatorBufferPoolGroup()");
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(
