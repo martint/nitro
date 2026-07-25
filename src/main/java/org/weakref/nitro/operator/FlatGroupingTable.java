@@ -36,8 +36,6 @@ final class FlatGroupingTable
     private static final boolean DEBUG_NORMALIZED_INT_KEY = Boolean.getBoolean("nitro.debug.normalizedIntKey");
     private static final boolean DEBUG_SPARSE_COMPOSITE_GROUP_CACHE =
             Boolean.getBoolean("nitro.debug.sparseCompositeGroupCache");
-    private static final Object FIXED_RECORD_CHUNK_FAMILY = new Object();
-    private static final Object VARIABLE_WIDTH_CHUNK_FAMILY = new Object();
     private static final int VECTOR_LENGTH = Long.BYTES;
     private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
     private static final int MIN_RECORDS_PER_CHUNK_SHIFT = 10;
@@ -1114,7 +1112,7 @@ final class FlatGroupingTable
         int groupIndex = recordIndex >> recordsPerChunkShift;
         byte[] chunk = fixedRecordChunks[groupIndex];
         if (chunk == null) {
-            chunk = borrowChunk(FIXED_RECORD_CHUNK_FAMILY, fixedRecordChunkSize);
+            chunk = borrowChunk(FixedRecordChunk.class, fixedRecordChunkSize);
             fixedRecordChunks[groupIndex] = chunk;
         }
         return chunk;
@@ -1189,7 +1187,7 @@ final class FlatGroupingTable
         singleDictionaryIdentity = null;
         if (fixedRecordChunks != null) {
             for (byte[] chunk : fixedRecordChunks) {
-                releaseChunk(FIXED_RECORD_CHUNK_FAMILY, chunk);
+                releaseChunk(FixedRecordChunk.class, chunk);
             }
             fixedRecordChunks = null;
         }
@@ -1294,7 +1292,7 @@ final class FlatGroupingTable
             }
             for (byte[] chunk : chunks) {
                 if (chunk != null) {
-                    arrayPool.retain(VARIABLE_WIDTH_CHUNK_FAMILY, chunk.length, chunk.length, chunk);
+                    arrayPool.retain(VariableWidthChunk.class, chunk.length, chunk.length, chunk);
                 }
             }
             chunks = null;
@@ -1302,7 +1300,7 @@ final class FlatGroupingTable
 
         private byte[] borrowChunk()
         {
-            byte[] chunk = arrayPool.borrow(VARIABLE_WIDTH_CHUNK_FAMILY, CHUNK_SIZE, byte[].class);
+            byte[] chunk = arrayPool.borrow(VariableWidthChunk.class, CHUNK_SIZE, byte[].class);
             return chunk == null ? new byte[CHUNK_SIZE] : chunk;
         }
 
@@ -1321,4 +1319,8 @@ final class FlatGroupingTable
             return (int) pointer;
         }
     }
+
+    private static final class FixedRecordChunk {}
+
+    private static final class VariableWidthChunk {}
 }
