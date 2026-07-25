@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator;
+package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.data.Allocator;
@@ -22,6 +22,12 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.BatchBufferOwner;
+import org.weakref.nitro.operator.BatchBufferScope;
+import org.weakref.nitro.operator.DynamicFilter;
+import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;

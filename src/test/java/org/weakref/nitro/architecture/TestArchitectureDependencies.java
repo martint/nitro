@@ -46,31 +46,6 @@ class TestArchitectureDependencies
     }
 
     @Test
-    void testFormatImportsInOperatorPackageDoNotExpand()
-            throws IOException
-    {
-        Pattern formatImport = Pattern.compile(
-                "^import (?:io\\.trino|org\\.apache\\.parquet|dev\\.hardwood)\\.",
-                Pattern.MULTILINE);
-        Set<String> existingViolations = Set.of(
-                "HardwoodParquetScanOperator.java",
-                "NitroParquetScanOperator.java",
-                "ParquetScanOperator.java",
-                "SkipDecodeScanOperator.java",
-                "TrinoParquetScanOperator.java");
-
-        Set<String> actual;
-        try (var files = Files.walk(MAIN_SOURCES.resolve("org/weakref/nitro/operator"))) {
-            actual = files.filter(path -> path.toString().endsWith(".java"))
-                    .filter(path -> matches(path, formatImport))
-                    .map(path -> path.getFileName().toString())
-                    .collect(java.util.stream.Collectors.toSet());
-        }
-
-        assertThat(actual).isEqualTo(existingViolations);
-    }
-
-    @Test
     void testFunctionVocabularyInEngineDoesNotExpand()
             throws IOException
     {

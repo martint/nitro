@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator;
+package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.junit.jupiter.api.Test;
 

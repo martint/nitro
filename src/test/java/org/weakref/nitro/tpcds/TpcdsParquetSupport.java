@@ -72,6 +72,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -4351,7 +4352,7 @@ final class TpcdsParquetSupport
     {
         SCAN_COUNT.incrementAndGet();
         List<String> columnNames = List.of(columns);
-        Operator decoder = new org.weakref.nitro.operator.NitroParquetScanOperator(
+        Operator decoder = new NitroParquetScanOperator(
                 allocator,
                 tables.tableFiles(tableName),
                 columnNames);

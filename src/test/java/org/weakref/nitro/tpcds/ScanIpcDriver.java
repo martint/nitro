@@ -20,8 +20,8 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
 import java.util.List;
 

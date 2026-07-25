@@ -31,9 +31,9 @@ import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
-import org.weakref.nitro.operator.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
 import java.util.ArrayList;
 import java.util.List;

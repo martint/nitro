@@ -33,9 +33,9 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.SkipDecodeScanOperator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
 
 public class MeasureQ88DynamicFilter
 {

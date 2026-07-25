@@ -112,7 +112,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   generated-column, or host-boundary adaptation policy does not belong in the
   source operator or connector implementation. Transitional operator-backed
   source, batch, selection, and runtime-filter adapters are quarantined under
-  `operator.source.compatibility`; that package is not connector SPI.
+  `operator.source.compatibility`; that package is not connector SPI. Legacy
+  Parquet/Hardwood/Trino format operators are quarantined there as bridge debt,
+  not treated as general engine operators or connector APIs.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,

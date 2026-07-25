@@ -22,7 +22,8 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Mimics {@link org.weakref.nitro.operator.NitroParquetScanOperator}'s dynamic-filter flow exactly: a lead
+ * Mimics {@link org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator}'s
+ * dynamic-filter flow exactly: a lead
  * filter column is full-decoded over a large window to derive a CLUSTERED survivor set (like a real date
  * filter over date-sorted inventory), then a payload column is read both by skip-decode (at the survivors) and
  * by full decode, and the two must agree. This reproduces the multi-reader + real-clustered-survivor scenario
