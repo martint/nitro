@@ -33,12 +33,19 @@ final class MembershipSet
 {
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
+    private final OperatorResources operatorResources;
     private Index index;
 
     MembershipSet(Allocator allocator, Allocator.Context allocationContext)
     {
+        this(allocator, allocationContext, allocator.engineResources().operatorResources());
+    }
+
+    MembershipSet(Allocator allocator, Allocator.Context allocationContext, OperatorResources operatorResources)
+    {
         this.allocator = allocator;
         this.allocationContext = allocationContext;
+        this.operatorResources = operatorResources;
     }
 
     void addBatch(Vector values, Vector nulls, Mask mask)
@@ -48,7 +55,7 @@ final class MembershipSet
             LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
                     ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
                     : null;
-            index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext);
+            index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources);
         }
         index.addBatch(values, nulls, mask);
     }
@@ -183,14 +190,14 @@ final class MembershipSet
         private Vector probeValues;
         private Vector probeNulls;
 
-        private GroupingIndex(Allocator allocator, Allocator.Context allocationContext)
+        private GroupingIndex(Allocator allocator, Allocator.Context allocationContext, OperatorResources operatorResources)
         {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
             this.grouping = new GroupingState(
                     allocator.primitiveArrays(),
-                    allocator.engineResources().operatorCodeGeneration(),
-                    allocator.engineResources().groupingState());
+                    operatorResources.codeGeneration(),
+                    operatorResources.grouping());
         }
 
         @Override

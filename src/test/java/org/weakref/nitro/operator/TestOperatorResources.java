@@ -72,6 +72,10 @@ class TestOperatorResources
                 Operator groupSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator aggregationSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator groupedAggregationSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator distinctSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator markerSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator semiOuter = new ConstantTableOperator(allocator, 0, List.of());
+                Operator semiInner = new ConstantTableOperator(allocator, 0, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
                 Operator aggregation = new AggregationOperator(allocator, List.of(), aggregationSource, operatorResources);
                 Operator groupedAggregation = new GroupedAggregationOperator(
@@ -79,10 +83,24 @@ class TestOperatorResources
                         List.of(0),
                         List.of(),
                         groupedAggregationSource,
+                        operatorResources);
+                Operator distinct = new MarkDistinctOperator(allocator, new int[] {0}, distinctSource, false, operatorResources);
+                Operator marker = new MarkDistinctMarkerOperator(allocator, new int[] {0}, markerSource, true, operatorResources);
+                Operator semiJoin = new SemiJoinOperator(
+                        allocator,
+                        semiOuter,
+                        0,
+                        semiInner,
+                        0,
+                        true,
+                        false,
                         operatorResources)) {
             assertThat(group.outputCount()).isEqualTo(1);
             assertThat(aggregation.outputCount()).isZero();
             assertThat(groupedAggregation.outputCount()).isEqualTo(1);
+            assertThat(distinct.outputCount()).isZero();
+            assertThat(marker.outputCount()).isEqualTo(1);
+            assertThat(semiJoin.outputCount()).isZero();
         }
     }
 }

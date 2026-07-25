@@ -72,6 +72,27 @@ public class SemiJoinOperator
 
     public SemiJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn, boolean includeMatches, boolean outputMatches)
     {
+        this(
+                allocator,
+                outer,
+                outerJoinColumn,
+                inner,
+                innerJoinColumn,
+                includeMatches,
+                outputMatches,
+                allocator.engineResources().operatorResources());
+    }
+
+    public SemiJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int outerJoinColumn,
+            Operator inner,
+            int innerJoinColumn,
+            boolean includeMatches,
+            boolean outputMatches,
+            OperatorResources operatorResources)
+    {
         this.outer = outer;
         this.inner = inner;
         this.outerJoinColumn = outerJoinColumn;
@@ -80,7 +101,7 @@ public class SemiJoinOperator
         this.selectionScratch = new PositionScratch(allocator.primitiveArrays());
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
-        this.membership = new MembershipSet(allocator, ALLOCATION_CONTEXT);
+        this.membership = new MembershipSet(allocator, ALLOCATION_CONTEXT, operatorResources);
     }
 
     @Override

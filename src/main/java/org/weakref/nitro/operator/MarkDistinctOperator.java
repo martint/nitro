@@ -30,6 +30,7 @@ public class MarkDistinctOperator
     private final Allocator allocator;
     private final PrimitiveArrayPool arrayPool;
     private final Operator source;
+    private final OperatorCodeGenerationResources codeGeneration;
     private final int[] distinctColumns;
     private final boolean retainNulls;
     private final Vector[] values;
@@ -58,8 +59,14 @@ public class MarkDistinctOperator
      */
     public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls)
     {
+        this(allocator, distinctColumns, source, retainNulls, allocator.engineResources().operatorResources());
+    }
+
+    public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls, OperatorResources operatorResources)
+    {
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
+        this.codeGeneration = operatorResources.codeGeneration();
         this.source = source;
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
@@ -164,7 +171,7 @@ public class MarkDistinctOperator
                         values,
                         retainNulls,
                         arrayPool,
-                        allocator.engineResources().operatorCodeGeneration());
+                        codeGeneration);
             }
             distinctKeySet.reserveAdditional(sourceMask.selectedCount());
             selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);
