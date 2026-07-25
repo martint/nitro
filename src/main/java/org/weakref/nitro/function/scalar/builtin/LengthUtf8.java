@@ -40,7 +40,7 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 public final class LengthUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LengthUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("LengthUtf8");
     private static final VarHandle INT_HANDLE = byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
     private static final VarHandle LONG_HANDLE = byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
     private static final int TOP_MASK32 = 0x8080_8080;
@@ -49,7 +49,7 @@ public final class LengthUtf8
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -71,7 +71,7 @@ public final class LengthUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
@@ -79,7 +79,7 @@ public final class LengthUtf8
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     requiredLength,

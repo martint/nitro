@@ -39,12 +39,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ScaledRelativeDifferenceGtI64
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ScaledRelativeDifferenceGtI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("ScaledRelativeDifferenceGtI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -90,7 +90,7 @@ public final class ScaledRelativeDifferenceGtI64
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(valueNulls, baselineNulls, scaleNulls, mask, outputNulls);
@@ -102,7 +102,7 @@ public final class ScaledRelativeDifferenceGtI64
 
         BooleanVector outputValues = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existingValues,
                 requiredLength);
         applyValues(valueAccessor, baselineAccessor, scaleAccessor, valueNulls, baselineNulls, scaleNulls, mask, outputValues);
@@ -154,9 +154,9 @@ public final class ScaledRelativeDifferenceGtI64
         }
 
         return new MaskOutcome(
-                context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, truePositions, trueIndex, mask.size()),
-                context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, nullPositions, nullIndex, mask.size()),
-                context.allocator().allocateEmptyMask(ALLOCATION_CONTEXT, mask.size()));
+                context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex, mask.size()),
+                context.allocator().allocateSparseMask(allocationContext, nullPositions, nullIndex, mask.size()),
+                context.allocator().allocateEmptyMask(allocationContext, mask.size()));
     }
 
     @Override
@@ -185,7 +185,7 @@ public final class ScaledRelativeDifferenceGtI64
                 truePositions[trueIndex++] = position;
             }
         }
-        return context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, truePositions, trueIndex, mask.size());
+        return context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex, mask.size());
     }
 
     @Override
@@ -214,7 +214,7 @@ public final class ScaledRelativeDifferenceGtI64
                 falsePositions[falseIndex++] = position;
             }
         }
-        return context.allocator().allocateSparseMask(ALLOCATION_CONTEXT, falsePositions, falseIndex, mask.size());
+        return context.allocator().allocateSparseMask(allocationContext, falsePositions, falseIndex, mask.size());
     }
 
     @Override

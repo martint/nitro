@@ -33,12 +33,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class NotBoolean
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("NotBoolean");
+    private final Allocator.Context allocationContext = new Allocator.Context("NotBoolean");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -64,7 +64,7 @@ public final class NotBoolean
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             boolean[] nulls = outputNulls.values();
@@ -80,7 +80,7 @@ public final class NotBoolean
 
         BooleanVector outputValues = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null ? output.getOrNull(Stream.VALUES) : null,
                 requiredLength);
         boolean[] values = outputValues.values();

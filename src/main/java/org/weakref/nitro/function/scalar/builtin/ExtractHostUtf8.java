@@ -38,7 +38,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ExtractHostUtf8
         implements PrimitiveFunction
 {
-    static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ExtractHostUtf8");
+    final Allocator.Context allocationContext = new Allocator.Context("ExtractHostUtf8");
     private static final byte[] HTTP_PREFIX = "http://".getBytes(StandardCharsets.UTF_8);
     private static final byte[] HTTPS_PREFIX = "https://".getBytes(StandardCharsets.UTF_8);
     private static final byte[] WWW_PREFIX = "www.".getBytes(StandardCharsets.UTF_8);
@@ -46,7 +46,12 @@ public final class ExtractHostUtf8
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
+    }
+
+    Allocator.Context allocationContext()
+    {
+        return allocationContext;
     }
 
     @Override
@@ -81,7 +86,7 @@ public final class ExtractHostUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             copyNulls(inputNullValues, mask, outputNulls);
@@ -93,7 +98,7 @@ public final class ExtractHostUtf8
         return result;
     }
 
-    private static Vector applyValues(Vector values, VectorAccess.BooleanValues inputNulls, Mask mask, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
+    private Vector applyValues(Vector values, VectorAccess.BooleanValues inputNulls, Mask mask, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
     {
         if (values instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector dictionaryValues) {
             return applyDictionary(dictionary, dictionaryValues, totalBytes, requiredLength, output, context);
@@ -101,7 +106,7 @@ public final class ExtractHostUtf8
 
         BinaryVector outputValues = BinaryVector.allocateOrGrow(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 requiredLength,
                 totalBytes);
@@ -141,14 +146,14 @@ public final class ExtractHostUtf8
         }
     }
 
-    private static DictionaryVector applyDictionary(DictionaryVector dictionary, BinaryVector dictionaryValues, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
+    private DictionaryVector applyDictionary(DictionaryVector dictionary, BinaryVector dictionaryValues, int totalBytes, int requiredLength, Streams output, PrimitiveExecutionContext context)
     {
         BinaryVector existingDictionaryValues = output != null && output.has(Stream.VALUES) && output.values() instanceof DictionaryVector existingDictionary && existingDictionary.values() instanceof BinaryVector vector
                 ? vector
                 : null;
         BinaryVector extractedValues = BinaryVector.allocateOrGrow(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existingDictionaryValues,
                 dictionaryValues.length(),
                 totalBytes);
@@ -160,7 +165,7 @@ public final class ExtractHostUtf8
         for (int position = 0; position < dictionaryValues.length(); position++) {
             writeExtracted(dictionaryValues, position, extractedValues, position);
         }
-        return context.allocator().adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(Arrays.copyOf(dictionary.ids(), requiredLength), extractedValues));
+        return context.allocator().adopt(allocationContext, DictionaryVector.wrap(Arrays.copyOf(dictionary.ids(), requiredLength), extractedValues));
     }
 
     private static int dictionaryTotalBytes(BinaryVector dictionaryValues)

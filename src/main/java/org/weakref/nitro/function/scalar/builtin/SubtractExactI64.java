@@ -36,13 +36,13 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class SubtractExactI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SubtractExactI64");
-    private static final Allocator.Context ERRORS_CONTEXT = new Allocator.Context("SubtractExactI64.errors");
+    private final Allocator.Context allocationContext = new Allocator.Context("SubtractExactI64");
+    private final Allocator.Context errorsContext = new Allocator.Context("SubtractExactI64.errors");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT, ERRORS_CONTEXT);
+        return Set.of(allocationContext, errorsContext);
     }
 
     @Override
@@ -72,17 +72,17 @@ public final class SubtractExactI64
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null && existingErrors == null && !requestNulls && leftNulls == null && rightNulls == null) {
             if (requestValues && requestErrors) {
                 int resultLength = RleVector.computeTargetRleLength(leftRle, rightRle);
-                I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, resultLength, I64Vector::new);
-                BooleanVector errors = context.allocator().allocate(ERRORS_CONTEXT, BooleanVector.class, resultLength, BooleanVector::new);
+                I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, resultLength, I64Vector::new);
+                BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, resultLength, BooleanVector::new);
                 I64BinaryDispatch.RleWithErrors result = I64BinaryDispatch.rleRleLongWithErrors(leftRle, rightRle, values, errors, SubtractExactI64::apply);
                 return Streams.ofValues(result.values()).with(Stream.ERRORS, result.errors());
             }
             if (requestErrors) {
-                BooleanVector errors = context.allocator().allocate(ERRORS_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+                BooleanVector errors = context.allocator().allocate(errorsContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
                 return Streams.of(Stream.ERRORS, I64BinaryDispatch.rleRleErrorsOnly(leftRle, rightRle, errors, SubtractExactI64::apply));
             }
             if (requestValues) {
-                I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+                I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
                 return Streams.ofValues(I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, SubtractExactI64::result));
             }
             return Streams.empty();
@@ -93,7 +93,7 @@ public final class SubtractExactI64
         if (requestNulls) {
             BooleanVector nulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     length);
             applyNulls(leftNulls, rightNulls, mask, nulls);
@@ -101,14 +101,14 @@ public final class SubtractExactI64
         }
         if (requestValues && requestErrors) {
             I64Vector result = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     existingValues instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     length,
                     I64Vector::new);
             BooleanVector errors = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ERRORS_CONTEXT,
+                    errorsContext,
                     existingErrors,
                     length);
             I64BinaryDispatch.applyLongWithErrors(left, right, mask, result, errors, SubtractExactI64::apply);
@@ -117,7 +117,7 @@ public final class SubtractExactI64
         else if (requestErrors) {
             BooleanVector errors = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ERRORS_CONTEXT,
+                    errorsContext,
                     existingErrors,
                     length);
             I64BinaryDispatch.applyErrorsOnly(left, right, mask, errors, SubtractExactI64::apply);
@@ -125,7 +125,7 @@ public final class SubtractExactI64
         }
         else if (requestValues) {
             I64Vector result = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     existingValues instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     length,

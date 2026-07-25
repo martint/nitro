@@ -31,12 +31,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class InUtf8
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("InUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("InUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -61,21 +61,21 @@ public final class InUtf8
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
-        return Utf8BinaryDispatch.applyInSet("in_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
+        return Utf8BinaryDispatch.applyInSet("in_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 
     @Override
     public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetTrueMask("in_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
+        return Utf8BinaryDispatch.tryEvaluateInSetTrueMask("in_utf8", allocationContext, inputs, mask, context);
     }
 
     @Override
     public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for in_utf8");
-        return Utf8BinaryDispatch.tryEvaluateInSetFalseMask("in_utf8", ALLOCATION_CONTEXT, inputs, mask, context);
+        return Utf8BinaryDispatch.tryEvaluateInSetFalseMask("in_utf8", allocationContext, inputs, mask, context);
     }
 
     @Override

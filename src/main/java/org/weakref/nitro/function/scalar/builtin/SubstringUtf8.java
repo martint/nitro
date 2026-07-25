@@ -39,12 +39,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class SubstringUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SubstringUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("SubstringUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -118,7 +118,7 @@ public final class SubstringUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(valueNulls, startNulls, lengthNulls, mask, outputNulls);
@@ -127,7 +127,7 @@ public final class SubstringUtf8
         if (requestedStreams.contains(Stream.VALUES)) {
             BinaryVector outputValues = BinaryVector.allocateOrGrow(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.getOrNull(Stream.VALUES) instanceof BinaryVector vector ? vector : null,
                     requiredLength,
                     totalBytes);
@@ -142,7 +142,7 @@ public final class SubstringUtf8
         return result;
     }
 
-    private static Streams tryApplyEncodedConstantSubstring(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, int requiredLength, PrimitiveExecutionContext context)
+    private Streams tryApplyEncodedConstantSubstring(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, int requiredLength, PrimitiveExecutionContext context)
     {
         if (!requestedStreams.contains(Stream.VALUES)) {
             return null;
@@ -183,7 +183,7 @@ public final class SubstringUtf8
                 result = result.with(Stream.NULLS, valueNulls);
             }
             else {
-                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), ALLOCATION_CONTEXT, null, requiredLength);
+                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), allocationContext, null, requiredLength);
                 nulls.markAllFalse();
                 result = result.with(Stream.NULLS, nulls);
             }
@@ -191,7 +191,7 @@ public final class SubstringUtf8
         return result;
     }
 
-    private static Streams tryApplySparseDictionaryConstantSubstring(Vector inputValues, Vector valueNullsVector, Mask mask, Set<Stream> requestedStreams, int requiredLength, long start, long length, PrimitiveExecutionContext context)
+    private Streams tryApplySparseDictionaryConstantSubstring(Vector inputValues, Vector valueNullsVector, Mask mask, Set<Stream> requestedStreams, int requiredLength, long start, long length, PrimitiveExecutionContext context)
     {
         if (!(inputValues instanceof DictionaryVector dictionary) || mask.none()) {
             return null;
@@ -253,7 +253,7 @@ public final class SubstringUtf8
             uniqueCount = 1;
         }
 
-        BinaryVector outputValues = BinaryVector.allocate(context.allocator(), ALLOCATION_CONTEXT, uniqueCount, totalBytes);
+        BinaryVector outputValues = BinaryVector.allocate(context.allocator(), allocationContext, uniqueCount, totalBytes);
         outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         for (int position = 0; position < uniqueCount; position++) {
             outputValues.setBytes(position, substrings[position]);
@@ -262,13 +262,13 @@ public final class SubstringUtf8
             outputValues.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         }
 
-        Streams result = Streams.ofValues(context.allocator().adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(outputIds, dictionary.length(), outputValues)));
+        Streams result = Streams.ofValues(context.allocator().adopt(allocationContext, DictionaryVector.wrap(outputIds, dictionary.length(), outputValues)));
         if (requestedStreams.contains(Stream.NULLS)) {
             if (valueNullsVector != null) {
                 result = result.with(Stream.NULLS, valueNullsVector);
             }
             else {
-                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), ALLOCATION_CONTEXT, null, requiredLength);
+                BooleanVector nulls = VectorAccess.writableBooleanVector(context.allocator(), allocationContext, null, requiredLength);
                 nulls.markAllFalse();
                 result = result.with(Stream.NULLS, nulls);
             }
@@ -297,23 +297,23 @@ public final class SubstringUtf8
         return OptionalLong.of(VectorAccess.longValues(rle).value(0));
     }
 
-    private static Vector deriveEncodedSubstrings(Vector values, long start, long length, PrimitiveExecutionContext context)
+    private Vector deriveEncodedSubstrings(Vector values, long start, long length, PrimitiveExecutionContext context)
     {
         return switch (values) {
             case BinaryVector binary -> deriveBinarySubstrings(binary, start, length, context);
             case DictionaryVector dictionary -> context.allocator().allocateDictionary(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     Arrays.copyOf(dictionary.ids(), dictionary.length()),
                     deriveEncodedSubstrings(dictionary.values(), start, length, context));
             case RleVector rle -> context.allocator().allocateRle(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     rle.counts(),
                     deriveEncodedSubstrings(rle.values(), start, length, context));
             default -> throw new IllegalArgumentException("Unsupported substring_utf8 vector type: " + values.getClass().getSimpleName());
         };
     }
 
-    private static BinaryVector deriveBinarySubstrings(BinaryVector values, long start, long length, PrimitiveExecutionContext context)
+    private BinaryVector deriveBinarySubstrings(BinaryVector values, long start, long length, PrimitiveExecutionContext context)
     {
         int totalBytes = 0;
         boolean asciiOnly = true;
@@ -327,7 +327,7 @@ public final class SubstringUtf8
             }
         }
 
-        BinaryVector output = BinaryVector.allocate(context.allocator(), ALLOCATION_CONTEXT, values.length(), totalBytes);
+        BinaryVector output = BinaryVector.allocate(context.allocator(), allocationContext, values.length(), totalBytes);
         output.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
         for (int position = 0; position < values.length(); position++) {
             long slice = Utf8Support.substringSlice(values.data(), values.startOffset(position), values.length(position), start, length);

@@ -36,12 +36,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class HashUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("HashUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("HashUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -63,7 +63,7 @@ public final class HashUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
@@ -71,7 +71,7 @@ public final class HashUtf8
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     requiredLength,

@@ -36,12 +36,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class MapContainsKeyUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MapContainsKeyUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("MapContainsKeyUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -78,7 +78,7 @@ public final class MapContainsKeyUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(mapNulls, keyNulls, mask, outputNulls);
@@ -87,7 +87,7 @@ public final class MapContainsKeyUtf8
         if (requestedStreams.contains(Stream.VALUES)) {
             BooleanVector outputValues = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) ? output.values() : null,
                     requiredLength);
             applyValues(maps, mapInput, mapKeys, keys, mapNulls, keyNulls, mask, outputValues);
@@ -96,7 +96,7 @@ public final class MapContainsKeyUtf8
         if (requestedStreams.contains(Stream.ERRORS) && (mapErrors != null || keyErrors != null)) {
             BooleanVector outputErrors = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null,
                     requiredLength);
             applyErrors(mapErrors, keyErrors, mask, outputErrors);

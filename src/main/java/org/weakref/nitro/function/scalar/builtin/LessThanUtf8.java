@@ -28,12 +28,12 @@ import java.util.Set;
 public final class LessThanUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("LessThanUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -45,6 +45,6 @@ public final class LessThanUtf8
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        return Utf8BinaryDispatch.applyLessThan("lt_utf8", ALLOCATION_CONTEXT, inputs, mask, requestedStreams, output, context);
+        return Utf8BinaryDispatch.applyLessThan("lt_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 }

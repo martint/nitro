@@ -205,6 +205,25 @@ class TestArchitectureDependencies
     }
 
     @Test
+    void testScalarFunctionAllocationContextsAreProviderOwned()
+            throws IOException
+    {
+        Pattern staticAllocationContext = Pattern.compile(
+                "static\\s+final\\s+Allocator\\.Context");
+        Path builtins = MAIN_SOURCES.resolve("org/weakref/nitro/function/scalar/builtin");
+        List<Path> violations;
+        try (var files = Files.walk(builtins)) {
+            violations = files.filter(path -> path.toString().endsWith(".java"))
+                    .filter(path -> matches(path, staticAllocationContext))
+                    .toList();
+        }
+
+        assertThat(violations)
+                .as("dynamically registered function providers must own their allocation contexts")
+                .isEmpty();
+    }
+
+    @Test
     void testCompilerRegistriesAndCachesAreExplicitlyOwned()
     {
         Pattern ambientCompilerResource = Pattern.compile(

@@ -35,12 +35,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class MultiplyNullAsZeroI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MultiplyNullAsZeroI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("MultiplyNullAsZeroI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override

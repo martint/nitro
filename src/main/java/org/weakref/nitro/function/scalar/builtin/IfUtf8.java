@@ -35,12 +35,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class IfUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IfUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("IfUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -81,7 +81,7 @@ public final class IfUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             result = result.with(Stream.NULLS, outputNulls);
@@ -89,7 +89,7 @@ public final class IfUtf8
         if (requestedStreams.contains(Stream.VALUES)) {
             BinaryVector outputValues = BinaryVector.allocateOrGrow(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                     requiredLength,
                     totalBytes);

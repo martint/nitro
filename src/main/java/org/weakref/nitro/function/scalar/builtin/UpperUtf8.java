@@ -37,12 +37,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class UpperUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("UpperUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("UpperUtf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -79,7 +79,7 @@ public final class UpperUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(valueNullValues, mask, outputNulls);
@@ -88,7 +88,7 @@ public final class UpperUtf8
         if (requestedStreams.contains(Stream.VALUES)) {
             BinaryVector outputValues = BinaryVector.allocateOrGrow(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.getOrNull(Stream.VALUES) instanceof BinaryVector vector ? vector : null,
                     requiredLength,
                     totalBytes);

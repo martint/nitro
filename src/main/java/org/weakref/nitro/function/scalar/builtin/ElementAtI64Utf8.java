@@ -37,12 +37,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ElementAtI64Utf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ElementAtI64Utf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("ElementAtI64Utf8");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -81,7 +81,7 @@ public final class ElementAtI64Utf8
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(maps, mapInput, mapKeys, mapValues, mapValueNulls, keys, mapNulls, keyNulls, mask, outputNulls);
@@ -89,7 +89,7 @@ public final class ElementAtI64Utf8
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     requiredLength,
@@ -100,7 +100,7 @@ public final class ElementAtI64Utf8
         if (requestedStreams.contains(Stream.ERRORS) && (mapErrors != null || keyErrors != null)) {
             BooleanVector outputErrors = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null,
                     requiredLength);
             applyErrors(mapErrors, keyErrors, mask, outputErrors);

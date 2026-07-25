@@ -36,12 +36,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class AddI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("AddI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("AddI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -65,7 +65,7 @@ public final class AddI64
         Vector existing = output != null && output.has(Stream.VALUES) ? output.values() : null;
 
         if (requestedStreams.contains(Stream.VALUES)) {
-            I64Vector fast = NullFreeScalarKernels.arithmeticLong(NullFreeScalarKernels.ADD, left, right, leftNulls, rightNulls, mask, existing, context.allocator(), ALLOCATION_CONTEXT);
+            I64Vector fast = NullFreeScalarKernels.arithmeticLong(NullFreeScalarKernels.ADD, left, right, leftNulls, rightNulls, mask, existing, context.allocator(), allocationContext);
             if (fast != null) {
                 return Streams.ofValues(fast);
             }
@@ -77,7 +77,7 @@ public final class AddI64
             // At least one input could carry a real null; addition propagates it (a + NULL = NULL).
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())));
             VectorAccess.combineNullsOr(leftNulls, rightNulls, mask, outputNulls);
@@ -88,12 +88,12 @@ public final class AddI64
         }
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existing == null && leftNulls == null && rightNulls == null) {
-            I64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
+            I64Vector values = context.allocator().allocate(allocationContext, I64Vector.class, RleVector.computeTargetRleLength(leftRle, rightRle), I64Vector::new);
             return result.with(Stream.VALUES, I64BinaryDispatch.rleRleLong(leftRle, rightRle, values, AddI64::apply));
         }
 
         I64Vector resultValues = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existing instanceof I64Vector vector ? vector : null,
                 I64Vector.class,
                 I64BinaryDispatch.requiredLength(mask, Math.max(left.length(), right.length())),

@@ -34,12 +34,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class OrBoolean
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("OrBoolean");
+    private final Allocator.Context allocationContext = new Allocator.Context("OrBoolean");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -72,7 +72,7 @@ public final class OrBoolean
         if (requestedStreams.contains(Stream.VALUES) && mask.all() && existingValues == null
                 && left instanceof BooleanVector leftFlat && right instanceof BooleanVector rightFlat
                 && VectorAccess.isAllFalseNulls(leftNulls) && VectorAccess.isAllFalseNulls(rightNulls)) {
-            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, length, BooleanVector::new);
+            BooleanVector values = context.allocator().allocate(allocationContext, BooleanVector.class, length, BooleanVector::new);
             orFlat(leftFlat.values(), rightFlat.values(), values.values(), length);
             return Streams.ofValues(values);
         }
@@ -82,7 +82,7 @@ public final class OrBoolean
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     length);
             applyNulls(leftValues, leftNulls, rightValues, rightNulls, mask, outputNulls);
@@ -93,14 +93,14 @@ public final class OrBoolean
         }
 
         if (left instanceof RleVector leftRle && right instanceof RleVector rightRle && mask.all() && existingValues == null) {
-            BooleanVector values = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
+            BooleanVector values = context.allocator().allocate(allocationContext, BooleanVector.class, RleVector.computeTargetRleLength(leftRle, rightRle), BooleanVector::new);
             applyValues(leftValues, leftNulls, rightValues, rightNulls, mask, values);
             return result.with(Stream.VALUES, values);
         }
 
         BooleanVector outputValues = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 existingValues,
                 length);
         applyValues(leftValues, leftNulls, rightValues, rightNulls, mask, outputValues);

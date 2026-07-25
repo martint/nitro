@@ -37,12 +37,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class DivideScaleI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("DivideScaleI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("DivideScaleI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override

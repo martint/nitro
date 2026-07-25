@@ -33,12 +33,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class LessThanF64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanF64");
+    private final Allocator.Context allocationContext = new Allocator.Context("LessThanF64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -56,7 +56,7 @@ public final class LessThanF64
         }
 
         if (requestedStreams.contains(Stream.VALUES)) {
-            BooleanVector fast = NullFreeScalarKernels.compareDouble(NullFreeScalarKernels.LESS_THAN, inputs.get(0).values(), inputs.get(1).values(), inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, output != null ? output.getOrNull(Stream.VALUES) : null, context.allocator(), ALLOCATION_CONTEXT);
+            BooleanVector fast = NullFreeScalarKernels.compareDouble(NullFreeScalarKernels.LESS_THAN, inputs.get(0).values(), inputs.get(1).values(), inputs.get(0).getOrNull(Stream.NULLS), inputs.get(1).getOrNull(Stream.NULLS), mask, output != null ? output.getOrNull(Stream.VALUES) : null, context.allocator(), allocationContext);
             if (fast != null) {
                 return Streams.ofValues(fast);
             }
@@ -73,7 +73,7 @@ public final class LessThanF64
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             boolean[] nulls = outputNulls.values();
@@ -89,7 +89,7 @@ public final class LessThanF64
 
         BooleanVector values = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.getOrNull(Stream.VALUES) != outputNulls ? output.getOrNull(Stream.VALUES) : null,
                 requiredLength);
         boolean[] outputValues = values.values();

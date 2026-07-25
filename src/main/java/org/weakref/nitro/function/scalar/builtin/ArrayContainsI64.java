@@ -36,12 +36,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ArrayContainsI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ArrayContainsI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("ArrayContainsI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -72,7 +72,7 @@ public final class ArrayContainsI64
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(arrayNulls, needleNulls, mask, outputNulls);
@@ -81,7 +81,7 @@ public final class ArrayContainsI64
         if (requestedStreams.contains(Stream.VALUES)) {
             BooleanVector outputValues = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) ? output.get(Stream.VALUES) : null,
                     requiredLength);
             applyValues(arrays, arrayInput, needles, arrayNulls, needleNulls, mask, outputValues);

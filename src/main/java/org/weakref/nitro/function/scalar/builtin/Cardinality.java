@@ -37,12 +37,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class Cardinality
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("Cardinality");
+    private final Allocator.Context allocationContext = new Allocator.Context("Cardinality");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -64,7 +64,7 @@ public final class Cardinality
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             copyNulls(inputNulls, mask, outputNulls);
@@ -72,7 +72,7 @@ public final class Cardinality
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     requiredLength,

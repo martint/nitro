@@ -34,12 +34,12 @@ import static java.lang.Math.toIntExact;
 public final class CastI64ToI32
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("CastI64ToI32");
+    private final Allocator.Context allocationContext = new Allocator.Context("CastI64ToI32");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -70,7 +70,7 @@ public final class CastI64ToI32
         }
 
         I32Vector outputValues = context.allocator().allocateOrGrow(
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof I32Vector vector ? vector : null,
                 I32Vector.class,
                 mask.maxPosition() + 1,

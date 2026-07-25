@@ -35,12 +35,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class IfI32
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IfI32");
+    private final Allocator.Context allocationContext = new Allocator.Context("IfI32");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -73,14 +73,14 @@ public final class IfI32
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I32Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I32Vector vector ? vector : null,
                     I32Vector.class,
                     requiredLength,

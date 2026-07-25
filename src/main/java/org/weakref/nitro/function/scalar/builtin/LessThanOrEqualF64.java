@@ -33,12 +33,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class LessThanOrEqualF64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("LessThanOrEqualF64");
+    private final Allocator.Context allocationContext = new Allocator.Context("LessThanOrEqualF64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -66,7 +66,7 @@ public final class LessThanOrEqualF64
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null ? output.getOrNull(Stream.NULLS) : null,
                     requiredLength);
             boolean[] nulls = outputNulls.values();
@@ -82,7 +82,7 @@ public final class LessThanOrEqualF64
 
         BooleanVector values = VectorAccess.writableBooleanVector(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.getOrNull(Stream.VALUES) != outputNulls ? output.getOrNull(Stream.VALUES) : null,
                 requiredLength);
         boolean[] outputValues = values.values();

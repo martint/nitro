@@ -38,12 +38,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class IfF64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("IfF64");
+    private final Allocator.Context allocationContext = new Allocator.Context("IfF64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -83,14 +83,14 @@ public final class IfF64
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             result = result.with(Stream.NULLS, outputNulls);
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             F64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof F64Vector vector ? vector : null,
                     F64Vector.class,
                     requiredLength,
@@ -103,7 +103,7 @@ public final class IfF64
         return result;
     }
 
-    private static Streams tryApplyConstantBranchValues(Vector condition, VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
+    private Streams tryApplyConstantBranchValues(Vector condition, VectorAccess.BooleanValues conditionValues, Vector conditionNulls, Vector trueValues, Vector falseValues, Vector trueNulls, Vector falseNulls, Mask mask, int requiredLength, Set<Stream> requestedStreams, PrimitiveExecutionContext context)
     {
         if (constantNullValue(trueNulls) != Boolean.FALSE || constantNullValue(falseNulls) != Boolean.FALSE) {
             return null;
@@ -117,14 +117,14 @@ public final class IfF64
 
         Streams result = Streams.empty();
         if (requestedStreams.contains(Stream.NULLS)) {
-            BooleanVector nullValues = context.allocator().allocate(ALLOCATION_CONTEXT, BooleanVector.class, 1, BooleanVector::new);
+            BooleanVector nullValues = context.allocator().allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
             nullValues.values()[0] = false;
-            result = result.with(Stream.NULLS, context.allocator().allocateSingleRunRle(ALLOCATION_CONTEXT, requiredLength, nullValues));
+            result = result.with(Stream.NULLS, context.allocator().allocateSingleRunRle(allocationContext, requiredLength, nullValues));
         }
         if (trueValue.equals(falseValue)) {
-            F64Vector values = context.allocator().allocate(ALLOCATION_CONTEXT, F64Vector.class, 1, F64Vector::new);
+            F64Vector values = context.allocator().allocate(allocationContext, F64Vector.class, 1, F64Vector::new);
             values.values()[0] = trueValue;
-            return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateSingleRunRle(ALLOCATION_CONTEXT, requiredLength, values)) : result;
+            return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateSingleRunRle(allocationContext, requiredLength, values)) : result;
         }
 
         int[] ids = new int[requiredLength];
@@ -145,10 +145,10 @@ public final class IfF64
             }
         }
 
-        F64Vector dictionaryValues = context.allocator().allocate(ALLOCATION_CONTEXT, F64Vector.class, 2, F64Vector::new);
+        F64Vector dictionaryValues = context.allocator().allocate(allocationContext, F64Vector.class, 2, F64Vector::new);
         dictionaryValues.values()[0] = falseValue;
         dictionaryValues.values()[1] = trueValue;
-        return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues)) : result;
+        return requestedStreams.contains(Stream.VALUES) ? result.with(Stream.VALUES, context.allocator().allocateDictionary(allocationContext, ids, dictionaryValues)) : result;
     }
 
     private static void applyValues(VectorAccess.BooleanValues conditionValues, Vector conditionNulls, VectorAccess.DoubleValues trueValues, VectorAccess.DoubleValues falseValues, Vector trueNulls, Vector falseNulls, Mask mask, F64Vector outputValues, BooleanVector outputNulls)

@@ -42,19 +42,19 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class RegexpReplaceUtf8
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("RegexpReplaceUtf8");
+    private final Allocator.Context allocationContext = new Allocator.Context("RegexpReplaceUtf8");
     private static final boolean CONSTANT_ARGUMENTS =
             Boolean.parseBoolean(System.getProperty("nitro.regexp.constantArguments", "true"));
     private static final boolean SPECIALIZE_HOST_EXTRACTION =
             Boolean.parseBoolean(System.getProperty("nitro.regexp.specializeHostExtraction", "true"));
     private static final Slice HOST_PATTERN = Slices.utf8Slice("^https?://(?:www\\.)?([^/]+)/.*$");
     private static final Slice HOST_REPLACEMENT = Slices.utf8Slice("\\1");
-    private static final ExtractHostUtf8 HOST_EXTRACTOR = new ExtractHostUtf8();
+    private final ExtractHostUtf8 hostExtractor = new ExtractHostUtf8();
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT, ExtractHostUtf8.ALLOCATION_CONTEXT);
+        return Set.of(allocationContext, hostExtractor.allocationContext());
     }
 
     @Override
@@ -81,7 +81,7 @@ public final class RegexpReplaceUtf8
                 VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls) &&
                 utf8Slice(patternRle.values(), 0).equals(HOST_PATTERN) &&
                 utf8Slice(replacementRle.values(), 0).equals(HOST_REPLACEMENT)) {
-            return HOST_EXTRACTOR.apply(List.of(inputs.getFirst()), mask, requestedStreams, output, context);
+            return hostExtractor.apply(List.of(inputs.getFirst()), mask, requestedStreams, output, context);
         }
 
         int requiredLength = maxLength(mask, values, patternValues, replacementValues);
@@ -91,7 +91,7 @@ public final class RegexpReplaceUtf8
         if (requestedStreams.contains(Stream.NULLS)) {
             outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             fillNulls(valuesNulls, patternNulls, replacementNulls, mask, outputNulls);
@@ -106,7 +106,7 @@ public final class RegexpReplaceUtf8
         return result.with(Stream.VALUES, rewritten);
     }
 
-    private static Vector applyGeneric(
+    private Vector applyGeneric(
             Vector values,
             Vector valuesNulls,
             Vector patternValues,
@@ -158,7 +158,7 @@ public final class RegexpReplaceUtf8
 
         BinaryVector outputValues = BinaryVector.allocateOrGrow(
                 context.allocator(),
-                ALLOCATION_CONTEXT,
+                allocationContext,
                 output != null && output.has(Stream.VALUES) && output.values() instanceof BinaryVector vector ? vector : null,
                 requiredLength,
                 totalBytes);

@@ -37,12 +37,12 @@ import static java.lang.Math.toIntExact;
 public final class ArrayElementI64
         implements PrimitiveFunction
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ArrayElementI64");
+    private final Allocator.Context allocationContext = new Allocator.Context("ArrayElementI64");
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        return Set.of(ALLOCATION_CONTEXT);
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -81,7 +81,7 @@ public final class ArrayElementI64
         if (requestedStreams.contains(Stream.NULLS)) {
             BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.NULLS) ? output.get(Stream.NULLS) : null,
                     requiredLength);
             applyNulls(arrays, arrayInput, elementNulls, indexes, arrayNulls, indexNulls, mask, outputNulls);
@@ -89,7 +89,7 @@ public final class ArrayElementI64
         }
         if (requestedStreams.contains(Stream.VALUES)) {
             I64Vector outputValues = context.allocator().allocateOrGrow(
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.VALUES) && output.values() instanceof I64Vector vector ? vector : null,
                     I64Vector.class,
                     requiredLength,
@@ -100,7 +100,7 @@ public final class ArrayElementI64
         if (requestedStreams.contains(Stream.ERRORS) && (arrayErrors != null || indexErrors != null || elementErrors != null)) {
             BooleanVector outputErrors = VectorAccess.writableBooleanVector(
                     context.allocator(),
-                    ALLOCATION_CONTEXT,
+                    allocationContext,
                     output != null && output.has(Stream.ERRORS) ? output.get(Stream.ERRORS) : null,
                     requiredLength);
             applyErrors(arrays, arrayInput, elementErrors, indexes, arrayErrors, indexErrors, arrayNulls, indexNulls, mask, outputErrors);
