@@ -15,11 +15,11 @@ package org.weakref.nitro.legacy.pipeline;
 
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Streams;
 
 /**
  * Bridges a data-centric compiled pipeline back into the pull-based operator world: it runs the compiled routine

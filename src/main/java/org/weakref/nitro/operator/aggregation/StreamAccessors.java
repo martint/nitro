@@ -13,10 +13,10 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 public final class StreamAccessors
 {

@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
  * Read-only accessor for the input streams seen by an accumulator.

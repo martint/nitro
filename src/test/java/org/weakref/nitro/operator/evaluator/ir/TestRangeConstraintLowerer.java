@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;

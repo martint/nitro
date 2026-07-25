@@ -15,9 +15,9 @@ package org.weakref.nitro.clickbench;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.nio.file.Path;

@@ -17,16 +17,16 @@ import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.BinaryOperation;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Program;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Utf8Equal;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 import java.util.Optional;

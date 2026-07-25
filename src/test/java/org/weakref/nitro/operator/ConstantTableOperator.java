@@ -21,6 +21,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Streams;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;

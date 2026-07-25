@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
@@ -27,12 +29,10 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Set;
 

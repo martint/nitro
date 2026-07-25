@@ -15,8 +15,8 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Streams;
 
 /**
  * Stateful aggregation contract used by global and grouped aggregation operators.

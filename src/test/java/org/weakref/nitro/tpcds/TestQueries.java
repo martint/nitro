@@ -23,14 +23,14 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.trino.TrinoOperatorCpuProfile;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSqlSupport;
 import org.weakref.nitro.trino.TrinoTpcdsParquetSupport;
@@ -2395,7 +2395,7 @@ public class TestQueries
     {
         Allocator.Context allocationContext = new Allocator.Context("TestQueries");
         Streams.Builder streams = Streams.builder();
-        for (org.weakref.nitro.operator.evaluator.ir.Stream stream : output.streams()) {
+        for (org.weakref.nitro.data.Stream stream : output.streams()) {
             streams.put(stream, allocator.copyVector(allocationContext, output.borrow(stream), mask));
         }
         return streams.build();

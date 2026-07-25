@@ -18,10 +18,10 @@ import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import static java.lang.Math.toIntExact;
 

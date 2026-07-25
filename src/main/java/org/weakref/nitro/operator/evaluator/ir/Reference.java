@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.data.Stream;
+
 public record Reference(Producer producer, Stream stream)
 {
 }

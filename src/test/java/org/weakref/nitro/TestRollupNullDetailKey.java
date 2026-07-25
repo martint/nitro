@@ -20,12 +20,12 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.aggregation.Sum;
 
 import java.util.List;

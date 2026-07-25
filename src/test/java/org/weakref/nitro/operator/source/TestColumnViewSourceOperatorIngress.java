@@ -31,11 +31,11 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 import java.util.Optional;

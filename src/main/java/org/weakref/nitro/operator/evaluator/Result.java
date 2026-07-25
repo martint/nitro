@@ -13,9 +13,9 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
  * The output of evaluator execution: computed values, optional null flags, and optional error flags.

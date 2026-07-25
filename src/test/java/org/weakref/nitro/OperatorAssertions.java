@@ -26,13 +26,13 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

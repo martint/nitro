@@ -17,8 +17,8 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 import java.util.Set;

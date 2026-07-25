@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -27,7 +28,6 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.Arrays;

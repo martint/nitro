@@ -26,10 +26,11 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Arrays;
 import java.util.Collections;

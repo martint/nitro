@@ -13,8 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;

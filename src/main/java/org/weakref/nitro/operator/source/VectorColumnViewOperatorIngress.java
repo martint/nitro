@@ -17,9 +17,9 @@ import org.weakref.nitro.core.batch.ColumnStream;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Set;
 import java.util.function.Supplier;

@@ -28,10 +28,10 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.concurrent.TimeUnit;
 

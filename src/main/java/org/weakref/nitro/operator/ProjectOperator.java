@@ -18,6 +18,8 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.jit.FusedProjectionCompiler.CompiledMultiProjection;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
@@ -27,7 +29,6 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.ArrayList;
 import java.util.EnumSet;

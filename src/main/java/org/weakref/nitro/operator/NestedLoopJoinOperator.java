@@ -15,7 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 
 import java.util.Arrays;
 import java.util.Iterator;

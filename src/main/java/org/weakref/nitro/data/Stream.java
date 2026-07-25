@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.evaluator.ir;
+package org.weakref.nitro.data;
 
 public enum Stream
 {

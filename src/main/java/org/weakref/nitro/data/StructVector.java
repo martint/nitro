@@ -13,9 +13,6 @@
  */
 package org.weakref.nitro.data;
 
-import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
-
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;

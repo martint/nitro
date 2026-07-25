@@ -25,9 +25,9 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;

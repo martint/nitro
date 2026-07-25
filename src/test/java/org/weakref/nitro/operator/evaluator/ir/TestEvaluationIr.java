@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.Stream;
 
 import java.util.List;
 import java.util.Map;

@@ -26,6 +26,8 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
@@ -34,8 +36,6 @@ import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.Streams;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
 import java.util.ArrayList;

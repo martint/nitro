@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -31,7 +32,6 @@ import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstraintLowerer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.Optional;

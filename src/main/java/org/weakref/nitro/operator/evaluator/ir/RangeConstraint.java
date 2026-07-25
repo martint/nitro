@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.Streams;
+import org.weakref.nitro.data.Streams;
 
 /**
  * Registry-produced physical range metadata used only while lowering a logical mask plan.

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
@@ -28,7 +29,6 @@ import org.weakref.nitro.function.scalar.builtin.GreaterThanOrEqualF64Optimizati
 import org.weakref.nitro.function.scalar.builtin.LessThanF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64Optimization;
-import org.weakref.nitro.operator.Streams;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;

@@ -26,6 +26,8 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
@@ -36,7 +38,6 @@ import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -51,7 +52,6 @@ import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -98,16 +98,16 @@ public class TestPlanEvaluator
         Variable sum = new Variable(0);
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(sum, new Call("add", List.of(
-                        new Reference(new Input(0), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES),
-                        new Reference(new Input(1), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES))), AllMask.ALL)),
-                List.of(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
-                Map.of(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
+                        new Reference(new Input(0), org.weakref.nitro.data.Stream.VALUES),
+                        new Reference(new Input(1), org.weakref.nitro.data.Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(sum, org.weakref.nitro.data.Stream.VALUES)),
+                Map.of(new Reference(sum, org.weakref.nitro.data.Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}))), new Allocator(EngineResources.createDefault()));
 
-        I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.data.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result.values()).containsExactly(11L, 22L, 33L);
     }
 
@@ -216,18 +216,18 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new ReferenceMask(new Reference(new Input(0), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
-                                new Reference(new Input(1), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES),
-                                new Reference(new Input(2), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
+                                new ReferenceMask(new Reference(new Input(0), org.weakref.nitro.data.Stream.VALUES)),
+                                new Reference(new Input(1), org.weakref.nitro.data.Stream.VALUES),
+                                new Reference(new Input(2), org.weakref.nitro.data.Stream.VALUES)),
                         AllMask.ALL)),
-                List.of(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)));
+                List.of(new Reference(result, org.weakref.nitro.data.Stream.VALUES)));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
-        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.data.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
     }
 
@@ -1553,18 +1553,18 @@ public class TestPlanEvaluator
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
-                                new ReferenceMask(new Reference(new Input(0), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
-                                new Reference(new Input(1), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES),
-                                new Reference(new Input(2), org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)),
+                                new ReferenceMask(new Reference(new Input(0), org.weakref.nitro.data.Stream.VALUES)),
+                                new Reference(new Input(1), org.weakref.nitro.data.Stream.VALUES),
+                                new Reference(new Input(2), org.weakref.nitro.data.Stream.VALUES)),
                         AllMask.ALL)),
-                List.of(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES)));
+                List.of(new Reference(result, org.weakref.nitro.data.Stream.VALUES)));
 
         PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 20})),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}))), new Allocator(EngineResources.createDefault()));
 
-        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.operator.evaluator.ir.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.data.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(10L, 1L, 20L, 1L);
     }
 

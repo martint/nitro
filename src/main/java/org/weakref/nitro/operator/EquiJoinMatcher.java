@@ -13,7 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 
 final class EquiJoinMatcher
         implements JoinMatcher

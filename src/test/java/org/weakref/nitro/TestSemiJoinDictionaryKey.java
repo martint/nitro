@@ -21,12 +21,12 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.SemiJoinOperator;
-import org.weakref.nitro.operator.Streams;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;

@@ -22,6 +22,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
 import java.nio.charset.StandardCharsets;
@@ -200,7 +201,7 @@ public class TestGroupingStatePoolReuse
         Streams first = state.groupedValues(0, Mask.all(4), null, allocator, context);
         Streams third = state.groupedValues(2, Mask.all(4), null, allocator, context);
         assertThat(((I64Vector) first.values()).values()).containsExactly(1, 4, 0, 7);
-        assertThat(((BooleanVector) first.get(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS)).values())
+        assertThat(((BooleanVector) first.get(org.weakref.nitro.data.Stream.NULLS)).values())
                 .containsExactly(false, false, true, false);
         assertThat(((I64Vector) third.values()).values()).containsExactly(3, 6, 9, wide);
 
@@ -230,7 +231,7 @@ public class TestGroupingStatePoolReuse
         Streams second = state.groupedValues(1, Mask.all(3), null, allocator, context);
         assertThat(((I64Vector) first.values()).values()).containsExactly(1, -1, Integer.MAX_VALUE);
         assertThat(((I64Vector) second.values()).values()).containsExactly(2, 3, Integer.MIN_VALUE);
-        assertThat(((BooleanVector) first.get(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS)).values()).containsExactly(false, false, false);
+        assertThat(((BooleanVector) first.get(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(false, false, false);
 
         allocator.release(context);
         state.releaseBuffers();
@@ -262,7 +263,7 @@ public class TestGroupingStatePoolReuse
         Streams first = state.groupedValues(0, Mask.all(4), null, allocator, context);
         Streams second = state.groupedValues(1, Mask.all(4), null, allocator, context);
         assertThat(((I64Vector) first.values()).values()).containsExactly(1, 3, 0, 6);
-        assertThat(((BooleanVector) first.get(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS)).values()).containsExactly(false, false, true, false);
+        assertThat(((BooleanVector) first.get(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(false, false, true, false);
         assertThat(((I64Vector) second.values()).values()).containsExactly(2, 4, 5, 7);
 
         allocator.release(context);
@@ -382,7 +383,7 @@ public class TestGroupingStatePoolReuse
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("pooledFlatRecordTest");
         Streams grouped = second.groupedValues(1, Mask.all(1), null, allocator, context);
-        assertThat(((BooleanVector) grouped.get(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS)).values()[0]).isTrue();
+        assertThat(((BooleanVector) grouped.get(org.weakref.nitro.data.Stream.NULLS)).values()[0]).isTrue();
         assertThat(((BinaryVector) grouped.values()).length(0)).isZero();
 
         allocator.release(context);

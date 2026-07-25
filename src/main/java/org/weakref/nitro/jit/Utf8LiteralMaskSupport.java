@@ -17,9 +17,9 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Streams;
 
 /**
  * Physical execution support for a compiled {@code UTF8 input == literal} expression.

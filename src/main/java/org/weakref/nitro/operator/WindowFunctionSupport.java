@@ -15,9 +15,10 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 /**
  * Shared helpers for {@link RunningWindowFunction} implementations.

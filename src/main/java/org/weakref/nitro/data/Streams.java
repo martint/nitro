@@ -11,11 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator;
-
-import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
+package org.weakref.nitro.data;
 
 import java.util.Collections;
 import java.util.EnumMap;
@@ -206,7 +202,7 @@ public final class Streams
         return STREAM_SETS[flags];
     }
 
-    static Set<Stream> streamSet(int flags)
+    public static Set<Stream> streamSet(int flags)
     {
         return STREAM_SETS[flags];
     }

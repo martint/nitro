@@ -36,7 +36,7 @@ public final class PrimitiveCallSiteBinder
     private static final ClassDesc CD_LIST = ClassDesc.of("java.util.List");
     private static final ClassDesc CD_SET = ClassDesc.of("java.util.Set");
     private static final ClassDesc CD_MASK = ClassDesc.of("org.weakref.nitro.data.Mask");
-    private static final ClassDesc CD_STREAMS = ClassDesc.of("org.weakref.nitro.operator.Streams");
+    private static final ClassDesc CD_STREAMS = ClassDesc.of("org.weakref.nitro.data.Streams");
     private static final ClassDesc CD_EXECUTION_CONTEXT = ClassDesc.of("org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext");
     private static final ClassDesc CD_PRIMITIVE = ClassDesc.of("org.weakref.nitro.operator.evaluator.PrimitiveFunction");
 

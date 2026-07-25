@@ -17,7 +17,8 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.SelectedPositions;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 
 import java.util.ArrayList;
 import java.util.List;

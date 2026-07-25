@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.RangeBoundProvider;
 

@@ -16,7 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.operator.generator.I64Generator;
 
 import java.util.List;

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Streams;
 
 /**
  * Pluggable contract that {@link WindowOperator} drives once per input row per partition. Window

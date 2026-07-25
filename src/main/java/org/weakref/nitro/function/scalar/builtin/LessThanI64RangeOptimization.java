@@ -20,13 +20,13 @@ import org.weakref.nitro.core.function.projection.ProjectionProgram;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.RangeBoundProvider;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstraint;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.List;
 import java.util.Optional;

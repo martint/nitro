@@ -20,9 +20,9 @@ import org.weakref.nitro.data.I64BinaryDispatch;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.evaluator.MaskOutcome;
 import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
 
@@ -214,10 +214,10 @@ final class LongComparisonMaskSupport
             return null;
         }
 
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
 
         DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
@@ -270,10 +270,10 @@ final class LongComparisonMaskSupport
             return constantMask;
         }
 
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
 
         int[] truePositions = new int[mask.count()];
         DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
@@ -304,10 +304,10 @@ final class LongComparisonMaskSupport
             return constantMask;
         }
 
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
 
         int[] falsePositions = new int[mask.count()];
         DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
@@ -337,10 +337,10 @@ final class LongComparisonMaskSupport
             return true;
         }
 
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
 
         DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
@@ -375,10 +375,10 @@ final class LongComparisonMaskSupport
             return true;
         }
 
-        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS));
-        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
-        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.NULLS));
+        VectorAccess.BooleanValues leftErrors = VectorAccess.booleanValues(inputs.get(0).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
+        VectorAccess.BooleanValues rightErrors = VectorAccess.booleanValues(inputs.get(1).getOrNull(org.weakref.nitro.data.Stream.ERRORS));
 
         DictionaryComparison comparison = tryDictionaryComparison(inputs.get(0).values(), inputs.get(1).values(), kernel, mask.count());
         if (comparison != null) {
@@ -452,7 +452,7 @@ final class LongComparisonMaskSupport
             return false;
         }
         boolean[] nulls = null;
-        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.data.Stream.NULLS);
         if (!VectorAccess.isAllFalseNulls(columnNulls)) {
             nulls = VectorAccess.flatBooleans(columnNulls);
             if (nulls == null) {
@@ -500,7 +500,7 @@ final class LongComparisonMaskSupport
         }
 
         boolean[] nulls = null;
-        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.data.Stream.NULLS);
         if (!VectorAccess.isAllFalseNulls(columnNulls)) {
             nulls = VectorAccess.flatBooleans(columnNulls);
             if (nulls == null) {
@@ -517,7 +517,7 @@ final class LongComparisonMaskSupport
 
     private static boolean isErrorFree(Streams input)
     {
-        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.data.Stream.ERRORS));
     }
 
     /**
@@ -539,7 +539,7 @@ final class LongComparisonMaskSupport
             return false;
         }
         boolean[] nulls = null;
-        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS);
+        Vector columnNulls = columnInput.getOrNull(org.weakref.nitro.data.Stream.NULLS);
         if (!VectorAccess.isAllFalseNulls(columnNulls)) {
             nulls = VectorAccess.flatBooleans(columnNulls);
             if (nulls == null) {
@@ -552,8 +552,8 @@ final class LongComparisonMaskSupport
 
     private static boolean isNullAndErrorFree(Streams input)
     {
-        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.NULLS))
-                && VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.operator.evaluator.ir.Stream.ERRORS));
+        return VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.data.Stream.NULLS))
+                && VectorAccess.isAllFalseNulls(input.getOrNull(org.weakref.nitro.data.Stream.ERRORS));
     }
 
     private static boolean isFlatInteger(Vector vector)

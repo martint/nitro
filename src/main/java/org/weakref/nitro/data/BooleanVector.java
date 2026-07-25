@@ -93,7 +93,7 @@ public class BooleanVector
     /**
      * Records that every element is false and clears any stale true bits from a pooled backing array.
      * Nitro treats a {@link BooleanVector} as immutable once it has been published through
-     * {@link org.weakref.nitro.operator.Streams}; this lets producers of a known all-false stream make
+     * {@link org.weakref.nitro.data.Streams}; this lets producers of a known all-false stream make
      * {@link #isAllFalse()} (and hence
      * {@link VectorAccess#isAllFalseNulls}) O(1).
      */

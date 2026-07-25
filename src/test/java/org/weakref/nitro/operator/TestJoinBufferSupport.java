@@ -24,6 +24,7 @@ import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 

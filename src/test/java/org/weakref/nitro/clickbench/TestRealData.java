@@ -24,10 +24,10 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Row;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.nio.file.Path;
 import java.util.List;

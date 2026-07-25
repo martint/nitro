@@ -17,6 +17,7 @@ import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder.ValueType;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentNull;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.ArgumentValue;
 import org.weakref.nitro.jit.ProjectionProgramBuilder.Binary;
@@ -36,7 +37,6 @@ import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Operation;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.ArrayList;
@@ -505,9 +505,9 @@ public final class FusedProjectionCompiler
         out.append("import org.weakref.nitro.data.I32Vector;\n");
         out.append("import org.weakref.nitro.data.I64Vector;\n");
         out.append("import org.weakref.nitro.data.Vector;\n");
-        out.append("import org.weakref.nitro.operator.Streams;\n");
+        out.append("import org.weakref.nitro.data.Streams;\n");
         out.append("import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;\n");
-        out.append("import org.weakref.nitro.operator.evaluator.ir.Stream;\n");
+        out.append("import org.weakref.nitro.data.Stream;\n");
         out.append("public final class ").append(simpleName).append(" implements org.weakref.nitro.jit.FusedMultiProjection {\n");
         Map<String, Integer> utf8Constants = utf8Constants(slice);
         for (Map.Entry<String, Integer> entry : utf8Constants.entrySet()) {

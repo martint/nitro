@@ -28,10 +28,10 @@ import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 
 import java.util.concurrent.TimeUnit;
 

@@ -15,13 +15,14 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
 
-import static org.weakref.nitro.operator.evaluator.ir.Stream.VALUES;
+import static org.weakref.nitro.data.Stream.VALUES;
 
 public class AggregationOperator
         implements Operator
@@ -91,7 +92,7 @@ public class AggregationOperator
     private Output resultOutput(BatchState batchState, int output)
     {
         return new Output(
-                java.util.Set.of(org.weakref.nitro.operator.evaluator.ir.Stream.VALUES, org.weakref.nitro.operator.evaluator.ir.Stream.NULLS),
+                java.util.Set.of(org.weakref.nitro.data.Stream.VALUES, org.weakref.nitro.data.Stream.NULLS),
                 stream -> {
                     doAggregationIfNeeded(batchState);
                     return batchState.results[output].get(stream);

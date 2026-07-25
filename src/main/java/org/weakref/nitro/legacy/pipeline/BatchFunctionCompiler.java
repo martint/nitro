@@ -87,17 +87,17 @@ public final class BatchFunctionCompiler
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
                 .append(" implements org.weakref.nitro.operator.evaluator.PrimitiveFunction {\n");
-        out.append("  private static final org.weakref.nitro.operator.evaluator.ir.Stream V = org.weakref.nitro.operator.evaluator.ir.Stream.VALUES;\n");
+        out.append("  private static final org.weakref.nitro.data.Stream V = org.weakref.nitro.data.Stream.VALUES;\n");
         if (vector) {
             out.append("  private static final jdk.incubator.vector.VectorSpecies<Long> S = jdk.incubator.vector.LongVector.SPECIES_PREFERRED;\n");
         }
-        out.append("  @Override public org.weakref.nitro.operator.Streams apply("
-                + "java.util.List<org.weakref.nitro.operator.Streams> inputs, "
+        out.append("  @Override public org.weakref.nitro.data.Streams apply("
+                + "java.util.List<org.weakref.nitro.data.Streams> inputs, "
                 + "org.weakref.nitro.data.Mask mask, "
-                + "java.util.Set<org.weakref.nitro.operator.evaluator.ir.Stream> requestedStreams, "
-                + "org.weakref.nitro.operator.Streams output, "
+                + "java.util.Set<org.weakref.nitro.data.Stream> requestedStreams, "
+                + "org.weakref.nitro.data.Streams output, "
                 + "org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext context) {\n");
-        out.append("    if (!requestedStreams.contains(V)) { return org.weakref.nitro.operator.Streams.empty(); }\n");
+        out.append("    if (!requestedStreams.contains(V)) { return org.weakref.nitro.data.Streams.empty(); }\n");
         for (int column : columns) {
             out.append("    long[] in").append(column).append(" = ((org.weakref.nitro.data.I64Vector) inputs.get(")
                     .append(column).append(").values()).values();\n");
@@ -126,7 +126,7 @@ public final class BatchFunctionCompiler
         out.append("      int n = mask.count();\n");
         out.append("      for (int k = 0; k < n; k++) { int i = mask.position(k); o[i] = ").append(value).append("; }\n");
         out.append("    }\n");
-        out.append("    return org.weakref.nitro.operator.Streams.ofValues(out);\n");
+        out.append("    return org.weakref.nitro.data.Streams.ofValues(out);\n");
         out.append("  }\n");
         out.append("}\n");
         return out.toString();

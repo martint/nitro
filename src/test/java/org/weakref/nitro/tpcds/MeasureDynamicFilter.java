@@ -28,14 +28,14 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.Streams;
 import org.weakref.nitro.operator.TableOperator;
-import org.weakref.nitro.operator.evaluator.ir.Stream;
 import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
