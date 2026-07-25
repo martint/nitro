@@ -106,6 +106,11 @@ public class Allocator
         return primitiveArrays;
     }
 
+    public VectorAllocator vectorAllocator(Context context)
+    {
+        return new ScopedVectorAllocator(this, requireNonNull(context, "context is null"));
+    }
+
     /**
      * Calculates the capacity of a vector that can hold the desired size, plus some extra space.
      * The extra space is roughly ~2x for small vector sizes and decreases logarithmically as the size of the vector increases

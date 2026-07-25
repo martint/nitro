@@ -13,7 +13,35 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.function.IntFunction;
+import java.util.function.Supplier;
+
+/// Connector-safe allocator scope for constructing Nitro SPI vectors.
+///
+/// Implementations own one allocation context. Closing the scope releases every vector that has
+/// not been individually released or transferred to a downstream owner.
 public interface VectorAllocator
+        extends AutoCloseable
 {
-    Vector allocate(int size);
+    <T extends Vector> T allocate(Class<T> vectorType, int size, IntFunction<T> factory);
+
+    <T extends Vector> T allocatePooled(
+            Object poolFamily,
+            int minimumPoolCapacity,
+            boolean exactCapacityMatch,
+            Class<T> vectorType,
+            Supplier<T> factory);
+
+    <T extends Vector> T adopt(T vector);
+
+    DictionaryVector dictionary(int[] ids, int length, Vector values);
+
+    RleVector runLength(int[] counts, Vector values);
+
+    <T extends Vector> T transfer(T vector);
+
+    void release(Vector vector);
+
+    @Override
+    void close();
 }

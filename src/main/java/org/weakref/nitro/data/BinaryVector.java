@@ -139,6 +139,17 @@ public final class BinaryVector
                 () -> new BinaryVector(positionCount, byteCapacity));
     }
 
+    public static BinaryVector allocate(VectorAllocator allocator, int positionCount, int byteCapacity)
+    {
+        requireNonNull(allocator, "allocator is null");
+        return allocator.allocatePooled(
+                poolFamily(positionCount),
+                byteCapacity,
+                false,
+                BinaryVector.class,
+                () -> new BinaryVector(positionCount, byteCapacity));
+    }
+
     public static BinaryVector allocateOrGrow(Allocator allocator, Allocator.Context allocationContext, BinaryVector existing, int positionCount, int byteCapacity)
     {
         return allocateOrGrow(allocator, allocationContext, existing, positionCount, byteCapacity, -1);

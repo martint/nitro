@@ -130,6 +130,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   exposes borrow/take stream ownership, and `VectorColumnViewOperatorIngress`
   maps those vectors to private operator outputs without connector knowledge of
   `Output`, `Batch`, evaluator IR, or Trino Page/Block types.
+  Connectors allocate vectors through a constructed `VectorAllocator` scope;
+  it exposes vector ownership operations but no `EngineResources`, operator,
+  compiler, registry, or service lookup.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,
