@@ -20,6 +20,8 @@ public final class GroupingStateResources
 {
     private final boolean poolZeroedLongDirectIds;
     private final Object zeroedLongDirectIdsFamily = new Object();
+    private final Object groupOperatorBufferPool = new Object();
+    private final Object markDistinctMaskPool = new Object();
 
     public GroupingStateResources(boolean poolZeroedLongDirectIds)
     {
@@ -34,5 +36,15 @@ public final class GroupingStateResources
     Object zeroedLongDirectIdsFamily()
     {
         return zeroedLongDirectIdsFamily;
+    }
+
+    Object groupOperatorBufferPool()
+    {
+        return groupOperatorBufferPool;
+    }
+
+    Object markDistinctMaskPool()
+    {
+        return markDistinctMaskPool;
     }
 }

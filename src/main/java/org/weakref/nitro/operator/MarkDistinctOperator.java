@@ -24,10 +24,10 @@ import java.util.Arrays;
 public class MarkDistinctOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("MarkDistinctOperator");
     private static final int[] EMPTY_POSITIONS = new int[0];
 
     private final Allocator allocator;
+    private final Allocator.Context allocationContext;
     private final PrimitiveArrayPool arrayPool;
     private final Operator source;
     private final OperatorCodeGenerationResources codeGeneration;
@@ -65,6 +65,9 @@ public class MarkDistinctOperator
     public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls, OperatorResources operatorResources)
     {
         this.allocator = allocator;
+        this.allocationContext = new Allocator.Context(
+                "MarkDistinctOperator",
+                operatorResources.grouping().markDistinctMaskPool());
         this.arrayPool = allocator.primitiveArrays();
         this.codeGeneration = operatorResources.codeGeneration();
         this.source = source;
@@ -144,7 +147,7 @@ public class MarkDistinctOperator
         distinctPositions = EMPTY_POSITIONS;
         Arrays.fill(values, null);
         Arrays.fill(nulls, null);
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private Mask computeDistinctMask(Batch sourceBatch, Mask sourceMask)
@@ -183,7 +186,7 @@ public class MarkDistinctOperator
         if (selectedCount == sourceMask.selectedCount()) {
             return sourceMask;
         }
-        return allocator.allocateSparseMask(ALLOCATION_CONTEXT, distinctPositions, selectedCount, sourceMask.size());
+        return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, sourceMask.size());
     }
 
     private final class BatchState
@@ -213,7 +216,7 @@ public class MarkDistinctOperator
         public Mask takeMask(Mask mask)
         {
             if (mask == ownedMask) {
-                allocator.transfer(ALLOCATION_CONTEXT, mask);
+                allocator.transfer(allocationContext, mask);
             }
             return mask;
         }
@@ -222,7 +225,7 @@ public class MarkDistinctOperator
         public void releaseMask(Mask mask)
         {
             if (mask == ownedMask) {
-                allocator.release(ALLOCATION_CONTEXT, mask);
+                allocator.release(allocationContext, mask);
             }
         }
 

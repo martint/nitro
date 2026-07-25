@@ -27,8 +27,8 @@ import static java.util.Objects.requireNonNull;
 public class GroupOperator
         implements Operator, GroupedKeySource
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("GroupOperator");
     private final Allocator allocator;
+    private final Allocator.Context allocationContext;
 
     private final int[] groupByColumns;
     private final Operator source;
@@ -57,6 +57,9 @@ public class GroupOperator
     {
         this.allocator = allocator;
         operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.allocationContext = new Allocator.Context(
+                "GroupOperator",
+                operatorResources.grouping().groupOperatorBufferPool());
         this.groupingState = new GroupingState(
                 allocator.primitiveArrays(),
                 operatorResources.codeGeneration(),
@@ -91,7 +94,7 @@ public class GroupOperator
                                 reusableResult = null;
                             }
                             batchState.result = null;
-                            return allocator.transfer(ALLOCATION_CONTEXT, vector);
+                            return allocator.transfer(allocationContext, vector);
                         });
             }
             else {
@@ -143,7 +146,7 @@ public class GroupOperator
     {
         if (!batchState.filled && !batchState.mask.none()) {
             batchState.filled = true;
-            reusableResult = allocator.reallocateIfNecessary(ALLOCATION_CONTEXT, reusableResult, I64Vector.class, batchState.mask.maxPosition() + 1, I64Vector::new);
+            reusableResult = allocator.reallocateIfNecessary(allocationContext, reusableResult, I64Vector.class, batchState.mask.maxPosition() + 1, I64Vector::new);
             batchState.result = reusableResult;
             if (groupByColumns.length == 1) {
                 int groupByColumn = groupByColumns[0];
@@ -182,7 +185,7 @@ public class GroupOperator
         Arrays.fill(groupValues, null);
         Arrays.fill(groupNulls, null);
         groupingState.releaseBuffers();
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     @Override
