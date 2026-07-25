@@ -152,8 +152,11 @@ public final class ColumnViewSourceOperatorIngress
                     throw new IllegalArgumentException("source column type does not match binding at column " + column);
                 }
                 Selection selection = sourceBatch.selection();
-                if (selection.count() > 0 && selection.maxPosition() >= view.positionCount()) {
-                    throw new IllegalArgumentException("source selection exceeds column position count at column " + column);
+                if (selection.positionCount() != view.positionCount()) {
+                    throw new IllegalArgumentException("source selection and column have different position counts at column " + column);
+                }
+                if (selection.count() > 0 && selection.maxPosition() >= selection.positionCount()) {
+                    throw new IllegalArgumentException("source selection exceeds its position count at column " + column);
                 }
             }
             return view;

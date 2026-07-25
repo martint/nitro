@@ -122,6 +122,9 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   `RegisteredColumnViewOperatorIngressFactory` is the immutable composition-root
   registry for those providers; type identities are lookup keys, not engine
   vocabulary, and no provider or cache is process-static.
+  Source `Selection` carries the complete physical `positionCount`; never infer
+  it from the greatest selected row. Generic mask translation uses the
+  constructed, allocator-owned `AllocatedSelectionOperatorIngress`.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,

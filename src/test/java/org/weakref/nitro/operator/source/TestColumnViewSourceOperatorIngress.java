@@ -215,6 +215,12 @@ class TestColumnViewSourceOperatorIngress
             implements Selection
     {
         @Override
+        public int positionCount()
+        {
+            return size;
+        }
+
+        @Override
         public int count()
         {
             return positions.length;
@@ -223,7 +229,7 @@ class TestColumnViewSourceOperatorIngress
         @Override
         public int maxPosition()
         {
-            return size - 1;
+            return positions.length == 0 ? -1 : positions[positions.length - 1];
         }
 
         @Override

@@ -35,6 +35,12 @@ final class MaskSelection
     }
 
     @Override
+    public int positionCount()
+    {
+        return mask.size();
+    }
+
+    @Override
     public int count()
     {
         return mask.count();

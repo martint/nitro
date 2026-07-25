@@ -16,10 +16,16 @@ package org.weakref.nitro.core.batch;
 /// Immutable logical row selection for a source batch.
 public interface Selection
 {
+    /// Number of physical row positions in the source generation.
+    int positionCount();
+
+    /// Number of selected positions.
     int count();
 
+    /// Greatest selected position, or {@code -1} when the selection is empty.
     int maxPosition();
 
+    /// Whether every physical row position is selected.
     boolean isDense();
 
     int position(int index);
