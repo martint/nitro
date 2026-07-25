@@ -115,6 +115,10 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   `operator.source.compatibility`; that package is not connector SPI. Legacy
   Parquet/Hardwood/Trino format operators are quarantined there as bridge debt,
   not treated as general engine operators or connector APIs.
+  Generic non-native batches enter through `ColumnViewSourceOperatorIngress`;
+  a constructed `ColumnViewOperatorIngressFactory` binds every schema field to
+  its registry/code-generated physical importer. The generic assembler owns
+  laziness, selection generations, and lifetime, never type or encoding cases.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,
