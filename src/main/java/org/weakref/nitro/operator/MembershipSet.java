@@ -36,11 +36,6 @@ final class MembershipSet
     private final OperatorResources operatorResources;
     private Index index;
 
-    MembershipSet(Allocator allocator, Allocator.Context allocationContext)
-    {
-        this(allocator, allocationContext, allocator.engineResources().operatorResources());
-    }
-
     MembershipSet(Allocator allocator, Allocator.Context allocationContext, OperatorResources operatorResources)
     {
         this.allocator = allocator;

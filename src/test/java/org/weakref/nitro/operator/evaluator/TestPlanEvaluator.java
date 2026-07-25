@@ -77,7 +77,7 @@ public class TestPlanEvaluator
         try (AllocationResources resources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
             Reference valuesReference = new Reference(new Input(0), Stream.VALUES);
-            PlanEvaluator evaluator = new PlanEvaluator(
+            PlanEvaluator evaluator = planEvaluator(
                     new EvaluationPlan(List.of(), List.of()),
                     primitiveRegistry(),
                     inputResolver(Map.of(valuesReference, new BooleanVector(new boolean[] {false, true, true, false, true, false}))),
@@ -108,7 +108,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(sum, org.weakref.nitro.data.Stream.VALUES)),
                 Map.of(new Reference(sum, org.weakref.nitro.data.Stream.VALUES), new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}))), new Allocator(EngineResources.createDefault()));
 
@@ -133,7 +133,7 @@ public class TestPlanEvaluator
                                 new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
                 List.of(totalValues));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 0, 3}),
                 new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}),
@@ -171,7 +171,7 @@ public class TestPlanEvaluator
                         firstValues, new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE),
                         secondValues, new StreamPlan(MaterializationPolicy.MATERIALIZE, MemoizationPolicy.MEMOIZE)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3, 4}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {100, 200, 300, 400}),
@@ -205,7 +205,7 @@ public class TestPlanEvaluator
                 List.of(new Assignment(nullValue, new Call("null_i64", List.of()), AllMask.ALL)),
                 List.of(new Reference(nullValue, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         Streams result = evaluator.evaluate(new Reference(nullValue, Stream.VALUES), Mask.all(3));
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(true, true, true);
@@ -227,7 +227,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, org.weakref.nitro.data.Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
@@ -243,7 +243,7 @@ public class TestPlanEvaluator
                 List.of(),
                 List.of(new Reference(new Input(0), Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))),
@@ -265,7 +265,7 @@ public class TestPlanEvaluator
         AtomicInteger vectorResolveCount = new AtomicInteger();
         AtomicInteger maskResolveCount = new AtomicInteger();
         Allocator allocator = new Allocator(EngineResources.createDefault());
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 new PlanEvaluator.InputResolver()
@@ -308,7 +308,7 @@ public class TestPlanEvaluator
     @Test
     void testReferenceMaskClassifiesErrorsThenNullsThenTrueValues()
     {
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 new EvaluationPlan(List.of(), List.of()),
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -356,7 +356,7 @@ public class TestPlanEvaluator
                 Map.of(),
                 Map.of());
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 builtinPrimitiveRegistry(),
                 inputResolver(Map.of(
@@ -391,7 +391,7 @@ public class TestPlanEvaluator
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(one, Stream.VALUES))), AllMask.ALL)),
                 List.of());
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -421,7 +421,7 @@ public class TestPlanEvaluator
                                 new Reference(new Input(0), Stream.VALUES),
                                 new Reference(two, Stream.VALUES))), AllMask.ALL)),
                 List.of());
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -465,7 +465,7 @@ public class TestPlanEvaluator
         input.setBytes(1, "bing".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(2, "golang".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
@@ -501,7 +501,7 @@ public class TestPlanEvaluator
         dictionary.setBytes(1, "example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         dictionary.setBytes(2, "maps.google.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -534,7 +534,7 @@ public class TestPlanEvaluator
         inputValues.setNull(1);
         BooleanVector inputNulls = new BooleanVector(new boolean[] {false, true});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -564,7 +564,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(product, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -606,7 +606,7 @@ public class TestPlanEvaluator
         input.setBytes(4, "aaa".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         input.setBytes(5, "b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
@@ -642,7 +642,7 @@ public class TestPlanEvaluator
         DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 4, 5}, dictionaryValues);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, false, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -696,7 +696,7 @@ public class TestPlanEvaluator
         values.setBytes(3, "http://tambov.irr.ru/0/c1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(4, "https://www.wildberries.ru/catalog".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -737,7 +737,7 @@ public class TestPlanEvaluator
         falseValues.setBytes(3, "z".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         org.weakref.nitro.data.BooleanVector conditions = new org.weakref.nitro.data.BooleanVector(new boolean[] {true, false, true, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -768,7 +768,7 @@ public class TestPlanEvaluator
         values.setBytes(2, "https://example.com/page".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         values.setBytes(3, "http://tambov.irr.ru/0/c1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -808,7 +808,7 @@ public class TestPlanEvaluator
         dictionaryValues.setBytes(3, "mailto:test@example.com".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         DictionaryVector input = DictionaryVector.wrap(new int[] {0, 1, 2, 3}, dictionaryValues);
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
@@ -863,7 +863,7 @@ public class TestPlanEvaluator
             dictionaryValues.setBytes(position, inputs[position].getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
         DictionaryVector input = DictionaryVector.wrap(java.util.stream.IntStream.range(0, inputs.length).toArray(), dictionaryValues);
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), input)),
@@ -904,7 +904,7 @@ public class TestPlanEvaluator
         input.setNull(2);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, true});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -941,7 +941,7 @@ public class TestPlanEvaluator
         input.setNull(2);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, true});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -981,7 +981,7 @@ public class TestPlanEvaluator
         BooleanVector parentNulls = new BooleanVector(new boolean[] {false, false, true, false});
         person.setField("name", Streams.ofValues(names).with(Stream.NULLS, childNulls));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -1043,7 +1043,7 @@ public class TestPlanEvaluator
         BooleanVector mapNulls = new BooleanVector(new boolean[] {false, true, false, false});
         BooleanVector lookupNulls = new BooleanVector(new boolean[] {false, false, false, true});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -1090,7 +1090,7 @@ public class TestPlanEvaluator
         BooleanVector mapErrors = new BooleanVector(new boolean[] {false, true, false});
         BooleanVector lookupErrors = new BooleanVector(new boolean[] {true, false, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -1150,7 +1150,7 @@ public class TestPlanEvaluator
         BooleanVector mapErrors = new BooleanVector(new boolean[] {false, false, false, true});
         BooleanVector keyErrors = new BooleanVector(new boolean[] {false, false, false, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -1210,7 +1210,7 @@ public class TestPlanEvaluator
         BooleanVector arrayErrors = new BooleanVector(new boolean[] {false, false, false, false, false, true});
         BooleanVector indexErrors = new BooleanVector(new boolean[] {false, false, false, false, false, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -1564,7 +1564,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, org.weakref.nitro.data.Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new RleVector(new int[] {2, 2}, new I64Vector(new long[] {10, 20})),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}))), new Allocator(EngineResources.createDefault()));
@@ -1586,7 +1586,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), dictionary)), new Allocator(EngineResources.createDefault()));
 
         assertThat(evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES)).isSameAs(dictionary);
@@ -1607,7 +1607,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
                 new Reference(new Input(1), Stream.VALUES), new DictionaryVector(new int[] {2, 0, 1, 2}, new I64Vector(new long[] {10, 20, 30})),
                 new Reference(new Input(2), Stream.VALUES), new DictionaryVector(new int[] {1, 1, 0, 0}, new I64Vector(new long[] {1, 2})))), new Allocator(EngineResources.createDefault()));
@@ -1635,7 +1635,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, false, false}),
                 new Reference(new Input(1), Stream.VALUES), new BooleanVector(new boolean[] {false, true, true, false}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
@@ -1675,7 +1675,7 @@ public class TestPlanEvaluator
                                 new ReferenceMask(new Reference(leftOnly, Stream.VALUES)),
                                 new ReferenceMask(new Reference(rightOnly, Stream.VALUES))))));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 left, new I64Vector(new long[] {1, 5, 7, 3}),
                 right, new I64Vector(new long[] {9, 2, 6, 1}),
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {4, 4, 4, 4}),
@@ -1703,7 +1703,7 @@ public class TestPlanEvaluator
                 List.of(errors),
                 Map.of(errors, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {20, 21, 22}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {5, 0, 2}))), new Allocator(EngineResources.createDefault()));
 
@@ -1716,7 +1716,7 @@ public class TestPlanEvaluator
     {
         Reference inputNulls = new Reference(new Input(0), Stream.NULLS);
         Reference inputErrors = new Reference(new Input(0), Stream.ERRORS);
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 new EvaluationPlan(List.of(), List.of(inputNulls, inputErrors)),
                 new PrimitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}))),
@@ -1745,7 +1745,7 @@ public class TestPlanEvaluator
                         new Assignment(copied, new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(source, Stream.ERRORS)), AllMask.ALL)),
                 List.of(copiedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(copiedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1777,7 +1777,7 @@ public class TestPlanEvaluator
                         new Assignment(copied, new org.weakref.nitro.operator.evaluator.ir.Copy(new Reference(source, Stream.VALUES)), AllMask.ALL)),
                 List.of(copiedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(copiedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1815,7 +1815,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of(mergedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
@@ -1869,7 +1869,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of(mergedErrors));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true}))), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
@@ -1894,7 +1894,7 @@ public class TestPlanEvaluator
                 List.of(errors),
                 Map.of(errors, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(requestedStreams.get()).containsExactly(Stream.ERRORS);
@@ -1929,7 +1929,7 @@ public class TestPlanEvaluator
                         values, StreamPlan.MATERIALIZED,
                         errors, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
@@ -1959,7 +1959,7 @@ public class TestPlanEvaluator
                 List.of(nulls),
                 Map.of(nulls, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         BooleanVector nullsVector = (BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS);
         assertThat(nullsVector.values()).containsExactly(false, true, false);
@@ -1992,7 +1992,7 @@ public class TestPlanEvaluator
                         values, StreamPlan.MATERIALIZED,
                         nulls, StreamPlan.MATERIALIZED));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(nulls, Mask.all(3)).get(Stream.NULLS)).values()).containsExactly(false, true, false);
         assertThat(((I64Vector) evaluator.evaluate(values, Mask.all(3)).get(Stream.VALUES)).values()).containsExactly(1L, 2L, 3L);
@@ -2027,7 +2027,7 @@ public class TestPlanEvaluator
                         errors, StreamPlan.MATERIALIZED),
                 Map.of(values, new ReferenceMask(values))));
 
-        PlanEvaluator evaluator = new PlanEvaluator(normalizedPlan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
+        PlanEvaluator evaluator = planEvaluator(normalizedPlan, primitiveRegistry, inputResolver(Map.of()), new Allocator(EngineResources.createDefault()));
 
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
         assertThat(((BooleanVector) evaluator.evaluate(errors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(false, true, false);
@@ -2052,7 +2052,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(result, Stream.VALUES))));
 
         AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, (reference, mask) -> {
             if (reference.equals(first) || reference.equals(second)) {
                 maskSizes.updateAndGet(existing -> {
                     var updated = new java.util.ArrayList<>(existing);
@@ -2103,7 +2103,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(result, Stream.VALUES))));
 
         AtomicReference<List<Integer>> maskSizes = new AtomicReference<>(List.of());
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, (reference, mask) -> {
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, (reference, mask) -> {
             if (reference.equals(first) || reference.equals(second)) {
                 maskSizes.updateAndGet(existing -> {
                     var updated = new java.util.ArrayList<>(existing);
@@ -2153,7 +2153,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(result, Stream.VALUES)));
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
                 new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {4, 5, 6}))), allocator);
 
@@ -2183,7 +2183,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true, false}),
                 new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
                 new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
@@ -2198,7 +2198,7 @@ public class TestPlanEvaluator
     @Test
     void testDirectAndMaskEvaluationDropsRowsThatAreNotUltimatelyTrue()
     {
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 new EvaluationPlan(List.of(), List.of()),
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2246,7 +2246,7 @@ public class TestPlanEvaluator
         needle.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
         needle.setBytes(0, "google".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2280,7 +2280,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of());
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2316,7 +2316,7 @@ public class TestPlanEvaluator
                         new Reference(value, Stream.VALUES),
                         new Reference(value, Stream.NULLS)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2344,7 +2344,7 @@ public class TestPlanEvaluator
                         new Reference(value, Stream.VALUES),
                         new Reference(value, Stream.NULLS)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2373,7 +2373,7 @@ public class TestPlanEvaluator
         int[] ids = {2, 0, 1, 2};
         DictionaryVector values = DictionaryVector.wrap(ids, new I64Vector(new long[] {7L, 11L, 13L}));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -2416,7 +2416,7 @@ public class TestPlanEvaluator
 
         AtomicBoolean requestedNulls = new AtomicBoolean();
         DictionaryVector values = DictionaryVector.wrap(new int[] {1, 0, 1}, new I64Vector(new long[] {17L, 29L}));
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2451,7 +2451,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(isNull, Stream.VALUES)));
 
         AtomicBoolean requestedValues = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2484,7 +2484,7 @@ public class TestPlanEvaluator
         DictionaryVector nulls = DictionaryVector.wrap(
                 new int[] {1, 0, 1, 1, 0},
                 new BooleanVector(new boolean[] {false, true}));
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
@@ -2509,7 +2509,7 @@ public class TestPlanEvaluator
         DictionaryVector nulls = DictionaryVector.wrap(
                 new int[] {0, 1, 1, 0},
                 new BooleanVector(new boolean[] {false, true}));
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> reference.equals(new Reference(new Input(0), Stream.NULLS)) ? nulls : null,
@@ -2533,7 +2533,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(resultReference));
         AtomicBoolean requestedValues = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2580,7 +2580,7 @@ public class TestPlanEvaluator
                 List.of(resultReference));
         AtomicInteger vectorResolveCount = new AtomicInteger();
         AtomicInteger maskResolveCount = new AtomicInteger();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 new PlanEvaluator.InputResolver()
@@ -2630,7 +2630,7 @@ public class TestPlanEvaluator
                         new Reference(average, Stream.VALUES),
                         new Reference(average, Stream.NULLS)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2657,7 +2657,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(difference, Stream.ERRORS)));
 
         AtomicBoolean requestedNulls = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2703,7 +2703,7 @@ public class TestPlanEvaluator
 
         AtomicBoolean requestedNulls = new AtomicBoolean();
         BinaryVector values = utf8Vector("go", "nitro", "x");
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2740,7 +2740,7 @@ public class TestPlanEvaluator
                 List.of());
 
         AtomicBoolean requestedNulls = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2778,7 +2778,7 @@ public class TestPlanEvaluator
                 List.of(new Reference(lessThan, Stream.NULLS)));
 
         AtomicBoolean requestedValues = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2815,7 +2815,7 @@ public class TestPlanEvaluator
                                 AllMask.ALL)),
                 List.of());
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 builtinPrimitiveRegistry(),
                 inputResolver(Map.of(
@@ -2845,7 +2845,7 @@ public class TestPlanEvaluator
 
         AtomicBoolean requestedLeftValues = new AtomicBoolean();
         AtomicBoolean requestedRightValues = new AtomicBoolean();
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 (reference, mask) -> {
@@ -2890,7 +2890,7 @@ public class TestPlanEvaluator
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        PlanEvaluator evaluator = new PlanEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
+        PlanEvaluator evaluator = planEvaluator(plan, primitiveRegistry, inputResolver(Map.of(
                 new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, false, false}),
                 new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false, false}),
                 new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {true, false, false, false}),
@@ -2905,7 +2905,7 @@ public class TestPlanEvaluator
     @Test
     void testDirectOrMaskEvaluationKeepsRowsThatBecomeTrueLater()
     {
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 new EvaluationPlan(List.of(), List.of()),
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2953,7 +2953,7 @@ public class TestPlanEvaluator
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -2993,7 +2993,7 @@ public class TestPlanEvaluator
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -3032,7 +3032,7 @@ public class TestPlanEvaluator
 
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1}, dictionary);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3077,7 +3077,7 @@ public class TestPlanEvaluator
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 2}, dictionary);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -3119,7 +3119,7 @@ public class TestPlanEvaluator
         values.setBytes(6, "15".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true, false, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -3173,7 +3173,7 @@ public class TestPlanEvaluator
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 2}, dictionary);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true, false});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -3234,7 +3234,7 @@ public class TestPlanEvaluator
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2, 3, 0}, nested);
         BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, false, true});
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(
@@ -3290,7 +3290,7 @@ public class TestPlanEvaluator
         DictionaryVector middle = DictionaryVector.wrapNested(new int[] {1, 2, 0, 1}, 4, inner);
         DictionaryVector values = DictionaryVector.wrapNested(new int[] {3, 0, 1, 2, 3}, 5, middle);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3339,7 +3339,7 @@ public class TestPlanEvaluator
 
         DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 0}, dictionary);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry(),
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3381,7 +3381,7 @@ public class TestPlanEvaluator
 
         DictionaryVector values = DictionaryVector.wrap(new int[] {3, 1, 0}, dictionary);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3424,7 +3424,7 @@ public class TestPlanEvaluator
 
         DictionaryVector values = DictionaryVector.wrap(new int[] {3, 1, 0}, dictionary);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3465,7 +3465,7 @@ public class TestPlanEvaluator
 
         DictionaryVector values = DictionaryVector.wrap(new int[] {49, 1, 0}, dictionary);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3508,7 +3508,7 @@ public class TestPlanEvaluator
 
         RleVector values = new RleVector(new int[] {2, 3}, runValues);
 
-        PlanEvaluator evaluator = new PlanEvaluator(
+        PlanEvaluator evaluator = planEvaluator(
                 plan,
                 primitiveRegistry,
                 inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
@@ -3542,6 +3542,77 @@ public class TestPlanEvaluator
 
         assertThat(result.has(Stream.VALUES)).isFalse();
         assertThat(((BooleanVector) result.get(Stream.NULLS)).values()).containsExactly(false, true, true);
+    }
+
+    private static PlanEvaluator planEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PlanEvaluator.InputResolver input,
+            Allocator allocator)
+    {
+        return new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                input,
+                allocator,
+                allocator.engineResources().operatorCodeGeneration().projectionMask());
+    }
+
+    private static PlanEvaluator planEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PlanEvaluator.InputResolver input,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler)
+    {
+        return new PlanEvaluator(plan, primitiveRegistry, input, allocator, projectionMaskCompiler);
+    }
+
+    private static PlanEvaluator planEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PlanEvaluator.InputResolver input,
+            Allocator allocator,
+            Object poolGroup)
+    {
+        return planEvaluator(plan, primitiveRegistry, input, allocator, poolGroup, false);
+    }
+
+    private static PlanEvaluator planEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PlanEvaluator.InputResolver input,
+            Allocator allocator,
+            Object poolGroup,
+            boolean requireProjectedCompanionStreams)
+    {
+        return new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                input,
+                allocator,
+                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                poolGroup,
+                requireProjectedCompanionStreams);
+    }
+
+    private static PlanEvaluator planEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            PlanEvaluator.InputResolver input,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler,
+            Object poolGroup,
+            boolean requireProjectedCompanionStreams)
+    {
+        return new PlanEvaluator(
+                plan,
+                primitiveRegistry,
+                input,
+                allocator,
+                projectionMaskCompiler,
+                poolGroup,
+                requireProjectedCompanionStreams);
     }
 
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)

@@ -26,13 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestMembershipSet
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TestMembershipSet");
-
     @Test
     void exactLongMembershipSurvivesRangeExpansionAndEncodedProbe()
     {
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
         try {
             long[] initial = new long[1_024];
             for (int index = 0; index < initial.length; index++) {
@@ -58,15 +58,17 @@ class TestMembershipSet
         }
         finally {
             set.releaseBuffers();
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 
     @Test
     void sparseExtremeLongDomainFallsBackWithoutLosingExactness()
     {
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
         try {
             set.addBatch(
                     new I64Vector(new long[] {Long.MIN_VALUE, 0, Long.MAX_VALUE}),
@@ -87,15 +89,17 @@ class TestMembershipSet
         }
         finally {
             set.releaseBuffers();
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 
     @Test
     void denseLongMembershipConvertsToHashWhenLaterKeysEscapeTheBoundedDomain()
     {
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
         try {
             set.addBatch(new I64Vector(new long[] {1, 2, 2, 3}), null, Mask.all(4));
             set.addBatch(new I64Vector(new long[] {100_000_000}), null, Mask.all(1));
@@ -116,15 +120,17 @@ class TestMembershipSet
         }
         finally {
             set.releaseBuffers();
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 
     @Test
     void emptyBuildRejectsEveryProbe()
     {
-        Allocator allocator = new Allocator(EngineResources.createDefault());
-        MembershipSet set = new MembershipSet(allocator, ALLOCATION_CONTEXT);
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
         try {
             set.beginProbeBatch(new I64Vector(new long[] {1, 2}), null);
             try {
@@ -137,7 +143,7 @@ class TestMembershipSet
         }
         finally {
             set.releaseBuffers();
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 }

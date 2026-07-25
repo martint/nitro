@@ -147,24 +147,9 @@ public final class PlanEvaluator
         }
     }
 
-    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator)
-    {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler(allocator));
-    }
-
     public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, ProjectionMaskCompiler projectionMaskCompiler)
     {
         this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler);
-    }
-
-    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup)
-    {
-        this(plan, primitiveRegistry, input, allocator, poolGroup, false);
-    }
-
-    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, Object poolGroup, boolean requireProjectedCompanionStreams)
-    {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams, projectionMaskCompiler(allocator));
     }
 
     public PlanEvaluator(
@@ -207,11 +192,6 @@ public final class PlanEvaluator
         this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
         this.requireProjectedCompanionStreams = requireProjectedCompanionStreams;
         this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
-    }
-
-    private static ProjectionMaskCompiler projectionMaskCompiler(Allocator allocator)
-    {
-        return allocator.engineResources().operatorCodeGeneration().projectionMask();
     }
 
     public Streams evaluate(Reference reference, Mask mask)
