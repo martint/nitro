@@ -50,14 +50,6 @@ public class DistinctCount
     }
 
     @Override
-    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
-    {
-        arrayPool = allocator.primitiveArrays();
-        codeGeneration = allocator.engineResources().operatorCodeGeneration();
-        return allocateState(allocator, allocationContext, size);
-    }
-
-    @Override
     public Streams allocate(AggregationExecutionContext context, int size)
     {
         arrayPool = context.allocator().primitiveArrays();

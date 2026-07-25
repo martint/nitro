@@ -53,12 +53,6 @@ public final class FilteredAccumulator
     }
 
     @Override
-    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
-    {
-        return delegate.allocate(allocator, allocationContext, size);
-    }
-
-    @Override
     public Streams allocate(AggregationExecutionContext context, int size)
     {
         return delegate.allocate(context, size);

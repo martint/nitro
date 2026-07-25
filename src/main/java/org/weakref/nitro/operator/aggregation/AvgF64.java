@@ -41,8 +41,10 @@ public class AvgF64
     }
 
     @Override
-    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
+    public Streams allocate(AggregationExecutionContext context, int size)
     {
+        Allocator allocator = context.allocator();
+        Allocator.Context allocationContext = context.allocationContext();
         return Streams.ofValues(allocator.allocate(allocationContext, AvgStateVector.class, size, AvgStateVector::new));
     }
 

@@ -43,8 +43,10 @@ public class MaxF64
     }
 
     @Override
-    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
+    public Streams allocate(AggregationExecutionContext context, int size)
     {
+        Allocator allocator = context.allocator();
+        Allocator.Context allocationContext = context.allocationContext();
         return Streams.ofValuesAndNulls(
                 allocator.allocate(allocationContext, F64Vector.class, size, F64Vector::new),
                 allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));

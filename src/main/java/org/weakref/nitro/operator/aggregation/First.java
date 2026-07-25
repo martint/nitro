@@ -37,8 +37,10 @@ public class First
     }
 
     @Override
-    public Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size)
+    public Streams allocate(AggregationExecutionContext context, int size)
     {
+        Allocator allocator = context.allocator();
+        Allocator.Context allocationContext = context.allocationContext();
         return Streams.ofValuesAndNulls(
                 allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new),
                 allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new));

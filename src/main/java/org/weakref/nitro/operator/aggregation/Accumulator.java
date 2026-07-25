@@ -48,20 +48,11 @@ public interface Accumulator
     }
 
     /**
-     * Allocates initial state capable of holding at least {@code size} groups.
+     * Allocates initial state capable of holding at least {@code size} groups using explicitly injected
+     * execution services. Every dynamically registered accumulator receives the same typed context; the
+     * aggregation operator does not inspect accumulator identity or discover services on its behalf.
      */
-    Streams allocate(Allocator allocator, Allocator.Context allocationContext, int size);
-
-    /**
-     * Allocates state with explicitly injected engine services.
-     *
-     * <p>Implementations that need only allocation inherit the compatibility adapter. Resource-aware dynamic
-     * accumulators override this method without requiring the aggregation operator to know their identity.
-     */
-    default Streams allocate(AggregationExecutionContext context, int size)
-    {
-        return allocate(context.allocator(), context.allocationContext(), size);
-    }
+    Streams allocate(AggregationExecutionContext context, int size);
 
     /**
      * Ensures the supplied state can hold at least {@code size} groups.

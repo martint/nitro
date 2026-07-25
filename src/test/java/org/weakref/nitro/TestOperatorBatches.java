@@ -61,6 +61,7 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
@@ -375,7 +376,12 @@ public class TestOperatorBatches
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Avg accumulator = new Avg(0);
-        Streams state = accumulator.allocate(allocator, new Allocator.Context("test"), 1);
+        Streams state = accumulator.allocate(
+                new AggregationExecutionContext(
+                        allocator,
+                        new Allocator.Context("test"),
+                        allocator.engineResources().operatorCodeGeneration()),
+                1);
         accumulator.initialize(state, 0, 1);
 
         I64Vector values = new I64Vector(new long[] {10, 20, 30});
