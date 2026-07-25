@@ -41,14 +41,14 @@ public final class QueryDriver
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         long sink = 0;
         for (int iteration = 0; iteration < warmup; iteration++) {
-            sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables, null));
         }
 
         if (Boolean.getBoolean("nitro.steadyStateAllocationProfile")) {
             int highWaterBatches = Integer.getInteger("nitro.allocationProfile.highWaterBatches", 8);
             for (int iteration = 0; iteration < measured; iteration++) {
                 SteadyStateAllocationProfile.Report report = SteadyStateAllocationProfile.measure(
-                        () -> query(query, new Allocator(EngineResources.createDefault()), registry, tables),
+                        () -> query(query, new Allocator(EngineResources.createDefault()), registry, tables, null),
                         highWaterBatches);
                 sink += report.sink();
                 System.out.printf("%s allocation pass %d: %s%n", query, iteration + 1, report.formatReport());
@@ -60,7 +60,7 @@ public final class QueryDriver
             JoinMaterializationProfile profile = new JoinMaterializationProfile();
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, profile.newAllocator(), registry, tables));
+                sink += consume(query(query, profile.newAllocator(), registry, tables, null));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -71,7 +71,7 @@ public final class QueryDriver
         if (!Boolean.getBoolean("nitro.operatorCpuProfile")) {
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables));
+                sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables, null));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -81,32 +81,35 @@ public final class QueryDriver
         OperatorCpuProfile profile = new OperatorCpuProfile();
         long start = System.nanoTime();
         for (int iteration = 0; iteration < measured; iteration++) {
-            sink += consume(TpchParquetSupport.withOperatorCpuProfile(
-                    profile,
-                    () -> query(query, new Allocator(EngineResources.createDefault()), registry, tables)));
+            sink += consume(query(query, new Allocator(EngineResources.createDefault()), registry, tables, profile));
         }
         long nanos = System.nanoTime() - start;
         System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
         System.out.println(profile.formatReport());
     }
 
-    private static Operator query(String query, Allocator allocator, PrimitiveRegistry registry, TpchParquetTables tables)
+    private static Operator query(
+            String query,
+            Allocator allocator,
+            PrimitiveRegistry registry,
+            TpchParquetTables tables,
+            OperatorCpuProfile profile)
     {
         return switch (query) {
-            case "query05" -> TpchParquetSupport.query05(allocator, registry, tables);
-            case "query07" -> TpchParquetSupport.query07(allocator, registry, tables);
+            case "query05" -> TpchParquetSupport.query05(allocator, registry, tables, profile);
+            case "query07" -> TpchParquetSupport.query07(allocator, registry, tables, profile);
             case "query08" -> TpchParquetSupport.query08(allocator, registry, tables);
-            case "query09" -> TpchParquetSupport.query09(allocator, registry, tables);
-            case "query11" -> TpchParquetSupport.query11(allocator, registry, tables);
-            case "query12" -> TpchParquetSupport.query12(allocator, registry, tables);
-            case "query13" -> TpchParquetSupport.query13(allocator, registry, tables);
+            case "query09" -> TpchParquetSupport.query09(allocator, registry, tables, profile);
+            case "query11" -> TpchParquetSupport.query11(allocator, registry, tables, profile);
+            case "query12" -> TpchParquetSupport.query12(allocator, registry, tables, profile);
+            case "query13" -> TpchParquetSupport.query13(allocator, registry, tables, profile);
             case "query14" -> TpchParquetSupport.query14(allocator, registry, tables);
             case "query15" -> TpchParquetSupport.query15(allocator, registry, tables);
-            case "query16" -> TpchParquetSupport.query16(allocator, registry, tables);
-            case "query19" -> TpchParquetSupport.query19(allocator, registry, tables);
-            case "query20" -> TpchParquetSupport.query20(allocator, registry, tables);
-            case "query21" -> TpchParquetSupport.query21(allocator, registry, tables);
-            case "query22" -> TpchParquetSupport.query22(allocator, registry, tables);
+            case "query16" -> TpchParquetSupport.query16(allocator, registry, tables, profile);
+            case "query19" -> TpchParquetSupport.query19(allocator, registry, tables, profile);
+            case "query20" -> TpchParquetSupport.query20(allocator, registry, tables, profile);
+            case "query21" -> TpchParquetSupport.query21(allocator, registry, tables, profile);
+            case "query22" -> TpchParquetSupport.query22(allocator, registry, tables, profile);
             default -> throw new IllegalArgumentException("Unsupported query: " + query);
         };
     }
