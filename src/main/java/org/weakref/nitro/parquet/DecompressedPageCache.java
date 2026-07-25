@@ -38,7 +38,6 @@ import static org.weakref.nitro.data.NativeBufferAdvice.preferHugePages;
 public final class DecompressedPageCache
         implements AutoCloseable
 {
-    private static final Object SLAB_POOL = new Object();
     private static final int DEFAULT_CAPACITY = 256 << 20;
     private static final int DEFAULT_MIN_SOURCE_PAGES = 16;
     private static final int DEFAULT_MIN_BYTES_PER_SOURCE = 20 << 20;
@@ -208,7 +207,7 @@ public final class DecompressedPageCache
         if (slab != null) {
             return;
         }
-        Slab borrowed = pool.borrow(SLAB_POOL, capacity, Slab.class);
+        Slab borrowed = pool.borrow(Slab.class, capacity, Slab.class);
         slabStorage = borrowed == null ? new Slab(capacity) : borrowed;
         slab = slabStorage.segment;
     }
@@ -237,7 +236,7 @@ public final class DecompressedPageCache
         admittedSources.clear();
         if (slabStorage != null) {
             slabStorage.finishUse(nextOffset);
-            pool.retain(SLAB_POOL, capacity, capacity, slabStorage);
+            pool.retain(Slab.class, capacity, capacity, slabStorage);
         }
     }
 
