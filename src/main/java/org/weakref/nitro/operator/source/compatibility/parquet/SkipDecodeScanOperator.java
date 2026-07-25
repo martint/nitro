@@ -83,7 +83,7 @@ import static java.util.Objects.requireNonNull;
 public final class SkipDecodeScanOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("SkipDecodeScanOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("SkipDecodeScanOperator", SkipDecodeScanOperator.class);
     private static final String BATCH_SIZE_PROPERTY = System.getProperty("nitro.skipScan.batchSize");
     private static final int BASE_BATCH_SIZE = Math.max(1, Integer.getInteger("nitro.skipScan.batchSize", 8192));
     private static final int FILTERED_BATCH_SIZE = Math.max(1, Integer.getInteger(
@@ -341,7 +341,7 @@ public final class SkipDecodeScanOperator
                 }
             }
         }
-        allocator.release(ALLOCATION_CONTEXT);
+        allocator.release(allocationContext);
     }
 
     private void closeCurrentBatch()
@@ -454,11 +454,11 @@ public final class SkipDecodeScanOperator
         Output[] outputs = new Output[columnCount];
         for (int c = 0; c < columnCount; c++) {
             BooleanVector nullVector = nullable[c]
-                    ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, survivorCount, BooleanVector::new)
+                    ? allocator.allocate(allocationContext, BooleanVector.class, survivorCount, BooleanVector::new)
                     : null;
             boolean[] outNulls = nullVector == null ? null : nullVector.values();
             if (kinds[c] == 1) {
-                I32Vector valueVector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, survivorCount, I32Vector::new);
+                I32Vector valueVector = allocator.allocate(allocationContext, I32Vector.class, survivorCount, I32Vector::new);
                 long[] widened = new long[survivorCount];
                 gather(values[c], nulls[c], readPositions[c], survivors, survivorCount, widened, outNulls);
                 int[] outValues = valueVector.values();
@@ -468,7 +468,7 @@ public final class SkipDecodeScanOperator
                 outputs[c] = output(valueVector, nullVector);
             }
             else {
-                I64Vector valueVector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, survivorCount, I64Vector::new);
+                I64Vector valueVector = allocator.allocate(allocationContext, I64Vector.class, survivorCount, I64Vector::new);
                 long[] outValues = valueVector.values();
                 gather(values[c], nulls[c], readPositions[c], survivors, survivorCount, outValues, outNulls);
                 outputs[c] = output(valueVector, nullVector);
@@ -480,12 +480,12 @@ public final class SkipDecodeScanOperator
     /** Wrap the column outputs in an all-rows batch over {@code count} positions. */
     private Batch buildBatch(Output[] outputs, int count)
     {
-        Mask mask = allocator.allocateAllMask(ALLOCATION_CONTEXT, count);
+        Mask mask = allocator.allocateAllMask(allocationContext, count);
         Batch batch = new Batch(
                 mask,
                 pushed -> {},
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                releasedMask -> allocator.release(ALLOCATION_CONTEXT, releasedMask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                releasedMask -> allocator.release(allocationContext, releasedMask),
                 () -> {},
                 outputs);
         currentBatch = batch;
@@ -500,7 +500,7 @@ public final class SkipDecodeScanOperator
     private Output bridgeFull(int columnIndex, Block block, int count)
     {
         BooleanVector nullVector = nullable[columnIndex]
-                ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, count, BooleanVector::new)
+                ? allocator.allocate(allocationContext, BooleanVector.class, count, BooleanVector::new)
                 : null;
         if (nullVector != null && block.mayHaveNull()) {
             boolean[] outNulls = nullVector.values();
@@ -531,11 +531,11 @@ public final class SkipDecodeScanOperator
             int[] ids = idsOffset == 0 && rawIds.length == count
                     ? rawIds
                     : java.util.Arrays.copyOfRange(rawIds, idsOffset, idsOffset + count);
-            return output(allocator.adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(ids, dictionaryValues)), nullVector);
+            return output(allocator.adopt(allocationContext, DictionaryVector.wrap(ids, dictionaryValues)), nullVector);
         }
         if (block instanceof RunLengthEncodedBlock runLengthBlock) {
             Vector value = convertFlatValues(columnIndex, runLengthBlock.getValue(), 1);
-            return output(allocator.allocateSingleRunRle(ALLOCATION_CONTEXT, count, value), nullVector);
+            return output(allocator.allocateSingleRunRle(allocationContext, count, value), nullVector);
         }
         return output(convertFlatValues(columnIndex, block, count), nullVector);
     }
@@ -546,7 +546,7 @@ public final class SkipDecodeScanOperator
         long[] rawValues = rawValues(block);
         int rawOffset = rawValues == null ? 0 : rawValuesOffset(block);
         if (kinds[columnIndex] == 1) {
-            I32Vector valueVector = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, count, I32Vector::new);
+            I32Vector valueVector = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
             int[] out = valueVector.values();
             if (rawValues != null) {
                 for (int i = 0; i < count; i++) {
@@ -560,7 +560,7 @@ public final class SkipDecodeScanOperator
             }
             return valueVector;
         }
-        I64Vector valueVector = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, count, I64Vector::new);
+        I64Vector valueVector = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
         long[] out = valueVector.values();
         if (rawValues != null) {
             System.arraycopy(rawValues, rawOffset, out, 0, count);
@@ -828,8 +828,8 @@ public final class SkipDecodeScanOperator
                     case NULLS -> requireNonNull(nullVector, "NULLS stream is absent");
                     default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                 },
-                (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+                (stream, vector) -> allocator.transfer(allocationContext, vector),
+                (stream, vector) -> allocator.release(allocationContext, vector));
     }
 
     /**

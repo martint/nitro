@@ -84,7 +84,7 @@ import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 public final class TrinoParquetScanOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("TrinoParquetScanOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("TrinoParquetScanOperator", TrinoParquetScanOperator.class);
     private static final String MAX_BATCH_ROWS_PROPERTY = "nitro.trino.scan.maxBatchRows";
     private static final int DEFAULT_MAX_BATCH_ROWS = 10_000;
     private static final int MAX_BATCH_ROWS = Integer.getInteger(MAX_BATCH_ROWS_PROPERTY, DEFAULT_MAX_BATCH_ROWS);
@@ -309,7 +309,7 @@ public final class TrinoParquetScanOperator
             SourcePage page = nextPage;
             nextPage = null;
             currentBatchState = null;
-            BatchState batchState = new BatchState(page, allocator.allocateAllMask(ALLOCATION_CONTEXT, page.getPositionCount()), columns.size());
+            BatchState batchState = new BatchState(page, allocator.allocateAllMask(allocationContext, page.getPositionCount()), columns.size());
             currentBatchState = batchState;
 
             if (dynamicFilter != null) {
@@ -330,14 +330,14 @@ public final class TrinoParquetScanOperator
                                 default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                             };
                         },
-                        (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                        (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+                        (stream, vector) -> allocator.transfer(allocationContext, vector),
+                        (stream, vector) -> allocator.release(allocationContext, vector));
             }
             Batch batch = new Batch(
                     batchState.mask(),
                     batchState::constrain,
-                    takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                    mask -> allocator.release(ALLOCATION_CONTEXT, mask),
+                    takenMask -> allocator.transfer(allocationContext, takenMask),
+                    mask -> allocator.release(allocationContext, mask),
                     () -> {},
                     outputs);
             currentBatch = batch;
@@ -375,7 +375,7 @@ public final class TrinoParquetScanOperator
                 }
             }
             if (count < batchRows) {
-                batchState.constrain(allocator.allocateSparseMask(ALLOCATION_CONTEXT, survivors, count, batchRows));
+                batchState.constrain(allocator.allocateSparseMask(allocationContext, survivors, count, batchRows));
             }
             dfRowsSeen += batchRows;
             dfRowsKept += count;
@@ -398,7 +398,7 @@ public final class TrinoParquetScanOperator
                 nextPage = null;
                 currentBatchState = null;
                 exhausted = true;
-                allocator.release(ALLOCATION_CONTEXT);
+                allocator.release(allocationContext);
             }
         }
 
@@ -490,7 +490,7 @@ public final class TrinoParquetScanOperator
 
         private ColumnBuffer readFullColumn(ColumnSpec column, Block block)
         {
-            Mask fullMask = allocator.allocateAllMask(ALLOCATION_CONTEXT, block.getPositionCount());
+            Mask fullMask = allocator.allocateAllMask(allocationContext, block.getPositionCount());
             BooleanVector nulls = null;
             try {
                 if (column.nullable()) {
@@ -498,7 +498,7 @@ public final class TrinoParquetScanOperator
                 }
             }
             finally {
-                allocator.release(ALLOCATION_CONTEXT, fullMask);
+                allocator.release(allocationContext, fullMask);
             }
             return new ColumnBuffer(
                     convertValues(column, block, true),
@@ -535,11 +535,11 @@ public final class TrinoParquetScanOperator
                 int[] ids = dictionaryIds(dictionaryBlock);
                 Vector dictionaryValues = convertedDictionaries.computeIfAbsent(dictionaryBlock.getDictionary(),
                         dictionary -> convertValues(column, dictionary, true));
-                return allocator.adopt(ALLOCATION_CONTEXT, DictionaryVector.wrap(ids, dictionaryValues));
+                return allocator.adopt(allocationContext, DictionaryVector.wrap(ids, dictionaryValues));
             }
             if (block instanceof RunLengthEncodedBlock runLengthEncodedBlock) {
                 Vector values = convertValues(column, runLengthEncodedBlock.getValue(), true);
-                return allocator.allocateSingleRunRle(ALLOCATION_CONTEXT, runLengthEncodedBlock.getPositionCount(), values);
+                return allocator.allocateSingleRunRle(allocationContext, runLengthEncodedBlock.getPositionCount(), values);
             }
         }
 
@@ -580,15 +580,15 @@ public final class TrinoParquetScanOperator
     private Vector emptyMaskedValues(ColumnSpec column, int size)
     {
         return switch (column.kind()) {
-            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
-            case DATE -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, size, I32Vector::new);
-            case I64, SHORT_DECIMAL -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new);
+            case I32 -> allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new);
+            case DATE -> allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new);
+            case I64, SHORT_DECIMAL -> allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new);
             case F64 -> rawDoubleBits
-                    ? allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, size, I64Vector::new)
-                    : allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, size, F64Vector::new);
-            case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, size, BooleanVector::new);
+                    ? allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new)
+                    : allocator.allocate(allocationContext, F64Vector.class, size, F64Vector::new);
+            case BOOLEAN -> allocator.allocate(allocationContext, BooleanVector.class, size, BooleanVector::new);
             case BINARY -> {
-                BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, size, 0);
+                BinaryVector values = BinaryVector.allocate(allocator, allocationContext, size, 0);
                 values.addTraits(column.binaryTraits());
                 yield values;
             }
@@ -600,11 +600,11 @@ public final class TrinoParquetScanOperator
         if (block instanceof IntArrayBlock intArrayBlock) {
             int[] rawValues = intArrayBlock.getRawValues();
             if (intArrayBlock.getRawValuesOffset() == 0 && rawValues.length == block.getPositionCount()) {
-                return allocator.adopt(ALLOCATION_CONTEXT, new I32Vector(rawValues));
+                return allocator.adopt(allocationContext, new I32Vector(rawValues));
             }
         }
 
-        I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, block.getPositionCount(), I32Vector::new);
+        I32Vector values = allocator.allocate(allocationContext, I32Vector.class, block.getPositionCount(), I32Vector::new);
         int[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -619,11 +619,11 @@ public final class TrinoParquetScanOperator
         if (block instanceof LongArrayBlock longArrayBlock) {
             long[] rawValues = rawValues(longArrayBlock);
             if (rawValuesOffset(longArrayBlock) == 0 && rawValues.length == block.getPositionCount()) {
-                return allocator.adopt(ALLOCATION_CONTEXT, new I64Vector(rawValues));
+                return allocator.adopt(allocationContext, new I64Vector(rawValues));
             }
         }
 
-        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, block.getPositionCount(), I64Vector::new);
+        I64Vector values = allocator.allocate(allocationContext, I64Vector.class, block.getPositionCount(), I64Vector::new);
         long[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -635,7 +635,7 @@ public final class TrinoParquetScanOperator
 
     private BooleanVector copyBoolean(Block block)
     {
-        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, block.getPositionCount(), BooleanVector::new);
+        BooleanVector values = allocator.allocate(allocationContext, BooleanVector.class, block.getPositionCount(), BooleanVector::new);
         boolean[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -672,7 +672,7 @@ public final class TrinoParquetScanOperator
             }
         }
 
-        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, positionCount, totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
 
         Slice rawSlice = dictionaryValues.getRawSlice();
@@ -700,7 +700,7 @@ public final class TrinoParquetScanOperator
 
     private I32Vector copyMaskedI32(Block block, Mask mask)
     {
-        I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, block.getPositionCount(), I32Vector::new);
+        I32Vector values = allocator.allocate(allocationContext, I32Vector.class, block.getPositionCount(), I32Vector::new);
         int[] output = values.values();
         forEachSelected(mask, position -> {
             if (!block.isNull(position)) {
@@ -733,7 +733,7 @@ public final class TrinoParquetScanOperator
             return null;
         }
 
-        BinaryVector values = allocator.adopt(ALLOCATION_CONTEXT, new BinaryVector(positionCount, rawOffsets, rawSlice.byteArray()));
+        BinaryVector values = allocator.adopt(allocationContext, new BinaryVector(positionCount, rawOffsets, rawSlice.byteArray()));
         values.addTraits(column.binaryTraits());
         return values;
     }
@@ -748,7 +748,7 @@ public final class TrinoParquetScanOperator
         int totalBytes = Math.max(0, lastEnd - firstOffset);
         Slice rawSlice = block.getRawSlice();
 
-        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, positionCount, totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, positionCount, totalBytes);
         values.addTraits(column.binaryTraits());
 
         if (totalBytes > 0) {
@@ -768,7 +768,7 @@ public final class TrinoParquetScanOperator
     /** A Trino DOUBLE block carries raw double bits in long lanes; widen into an F64Vector. */
     private F64Vector copyF64(Block block)
     {
-        F64Vector values = allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, block.getPositionCount(), F64Vector::new);
+        F64Vector values = allocator.allocate(allocationContext, F64Vector.class, block.getPositionCount(), F64Vector::new);
         double[] output = values.values();
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (!block.isNull(position)) {
@@ -780,7 +780,7 @@ public final class TrinoParquetScanOperator
 
     private F64Vector copyMaskedF64(Block block, Mask mask)
     {
-        F64Vector values = allocator.allocate(ALLOCATION_CONTEXT, F64Vector.class, block.getPositionCount(), F64Vector::new);
+        F64Vector values = allocator.allocate(allocationContext, F64Vector.class, block.getPositionCount(), F64Vector::new);
         double[] output = values.values();
         forEachSelected(mask, position -> {
             if (!block.isNull(position)) {
@@ -792,7 +792,7 @@ public final class TrinoParquetScanOperator
 
     private I64Vector copyMaskedI64(Block block, Mask mask)
     {
-        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, block.getPositionCount(), I64Vector::new);
+        I64Vector values = allocator.allocate(allocationContext, I64Vector.class, block.getPositionCount(), I64Vector::new);
         long[] output = values.values();
         forEachSelected(mask, position -> {
             if (!block.isNull(position)) {
@@ -804,7 +804,7 @@ public final class TrinoParquetScanOperator
 
     private BooleanVector copyMaskedBoolean(Block block, Mask mask)
     {
-        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, block.getPositionCount(), BooleanVector::new);
+        BooleanVector values = allocator.allocate(allocationContext, BooleanVector.class, block.getPositionCount(), BooleanVector::new);
         boolean[] output = values.values();
         forEachSelected(mask, position -> {
             if (!block.isNull(position)) {
@@ -817,7 +817,7 @@ public final class TrinoParquetScanOperator
     private BinaryVector copyMaskedBinary(ColumnSpec column, Block block, Mask mask)
     {
         int totalBytes = selectedBinaryBytes(block, mask);
-        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, block.getPositionCount(), totalBytes);
+        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, block.getPositionCount(), totalBytes);
         values.addTraits(column.binaryTraits());
         int[] currentOffset = {0};
         forEachSelected(mask, position -> {
@@ -847,7 +847,7 @@ public final class TrinoParquetScanOperator
     private BooleanVector copyNulls(Block block, Mask mask)
     {
         int positionCount = block.getPositionCount();
-        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, positionCount, BooleanVector::new);
+        BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, positionCount, BooleanVector::new);
         if (!block.mayHaveNull()) {
             return nulls;
         }
@@ -903,7 +903,7 @@ public final class TrinoParquetScanOperator
 
     private BooleanVector selectedNulls(Mask mask)
     {
-        BooleanVector nulls = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, mask.size(), BooleanVector::new);
+        BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, mask.size(), BooleanVector::new);
         boolean[] output = nulls.values();
         forEachSelected(mask, position -> output[position] = true);
         return nulls;

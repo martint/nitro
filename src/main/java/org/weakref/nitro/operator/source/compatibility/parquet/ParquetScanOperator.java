@@ -79,7 +79,7 @@ import static org.apache.parquet.schema.Type.Repetition.REQUIRED;
 public final class ParquetScanOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("ParquetScanOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("ParquetScanOperator", ParquetScanOperator.class);
     private static final int MAX_BATCH_ROWS = 512;
 
     private final Allocator allocator;
@@ -152,7 +152,7 @@ public final class ParquetScanOperator
                 batchRowCount,
                 currentRowGroupColumnPages,
                 currentRowGroupNestedColumnPages,
-                allocator.allocateAllMask(ALLOCATION_CONTEXT, batchRowCount));
+                allocator.allocateAllMask(allocationContext, batchRowCount));
         currentBatchState = batchState;
 
         Output[] outputs = new Output[columns.size()];
@@ -169,9 +169,9 @@ public final class ParquetScanOperator
                             default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                         };
                     },
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector));
         }
-        return new Batch(batchState.mask(), batchState::constrain, takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask), outputs);
+        return new Batch(batchState.mask(), batchState::constrain, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
     }
 
     @Override
@@ -207,7 +207,7 @@ public final class ParquetScanOperator
             throw new UncheckedIOException("Unable to close Parquet file reader", exception);
         }
         finally {
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 
@@ -502,7 +502,7 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readArrayI64Column(ColumnSpec column, ColumnPages columnPages, int rowGroupRowCount, int startRow, int rowCount, Mask mask)
     {
-        ArrayVector values = allocator.allocateArray(ALLOCATION_CONTEXT, rowCount);
+        ArrayVector values = allocator.allocateArray(allocationContext, rowCount);
         String columnName = column.name();
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
@@ -528,8 +528,8 @@ public final class ParquetScanOperator
             offsets[position + 1] = elementCount;
         }
 
-        I64Vector elementValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, elementCount, I64Vector::new);
-        BooleanVector elementNulls = column.elementNullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, elementCount, BooleanVector::new) : null;
+        I64Vector elementValues = allocator.allocate(allocationContext, I64Vector.class, elementCount, I64Vector::new);
+        BooleanVector elementNulls = column.elementNullable() ? allocator.allocate(allocationContext, BooleanVector.class, elementCount, BooleanVector::new) : null;
         recordReader = columnIo.getRecordReader(
                 new ReplayPageReadStore(rowGroupRowCount, List.of(columnPages)),
                 new GroupRecordConverter(projectedSchema));
@@ -571,8 +571,8 @@ public final class ParquetScanOperator
     {
         checkArgument(column.mapSpec() != null, "Map column is missing map metadata: %s", column.name());
 
-        MapVector values = allocator.allocateMap(ALLOCATION_CONTEXT, rowCount);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        MapVector values = allocator.allocateMap(allocationContext, rowCount);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
 
@@ -621,18 +621,18 @@ public final class ParquetScanOperator
         }
 
         Vector keyValues = switch (column.mapSpec().key().kind()) {
-            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
-            case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
-            case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, entryCount, keyBinaryCapacity);
+            case I32 -> allocator.allocate(allocationContext, I32Vector.class, entryCount, I32Vector::new);
+            case I64 -> allocator.allocate(allocationContext, I64Vector.class, entryCount, I64Vector::new);
+            case BINARY -> BinaryVector.allocate(allocator, allocationContext, entryCount, keyBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map key kind: " + column.mapSpec().key().kind());
         };
         Vector valueValues = switch (column.mapSpec().value().kind()) {
-            case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, entryCount, I32Vector::new);
-            case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, entryCount, I64Vector::new);
-            case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, entryCount, valueBinaryCapacity);
+            case I32 -> allocator.allocate(allocationContext, I32Vector.class, entryCount, I32Vector::new);
+            case I64 -> allocator.allocate(allocationContext, I64Vector.class, entryCount, I64Vector::new);
+            case BINARY -> BinaryVector.allocate(allocator, allocationContext, entryCount, valueBinaryCapacity);
             default -> throw new IllegalArgumentException("Unsupported map value kind: " + column.mapSpec().value().kind());
         };
-        BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, entryCount, BooleanVector::new) : null;
+        BooleanVector valueNulls = column.mapSpec().value().nullable() ? allocator.allocate(allocationContext, BooleanVector.class, entryCount, BooleanVector::new) : null;
 
         recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowGroupRowCount, mapPages), new GroupRecordConverter(projectedSchema));
         skipRecords(recordReader, startRow);
@@ -699,8 +699,8 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readStructColumn(ColumnSpec column, List<ColumnPages> fieldPages, int rowGroupRowCount, int startRow, int rowCount, Mask mask)
     {
-        StructVector values = allocator.allocate(ALLOCATION_CONTEXT, StructVector.class, rowCount, StructVector::new);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        StructVector values = allocator.allocate(allocationContext, StructVector.class, rowCount, StructVector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         MessageType projectedSchema = new MessageType(schema.getName(), column.projectedType());
         MessageColumnIO columnIo = new ColumnIOFactory().getColumnIO(projectedSchema);
         ReplayPageReadStore replayPageStore = new ReplayPageReadStore(rowGroupRowCount, fieldPages);
@@ -740,13 +740,13 @@ public final class ParquetScanOperator
         for (int fieldIndex = 0; fieldIndex < column.structFields().size(); fieldIndex++) {
             StructFieldSpec field = column.structFields().get(fieldIndex);
             fieldValues[fieldIndex] = switch (field.kind()) {
-                case I32 -> allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
-                case I64 -> allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
-                case BOOLEAN -> allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
-                case BINARY -> BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, binaryCapacities[fieldIndex]);
+                case I32 -> allocator.allocate(allocationContext, I32Vector.class, rowCount, I32Vector::new);
+                case I64 -> allocator.allocate(allocationContext, I64Vector.class, rowCount, I64Vector::new);
+                case BOOLEAN -> allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
+                case BINARY -> BinaryVector.allocate(allocator, allocationContext, rowCount, binaryCapacities[fieldIndex]);
                 default -> throw new IllegalArgumentException("Unsupported struct field kind: " + field.kind());
             };
-            fieldNulls[fieldIndex] = field.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            fieldNulls[fieldIndex] = field.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         }
 
         recordReader = columnIo.getRecordReader(new ReplayPageReadStore(rowGroupRowCount, fieldPages), new GroupRecordConverter(projectedSchema));
@@ -830,14 +830,14 @@ public final class ParquetScanOperator
 
         try {
             Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage());
-            I32Vector dictionaryValues = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, columnPages.dictionaryPage().getDictionarySize(), I32Vector::new);
+            I32Vector dictionaryValues = allocator.allocate(allocationContext, I32Vector.class, columnPages.dictionaryPage().getDictionarySize(), I32Vector::new);
             int[] dictionaryEntries = dictionaryValues.values();
             for (int index = 0; index < dictionaryEntries.length; index++) {
                 dictionaryEntries[index] = dictionary.decodeToInt(index);
             }
 
             int[] ids = new int[rowCount];
-            BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
             int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
             if (mask.all()) {
@@ -895,7 +895,7 @@ public final class ParquetScanOperator
                     columnReader.consume();
                 }
             }
-            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
+            return new ColumnBuffer(allocator.allocateDictionary(allocationContext, ids, dictionaryValues), nulls);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
@@ -904,8 +904,8 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readFlatI32Column(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
     {
-        I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        I32Vector values = allocator.allocate(allocationContext, I32Vector.class, rowCount, I32Vector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         int[] outputValues = values.values();
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
@@ -998,14 +998,14 @@ public final class ParquetScanOperator
 
         try {
             Dictionary dictionary = columnPages.dictionaryPage().getEncoding().initDictionary(column.descriptor(), columnPages.dictionaryPage());
-            I64Vector dictionaryValues = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, columnPages.dictionaryPage().getDictionarySize(), I64Vector::new);
+            I64Vector dictionaryValues = allocator.allocate(allocationContext, I64Vector.class, columnPages.dictionaryPage().getDictionarySize(), I64Vector::new);
             long[] dictionaryEntries = dictionaryValues.values();
             for (int index = 0; index < dictionaryEntries.length; index++) {
                 dictionaryEntries[index] = dictionary.decodeToLong(index);
             }
 
             int[] ids = new int[rowCount];
-            BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
             int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
             if (mask.all()) {
@@ -1063,7 +1063,7 @@ public final class ParquetScanOperator
                     columnReader.consume();
                 }
             }
-            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
+            return new ColumnBuffer(allocator.allocateDictionary(allocationContext, ids, dictionaryValues), nulls);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
@@ -1072,8 +1072,8 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readFlatI64Column(ColumnSpec column, int rowCount, ColumnReader columnReader, Mask mask)
     {
-        I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        I64Vector values = allocator.allocate(allocationContext, I64Vector.class, rowCount, I64Vector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         long[] outputValues = values.values();
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
@@ -1138,8 +1138,8 @@ public final class ParquetScanOperator
     private ColumnBuffer readBooleanColumn(ColumnSpec column, int startRow, int rowCount, ColumnReader columnReader, Mask mask)
     {
         skipColumnEntries(columnReader, startRow);
-        BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        BooleanVector values = allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputValues = values.values();
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
@@ -1221,7 +1221,7 @@ public final class ParquetScanOperator
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryByteCapacity += dictionary.decodeToBinary(index).length();
             }
-            BinaryVector dictionaryValues = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, columnPages.dictionaryPage().getDictionarySize(), dictionaryByteCapacity);
+            BinaryVector dictionaryValues = BinaryVector.allocate(allocator, allocationContext, columnPages.dictionaryPage().getDictionarySize(), dictionaryByteCapacity);
             for (int index = 0; index < columnPages.dictionaryPage().getDictionarySize(); index++) {
                 dictionaryValues.setBytes(index, dictionary.decodeToBinary(index).getBytesUnsafe());
             }
@@ -1229,7 +1229,7 @@ public final class ParquetScanOperator
 
             ColumnReader columnReader = createColumnReader(columnPages, startRow);
             int[] ids = new int[rowCount];
-            BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] outputNulls = nulls == null ? null : nulls.values();
             int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
             if (mask.all()) {
@@ -1287,7 +1287,7 @@ public final class ParquetScanOperator
                     columnReader.consume();
                 }
             }
-            return new ColumnBuffer(allocator.allocateDictionary(ALLOCATION_CONTEXT, ids, dictionaryValues), nulls);
+            return new ColumnBuffer(allocator.allocateDictionary(allocationContext, ids, dictionaryValues), nulls);
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to decode Parquet dictionary", exception);
@@ -1296,8 +1296,8 @@ public final class ParquetScanOperator
 
     private ColumnBuffer readFlatBinaryColumn(ColumnSpec column, int rowCount, int byteCapacity, ColumnReader columnReader, Mask mask)
     {
-        BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, byteCapacity);
-        BooleanVector nulls = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+        BinaryVector values = BinaryVector.allocate(allocator, allocationContext, rowCount, byteCapacity);
+        BooleanVector nulls = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
         boolean[] outputNulls = nulls == null ? null : nulls.values();
         int maxDefinitionLevel = column.descriptor().getMaxDefinitionLevel();
         if (mask.all()) {

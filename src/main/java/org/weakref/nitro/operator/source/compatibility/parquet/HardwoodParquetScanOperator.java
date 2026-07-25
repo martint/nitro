@@ -57,7 +57,7 @@ import static java.util.Objects.requireNonNull;
 public final class HardwoodParquetScanOperator
         implements Operator
 {
-    private static final Allocator.Context ALLOCATION_CONTEXT = new Allocator.Context("HardwoodParquetScanOperator");
+    private final Allocator.Context allocationContext = new Allocator.Context("HardwoodParquetScanOperator", HardwoodParquetScanOperator.class);
     private static final int MAX_BATCH_ROWS = 512;
 
     private final Allocator allocator;
@@ -144,7 +144,7 @@ public final class HardwoodParquetScanOperator
         int rowCount = Math.min(MAX_BATCH_ROWS, totalRows - batchStart);
         nextBatchStart += rowCount;
 
-        BatchState batchState = new BatchState(batchStart, rowCount, allocator.allocateAllMask(ALLOCATION_CONTEXT, rowCount));
+        BatchState batchState = new BatchState(batchStart, rowCount, allocator.allocateAllMask(allocationContext, rowCount));
         currentBatchState = batchState;
 
         Output[] outputs = new Output[columns.size()];
@@ -161,14 +161,14 @@ public final class HardwoodParquetScanOperator
                             default -> throw new IllegalArgumentException("Output does not expose stream: " + stream);
                         };
                     },
-                    (stream, vector) -> allocator.transfer(ALLOCATION_CONTEXT, vector),
-                    (stream, vector) -> allocator.release(ALLOCATION_CONTEXT, vector));
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
         }
         Batch batch = new Batch(
                 batchState.mask(),
                 batchState::constrain,
-                takenMask -> allocator.transfer(ALLOCATION_CONTEXT, takenMask),
-                mask -> allocator.release(ALLOCATION_CONTEXT, mask),
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                mask -> allocator.release(allocationContext, mask),
                 () -> {},
                 outputs);
         currentBatch = batch;
@@ -216,7 +216,7 @@ public final class HardwoodParquetScanOperator
             throw new RuntimeException("Unable to close Hardwood Parquet reader", exception);
         }
         finally {
-            allocator.release(ALLOCATION_CONTEXT);
+            allocator.release(allocationContext);
         }
     }
 
@@ -314,8 +314,8 @@ public final class HardwoodParquetScanOperator
 
         private ColumnBuffer readI32Batch(int rowCount, Mask mask)
         {
-            I32Vector values = allocator.allocate(ALLOCATION_CONTEXT, I32Vector.class, rowCount, I32Vector::new);
-            BooleanVector nullVector = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            I32Vector values = allocator.allocate(allocationContext, I32Vector.class, rowCount, I32Vector::new);
+            BooleanVector nullVector = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             int[] result = values.values();
             int selectedIndex = 0;
@@ -342,8 +342,8 @@ public final class HardwoodParquetScanOperator
 
         private ColumnBuffer readI64Batch(int rowCount, Mask mask)
         {
-            I64Vector values = allocator.allocate(ALLOCATION_CONTEXT, I64Vector.class, rowCount, I64Vector::new);
-            BooleanVector nullVector = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            I64Vector values = allocator.allocate(allocationContext, I64Vector.class, rowCount, I64Vector::new);
+            BooleanVector nullVector = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             long[] result = values.values();
             int selectedIndex = 0;
@@ -370,8 +370,8 @@ public final class HardwoodParquetScanOperator
 
         private ColumnBuffer readBooleanBatch(int rowCount, Mask mask)
         {
-            BooleanVector values = allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new);
-            BooleanVector nullVector = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            BooleanVector values = allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
+            BooleanVector nullVector = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             boolean[] result = values.values();
             int selectedIndex = 0;
@@ -398,9 +398,9 @@ public final class HardwoodParquetScanOperator
 
         private ColumnBuffer readBinaryBatch(int rowCount, Mask mask)
         {
-            BinaryVector values = BinaryVector.allocate(allocator, ALLOCATION_CONTEXT, rowCount, 0);
+            BinaryVector values = BinaryVector.allocate(allocator, allocationContext, rowCount, 0);
             values.addTraits(column.binaryTraits());
-            BooleanVector nullVector = column.nullable() ? allocator.allocate(ALLOCATION_CONTEXT, BooleanVector.class, rowCount, BooleanVector::new) : null;
+            BooleanVector nullVector = column.nullable() ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             int selectedIndex = 0;
             int totalBytes = 0;
@@ -421,7 +421,7 @@ public final class HardwoodParquetScanOperator
                 byte[] value = binaries[batchValuePosition];
                 if (selected) {
                     totalBytes += value.length;
-                    values = BinaryVector.allocateOrGrow(allocator, ALLOCATION_CONTEXT, values, rowCount, totalBytes);
+                    values = BinaryVector.allocateOrGrow(allocator, allocationContext, values, rowCount, totalBytes);
                     values.setBytes(position, value);
                 }
                 else {
