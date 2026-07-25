@@ -3525,7 +3525,7 @@ public class HashJoinOperator
             if (streams.contains(Stream.ERRORS) && sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
                 knownFlags |= ERRORS_FLAG;
             }
-            return Streams.streamSet(knownFlags);
+            return Output.streamSet(knownFlags);
         }
 
         int innerOutputIndex = outputIndex - outerOutputCount;
@@ -3535,7 +3535,7 @@ public class HashJoinOperator
         if (streams.contains(Stream.ERRORS) && bufferedInner.outputKnownAllFalse(innerOutputIndex, Stream.ERRORS)) {
             knownFlags |= ERRORS_FLAG;
         }
-        return Streams.streamSet(knownFlags);
+        return Output.streamSet(knownFlags);
     }
 
     private boolean innerOutputKnownAllFalseNulls(int innerOutputIndex)

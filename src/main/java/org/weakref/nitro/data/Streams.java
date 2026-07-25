@@ -202,16 +202,6 @@ public final class Streams
         return STREAM_SETS[flags];
     }
 
-    public static Set<Stream> streamSet(int flags)
-    {
-        return STREAM_SETS[flags];
-    }
-
-    int flags()
-    {
-        return flags;
-    }
-
     /** Number of present vectors in VALUES, NULLS, ERRORS order. */
     public int vectorCount()
     {

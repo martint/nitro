@@ -19,6 +19,8 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -68,8 +70,23 @@ public final class Output
 
     static {
         for (int flags = 0; flags < STREAM_SETS.length; flags++) {
-            STREAM_SETS[flags] = Streams.streamSet(flags);
+            EnumSet<Stream> streams = EnumSet.noneOf(Stream.class);
+            if ((flags & VALUES_FLAG) != 0) {
+                streams.add(Stream.VALUES);
+            }
+            if ((flags & NULLS_FLAG) != 0) {
+                streams.add(Stream.NULLS);
+            }
+            if ((flags & ERRORS_FLAG) != 0) {
+                streams.add(Stream.ERRORS);
+            }
+            STREAM_SETS[flags] = Collections.unmodifiableSet(streams);
         }
+    }
+
+    static Set<Stream> streamSet(int flags)
+    {
+        return STREAM_SETS[flags];
     }
 
     private final int exposedFlags;
