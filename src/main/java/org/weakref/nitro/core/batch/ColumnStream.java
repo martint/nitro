@@ -11,13 +11,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.core.batch;
 
-/**
- * Marker interface for vectors whose primary representation is a direct flat layout rather than an
- * indirection wrapper such as dictionary or run-length encoding.
- */
-public interface FlatVector
-        extends Vector
+/// Structural streams exposed by one source column.
+///
+/// `VALUES` uses a representation admitted by the column's [TypeBinding]. `NULLS` and
+/// `ERRORS`, when present, are boolean-valued Nitro vectors and may themselves be encoded.
+public enum ColumnStream
 {
+    VALUES,
+    NULLS,
+    ERRORS,
 }

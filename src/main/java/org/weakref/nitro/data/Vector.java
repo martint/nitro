@@ -30,8 +30,7 @@ import java.util.function.Consumer;
  * </ul>
  * Generic operators should prefer these hooks over branching on concrete vector classes.
  */
-public sealed interface Vector
-        permits ConcatenatedBooleanVector, DictionaryVector, FlatVector, RleVector
+public interface Vector
 {
     /**
      * Returns the logical row count represented by this vector.

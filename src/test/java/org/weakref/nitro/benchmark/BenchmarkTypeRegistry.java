@@ -17,7 +17,16 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.core.type.TypeRegistry;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Vector;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -51,41 +60,72 @@ public final class BenchmarkTypeRegistry
     {
         String value = identity.value();
         Class<?> carrierType;
+        Class<? extends Vector> flatVectorType;
         if (value.equals(DOUBLE)) {
             carrierType = double.class;
+            flatVectorType = F64Vector.class;
         }
         else if (value.equals(BOOLEAN)) {
             carrierType = boolean.class;
+            flatVectorType = BooleanVector.class;
         }
         else if (value.equals(VARCHAR) || value.startsWith("benchmark:varchar(") || value.startsWith("benchmark:char(")) {
             carrierType = byte[].class;
+            flatVectorType = BinaryVector.class;
+        }
+        else if (value.equals(INTEGER)) {
+            carrierType = long.class;
+            flatVectorType = I32Vector.class;
         }
         else if (value.equals(BIGINT) ||
-                value.equals(INTEGER) ||
                 value.equals(DATE) ||
                 value.equals(TIME) ||
                 value.startsWith("benchmark:decimal(")) {
             carrierType = long.class;
+            flatVectorType = I64Vector.class;
         }
         else {
             throw new IllegalArgumentException("Unknown benchmark type identity: " + value);
         }
-        return new RegistryTypeBinding(identity, carrierType);
+        return new RegistryTypeBinding(identity, carrierType, flatVectorType);
     }
 
-    private record RegistryTypeBinding(TypeIdentity identity, Class<?> carrierType)
+    private record RegistryTypeBinding(TypeIdentity identity, Class<?> carrierType, Class<? extends Vector> flatVectorType)
             implements TypeBinding
     {
         private RegistryTypeBinding
         {
             requireNonNull(identity, "identity is null");
             requireNonNull(carrierType, "carrierType is null");
+            requireNonNull(flatVectorType, "flatVectorType is null");
         }
 
         @Override
         public TypeOperators operators()
         {
             return TypeOperators.UNSPECIFIED;
+        }
+
+        @Override
+        public Set<Class<? extends Vector>> supportedVectorTypes()
+        {
+            return Set.of(flatVectorType, DictionaryVector.class, RleVector.class);
+        }
+
+        @Override
+        public boolean supportsVector(Vector vector)
+        {
+            requireNonNull(vector, "vector is null");
+            if (flatVectorType.isInstance(vector)) {
+                return true;
+            }
+            if (vector instanceof DictionaryVector dictionary) {
+                return supportsVector(dictionary.values());
+            }
+            if (vector instanceof RleVector rle) {
+                return supportsVector(rle.values());
+            }
+            return false;
         }
     }
 }

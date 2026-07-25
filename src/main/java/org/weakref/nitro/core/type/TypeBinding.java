@@ -13,6 +13,12 @@
  */
 package org.weakref.nitro.core.type;
 
+import org.weakref.nitro.data.Vector;
+
+import java.util.Set;
+
+import static java.util.Objects.requireNonNull;
+
 /// A plan-time logical type binding.
 ///
 /// Bindings are supplied dynamically by the embedding type registry. Operators carry them but do
@@ -24,4 +30,21 @@ public interface TypeBinding
     Class<?> carrierType();
 
     TypeOperators operators();
+
+    /// Vector representations this type provider permits at an SPI boundary.
+    ///
+    /// The set is descriptive metadata for connectors and integration adapters. A provider can
+    /// override [#supportsVector(Vector)] when validity also depends on nested representation.
+    /// An empty set is retained only for legacy bindings and is not eligible for direct vector
+    /// source ingress.
+    default Set<Class<? extends Vector>> supportedVectorTypes()
+    {
+        return Set.of();
+    }
+
+    default boolean supportsVector(Vector vector)
+    {
+        requireNonNull(vector, "vector is null");
+        return supportedVectorTypes().stream().anyMatch(type -> type.isInstance(vector));
+    }
 }

@@ -17,6 +17,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -26,6 +31,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestBenchmarkSchemaRegistry
 {
     private final BenchmarkSchemaRegistry schemas = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
+
+    @Test
+    void testTypeBindingsDeclareConnectorVectorContracts()
+    {
+        BenchmarkTypeRegistry types = new BenchmarkTypeRegistry();
+
+        assertThat(types.resolve(new TypeIdentity(BenchmarkTypeRegistry.BIGINT)).supportedVectorTypes())
+                .contains(I64Vector.class);
+        assertThat(types.resolve(new TypeIdentity(BenchmarkTypeRegistry.INTEGER)).supportedVectorTypes())
+                .contains(I32Vector.class);
+        assertThat(types.resolve(new TypeIdentity(BenchmarkTypeRegistry.DOUBLE)).supportedVectorTypes())
+                .contains(F64Vector.class);
+        assertThat(types.resolve(new TypeIdentity(BenchmarkTypeRegistry.VARCHAR)).supportedVectorTypes())
+                .contains(BinaryVector.class);
+    }
 
     @Test
     void testTpchSchemaUsesCatalogBindings()

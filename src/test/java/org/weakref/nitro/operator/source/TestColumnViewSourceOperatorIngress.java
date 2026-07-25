@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.source;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.ColumnCapability;
 import org.weakref.nitro.core.batch.ColumnEncoding;
+import org.weakref.nitro.core.batch.ColumnStream;
 import org.weakref.nitro.core.batch.ColumnTraits;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
@@ -199,6 +200,24 @@ class TestColumnViewSourceOperatorIngress
         public ColumnTraits traits()
         {
             return new ColumnTraits(ColumnEncoding.FLAT, false, true, true);
+        }
+
+        @Override
+        public Set<ColumnStream> streams()
+        {
+            return Set.of(ColumnStream.VALUES);
+        }
+
+        @Override
+        public org.weakref.nitro.data.Vector borrow(ColumnStream stream)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public org.weakref.nitro.data.Vector take(ColumnStream stream)
+        {
+            throw new UnsupportedOperationException();
         }
 
         @Override

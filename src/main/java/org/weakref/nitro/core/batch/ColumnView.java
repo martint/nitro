@@ -14,8 +14,10 @@
 package org.weakref.nitro.core.batch;
 
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Vector;
 
 import java.util.Optional;
+import java.util.Set;
 
 /// Read-only, lazily materializable column boundary.
 ///
@@ -28,6 +30,18 @@ public interface ColumnView
     int positionCount();
 
     ColumnTraits traits();
+
+    /// Immutable set of streams exposed for this view generation.
+    Set<ColumnStream> streams();
+
+    /// Borrows a vector owned by the current source-batch generation.
+    Vector borrow(ColumnStream stream);
+
+    /// Transfers ownership of a vector out of the current source-batch generation.
+    ///
+    /// A stream may be borrowed immediately before it is taken. The transfer must detach that
+    /// stream from the source generation so [SourceBatch#close()] does not release it.
+    Vector take(ColumnStream stream);
 
     default <T> Optional<T> capability(ColumnCapability<T> capability)
     {

@@ -125,6 +125,11 @@ java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
   Source `Selection` carries the complete physical `positionCount`; never infer
   it from the greatest selected row. Generic mask translation uses the
   constructed, allocator-owned `AllocatedSelectionOperatorIngress`.
+  Nitro `Vector` representations and allocator ownership are connector SPI.
+  Each `TypeBinding` declares its supported vector classes; `ColumnView`
+  exposes borrow/take stream ownership, and `VectorColumnViewOperatorIngress`
+  maps those vectors to private operator outputs without connector knowledge of
+  `Output`, `Batch`, evaluator IR, or Trino Page/Block types.
 - **Filter / project / shape**: `FilterOperator`, `ProjectOperator`,
   `LimitOperator`, `OffsetOperator`, `TopNOperator`, `TopNRankingOperator`,
   `MarkDistinctOperator`, `EnforceSingleRowOperator`, `MaterializeOperator`,
