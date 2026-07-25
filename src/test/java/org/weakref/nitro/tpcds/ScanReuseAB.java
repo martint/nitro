@@ -24,6 +24,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
 import java.nio.file.Path;
@@ -71,7 +72,7 @@ public final class ScanReuseAB
         long sum = 0;
         try (Operator operator = switch (mode) {
             case "hardwood" -> new HardwoodParquetScanOperator(allocator, files, COLUMNS);
-            case "nitro" -> new NitroParquetScanOperator(allocator, files, COLUMNS);
+            case "nitro" -> new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, files, COLUMNS);
             default -> new TrinoParquetScanOperator(allocator, files, COLUMNS);
         }) {
             int columnCount = operator.outputCount();

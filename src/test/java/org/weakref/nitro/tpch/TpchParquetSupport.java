@@ -1722,7 +1722,11 @@ final class TpchParquetSupport
     private static Operator scannedTable(Allocator allocator, TpchParquetTables tables, String tableName, String... columns)
     {
         List<String> columnNames = List.of(columns);
-        Operator decoder = new NitroParquetScanOperator(allocator, tables.tableFiles(tableName), columnNames);
+        Operator decoder = new NitroParquetScanOperator(
+                tables.scanResources(),
+                allocator,
+                tables.tableFiles(tableName),
+                columnNames);
         return new BatchSourceOperator(
                 new OperatorBatchSource(decoder, SCHEMAS.tpch(tableName, columnNames)),
                 new NativeSourceOperatorIngress());

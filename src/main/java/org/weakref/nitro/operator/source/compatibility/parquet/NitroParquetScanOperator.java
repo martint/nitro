@@ -53,9 +53,6 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetScanOperator
         implements Operator
 {
-    private static final Object BUFFER_POOL = new Object();
-    private static final Object DECOMPRESSED_PAGE_CACHE = new Object();
-    private static final Object DIRECT_NUMERIC_BATCH_DECODE_ADMISSION = new Object();
     private static final boolean SHARED_DECOMPRESSED_PAGES =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.sharedDecompressedPages", "true"));
     // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
@@ -322,17 +319,6 @@ public final class NitroParquetScanOperator
     private final boolean[][] directNullScratch;
     private final boolean[] directNullResolved;
     private final long[] directNullPendingAdvance;
-
-    public NitroParquetScanOperator(Allocator allocator, List<Path> paths, List<String> columns)
-    {
-        this(
-                allocator,
-                paths,
-                columns,
-                BUFFER_POOL,
-                DECOMPRESSED_PAGE_CACHE,
-                DIRECT_NUMERIC_BATCH_DECODE_ADMISSION);
-    }
 
     public NitroParquetScanOperator(
             NitroParquetScanResources resources,

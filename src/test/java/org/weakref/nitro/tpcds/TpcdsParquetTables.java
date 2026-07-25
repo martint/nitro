@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.tpcds;
 
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -35,6 +37,7 @@ public final class TpcdsParquetTables
 
     private final Path rootDirectory;
     private final String schema;
+    private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
     private final Map<String, List<Path>> tableFiles = new HashMap<>();
 
     private TpcdsParquetTables(Path rootDirectory, String schema)
@@ -96,6 +99,11 @@ public final class TpcdsParquetTables
     public Path schemaDirectory()
     {
         return rootDirectory.resolve(schema);
+    }
+
+    public NitroParquetScanResources scanResources()
+    {
+        return scanResources;
     }
 
     public Path tableDirectory(String tableName)

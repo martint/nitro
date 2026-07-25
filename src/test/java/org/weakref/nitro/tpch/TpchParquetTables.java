@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.tpch;
 
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.tpcds.ParquetTables;
 
 import java.io.IOException;
@@ -35,6 +36,7 @@ public final class TpchParquetTables
 
     private final Path rootDirectory;
     private final String schema;
+    private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
 
     private TpchParquetTables(Path rootDirectory, String schema)
     {
@@ -80,6 +82,11 @@ public final class TpchParquetTables
     public Path schemaDirectory()
     {
         return rootDirectory.resolve(schema);
+    }
+
+    public NitroParquetScanResources scanResources()
+    {
+        return scanResources;
     }
 
     @Override

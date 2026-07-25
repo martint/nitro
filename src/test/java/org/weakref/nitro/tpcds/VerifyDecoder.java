@@ -26,6 +26,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
 import java.nio.file.Path;
@@ -48,7 +49,7 @@ public final class VerifyDecoder
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         List<Path> files = tables.tableFiles(table);
 
-        long[][] nitro = digest(new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
+        long[][] nitro = digest(new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), files, columns), columns.size());
         long[][] trino = digest(new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
 
         if (nitro[0][0] != trino[0][0]) {

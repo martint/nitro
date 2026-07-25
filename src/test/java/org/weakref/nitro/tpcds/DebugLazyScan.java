@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 
 import java.util.List;
 
@@ -47,7 +48,7 @@ public final class DebugLazyScan
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         // Large multi-page constrained FACT scan: filter on ss_quantity, masked-read nullable ss_customer_sk.
-        Operator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
+        Operator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
 
         Variable literal = new Variable(0);
         Variable greater = new Variable(1);

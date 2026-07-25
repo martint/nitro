@@ -4353,6 +4353,7 @@ final class TpcdsParquetSupport
         SCAN_COUNT.incrementAndGet();
         List<String> columnNames = List.of(columns);
         Operator decoder = new NitroParquetScanOperator(
+                tables.scanResources(),
                 allocator,
                 tables.tableFiles(tableName),
                 columnNames);

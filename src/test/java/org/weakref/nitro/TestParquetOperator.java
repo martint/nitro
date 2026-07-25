@@ -143,7 +143,7 @@ public class TestParquetOperator
                 new Field("x", BIGINT, false),
                 new Field("maybe", BIGINT, true)));
         Operator ingress = new BatchSourceOperator(new OperatorBatchSource(
-                new NitroParquetScanOperator(allocator, List.of(file), List.of("x", "maybe")),
+                new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, List.of(file), List.of("x", "maybe")),
                 inputSchema), new NativeSourceOperatorIngress());
         assertThat(ingress.outputSchema()).isEqualTo(inputSchema);
         assertThat(ingress.supportsDynamicFilterPushdown(0)).isTrue();
@@ -199,6 +199,7 @@ public class TestParquetOperator
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                new NitroParquetScanResources(),
                 allocator,
                 List.of(file),
                 List.of("key", "p1", "p2", "p3", "p4"))) {
@@ -229,7 +230,7 @@ public class TestParquetOperator
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("direct-null-mask-test");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, List.of(file), List.of("maybe"))) {
             Batch batch = scan.next();
             Mask nullMask = batch.output(0).tryBorrowMask(
                     Stream.NULLS,
@@ -263,7 +264,7 @@ public class TestParquetOperator
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("direct-null-mask-skipped-batch-test");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(allocator, List.of(first, second), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, List.of(first, second), List.of("maybe"))) {
             Batch skipped = scan.next();
             assertThat(skipped.borrowMask()).hasSize(10_000);
 
@@ -301,6 +302,7 @@ public class TestParquetOperator
         assertDictionaryEncoding(first, "maybe");
 
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                new NitroParquetScanResources(),
                 new Allocator(EngineResources.createDefault()),
                 List.of(first, second),
                 List.of("x", "maybe"))) {
@@ -482,7 +484,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-filter.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(1_200);
@@ -515,6 +517,7 @@ public class TestParquetOperator
 
         int actual = 0;
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                new NitroParquetScanResources(),
                 new Allocator(EngineResources.createDefault()),
                 List.of(file),
                 List.of("x", "maybe"))) {
@@ -640,7 +643,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-homogeneous-runs.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(4_500);
@@ -1233,7 +1236,7 @@ public class TestParquetOperator
         assertDictionaryEncoding(second, "name");
 
         org.weakref.nitro.data.Vector retained;
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("name"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("name"))) {
             try (Batch firstBatch = scan.next()) {
                 retained = firstBatch.output(0).take(Stream.VALUES);
             }
