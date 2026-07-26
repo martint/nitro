@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -45,9 +46,9 @@ public class Sum
     }
 
     @Override
-    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
+    public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GeneratedGroupedAccumulatorUpdate.inputValue(inputColumn);
+        return GroupedAggregationUpdate.inputValue(inputColumn);
     }
 
     @Override

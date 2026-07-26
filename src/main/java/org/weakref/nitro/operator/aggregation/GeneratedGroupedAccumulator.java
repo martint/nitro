@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+
 /**
  * Marks an {@link Accumulator} whose state implements the long-update SPI and whose provider declares
  * its per-row contribution, so it can participate in the generated single-long-key grouped-aggregation kernel — one
@@ -25,5 +27,5 @@ public interface GeneratedGroupedAccumulator
     /**
      * Declares the provider-supplied physical update that a generated grouping loop executes.
      */
-    GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate();
+    GroupedAggregationUpdate generatedGroupedUpdate();
 }

@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.F64Vector;
@@ -41,9 +42,9 @@ public class Avg
     }
 
     @Override
-    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
+    public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GeneratedGroupedAccumulatorUpdate.inputValue(inputColumn);
+        return GroupedAggregationUpdate.inputValue(inputColumn);
     }
 
     @Override

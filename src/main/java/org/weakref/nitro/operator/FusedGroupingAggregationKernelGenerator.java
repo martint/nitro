@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
@@ -37,7 +37,7 @@ import static java.lang.constant.ConstantDescs.CD_void;
  * the single-long open-addressed probe and, per accumulator, a single state update through the
  * classloader-safe long-state invocation convention — so there is no group-id vector round-trip.
  * The generator hard-codes no aggregate function or provider state class: it emits exactly the contribution each
- * {@link GeneratedGroupedAccumulatorUpdate} declares, and unsupported invocation conventions retain the ordinary
+ * {@link GroupedAggregationUpdate} declares, and unsupported invocation conventions retain the ordinary
  * accumulator fallback.
  */
 final class FusedGroupingAggregationKernelGenerator
@@ -90,7 +90,7 @@ final class FusedGroupingAggregationKernelGenerator
     private boolean closed;
 
     FusedGroupingKernel create(
-            List<GeneratedGroupedAccumulatorUpdate> specs,
+            List<GroupedAggregationUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -111,17 +111,17 @@ final class FusedGroupingAggregationKernelGenerator
                 key -> generate(specs, writeGroups, intKey, keyMapped, runCache, constantRuns, directGrouping, idIndexedGrouping, intInputs, mappedInputs, mappedInputNulls, inputUsesKeyIds, inputNullUsesKeyIds));
     }
 
-    private static String cacheKey(List<GeneratedGroupedAccumulatorUpdate> specs)
+    private static String cacheKey(List<GroupedAggregationUpdate> specs)
     {
         StringBuilder key = new StringBuilder();
-        for (GeneratedGroupedAccumulatorUpdate spec : specs) {
+        for (GroupedAggregationUpdate spec : specs) {
             key.append(spec.contribution()).append('|');
         }
         return key.toString();
     }
 
     private FusedGroupingKernel generate(
-            List<GeneratedGroupedAccumulatorUpdate> specs,
+            List<GroupedAggregationUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -185,7 +185,7 @@ final class FusedGroupingAggregationKernelGenerator
 
     private static void emitAccumulate(
             CodeBuilder code,
-            List<GeneratedGroupedAccumulatorUpdate> specs,
+            List<GroupedAggregationUpdate> specs,
             boolean writeGroups,
             boolean intKey,
             boolean keyMapped,
@@ -252,7 +252,7 @@ final class FusedGroupingAggregationKernelGenerator
     }
 
     // for (int index = 0; index < count; index++) { position = sparse ? positions[index] : index; <body> }
-    private static void emitLoop(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitLoop(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean sparse, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean constantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         code.loadConstant(0);
         code.istore(INDEX);
@@ -286,7 +286,7 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static void emitProbeAndAccumulate(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
+    private static void emitProbeAndAccumulate(CodeBuilder code, List<GroupedAggregationUpdate> specs, boolean writeGroups, boolean intKey, boolean keyMapped, boolean runCache, boolean batchConstantRuns, boolean directGrouping, boolean idIndexedGrouping, boolean[] intInputs, boolean[] mappedInputs, boolean[] mappedInputNulls, boolean[] inputUsesKeyIds, boolean[] inputNullUsesKeyIds)
     {
         // long key = keys[position];
         code.aload(KEYS);
@@ -513,7 +513,7 @@ final class FusedGroupingAggregationKernelGenerator
             if (emitted[accumulator]) {
                 continue;
             }
-            GeneratedGroupedAccumulatorUpdate spec = specs.get(accumulator);
+            GroupedAggregationUpdate spec = specs.get(accumulator);
             if (!spec.readsInput()) {
                 if (!batchConstantRuns) {
                     emitIncrement(code, spec, accumulator, intInputs, mappedInputs, inputUsesKeyIds);
@@ -550,7 +550,7 @@ final class FusedGroupingAggregationKernelGenerator
             code.ifne(nextInput);
             code.labelBinding(increment);
             for (int candidate = accumulator; candidate < specs.size(); candidate++) {
-                GeneratedGroupedAccumulatorUpdate candidateSpec = specs.get(candidate);
+                GroupedAggregationUpdate candidateSpec = specs.get(candidate);
                 if (!emitted[candidate]
                         && candidateSpec.readsInput()
                         && candidateSpec.inputColumn() == spec.inputColumn()) {
@@ -562,13 +562,13 @@ final class FusedGroupingAggregationKernelGenerator
         }
     }
 
-    private static boolean batchesConstantRuns(List<GeneratedGroupedAccumulatorUpdate> specs, boolean constantRuns)
+    private static boolean batchesConstantRuns(List<GroupedAggregationUpdate> specs, boolean constantRuns)
     {
         if (!constantRuns) {
             return false;
         }
         boolean hasInputIndependent = false;
-        for (GeneratedGroupedAccumulatorUpdate spec : specs) {
+        for (GroupedAggregationUpdate spec : specs) {
             if (!spec.readsInput()) {
                 hasInputIndependent = true;
             }
@@ -581,28 +581,28 @@ final class FusedGroupingAggregationKernelGenerator
         return hasInputIndependent;
     }
 
-    private static int runGroupLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
+    private static int runGroupLocal(List<GroupedAggregationUpdate> specs)
     {
         return INPUT_ARRAY_BASE + specs.size();
     }
 
-    private static int runCountLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
+    private static int runCountLocal(List<GroupedAggregationUpdate> specs)
     {
         return runGroupLocal(specs) + 1;
     }
 
-    private static int idIndexedHashLocal(List<GeneratedGroupedAccumulatorUpdate> specs)
+    private static int idIndexedHashLocal(List<GroupedAggregationUpdate> specs)
     {
         return runCountLocal(specs) + 1;
     }
 
     /** Coalesces input-independent constant updates across a physically adjacent key run. */
-    private static void emitConstantRunFlush(CodeBuilder code, List<GeneratedGroupedAccumulatorUpdate> specs)
+    private static void emitConstantRunFlush(CodeBuilder code, List<GroupedAggregationUpdate> specs)
     {
         int runGroup = runGroupLocal(specs);
         int runCount = runCountLocal(specs);
         for (int accumulator = 0; accumulator < specs.size(); accumulator++) {
-            GeneratedGroupedAccumulatorUpdate spec = specs.get(accumulator);
+            GroupedAggregationUpdate spec = specs.get(accumulator);
             if (spec.readsInput()) {
                 continue;
             }
@@ -635,7 +635,7 @@ final class FusedGroupingAggregationKernelGenerator
 
     private static void emitIncrement(
             CodeBuilder code,
-            GeneratedGroupedAccumulatorUpdate spec,
+            GroupedAggregationUpdate spec,
             int accumulator,
             boolean[] intInputs,
             boolean[] mappedInputs,

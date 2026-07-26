@@ -15,11 +15,11 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
-import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -169,7 +169,7 @@ class TestOperatorCodeGenerationResources
     {
         try (OperatorCodeGenerationResources resources = new OperatorCodeGenerationResources()) {
             FusedGroupingKernel kernel = resources.fusedGrouping().create(
-                    List.of(GeneratedGroupedAccumulatorUpdate.constant(3)),
+                    List.of(GroupedAggregationUpdate.constant(3)),
                     false,
                     false,
                     false,
@@ -211,7 +211,7 @@ class TestOperatorCodeGenerationResources
     private static FusedGroupingKernel createCountKernel(FusedGroupingAggregationKernelGenerator generator)
     {
         return generator.create(
-                List.of(GeneratedGroupedAccumulatorUpdate.constant(1)),
+                List.of(GroupedAggregationUpdate.constant(1)),
                 false,
                 false,
                 false,

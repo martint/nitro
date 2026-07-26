@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -42,9 +43,9 @@ public class CountColumn
     }
 
     @Override
-    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
+    public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GeneratedGroupedAccumulatorUpdate.constantWhenNotNull(1, inputColumn);
+        return GroupedAggregationUpdate.constantWhenNotNull(1, inputColumn);
     }
 
     @Override

@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.CountStateVector;
@@ -31,9 +32,9 @@ public class CountAll
         implements GeneratedGroupedAccumulator
 {
     @Override
-    public GeneratedGroupedAccumulatorUpdate generatedGroupedUpdate()
+    public GroupedAggregationUpdate generatedGroupedUpdate()
     {
-        return GeneratedGroupedAccumulatorUpdate.constant(1);
+        return GroupedAggregationUpdate.constant(1);
     }
 
     @Override

@@ -11,20 +11,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.aggregation;
+package org.weakref.nitro.core.function.aggregation;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Describes the long contribution supplied to one accumulator's classloader-safe state-update SPI.
+ * Classloader-neutral description of one long contribution to grouped aggregation state.
  * <p>
- * The kernel reads no function definition — it dispatches solely on this declarative spec — so the
- * accumulator set the generator can compile grows by accumulators implementing {@link GeneratedGroupedAccumulator},
- * not by changes to the generator.
+ * This is provider metadata, not an executable operator contract. A physical lowering step may
+ * combine these descriptions and generate an engine-owned grouping kernel without recognizing a
+ * function identity or provider implementation class.
  *
  * @param contribution the physical long contribution and optional input null check
  */
-public record GeneratedGroupedAccumulatorUpdate(Contribution contribution)
+public record GroupedAggregationUpdate(Contribution contribution)
 {
     public sealed interface Contribution
             permits InputValue, Constant {}
@@ -51,24 +51,24 @@ public record GeneratedGroupedAccumulatorUpdate(Contribution contribution)
         }
     }
 
-    public GeneratedGroupedAccumulatorUpdate
+    public GroupedAggregationUpdate
     {
         requireNonNull(contribution, "contribution is null");
     }
 
-    public static GeneratedGroupedAccumulatorUpdate inputValue(int inputColumn)
+    public static GroupedAggregationUpdate inputValue(int inputColumn)
     {
-        return new GeneratedGroupedAccumulatorUpdate(new InputValue(inputColumn));
+        return new GroupedAggregationUpdate(new InputValue(inputColumn));
     }
 
-    public static GeneratedGroupedAccumulatorUpdate constant(long value)
+    public static GroupedAggregationUpdate constant(long value)
     {
-        return new GeneratedGroupedAccumulatorUpdate(new Constant(value, -1));
+        return new GroupedAggregationUpdate(new Constant(value, -1));
     }
 
-    public static GeneratedGroupedAccumulatorUpdate constantWhenNotNull(long value, int inputColumn)
+    public static GroupedAggregationUpdate constantWhenNotNull(long value, int inputColumn)
     {
-        return new GeneratedGroupedAccumulatorUpdate(new Constant(value, inputColumn));
+        return new GroupedAggregationUpdate(new Constant(value, inputColumn));
     }
 
     public int inputColumn()
