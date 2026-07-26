@@ -567,7 +567,10 @@ public class HashJoinOperator
             }
         }
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
-        this.bufferedInner = new BufferedJoinInput(new JoinBufferSupport(allocator, buildAllocationContext), innerOutputCount);
+        this.bufferedInner = new BufferedJoinInput(
+                operatorResources.bufferedJoinInputPolicy(),
+                new JoinBufferSupport(allocator, buildAllocationContext),
+                innerOutputCount);
         this.outerSchema = new Streams[outerOutputCount];
         this.innerSchema = new Streams[innerOutputCount];
         int effectiveJoinKeyCount = outerJoinColumns.length + (promotedBinaryEqualityFilter ? 1 : 0);

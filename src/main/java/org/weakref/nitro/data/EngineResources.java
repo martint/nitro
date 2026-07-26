@@ -15,6 +15,7 @@ package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.AdaptiveLongGroupingPolicy;
 import org.weakref.nitro.operator.AggregationOperatorResources;
+import org.weakref.nitro.operator.BufferedJoinInputPolicy;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
 import org.weakref.nitro.operator.FlatKeyTablePolicy;
@@ -64,6 +65,7 @@ public final class EngineResources
                         GroupIdOperatorPolicy.fromSystemProperties(),
                         projectOperator,
                         aggregationOperator,
+                        BufferedJoinInputPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         TopNRankingOperatorPolicy.fromSystemProperties()));
@@ -89,6 +91,7 @@ public final class EngineResources
                         GroupIdOperatorPolicy.fromSystemProperties(),
                         projectOperator,
                         aggregationOperator,
+                        BufferedJoinInputPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         TopNRankingOperatorPolicy.fromSystemProperties()));

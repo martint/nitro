@@ -33,6 +33,7 @@ public final class OperatorResources
     private final GroupIdOperatorPolicy groupIdPolicy;
     private final ProjectOperatorResources project;
     private final AggregationOperatorResources aggregation;
+    private final BufferedJoinInputPolicy bufferedJoinInputPolicy;
     private final HashJoinOperatorResources hashJoin;
     private final GroupingStateResources grouping;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
@@ -48,6 +49,7 @@ public final class OperatorResources
             GroupIdOperatorPolicy groupIdPolicy,
             ProjectOperatorResources project,
             AggregationOperatorResources aggregation,
+            BufferedJoinInputPolicy bufferedJoinInputPolicy,
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             TopNRankingOperatorPolicy topNRankingPolicy)
@@ -64,6 +66,7 @@ public final class OperatorResources
         this.fullJoinPolicy = requireNonNull(fullJoinPolicy, "fullJoinPolicy is null");
         this.groupIdPolicy = requireNonNull(groupIdPolicy, "groupIdPolicy is null");
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
+        this.bufferedJoinInputPolicy = requireNonNull(bufferedJoinInputPolicy, "bufferedJoinInputPolicy is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
@@ -94,6 +97,7 @@ public final class OperatorResources
                 GroupIdOperatorPolicy.fromSystemProperties(),
                 new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties(), evaluationPolicy),
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
+                BufferedJoinInputPolicy.fromSystemProperties(),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
                         hashJoinMaterializationListener,
@@ -170,6 +174,12 @@ public final class OperatorResources
     {
         checkOpen();
         return hashJoin;
+    }
+
+    public BufferedJoinInputPolicy bufferedJoinInputPolicy()
+    {
+        checkOpen();
+        return bufferedJoinInputPolicy;
     }
 
     public GroupingStateResources grouping()

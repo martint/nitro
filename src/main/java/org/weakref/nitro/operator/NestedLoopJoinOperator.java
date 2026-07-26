@@ -74,12 +74,27 @@ public class NestedLoopJoinOperator
 
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
+        this(
+                allocator.engineResources().operatorResources().bufferedJoinInputPolicy(),
+                allocator,
+                outer,
+                inner,
+                matcher);
+    }
+
+    private NestedLoopJoinOperator(
+            BufferedJoinInputPolicy bufferedJoinInputPolicy,
+            Allocator allocator,
+            Operator outer,
+            Operator inner,
+            JoinMatcher matcher)
+    {
         this.allocator = allocator;
         this.outer = outer;
         this.inner = inner;
         this.matcher = matcher;
         this.buffers = new JoinBufferSupport(allocator, allocationContext);
-        this.bufferedInner = new BufferedJoinInput(buffers, inner.outputCount());
+        this.bufferedInner = new BufferedJoinInput(bufferedJoinInputPolicy, buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
         this.currentOutputs = new Streams[outputCount()];
     }

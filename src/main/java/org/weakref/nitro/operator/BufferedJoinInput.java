@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static java.lang.Math.toIntExact;
+import static java.util.Objects.requireNonNull;
 
 final class BufferedJoinInput
 {
@@ -33,51 +34,11 @@ final class BufferedJoinInput
         void prune(Batch batch, Mask mask);
     }
 
-    // Coalesce a multi-batch build into one addressable batch up to this many rows. A single build batch lets the
-    // inner join output reference build columns as a zero-copy DictionaryVector (one run, ids = matched build
-    // positions) instead of copying the (variable-width) bytes once per matched output row -- the dominant cost in
-    // high-fan-out joins over dimension tables. Bounded so a fact-table-sized build is never copied wholesale; the
-    // one-time coalesce copy pays for itself whenever the join output references the build more than once.
-    private static final int MAX_COALESCED_ROWS = Integer.getInteger("nitro.hash.join.maxCoalescedInnerRows", 4_000_000);
-    // Post-load coalescing is a separate decision from an explicitly requested direct build. Keeping the controls
-    // separate lets large ordinary builds remain paged without disabling a caller's exact/bounded one-copy layout.
-    // Above one million rows, the eager second payload copy is a large fixed cost and paged row references remain
-    // cheaper for selective probes; callers that know the final cardinality can still request the one-copy layout.
-    private static final int MAX_POST_LOAD_COALESCED_ROWS =
-            Integer.getInteger("nitro.hash.join.maxPostLoadCoalescedInnerRows", 1 << 20);
-    private static final boolean COALESCE_RANGE_SELECTION =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.coalesceRangeSelection", "true"));
-    private static final boolean BUFFERED_DENSE_POSITIONS_CACHE =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.bufferedDensePositionsCache", "true"));
-    private static final boolean CLOSE_COPIED_BATCHES =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.closeCopiedBuildBatches", "true"));
-    private static final boolean SHARED_COMPACTION_POSITIONS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.sharedCompactionPositions", "true"));
-    private static final boolean RECYCLED_COMPACTION_MAPPINGS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.recycledCompactionMappings", "true"));
-    private static final boolean RELEASE_COPIED_COALESCE_SOURCES =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.releaseCopiedCoalesceSources", "true"));
-    private static final boolean DEFAULT_DIRECT_EXACT_COALESCE =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.directExactCoalesce", "false"));
-    // An operator-reported exact cardinality is a stronger signal than the post-load row count: it lets the build
-    // write directly into its final one-batch layout instead of first filling 64K pages and then copying them again.
-    // Keep automatic admission at the ordinary one-million-row coalescing bound. Larger exact builds require the
-    // explicit physical-plan hint below, which preserves the existing 4M escape hatch without making a large eager
-    // allocation the default for every scan-backed dimension.
-    private static final boolean AUTOMATIC_DIRECT_EXACT_COALESCE =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.automaticDirectExactCoalesce", "true"));
-    // Small or fixed-width-dominated builds already make the ordinary paged-then-coalesced copy cheap, while
-    // pre-sizing a large final batch can add locality work without recovering enough payload traffic. Automatic
-    // admission therefore requires both this cardinality floor and a variable-width majority in the first physical
-    // batch. Explicit physical-plan hints retain the existing lower-cardinality escape hatch.
-    private static final int MIN_AUTOMATIC_DIRECT_EXACT_ROWS =
-            Integer.getInteger("nitro.hash.join.minAutomaticDirectExactRows", 1 << 18);
-    private static final boolean DEFAULT_DIRECT_BOUNDED_COALESCE =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.directBoundedCoalesce", "true"));
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
 
+    private final BufferedJoinInputPolicy policy;
     private final JoinBufferSupport buffers;
     private final PrimitiveArrayPool arrayPool;
     private final int columnCount;
@@ -96,12 +57,13 @@ final class BufferedJoinInput
 
     private boolean loaded;
     private long rowCount;
-    private boolean directExactCoalesce = DEFAULT_DIRECT_EXACT_COALESCE;
+    private boolean directExactCoalesce;
     private boolean directBoundedCoalesce;
 
     @SuppressWarnings("unchecked")
-    BufferedJoinInput(JoinBufferSupport buffers, int columnCount)
+    BufferedJoinInput(BufferedJoinInputPolicy policy, JoinBufferSupport buffers, int columnCount)
     {
+        this.policy = requireNonNull(policy, "policy is null");
         this.buffers = buffers;
         this.arrayPool = buffers.primitiveArrays();
         this.compactionPositions = new PositionBuffer(arrayPool);
@@ -111,6 +73,7 @@ final class BufferedJoinInput
         this.outputKnownAllFalseFlags = new int[columnCount];
         this.outputKnownAllFalseInitialized = new boolean[columnCount];
         this.compactionMappings = buffers.newRecyclingPositionMappingCache();
+        this.directExactCoalesce = policy.directExactCoalesce();
     }
 
     public void loadAll(Operator source, int batchSize)
@@ -131,7 +94,7 @@ final class BufferedJoinInput
         if (loaded) {
             throw new IllegalStateException("Build input is already loaded");
         }
-        directBoundedCoalesce = DEFAULT_DIRECT_BOUNDED_COALESCE;
+        directBoundedCoalesce = policy.directBoundedCoalesce();
         return directBoundedCoalesce;
     }
 
@@ -177,14 +140,14 @@ final class BufferedJoinInput
         int outputPosition = 0;
         long exactRows = source.exactOutputRows();
         int outputBatchSize;
-        boolean automaticExactCandidate = AUTOMATIC_DIRECT_EXACT_COALESCE &&
-                exactRows >= MIN_AUTOMATIC_DIRECT_EXACT_ROWS &&
-                exactRows <= MAX_POST_LOAD_COALESCED_ROWS;
-        if (directExactCoalesce && exactRows > 0 && exactRows <= MAX_COALESCED_ROWS) {
+        boolean automaticExactCandidate = policy.automaticDirectExactCoalesce() &&
+                exactRows >= policy.minAutomaticDirectExactRows() &&
+                exactRows <= policy.maxPostLoadCoalescedRows();
+        if (directExactCoalesce && exactRows > 0 && exactRows <= policy.maxCoalescedRows()) {
             outputBatchSize = toIntExact(exactRows);
         }
         else if (directBoundedCoalesce) {
-            outputBatchSize = MAX_COALESCED_ROWS;
+            outputBatchSize = policy.maxCoalescedRows();
         }
         else {
             outputBatchSize = batchSize;
@@ -243,8 +206,8 @@ final class BufferedJoinInput
                             outputPosition,
                             copied,
                             outputBatchSize,
-                            SHARED_COMPACTION_POSITIONS ? compactionPositions : null,
-                            RECYCLED_COMPACTION_MAPPINGS ? compactionMappings : null);
+                            policy.sharedCompactionPositions() ? compactionPositions : null,
+                            policy.recycledCompactionMappings() ? compactionMappings : null);
                 }
                 outputPosition += copied;
                 maskOffset += copied;
@@ -259,7 +222,7 @@ final class BufferedJoinInput
             // Every selected stream and position has been copied into this buffer. Close the non-retained wrapper
             // now so operators above the scan can recycle their masks and borrowed streams before the next batch.
             // Retained and deferred paths deliberately keep their batches open and do not reach this point.
-            if (CLOSE_COPIED_BATCHES) {
+            if (policy.closeCopiedBatches()) {
                 batch.close();
             }
         }
@@ -320,8 +283,8 @@ final class BufferedJoinInput
                             0,
                             mask.count(),
                             mask.count(),
-                            SHARED_COMPACTION_POSITIONS ? compactionPositions : null,
-                            RECYCLED_COMPACTION_MAPPINGS ? compactionMappings : null);
+                            policy.sharedCompactionPositions() ? compactionPositions : null,
+                            policy.recycledCompactionMappings() ? compactionMappings : null);
                 }
                 rowCount += mask.count();
                 batches.add(new InnerBatch(columns, mask.count()));
@@ -335,7 +298,7 @@ final class BufferedJoinInput
 
     private void coalesceSmallBatches()
     {
-        if (batches.size() <= 1 || rowCount == 0 || rowCount > MAX_POST_LOAD_COALESCED_ROWS) {
+        if (batches.size() <= 1 || rowCount == 0 || rowCount > policy.maxPostLoadCoalescedRows()) {
             return;
         }
 
@@ -349,7 +312,7 @@ final class BufferedJoinInput
                 if (batch.retained()) {
                     columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], batch.positions(), batch.length(), outputStart, size);
                 }
-                else if (COALESCE_RANGE_SELECTION && buffers.canCopyRangeWithoutMaterializing(batch.columns()[columnIndex])) {
+                else if (policy.coalesceRangeSelection() && buffers.canCopyRangeWithoutMaterializing(batch.columns()[columnIndex])) {
                     columns[columnIndex] = buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourceRange, outputStart, size);
                 }
                 else {
@@ -359,7 +322,7 @@ final class BufferedJoinInput
             }
             outputStart += batch.length();
         }
-        java.util.Set<org.weakref.nitro.data.Vector> retained = RELEASE_COPIED_COALESCE_SOURCES ? buffers.identities(columns) : null;
+        java.util.Set<org.weakref.nitro.data.Vector> retained = policy.releaseCopiedCoalesceSources() ? buffers.identities(columns) : null;
         for (InnerBatch batch : batches) {
             if (retained != null && !batch.retained()) {
                 buffers.releaseUnreferenced(batch.columns(), retained);
@@ -497,7 +460,7 @@ final class BufferedJoinInput
 
     private int[] densePositions(int length)
     {
-        if (!BUFFERED_DENSE_POSITIONS_CACHE) {
+        if (!policy.bufferedDensePositionsCache()) {
             int[] positions = new int[length];
             for (int index = 0; index < length; index++) {
                 positions[index] = index;
