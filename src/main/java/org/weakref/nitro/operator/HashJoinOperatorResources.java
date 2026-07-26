@@ -29,6 +29,7 @@ public final class HashJoinOperatorResources
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
     private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinOutputPolicy outputPolicy;
+    private final HashJoinFilterPolicy filterPolicy;
     private final Object sharedBufferPoolGroup = new Object();
 
     public HashJoinOperatorResources(boolean shareBufferPoolAcrossOperators)
@@ -39,7 +40,8 @@ public final class HashJoinOperatorResources
                 HashJoinIndexPolicy.defaults(),
                 HashJoinDynamicFilterPolicy.defaults(),
                 HashJoinBuildPolicy.defaults(),
-                HashJoinOutputPolicy.defaults());
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -52,7 +54,8 @@ public final class HashJoinOperatorResources
                 HashJoinIndexPolicy.defaults(),
                 HashJoinDynamicFilterPolicy.defaults(),
                 HashJoinBuildPolicy.defaults(),
-                HashJoinOutputPolicy.defaults());
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -66,7 +69,8 @@ public final class HashJoinOperatorResources
                 indexPolicy,
                 HashJoinDynamicFilterPolicy.defaults(),
                 HashJoinBuildPolicy.defaults(),
-                HashJoinOutputPolicy.defaults());
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -81,7 +85,8 @@ public final class HashJoinOperatorResources
                 indexPolicy,
                 dynamicFilterPolicy,
                 HashJoinBuildPolicy.defaults(),
-                HashJoinOutputPolicy.defaults());
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -97,7 +102,8 @@ public final class HashJoinOperatorResources
                 indexPolicy,
                 dynamicFilterPolicy,
                 buildPolicy,
-                HashJoinOutputPolicy.defaults());
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -108,12 +114,32 @@ public final class HashJoinOperatorResources
             HashJoinBuildPolicy buildPolicy,
             HashJoinOutputPolicy outputPolicy)
     {
+        this(
+                shareBufferPoolAcrossOperators,
+                materializationListener,
+                indexPolicy,
+                dynamicFilterPolicy,
+                buildPolicy,
+                outputPolicy,
+                HashJoinFilterPolicy.defaults());
+    }
+
+    public HashJoinOperatorResources(
+            boolean shareBufferPoolAcrossOperators,
+            HashJoinMaterializationListener materializationListener,
+            HashJoinIndexPolicy indexPolicy,
+            HashJoinDynamicFilterPolicy dynamicFilterPolicy,
+            HashJoinBuildPolicy buildPolicy,
+            HashJoinOutputPolicy outputPolicy,
+            HashJoinFilterPolicy filterPolicy)
+    {
         this.shareBufferPoolAcrossOperators = shareBufferPoolAcrossOperators;
         this.materializationListener = materializationListener;
         this.indexPolicy = requireNonNull(indexPolicy, "indexPolicy is null");
         this.dynamicFilterPolicy = requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
         this.buildPolicy = requireNonNull(buildPolicy, "buildPolicy is null");
         this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
+        this.filterPolicy = requireNonNull(filterPolicy, "filterPolicy is null");
     }
 
     Object bufferPoolCompatibilityGroup(Object localPoolGroup)
@@ -144,5 +170,10 @@ public final class HashJoinOperatorResources
     HashJoinOutputPolicy outputPolicy()
     {
         return outputPolicy;
+    }
+
+    HashJoinFilterPolicy filterPolicy()
+    {
+        return filterPolicy;
     }
 }

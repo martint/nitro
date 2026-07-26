@@ -1,0 +1,45 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.weakref.nitro.operator;
+
+/// Engine-selected residual-filter execution policy for hash joins.
+///
+/// The property-backed factory is a standalone composition adapter. Hash joins receive one immutable policy from
+/// their resource owner and never consult process-global configuration for these decisions.
+public record HashJoinFilterPolicy(
+        boolean directBinaryDispatch,
+        boolean promoteBinaryEquality,
+        boolean orderedLongPayload,
+        boolean cacheCurrentOuterValue)
+{
+    public static HashJoinFilterPolicy defaults()
+    {
+        return new HashJoinFilterPolicy(true, true, true, true);
+    }
+
+    public static HashJoinFilterPolicy fromSystemProperties()
+    {
+        HashJoinFilterPolicy defaults = defaults();
+        return new HashJoinFilterPolicy(
+                booleanProperty("nitro.join.directBinaryFilterDispatch", defaults.directBinaryDispatch()),
+                booleanProperty("nitro.join.promoteBinaryEqualityFilter", defaults.promoteBinaryEquality()),
+                booleanProperty("nitro.hash.join.orderedLongFilterPayload", defaults.orderedLongPayload()),
+                booleanProperty("nitro.hash.join.cacheCurrentOuterFilter", defaults.cacheCurrentOuterValue()));
+    }
+
+    private static boolean booleanProperty(String name, boolean defaultValue)
+    {
+        return Boolean.parseBoolean(System.getProperty(name, Boolean.toString(defaultValue)));
+    }
+}

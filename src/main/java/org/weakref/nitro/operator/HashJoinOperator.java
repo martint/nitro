@@ -48,14 +48,6 @@ import static java.util.Objects.requireNonNull;
 public class HashJoinOperator
         implements Operator
 {
-    private static final boolean DIRECT_BINARY_JOIN_FILTER_DISPATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.join.directBinaryFilterDispatch", "true"));
-    // An exact equality residual is also an equi-key. Include it in the internal index so duplicate primary keys do
-    // not generate candidates that the residual immediately rejects. This changes neither the public operator shape
-    // nor null semantics: a null in either promoted key remains non-matching, exactly as in the residual predicate.
-    private static final boolean PROMOTE_BINARY_EQUALITY_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.join.promoteBinaryEqualityFilter", "true"));
-
     @FunctionalInterface
     public interface JoinFilterFunction
     {
@@ -128,10 +120,6 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.join.lazyDuplicateSlotState", "false"));
     private static final boolean IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES =
             Boolean.parseBoolean(System.getProperty("nitro.join.implicitSequentialBuildRowReferences", "true"));
-    private static final boolean ORDERED_LONG_JOIN_FILTER_PAYLOAD =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.orderedLongFilterPayload", "true"));
-    private static final boolean CACHE_CURRENT_OUTER_JOIN_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheCurrentOuterFilter", "true"));
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
     private static final int VALUES_FLAG = 1;
@@ -144,6 +132,7 @@ public class HashJoinOperator
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
     private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinOutputPolicy outputPolicy;
+    private final HashJoinFilterPolicy filterPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -392,6 +381,7 @@ public class HashJoinOperator
         this.dynamicFilterPolicy = operatorResources.hashJoin().dynamicFilterPolicy();
         this.buildPolicy = operatorResources.hashJoin().buildPolicy();
         this.outputPolicy = operatorResources.hashJoin().outputPolicy();
+        this.filterPolicy = operatorResources.hashJoin().filterPolicy();
         this.composeEncodedOuterDictionaryDepth = outputPolicy.composeEncodedOuterDictionaryDepth();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
@@ -427,7 +417,7 @@ public class HashJoinOperator
         this.currentOuterFilterBaseValues = new Vector[joinFilters.length];
         this.currentOuterFilterDictionaryDepths = new int[joinFilters.length];
         this.singleEncodedBinaryJoinFilter = joinFilters.length == 1 && joinFilters[0].encodedBinaryEquals();
-        this.promotedBinaryEqualityFilter = PROMOTE_BINARY_EQUALITY_FILTER && singleEncodedBinaryJoinFilter;
+        this.promotedBinaryEqualityFilter = filterPolicy.promoteBinaryEquality() && singleEncodedBinaryJoinFilter;
         this.singleLongNotEqualJoinFilter = joinFilters.length == 1 && joinFilters[0].longNotEqual();
         this.singleLongBitwiseOverlapJoinFilter = joinFilters.length == 1 && joinFilters[0].longBitwiseOverlap();
         for (JoinFilter filter : joinFilters) {
@@ -629,7 +619,7 @@ public class HashJoinOperator
                 }
                 currentMatchIndex++;
                 boolean passes = promotedBinaryEqualityFilter ||
-                        (DIRECT_BINARY_JOIN_FILTER_DISPATCH && singleEncodedBinaryJoinFilter
+                        (filterPolicy.directBinaryDispatch() && singleEncodedBinaryJoinFilter
                                 ? passesBinaryJoinFilter(currentOuterPosition, rowReference)
                                 : passesJoinFilters(currentOuterPosition, rowReference, matchIndex));
                 if (!passes) {
@@ -1391,10 +1381,10 @@ public class HashJoinOperator
                     currentMatches instanceof ChainLongList chain) {
                 int storageIndex = chain.storageIndex(matchIndex);
                 if (storageIndex >= 0) {
-                    boolean outerNull = CACHE_CURRENT_OUTER_JOIN_FILTER
+                    boolean outerNull = filterPolicy.cacheCurrentOuterValue()
                             ? currentFastOuterFilterNull
                             : fastOuterFilterNulls != null && fastOuterFilterNulls.value(outerPosition);
-                    long outerValue = CACHE_CURRENT_OUTER_JOIN_FILTER
+                    long outerValue = filterPolicy.cacheCurrentOuterValue()
                             ? currentFastOuterFilterLong
                             : fastOuterFilterLongArray == null
                                     ? fastOuterFilterLongs.value(outerPosition)
@@ -1472,14 +1462,14 @@ public class HashJoinOperator
     private boolean passesFastBinaryJoinFilter(int outerPosition, int innerLogicalPosition)
     {
         int innerPosition = fastInnerFilterPositions == null ? innerLogicalPosition : fastInnerFilterPositions[innerLogicalPosition];
-        boolean outerNull = CACHE_CURRENT_OUTER_JOIN_FILTER
+        boolean outerNull = filterPolicy.cacheCurrentOuterValue()
                 ? currentFastOuterFilterNull
                 : fastOuterFilterNulls != null && fastOuterFilterNulls.value(outerPosition);
         if (outerNull ||
                 (fastInnerFilterNulls != null && fastInnerFilterNulls.value(innerPosition))) {
             return false;
         }
-        int outerBasePosition = CACHE_CURRENT_OUTER_JOIN_FILTER
+        int outerBasePosition = filterPolicy.cacheCurrentOuterValue()
                 ? currentFastOuterFilterBasePosition
                 : fastOuterFilterDictionary == null
                         ? outerPosition
@@ -1497,14 +1487,14 @@ public class HashJoinOperator
     private boolean passesFastLongJoinFilter(int outerPosition, int innerLogicalPosition)
     {
         int innerPosition = fastInnerFilterPositions == null ? innerLogicalPosition : fastInnerFilterPositions[innerLogicalPosition];
-        boolean outerNull = CACHE_CURRENT_OUTER_JOIN_FILTER
+        boolean outerNull = filterPolicy.cacheCurrentOuterValue()
                 ? currentFastOuterFilterNull
                 : fastOuterFilterNulls != null && fastOuterFilterNulls.value(outerPosition);
         if (outerNull ||
                 (fastInnerFilterNulls != null && fastInnerFilterNulls.value(innerPosition))) {
             return false;
         }
-        long outerValue = CACHE_CURRENT_OUTER_JOIN_FILTER
+        long outerValue = filterPolicy.cacheCurrentOuterValue()
                 ? currentFastOuterFilterLong
                 : fastOuterFilterLongArray == null
                         ? fastOuterFilterLongs.value(outerPosition)
@@ -1515,7 +1505,7 @@ public class HashJoinOperator
 
     private void cacheCurrentOuterFilterValue()
     {
-        if (!CACHE_CURRENT_OUTER_JOIN_FILTER || fastInnerFilterBatch == null) {
+        if (!filterPolicy.cacheCurrentOuterValue() || fastInnerFilterBatch == null) {
             return;
         }
         currentFastOuterFilterNull = fastOuterFilterNulls != null && fastOuterFilterNulls.value(currentOuterPosition);
@@ -1537,7 +1527,7 @@ public class HashJoinOperator
     private void cacheOrderedInnerFilterPayload()
     {
         if (fastInnerOrderedFilterAttempted ||
-                !ORDERED_LONG_JOIN_FILTER_PAYLOAD ||
+                !filterPolicy.orderedLongPayload() ||
                 (!singleLongNotEqualJoinFilter && !singleLongBitwiseOverlapJoinFilter) ||
                 fastInnerFilterBatch == null ||
                 fastInnerFilterNulls != null ||
