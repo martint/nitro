@@ -25,7 +25,7 @@ import org.weakref.nitro.data.Vector;
  * groups increases, and eventually materialize result streams from the accumulated state.
  */
 public interface Accumulator
-        extends AggregationUnit
+        extends PhysicalAggregationUnit
 {
     @Override
     default int outputCount()

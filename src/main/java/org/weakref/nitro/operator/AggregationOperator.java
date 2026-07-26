@@ -19,8 +19,8 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
-import org.weakref.nitro.operator.aggregation.AggregationProgram;
-import org.weakref.nitro.operator.aggregation.AggregationUnit;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
@@ -41,8 +41,8 @@ public class AggregationOperator
     private final boolean deferResultMaterialization;
 
     private final Operator source;
-    private final AggregationProgram program;
-    private final List<AggregationUnit> units;
+    private final PhysicalAggregationProgram program;
+    private final List<PhysicalAggregationUnit> units;
     private final int[][] outputsByUnit;
 
     private final Streams[] reusableResults;
@@ -51,20 +51,20 @@ public class AggregationOperator
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, AggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
+        this(allocator, PhysicalAggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
     }
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, AggregationProgram.independent(aggregations), source, operatorResources);
+        this(allocator, PhysicalAggregationProgram.independent(aggregations), source, operatorResources);
     }
 
-    public AggregationOperator(Allocator allocator, AggregationProgram program, Operator source)
+    public AggregationOperator(Allocator allocator, PhysicalAggregationProgram program, Operator source)
     {
         this(allocator, program, source, allocator.engineResources().operatorResources());
     }
 
-    public AggregationOperator(Allocator allocator, AggregationProgram program, Operator source, OperatorResources operatorResources)
+    public AggregationOperator(Allocator allocator, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)
     {
         this.allocator = allocator;
         operatorResources = requireNonNull(operatorResources, "operatorResources is null");
@@ -158,7 +158,7 @@ public class AggregationOperator
                         continue;
                     }
                     for (int unit = 0; unit < units.size(); unit++) {
-                        AggregationUnit aggregationUnit = units.get(unit);
+                        PhysicalAggregationUnit aggregationUnit = units.get(unit);
                         int filterColumn = aggregationUnit.filterInputColumn();
                         Mask aggregationMask = filterColumn < 0 ? mask : filterMask(batch, filterColumn, mask);
                         try {
@@ -190,9 +190,9 @@ public class AggregationOperator
 
     private void materializeUnitResults(int unit, Streams state, BatchState batchState)
     {
-        AggregationUnit aggregationUnit = units.get(unit);
+        PhysicalAggregationUnit aggregationUnit = units.get(unit);
         for (int output : outputsByUnit[unit]) {
-            AggregationProgram.Output binding = program.outputs().get(output);
+            PhysicalAggregationProgram.Output binding = program.outputs().get(output);
             reusableResults[output] = aggregationUnit.result(
                     binding.result(),
                     0,
@@ -204,10 +204,10 @@ public class AggregationOperator
         }
     }
 
-    private static int[][] outputsByUnit(AggregationProgram program)
+    private static int[][] outputsByUnit(PhysicalAggregationProgram program)
     {
         int[] counts = new int[program.units().size()];
-        for (AggregationProgram.Output output : program.outputs()) {
+        for (PhysicalAggregationProgram.Output output : program.outputs()) {
             counts[output.unit()]++;
         }
         int[][] outputsByUnit = new int[counts.length][];

@@ -26,7 +26,7 @@ import org.weakref.nitro.data.Vector;
  * between functions or rewrite the supplied program. Each result slot must materialize an
  * independently owned output bundle; slots must not alias mutable vectors.
  */
-public interface AggregationUnit
+public interface PhysicalAggregationUnit
 {
     int outputCount();
 

@@ -59,8 +59,6 @@ import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
-import org.weakref.nitro.operator.aggregation.AggregationProgram;
-import org.weakref.nitro.operator.aggregation.AggregationUnit;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.ConditionalSum;
@@ -70,6 +68,8 @@ import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
@@ -1422,11 +1422,11 @@ public class TestOperators
     void testPhysicalAggregationProgramRoutesMultipleResultsFromOneUnit()
     {
         SumAndCountUnit unit = new SumAndCountUnit(0);
-        AggregationProgram program = new AggregationProgram(
+        PhysicalAggregationProgram program = new PhysicalAggregationProgram(
                 List.of(unit),
                 List.of(
-                        new AggregationProgram.Output(0, 1),
-                        new AggregationProgram.Output(0, 0)));
+                        new PhysicalAggregationProgram.Output(0, 1),
+                        new PhysicalAggregationProgram.Output(0, 0)));
 
         assertThat(operator(new AggregationOperator(
                 allocator,
@@ -1440,11 +1440,11 @@ public class TestOperators
     void testGroupedPhysicalAggregationProgramRoutesMultipleResultsFromOneUnit()
     {
         SumAndCountUnit unit = new SumAndCountUnit(1);
-        AggregationProgram program = new AggregationProgram(
+        PhysicalAggregationProgram program = new PhysicalAggregationProgram(
                 List.of(unit),
                 List.of(
-                        new AggregationProgram.Output(0, 1),
-                        new AggregationProgram.Output(0, 0)));
+                        new PhysicalAggregationProgram.Output(0, 1),
+                        new PhysicalAggregationProgram.Output(0, 0)));
 
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
@@ -4651,7 +4651,7 @@ public class TestOperators
      * opaque to the operators; only the program's unit/result bindings describe the output shape.
      */
     private static final class SumAndCountUnit
-            implements AggregationUnit
+            implements PhysicalAggregationUnit
     {
         private final int inputColumn;
         private int accumulationCalls;

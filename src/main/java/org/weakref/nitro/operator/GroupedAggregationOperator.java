@@ -26,10 +26,10 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
-import org.weakref.nitro.operator.aggregation.AggregationProgram;
-import org.weakref.nitro.operator.aggregation.AggregationUnit;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulator;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulatorUpdate;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.ArrayList;
@@ -75,8 +75,8 @@ public class GroupedAggregationOperator
     private final int[] groupedColumns;
     private final int[] groupByColumns;
     private final int[] groupedKeyIndexes;
-    private final AggregationProgram program;
-    private final AggregationUnit[] aggregations;
+    private final PhysicalAggregationProgram program;
+    private final PhysicalAggregationUnit[] aggregations;
     private final int[] plainAggregationIndexes;
     private final int[] filteredAggregationIndexes;
     private final DistinctAggregationGroup[] distinctAggregationGroups;
@@ -112,20 +112,20 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, AggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
+        this(allocator, groupColumn, PhysicalAggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, groupColumn, AggregationProgram.independent(aggregations), source, operatorResources);
+        this(allocator, groupColumn, PhysicalAggregationProgram.independent(aggregations), source, operatorResources);
     }
 
-    public GroupedAggregationOperator(Allocator allocator, int groupColumn, AggregationProgram program, Operator source)
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, PhysicalAggregationProgram program, Operator source)
     {
         this(allocator, groupColumn, program, source, allocator.engineResources().operatorResources());
     }
 
-    public GroupedAggregationOperator(Allocator allocator, int groupColumn, AggregationProgram program, Operator source, OperatorResources operatorResources)
+    public GroupedAggregationOperator(Allocator allocator, int groupColumn, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)
     {
         this(allocator, groupColumn, List.of(), program, source, null, null, null, operatorResources);
     }
@@ -137,7 +137,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, groupColumn, groupedColumns, AggregationProgram.independent(aggregations), source, null, null, null, operatorResources);
+        this(allocator, groupColumn, groupedColumns, PhysicalAggregationProgram.independent(aggregations), source, null, null, null, operatorResources);
     }
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Accumulator> aggregations, Operator source)
@@ -150,12 +150,12 @@ public class GroupedAggregationOperator
         this(allocator, groupByColumns, groupByColumns, aggregations, source, operatorResources);
     }
 
-    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, AggregationProgram program, Operator source)
+    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, PhysicalAggregationProgram program, Operator source)
     {
         this(allocator, groupByColumns, groupByColumns, program, source, allocator.engineResources().operatorResources());
     }
 
-    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, AggregationProgram program, Operator source, OperatorResources operatorResources)
+    public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)
     {
         this(allocator, groupByColumns, groupByColumns, program, source, operatorResources);
     }
@@ -173,14 +173,14 @@ public class GroupedAggregationOperator
             Operator source,
             OperatorResources operatorResources)
     {
-        this(allocator, groupByColumns, groupedColumns, AggregationProgram.independent(aggregations), source, operatorResources);
+        this(allocator, groupByColumns, groupedColumns, PhysicalAggregationProgram.independent(aggregations), source, operatorResources);
     }
 
     public GroupedAggregationOperator(
             Allocator allocator,
             List<Integer> groupByColumns,
             List<Integer> groupedColumns,
-            AggregationProgram program,
+            PhysicalAggregationProgram program,
             Operator source)
     {
         this(allocator, groupByColumns, groupedColumns, program, source, allocator.engineResources().operatorResources());
@@ -190,7 +190,7 @@ public class GroupedAggregationOperator
             Allocator allocator,
             List<Integer> groupByColumns,
             List<Integer> groupedColumns,
-            AggregationProgram program,
+            PhysicalAggregationProgram program,
             Operator source,
             OperatorResources operatorResources)
     {
@@ -213,7 +213,7 @@ public class GroupedAggregationOperator
             Allocator allocator,
             int groupColumn,
             List<Integer> groupedColumns,
-            AggregationProgram program,
+            PhysicalAggregationProgram program,
             Operator source,
             int[] groupByColumns,
             int[] groupedKeyIndexes,
@@ -251,7 +251,7 @@ public class GroupedAggregationOperator
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
         this.program = requireNonNull(program, "program is null");
-        this.aggregations = program.units().toArray(AggregationUnit[]::new);
+        this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
         DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(this.aggregations, groupPartitionedLongDistinct);
         this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();
         this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
@@ -739,7 +739,7 @@ public class GroupedAggregationOperator
         boolean grow = stateCapacity < needed;
         boolean stateVectorsChanged = false;
         for (int index = 0; index < aggregations.length; index++) {
-            AggregationUnit accumulator = aggregations[index];
+            PhysicalAggregationUnit accumulator = aggregations[index];
             if (states[index] == null) {
                 states[index] = accumulator.allocate(aggregationExecutionContext, newCapacity);
                 stateVectorsChanged = true;
@@ -913,8 +913,8 @@ public class GroupedAggregationOperator
 
     private Streams aggregationOutput(int output, BatchState batchState)
     {
-        AggregationProgram.Output binding = program.outputs().get(output);
-        AggregationUnit unit = aggregations[binding.unit()];
+        PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+        PhysicalAggregationUnit unit = aggregations[binding.unit()];
         Streams state = states[binding.unit()];
         Streams streams = result[output];
         if (streams != null && batchState.aggregationMaterializedMask[output] != null && batchState.mask.equals(batchState.aggregationMaterializedMask[output])) {
@@ -957,7 +957,7 @@ public class GroupedAggregationOperator
 
     private Streams aggregationCopyPosition(int output, Streams existing, int sourcePosition, int outputPosition, int size)
     {
-        AggregationProgram.Output binding = program.outputs().get(output);
+        PhysicalAggregationProgram.Output binding = program.outputs().get(output);
         return aggregations[binding.unit()].copyResultPosition(
                 binding.result(),
                 sourcePosition,
@@ -1078,7 +1078,7 @@ public class GroupedAggregationOperator
     }
 
     private static DistinctAggregationPlan planDistinctAggregations(
-            AggregationUnit[] aggregations,
+            PhysicalAggregationUnit[] aggregations,
             boolean groupPartitionedLongDistinct)
     {
         List<Integer> plainAggregationIndexes = new ArrayList<>();

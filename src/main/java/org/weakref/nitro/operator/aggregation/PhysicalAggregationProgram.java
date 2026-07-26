@@ -25,9 +25,9 @@ import static java.util.Objects.requireNonNull;
  * result slot of a unit, allowing a provider-selected unit to share traversal and state across
  * results without any aggregate recognition in execution operators.
  */
-public record AggregationProgram(List<AggregationUnit> units, List<Output> outputs)
+public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
 {
-    public AggregationProgram
+    public PhysicalAggregationProgram
     {
         units = List.copyOf(requireNonNull(units, "units is null"));
         outputs = List.copyOf(requireNonNull(outputs, "outputs is null"));
@@ -55,15 +55,15 @@ public record AggregationProgram(List<AggregationUnit> units, List<Output> outpu
         }
     }
 
-    public static AggregationProgram independent(List<? extends Accumulator> accumulators)
+    public static PhysicalAggregationProgram independent(List<? extends Accumulator> accumulators)
     {
         requireNonNull(accumulators, "accumulators is null");
-        List<AggregationUnit> units = List.copyOf(accumulators);
+        List<PhysicalAggregationUnit> units = List.copyOf(accumulators);
         List<Output> outputs = new ArrayList<>(units.size());
         for (int unit = 0; unit < units.size(); unit++) {
             outputs.add(new Output(unit, 0));
         }
-        return new AggregationProgram(units, outputs);
+        return new PhysicalAggregationProgram(units, outputs);
     }
 
     public record Output(int unit, int result)
