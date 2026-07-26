@@ -64,6 +64,7 @@ public class GroupOperator
                 allocator.primitiveArrays(),
                 operatorResources.codeGeneration(),
                 operatorResources.grouping(),
+                operatorResources.adaptiveLongGroupingPolicy(),
                 operatorResources.flatKeyTablePolicy());
         this.groupByColumns = groupByColumns.clone();
         this.source = source;

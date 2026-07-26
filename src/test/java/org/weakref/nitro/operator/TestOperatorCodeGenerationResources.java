@@ -97,17 +97,32 @@ class TestOperatorCodeGenerationResources
         assertThat(isolatedShape.getClass()).isNotSameAs(firstTable.getClass());
 
         AdaptiveLongGroupingTable firstAdaptive =
-                AdaptiveLongGroupingTable.create(2, 16, arrayPool, first);
+                AdaptiveLongGroupingTable.create(2, 16, arrayPool, first, AdaptiveLongGroupingPolicy.defaults());
         AdaptiveLongGroupingTable reusedAdaptive =
-                AdaptiveLongGroupingTable.create(2, 16, arrayPool, first);
+                AdaptiveLongGroupingTable.create(2, 16, arrayPool, first, AdaptiveLongGroupingPolicy.defaults());
         AdaptiveLongGroupingTable isolatedAdaptive =
-                AdaptiveLongGroupingTable.create(2, 16, arrayPool, second);
+                AdaptiveLongGroupingTable.create(2, 16, arrayPool, second, AdaptiveLongGroupingPolicy.defaults());
+        AdaptiveLongGroupingPolicy lowLoadFactorPolicy = new AdaptiveLongGroupingPolicy(
+                0.25f,
+                true,
+                0.825f,
+                1 << 24,
+                true,
+                1 << 22,
+                true,
+                1 << 20,
+                false);
+        AdaptiveLongGroupingTable differentlyConfiguredAdaptive =
+                AdaptiveLongGroupingTable.create(2, 16, arrayPool, first, lowLoadFactorPolicy);
         assertThat(reusedAdaptive.getClass()).isSameAs(firstAdaptive.getClass());
+        assertThat(differentlyConfiguredAdaptive.getClass()).isSameAs(firstAdaptive.getClass());
+        assertThat(differentlyConfiguredAdaptive.slots).hasSize(64);
         assertThat(isolatedAdaptive.getClass()).isNotSameAs(firstAdaptive.getClass());
 
-        DictionaryHashBatchKernel firstHash = first.dictionaryHash().create(1);
-        assertThat(first.dictionaryHash().create(1)).isSameAs(firstHash);
-        assertThat(second.dictionaryHash().create(1)).isNotSameAs(firstHash);
+        DictionaryHashBatchKernel firstHash = first.dictionaryHash().create(1, 72);
+        assertThat(first.dictionaryHash().create(1, 72)).isSameAs(firstHash);
+        assertThat(first.dictionaryHash().create(1, 36)).isNotSameAs(firstHash);
+        assertThat(second.dictionaryHash().create(1, 72)).isNotSameAs(firstHash);
 
         int mixedShape = MixedComposite3GroupingKernelGenerator.shape(0, 0, 0);
         MixedComposite3GroupingKernel firstMixed = first.mixedComposite3Grouping().create(mixedShape);

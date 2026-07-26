@@ -35,6 +35,7 @@ class TestFlatGroupingTable
     private final PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final GroupingStateResources groupingResources = engineResources.groupingState();
+    private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
@@ -534,7 +535,7 @@ class TestFlatGroupingTable
         Vector[] values = {new I64Vector(keys), utf8(labels)};
         Vector[] nulls = {null, null};
 
-        GroupingState oneBatch = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState oneBatch = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         try {
             oneBatch.assignGroups(values, nulls, Mask.all(size), new I64Vector(size), false);
             assertThat(oneBatch.usesPackedFlatIdentitySlots()).isFalse();
@@ -543,7 +544,7 @@ class TestFlatGroupingTable
             oneBatch.releaseBuffers();
         }
 
-        GroupingState sustained = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState sustained = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         try {
             sustained.assignGroups(values, nulls, Mask.all(size), new I64Vector(size), true);
             assertThat(sustained.usesPackedFlatIdentitySlots()).isTrue();
@@ -564,7 +565,7 @@ class TestFlatGroupingTable
             second[position] = position * 3L;
         }
 
-        GroupingState compact = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState compact = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         try {
             compact.assignGroups(
                     new Vector[] {new I64Vector(first), new I64Vector(second)},
@@ -582,7 +583,7 @@ class TestFlatGroupingTable
         for (int position = 0; position < size; position++) {
             wideFirst[position] += 1L << 40;
         }
-        GroupingState fullWidth = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState fullWidth = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         try {
             fullWidth.assignGroups(
                     new Vector[] {new I64Vector(wideFirst), new I64Vector(second)},
@@ -814,7 +815,7 @@ class TestFlatGroupingTable
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("pooled-dictionary-generation");
-        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         int[] firstId = {0};
         int[] secondId = {1};
 
@@ -986,7 +987,7 @@ class TestFlatGroupingTable
             sharedIds[position] = position;
         }
 
-        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         I64Vector initialGroups = new I64Vector(size);
         state.assignGroups(
                 new Vector[] {
@@ -1028,7 +1029,7 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {0, 0, 0, 0})};
         BooleanVector allNull = new BooleanVector(new boolean[] {true, true, true, true});
         BooleanVector nullFree = new BooleanVector(new boolean[] {false, false, false, false});
-        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         try {
             I64Vector grandTotal = new I64Vector(ids.length);
             state.assignGroups(values, new Vector[] {allNull, allNull, nullFree}, Mask.all(ids.length), grandTotal);
@@ -1143,7 +1144,7 @@ class TestFlatGroupingTable
             categoricalValues[position] = "category-" + (position & 15);
         }
 
-        GroupingState distinct = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState distinct = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         I64Vector distinctGroups = new I64Vector(size);
         distinct.assignGroups(new Vector[] {utf8(distinctValues)}, new Vector[] {null}, Mask.all(size), distinctGroups);
         assertThat(distinct.usesFlatSingleRecordIdentity()).isTrue();
@@ -1152,7 +1153,7 @@ class TestFlatGroupingTable
         assertThat(distinctGroups.values()[size - 1]).isEqualTo(size - 1L);
         distinct.releaseBuffers();
 
-        GroupingState categorical = new GroupingState(arrayPool, codeGeneration, groupingResources, flatKeyTablePolicy);
+        GroupingState categorical = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         I64Vector categoricalGroups = new I64Vector(size);
         categorical.assignGroups(new Vector[] {utf8(categoricalValues)}, new Vector[] {null}, Mask.all(size), categoricalGroups);
         assertThat(categorical.usesFlatSingleRecordIdentity()).isFalse();

@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import org.weakref.nitro.operator.AdaptiveLongGroupingPolicy;
 import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
@@ -55,6 +56,7 @@ public final class EngineResources
                 new AllocationResources(primitiveArrays, nativeBuffers),
                 new OperatorResources(
                         operatorCodeGeneration,
+                        AdaptiveLongGroupingPolicy.fromSystemProperties(),
                         FlatKeyTablePolicy.fromSystemProperties(),
                         DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),
@@ -79,6 +81,7 @@ public final class EngineResources
                 allocationResources,
                 new OperatorResources(
                         operatorCodeGeneration,
+                        AdaptiveLongGroupingPolicy.fromSystemProperties(),
                         FlatKeyTablePolicy.fromSystemProperties(),
                         DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),

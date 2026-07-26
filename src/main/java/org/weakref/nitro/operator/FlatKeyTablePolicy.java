@@ -46,6 +46,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table)
             int generatedHybridHashBatchMinFields,
             int generatedHybridHashBatchMinAccessorFields,
             int generatedDictionaryHashBatchNullFreePairMinRows,
+            int generatedDictionaryHashProbeTileRows,
             boolean generatedDictionaryRecordEquality,
             boolean debugGeneratedDictionaryHashBatch,
             boolean mixedCompositeIds,
@@ -90,6 +91,13 @@ public record FlatKeyTablePolicy(Layout layout, Table table)
             int discriminatingFieldHashMinDistinctPercent,
             int valueIdCeiling)
     {
+        public Layout
+        {
+            if (generatedDictionaryHashProbeTileRows <= 0) {
+                throw new IllegalArgumentException("Generated dictionary hash probe tile rows must be positive");
+            }
+        }
+
         public static Layout defaults()
         {
             return new Layout(
@@ -101,6 +109,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table)
                     5,
                     2,
                     2048,
+                    72,
                     true,
                     false,
                     true,
@@ -166,6 +175,11 @@ public record FlatKeyTablePolicy(Layout layout, Table table)
                     Integer.getInteger(
                             "nitro.group.generatedDictionaryHashBatchNullFreePairMinRows",
                             defaults.generatedDictionaryHashBatchNullFreePairMinRows()),
+                    Math.max(
+                            1,
+                            Integer.getInteger(
+                                    "nitro.group.generatedDictionaryHashProbeTileRows",
+                                    defaults.generatedDictionaryHashProbeTileRows())),
                     booleanProperty(
                             "nitro.group.generatedDictionaryRecordEquality",
                             defaults.generatedDictionaryRecordEquality()),

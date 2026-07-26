@@ -44,6 +44,7 @@ final class GroupingState
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
     private final GroupingStateResources resources;
+    private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final LongGroupingPolicy longPolicy;
     private final CompositeGroupingPolicy compositePolicy;
@@ -123,11 +124,13 @@ final class GroupingState
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             GroupingStateResources resources,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
         this.resources = resources;
+        this.adaptiveLongGroupingPolicy = adaptiveLongGroupingPolicy;
         this.flatKeyTablePolicy = flatKeyTablePolicy;
         this.longPolicy = resources.longGroupingPolicy();
         this.compositePolicy = resources.compositeGroupingPolicy();
@@ -938,7 +941,12 @@ final class GroupingState
                     values.length >= compositePolicy.generatedCompactLongMinArity()) {
                 useMultiLongGrouping = true;
                 multiLongArity = values.length;
-                multiLongTable = AdaptiveLongGroupingTable.create(values.length, Math.max(16, values[0].length()), arrayPool, codeGeneration);
+                multiLongTable = AdaptiveLongGroupingTable.create(
+                        values.length,
+                        Math.max(16, values[0].length()),
+                        arrayPool,
+                        codeGeneration,
+                        adaptiveLongGroupingPolicy);
                 return;
             }
             if (values.length == 2 && compositePolicy.packedIntPair()) {

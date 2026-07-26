@@ -207,6 +207,7 @@ public class GroupedAggregationOperator
                         allocator.primitiveArrays(),
                         operatorResources.codeGeneration(),
                         operatorResources.grouping(),
+                        operatorResources.adaptiveLongGroupingPolicy(),
                         operatorResources.flatKeyTablePolicy()),
                 requireNonNull(operatorResources, "operatorResources is null"));
     }
@@ -247,6 +248,7 @@ public class GroupedAggregationOperator
                 allocationContext,
                 operatorResources.codeGeneration(),
                 operatorResources.distinctKeySetPolicy(),
+                operatorResources.adaptiveLongGroupingPolicy(),
                 operatorResources.flatKeyTablePolicy());
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
@@ -820,6 +822,7 @@ public class GroupedAggregationOperator
                     allocationContext,
                     operatorResources.codeGeneration(),
                     operatorResources.distinctKeySetPolicy(),
+                    operatorResources.adaptiveLongGroupingPolicy(),
                     operatorResources.flatKeyTablePolicy());
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
@@ -1196,6 +1199,7 @@ public class GroupedAggregationOperator
                 Allocator.Context allocationContext,
                 OperatorCodeGenerationResources codeGeneration,
                 DistinctKeySetPolicy distinctKeySetPolicy,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
                 FlatKeyTablePolicy flatKeyTablePolicy)
         {
             arrayPool = allocator.primitiveArrays();
@@ -1217,8 +1221,20 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration, distinctKeySetPolicy, flatKeyTablePolicy)
-                            : DistinctKeySet.create(values, arrayPool, codeGeneration, distinctKeySetPolicy, flatKeyTablePolicy);
+                            ? DistinctKeySet.createGroupedLong(
+                                    values,
+                                    arrayPool,
+                                    codeGeneration,
+                                    distinctKeySetPolicy,
+                                    adaptiveLongGroupingPolicy,
+                                    flatKeyTablePolicy)
+                            : DistinctKeySet.create(
+                                    values,
+                                    arrayPool,
+                                    codeGeneration,
+                                    distinctKeySetPolicy,
+                                    adaptiveLongGroupingPolicy,
+                                    flatKeyTablePolicy);
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());

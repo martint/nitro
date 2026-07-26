@@ -385,6 +385,7 @@ public class TestOperatorBatches
                         new Allocator.Context("test"),
                         allocator.engineResources().operatorCodeGeneration(),
                         allocator.engineResources().operatorResources().distinctKeySetPolicy(),
+                        allocator.engineResources().operatorResources().adaptiveLongGroupingPolicy(),
                         allocator.engineResources().operatorResources().flatKeyTablePolicy()),
                 1);
         accumulator.initialize(state, 0, 1);

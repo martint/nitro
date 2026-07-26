@@ -193,6 +193,7 @@ final class MembershipSet
                     allocator.primitiveArrays(),
                     operatorResources.codeGeneration(),
                     operatorResources.grouping(),
+                    operatorResources.adaptiveLongGroupingPolicy(),
                     operatorResources.flatKeyTablePolicy());
         }
 

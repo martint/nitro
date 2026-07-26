@@ -37,9 +37,6 @@ final class DictionaryHashBatchKernelGenerator
 
     static final int HASH_MODE_SHIFT = 18;
 
-    private static final int ASSIGN_TILE_ROWS =
-            Math.max(1, Integer.getInteger("nitro.group.generatedDictionaryHashProbeTileRows", 72));
-
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryHashBatchKernel");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
@@ -85,13 +82,13 @@ final class DictionaryHashBatchKernelGenerator
     private static final int ASSIGN_TILE_END = 17;
     private static final int ASSIGN_TILE_START = 18;
 
-    private final ConcurrentHashMap<Integer, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
 
-    DictionaryHashBatchKernel create(int shape)
+    DictionaryHashBatchKernel create(int shape, int assignTileRows)
     {
         checkOpen();
-        return kernels.computeIfAbsent(shape, DictionaryHashBatchKernelGenerator::generate);
+        return kernels.computeIfAbsent(new KernelShape(shape, assignTileRows), DictionaryHashBatchKernelGenerator::generate);
     }
 
     @Override
@@ -108,10 +105,12 @@ final class DictionaryHashBatchKernelGenerator
         }
     }
 
-    private static DictionaryHashBatchKernel generate(int shape)
+    private static DictionaryHashBatchKernel generate(KernelShape kernelShape)
     {
+        int shape = kernelShape.shape();
         int fieldCount = shape & 0xF;
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryHashBatchKernel" + Integer.toUnsignedString(shape));
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryHashBatchKernel" +
+                Integer.toUnsignedString(shape) + "Tile" + kernelShape.assignTileRows());
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(ClassDesc.of("java.lang.Object"));
             builder.withInterfaceSymbols(CD_KERNEL);
@@ -122,7 +121,11 @@ final class DictionaryHashBatchKernelGenerator
                 code.return_();
             });
             builder.withMethodBody("hash", HASH_TYPE, ClassFile.ACC_PUBLIC, code -> emitHash(code, shape, fieldCount));
-            builder.withMethodBody("assign", ASSIGN_TYPE, ClassFile.ACC_PUBLIC, code -> emitAssign(code, shape, fieldCount));
+            builder.withMethodBody(
+                    "assign",
+                    ASSIGN_TYPE,
+                    ClassFile.ACC_PUBLIC,
+                    code -> emitAssign(code, shape, fieldCount, kernelShape.assignTileRows()));
         });
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup().defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
@@ -220,7 +223,7 @@ final class DictionaryHashBatchKernelGenerator
         code.laload();
     }
 
-    private static void emitAssign(CodeBuilder code, int shape, int fieldCount)
+    private static void emitAssign(CodeBuilder code, int shape, int fieldCount, int assignTileRows)
     {
         code.loadConstant(0);
         code.istore(ASSIGN_TILE_START);
@@ -232,7 +235,7 @@ final class DictionaryHashBatchKernelGenerator
         code.if_icmpge(exit);
 
         code.iload(ASSIGN_TILE_START);
-        code.loadConstant(ASSIGN_TILE_ROWS);
+        code.loadConstant(assignTileRows);
         code.iadd();
         code.istore(ASSIGN_TILE_END);
         Label boundedTile = code.newLabel();
@@ -318,4 +321,6 @@ final class DictionaryHashBatchKernelGenerator
         code.lload(ASSIGN_NEXT_GROUP_ID);
         code.lreturn();
     }
+
+    private record KernelShape(int shape, int assignTileRows) {}
 }

@@ -33,33 +33,22 @@ class AdaptiveLongGroupingTable
 {
     private static final int MAX_COMPACT_GROUP_ID = 0x00FF_FFFF;
     static final long COMPACT_DOMAIN_EXCEEDED = Long.MIN_VALUE;
-    private static final float LOAD_FACTOR = 0.75f;
     // A grouping-owned compact pair can otherwise cross 75% near the end of a very large build and double a
     // 64 MiB slot plane for only the final few percent of groups. At 2^24 slots, admit a bounded denser terminal
     // generation; smaller generations retain the established collision profile, and DISTINCT-owned tables retain
     // their generated grouped-probe policy. The disable switch is retained for adjacent whole-query controls.
-    private static final boolean HIGH_DENSITY_PAIR_CAPACITY =
-            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongHighDensityPair", "true"));
-    private static final float HIGH_DENSITY_PAIR_LOAD_FACTOR = 0.825f;
-    private static final int HIGH_DENSITY_PAIR_MIN_SLOTS = 1 << 24;
     // Once a grouping-owned compact pair reaches one quarter of the established high-density terminal capacity,
     // skip the otherwise short-lived half-capacity generation only when an exact terminal slot plane is already idle
     // in the shared primitive pool. This avoids a full rehash in repeated compatible pipelines without speculatively
     // doubling the working set of streams that stop in the half-capacity generation. A disable switch provides an
     // adjacent whole-query control and allows broad activation audits before retention.
-    private static final boolean HIGH_DENSITY_PAIR_TERMINAL_JUMP =
-            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongHighDensityPairTerminalJump", "true"));
-    private static final int HIGH_DENSITY_PAIR_TERMINAL_JUMP_SLOTS = HIGH_DENSITY_PAIR_MIN_SLOTS >>> 2;
-    private static final boolean GROUPED_PROBE =
-            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveLongGroupedProbe", "true"));
     private static final int GROUPED_PROBE_LANES = IntVector.SPECIES_256.length();
-    private static final int GROUPED_PROBE_MIN_SLOTS = 1 << 20;
-    private static final boolean DEBUG_SHAPES = Boolean.getBoolean("nitro.debug.adaptiveLongGrouping");
 
     final int arity;
     private final boolean groupedProbeEligible;
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
+    private final AdaptiveLongGroupingPolicy policy;
 
     int[] slots;
     int slotMask;
@@ -93,6 +82,7 @@ class AdaptiveLongGroupingTable
     AdaptiveLongGroupingTable(
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
+            AdaptiveLongGroupingPolicy policy,
             int arity,
             int expectedSize,
             boolean groupedProbeEligible)
@@ -103,12 +93,13 @@ class AdaptiveLongGroupingTable
         this.arity = arity;
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
+        this.policy = policy;
         this.groupedProbeEligible = groupedProbeEligible;
-        if (DEBUG_SHAPES) {
+        if (policy.debugShapes()) {
             System.err.printf("[adaptive-long-grouping] create arity=%d expected=%d%n", arity, expectedSize);
         }
         int capacity = 16;
-        while (capacity < expectedSize / LOAD_FACTOR) {
+        while (capacity < expectedSize / policy.loadFactor()) {
             capacity <<= 1;
         }
         allocateSlots(capacity);
@@ -129,18 +120,20 @@ class AdaptiveLongGroupingTable
             int arity,
             int expectedSize,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            AdaptiveLongGroupingPolicy policy)
     {
-        return codeGeneration.adaptiveLongGrouping().create(arity, expectedSize, false, arrayPool, codeGeneration);
+        return codeGeneration.adaptiveLongGrouping().create(arity, expectedSize, false, arrayPool, codeGeneration, policy);
     }
 
     static AdaptiveLongGroupingTable createDistinct(
             int arity,
             int expectedSize,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            AdaptiveLongGroupingPolicy policy)
     {
-        return codeGeneration.adaptiveLongGrouping().create(arity, expectedSize, true, arrayPool, codeGeneration);
+        return codeGeneration.adaptiveLongGrouping().create(arity, expectedSize, true, arrayPool, codeGeneration, policy);
     }
 
     @Override
@@ -180,7 +173,7 @@ class AdaptiveLongGroupingTable
 
         long nextGroupId;
         if (nullAccessors == null && !containsNullableGroups) {
-            if (DEBUG_SHAPES) {
+            if (policy.debugShapes()) {
                 debugNullFreeBatches++;
             }
             nextGroupId = positions == null
@@ -192,7 +185,7 @@ class AdaptiveLongGroupingTable
                 containsNullableGroups = true;
                 ensureNullableStorage();
             }
-            if (DEBUG_SHAPES) {
+            if (policy.debugShapes()) {
                 debugNullableBatches++;
             }
             VectorAccess.BooleanValues[] compactNullAccessors = nullAccessors == null ? nullableAccessors(null) : nullAccessors;
@@ -582,12 +575,12 @@ class AdaptiveLongGroupingTable
     int nextGrowthCapacity(int capacity)
     {
         if (terminalReuseEligible(capacity)) {
-            reusedTerminalSlots = arrayPool.tryBorrowInts(HIGH_DENSITY_PAIR_MIN_SLOTS);
+            reusedTerminalSlots = arrayPool.tryBorrowInts(policy.highDensityPairMinSlots());
             if (reusedTerminalSlots != null) {
-                if (DEBUG_SHAPES) {
+                if (policy.debugShapes()) {
                     debugTerminalJumpUsed = true;
                 }
-                return HIGH_DENSITY_PAIR_MIN_SLOTS;
+                return policy.highDensityPairMinSlots();
             }
         }
         // A single unusually large reservation can cross the reused terminal generation and its load threshold in
@@ -602,11 +595,11 @@ class AdaptiveLongGroupingTable
 
     boolean terminalReuseEligible(int capacity)
     {
-        return HIGH_DENSITY_PAIR_TERMINAL_JUMP &&
-                HIGH_DENSITY_PAIR_CAPACITY &&
+        return policy.highDensityPairTerminalJump() &&
+                policy.highDensityPairCapacity() &&
                 arity == 2 &&
                 !groupedProbeEligible &&
-                capacity == HIGH_DENSITY_PAIR_TERMINAL_JUMP_SLOTS;
+                capacity == policy.highDensityPairTerminalJumpSlots();
     }
 
     @Override
@@ -635,7 +628,7 @@ class AdaptiveLongGroupingTable
         if (promoted != null) {
             return;
         }
-        if (DEBUG_SHAPES) {
+        if (policy.debugShapes()) {
             System.err.printf("[adaptive-long-grouping] promote arity=%d groups=%d slots=%d%n", arity, groupCount, slots.length);
         }
         LongGroupingTable target = codeGeneration.multiLongGrouping().create(arity, Math.max(16, toIntExact(groupCount)), arrayPool);
@@ -720,15 +713,15 @@ class AdaptiveLongGroupingTable
         Arrays.fill(slots, 0);
         slotMask = capacity - 1;
         maxFill = (int) (capacity * loadFactor(capacity));
-        debugHighDensityCapacityUsed |= loadFactor(capacity) != LOAD_FACTOR;
+        debugHighDensityCapacityUsed |= loadFactor(capacity) != policy.loadFactor();
     }
 
     private float loadFactor(int capacity)
     {
-        return HIGH_DENSITY_PAIR_CAPACITY && arity == 2 && !groupedProbeEligible &&
-                capacity >= HIGH_DENSITY_PAIR_MIN_SLOTS
-                ? HIGH_DENSITY_PAIR_LOAD_FACTOR
-                : LOAD_FACTOR;
+        return policy.highDensityPairCapacity() && arity == 2 && !groupedProbeEligible &&
+                capacity >= policy.highDensityPairMinSlots()
+                ? policy.highDensityPairLoadFactor()
+                : policy.loadFactor();
     }
 
     final void rehash(int capacity)
@@ -743,7 +736,7 @@ class AdaptiveLongGroupingTable
             Arrays.fill(slots, 0);
             slotMask = capacity - 1;
             maxFill = (int) (capacity * loadFactor(capacity));
-            debugHighDensityCapacityUsed |= loadFactor(capacity) != LOAD_FACTOR;
+            debugHighDensityCapacityUsed |= loadFactor(capacity) != policy.loadFactor();
         }
         else {
             allocateSlots(capacity);
@@ -787,7 +780,10 @@ class AdaptiveLongGroupingTable
      */
     final int nextProbeCandidate(int[] slots, int slot, int slotMask, int fragment)
     {
-        if (!GROUPED_PROBE || !groupedProbeEligible || arity != 2 || slots.length < GROUPED_PROBE_MIN_SLOTS) {
+        if (!policy.groupedProbe() ||
+                !groupedProbeEligible ||
+                arity != 2 ||
+                slots.length < policy.groupedProbeMinSlots()) {
             return slot;
         }
         int fragmentBits = fragment << 24;
@@ -812,7 +808,7 @@ class AdaptiveLongGroupingTable
     @Override
     public void releaseBuffers()
     {
-        if (DEBUG_SHAPES) {
+        if (policy.debugShapes()) {
             System.err.printf(
                     "[adaptive-long-grouping] release arity=%d groups=%d slots=%d groupedProbeEligible=%s highDensityCapacity=%s terminalJump=%s promoted=%s nullFreeBatches=%d nullableBatches=%d%n",
                     arity,

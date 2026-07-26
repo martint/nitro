@@ -46,9 +46,10 @@ final class DistinctKeySet
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, false, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
+        return create(samples, false, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
     }
 
     /**
@@ -61,10 +62,11 @@ final class DistinctKeySet
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
-            return create(samples, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
+            return create(samples, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         }
         return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy));
     }
@@ -83,9 +85,16 @@ final class DistinctKeySet
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
+        DistinctIndex index = createIndex(
+                samples,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
@@ -97,6 +106,7 @@ final class DistinctKeySet
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
@@ -108,13 +118,20 @@ final class DistinctKeySet
                     policy.adaptiveCompactLongPair() && admitsAdaptiveCompactLongPair(samples, policy),
                     arrayPool,
                     codeGeneration,
-                    policy);
+                    policy,
+                    adaptiveLongGroupingPolicy);
         }
         if (policy.adaptiveCompactMultiLong() &&
                 samples.length >= policy.adaptiveCompactMultiLongMinArity() &&
                 samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY &&
                 allIntegerVectors(samples)) {
-            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration, policy);
+            return new AdaptiveMultiLongDistinctIndex(
+                    samples.length,
+                    Math.max(16, samples[0].length()),
+                    arrayPool,
+                    codeGeneration,
+                    policy,
+                    adaptiveLongGroupingPolicy);
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
             return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
@@ -916,11 +933,17 @@ final class DistinctKeySet
                 int expectedSize,
                 PrimitiveArrayPool arrayPool,
                 OperatorCodeGenerationResources codeGeneration,
-                DistinctKeySetPolicy policy)
+                DistinctKeySetPolicy policy,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
             this.arrayPool = arrayPool;
             this.policy = policy;
-            table = AdaptiveLongGroupingTable.createDistinct(arity, expectedSize, arrayPool, codeGeneration);
+            table = AdaptiveLongGroupingTable.createDistinct(
+                    arity,
+                    expectedSize,
+                    arrayPool,
+                    codeGeneration,
+                    adaptiveLongGroupingPolicy);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
             sharedDictionaryGenerationScratch = new long[arity];
@@ -1361,6 +1384,7 @@ final class DistinctKeySet
         private final PrimitiveArrayPool arrayPool;
         private final OperatorCodeGenerationResources codeGeneration;
         private final DistinctKeySetPolicy policy;
+        private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
 
         private long[] firstKeys;
         private long[] secondKeys;
@@ -1379,11 +1403,13 @@ final class DistinctKeySet
                 boolean adaptiveCompactCandidate,
                 PrimitiveArrayPool arrayPool,
                 OperatorCodeGenerationResources codeGeneration,
-                DistinctKeySetPolicy policy)
+                DistinctKeySetPolicy policy,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
             this.arrayPool = arrayPool;
             this.codeGeneration = codeGeneration;
             this.policy = policy;
+            this.adaptiveLongGroupingPolicy = adaptiveLongGroupingPolicy;
             this.adaptiveCompactCandidate = adaptiveCompactCandidate;
             int capacity = DistinctKeySet.capacity(expectedSize);
             allocate(capacity);
@@ -1538,7 +1564,8 @@ final class DistinctKeySet
                     Math.max(16, size + pendingAdditional),
                     arrayPool,
                     codeGeneration,
-                    policy);
+                    policy,
+                    adaptiveLongGroupingPolicy);
             adaptiveDelegate.importPairs(this);
             releaseTableBuffers();
             pendingAdditional = 0;

@@ -1991,7 +1991,9 @@ class FlatKeyLayout
                 count < policy.generatedDictionaryHashBatchNullFreePairMinRows()) {
             return null;
         }
-        DictionaryHashBatchKernel kernel = codeGeneration.dictionaryHash().create(shape);
+        DictionaryHashBatchKernel kernel = codeGeneration.dictionaryHash().create(
+                shape,
+                policy.generatedDictionaryHashProbeTileRows());
         if (policy.debugGeneratedDictionaryHashBatch() && !debugGeneratedDictionaryHashBatchPrinted) {
             debugGeneratedDictionaryHashBatchPrinted = true;
             System.err.printf("[generated-dictionary-hash-batch] fields=%d shape=%d rows=%d compact=%s kinds=%s ids=%s offsets=%s order=%s%n",

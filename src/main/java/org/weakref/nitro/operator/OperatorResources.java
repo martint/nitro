@@ -25,6 +25,7 @@ public final class OperatorResources
         implements AutoCloseable
 {
     private final OperatorCodeGenerationResources codeGeneration;
+    private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final DistinctKeySetPolicy distinctKeySetPolicy;
     private final FilterOperatorResources filter;
@@ -39,6 +40,7 @@ public final class OperatorResources
 
     public OperatorResources(
             OperatorCodeGenerationResources codeGeneration,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy,
             DistinctKeySetPolicy distinctKeySetPolicy,
             FilterOperatorPolicy filterPolicy,
@@ -51,6 +53,7 @@ public final class OperatorResources
             TopNRankingOperatorPolicy topNRankingPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
+        this.adaptiveLongGroupingPolicy = requireNonNull(adaptiveLongGroupingPolicy, "adaptiveLongGroupingPolicy is null");
         this.flatKeyTablePolicy = requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
         this.distinctKeySetPolicy = requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
         this.project = requireNonNull(project, "project is null");
@@ -83,6 +86,7 @@ public final class OperatorResources
         FlatKeyTablePolicy flatKeyTablePolicy = FlatKeyTablePolicy.fromSystemProperties();
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
+                AdaptiveLongGroupingPolicy.fromSystemProperties(),
                 flatKeyTablePolicy,
                 DistinctKeySetPolicy.fromSystemProperties(),
                 FilterOperatorPolicy.fromSystemProperties(),
@@ -117,6 +121,12 @@ public final class OperatorResources
     {
         checkOpen();
         return flatKeyTablePolicy;
+    }
+
+    public AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy()
+    {
+        checkOpen();
+        return adaptiveLongGroupingPolicy;
     }
 
     public DistinctKeySetPolicy distinctKeySetPolicy()

@@ -77,6 +77,7 @@ public class AggregationOperator
                 allocationContext,
                 operatorResources.codeGeneration(),
                 operatorResources.distinctKeySetPolicy(),
+                operatorResources.adaptiveLongGroupingPolicy(),
                 operatorResources.flatKeyTablePolicy());
         this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
