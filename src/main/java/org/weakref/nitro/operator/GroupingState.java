@@ -37,94 +37,15 @@ import static java.lang.Math.toIntExact;
 final class GroupingState
 {
     private static final VectorAccess.BooleanValues NEVER_NULL = _ -> false;
-    private static final boolean DEBUG_GROUPING_SHAPES = Boolean.getBoolean("nitro.debug.groupingShapes");
-    private static final boolean DEBUG_FLAT_PACKED_IDENTITY = Boolean.getBoolean("nitro.debug.flatPackedIdentity");
-    private static final boolean SHARED_DICTIONARY_COMPOSITE_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryComposite", "true"));
-    // The shared-dictionary shortcut stores owned object keys for materialization. That is excellent for narrow
-    // composites, but at four fields the object-key array, per-field wrappers, and polymorphic equality outweigh the
-    // saved row hashes even under strong id reuse. Route wider composites to FlatGroupingTable, whose packed records
-    // and dictionary cache preserve the same reuse without an object graph per group.
-    private static final int SHARED_DICTIONARY_MAX_FIELDS =
-            Integer.getInteger("nitro.group.sharedDictionaryMaxFields", 3);
-    private static final int SHARED_DICTIONARY_SAMPLE_SIZE =
-            Integer.getInteger("nitro.group.sharedDictionarySampleSize", 128);
-    private static final int SHARED_DICTIONARY_MAX_DISTINCT_PERCENT =
-            Integer.getInteger("nitro.group.sharedDictionaryMaxDistinctPercent", 75);
-    private static final boolean SHARED_DICTIONARY_FLAT_BACKING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.sharedDictionaryFlatBacking", "true"));
-    private static final int SHARED_DICTIONARY_FLAT_BACKING_MIN_FIELDS =
-            Integer.getInteger("nitro.group.sharedDictionaryFlatBackingMinFields", 3);
-    private static final int SHARED_DICTIONARY_FLAT_BACKING_MIN_ROWS =
-            Integer.getInteger("nitro.group.sharedDictionaryFlatBackingMinRows", 1 << 12);
-    private static final boolean PACKED_INT_PAIR_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntPair", "true"));
-    private static final boolean PACKED_INT_TRIPLE_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTriple", "true"));
-    private static final boolean PACKED_INT_TRIPLE_COMBINED_CONTROL =
-            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTripleCombinedControl", "true"));
-    private static final boolean PACKED_INT_TRIPLE_PACKED_TAIL =
-            Boolean.parseBoolean(System.getProperty("nitro.group.packedIntTriplePackedTail", "true"));
-    private static final boolean ADAPTIVE_COMPACT_LONG_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveCompactLong", "false"));
-    // Admit the generated compact table by structural arity. Two-key workloads have passed the broad admission
-    // screen (including high-cardinality q65 and q23), while the three-key cohort remains mixed. The same generated
-    // mechanism supports every arity; this flag controls default admission, not a separate pair implementation.
-    private static final boolean GENERATED_COMPACT_LONG_PAIR_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.generatedCompactLongPair", "true"));
-    // Arity two already uses this generator. Arity three retains its more compact packed-tail layout until the
-    // generated equivalent wins its mixed cohort. At arity four and above, signed-32 packed lanes strictly reduce
-    // the full-width generated table; an out-of-domain value still promotes all prior groups exactly.
-    private static final int GENERATED_COMPACT_LONG_MIN_ARITY =
-            Integer.getInteger("nitro.group.generatedCompactLongMinArity", 4);
     private static final int PACKED_GROUP_ID_MASK = 0x00FF_FFFF;
     private static final int PACKED_INT_TRIPLE_MIN_THIRD = -(1 << 28);
     private static final int PACKED_INT_TRIPLE_MAX_THIRD = (1 << 28) - 1;
-    private static final boolean EARLY_REJECT_MIXED_COMPOSITE =
-            Boolean.parseBoolean(System.getProperty("nitro.group.earlyRejectMixedComposite", "true"));
-    private static final boolean FLAT_SINGLE_KEY_RECORD_IDENTITY =
-            Boolean.parseBoolean(System.getProperty("nitro.group.flatSingleKeyRecordIdentity", "true"));
-    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_BATCH_ROWS =
-            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentityMinBatchRows", 1 << 12);
-    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE =
-            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentitySampleSize", 256);
-    private static final int FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT =
-            Integer.getInteger("nitro.group.flatSingleKeyRecordIdentityMinDistinctPercent", 90);
-    // Self-contained {hash,record} slots remove a dependent record load but widen every hash generation. Admit only
-    // a sustained source (the producer proves another batch exists), a narrow physical key, and a high-cardinality
-    // first batch. One-batch sinks retain the compact ordinary slot and do not even pay for the admission sample.
-    private static final boolean PACKED_FLAT_IDENTITY_SLOTS =
-            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.packedHashRecordSlots", "true"));
-    private static final int PACKED_FLAT_IDENTITY_MAX_FIELDS =
-            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMaxFields", 2);
-    private static final int PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS =
-            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMinBatchRows", 1 << 12);
-    private static final int PACKED_FLAT_IDENTITY_BLOCKING_MIN_BATCH_ROWS =
-            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsBlockingMinBatchRows", 10_000);
-    private static final int PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT =
-            Integer.getInteger("nitro.flatGrouping.packedHashRecordSlotsMinDistinctPercent", 80);
-    // Direct, nearly unique primitive pairs otherwise duplicate full-width keys in both hash slots and the reverse
-    // materialization map. Keep the exact 32-bit hash and identity record id together; dictionary-mapped pairs retain
-    // their generated path because the physical id reuse makes that duplication cheaper than flat record probing.
-    private static final boolean FULL_WIDTH_PAIR_PACKED_IDENTITY =
-            Boolean.parseBoolean(System.getProperty("nitro.group.fullWidthPairPackedIdentity", "true"));
-    private static final int FULL_WIDTH_PAIR_PACKED_IDENTITY_MIN_BATCH_ROWS =
-            Integer.getInteger("nitro.group.fullWidthPairPackedIdentityMinBatchRows", 1 << 10);
-    private static final boolean ADAPTIVE_FLAT_GROUP_LOOKAHEAD =
-            Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveFlatLookahead", "true"));
-    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_START_BATCH =
-            Integer.getInteger("nitro.group.adaptiveFlatLookaheadStartBatch", 4);
-    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_BATCHES =
-            Integer.getInteger("nitro.group.adaptiveFlatLookaheadBatches", 64);
-    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_ROWS =
-            Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinRows", 1 << 13);
-    private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_NEW_PERCENT =
-            Integer.getInteger("nitro.group.adaptiveFlatLookaheadMinNewPercent", 20);
     private final Object2LongMap<OperatorKeySemantics.Key> groups = new Object2LongOpenHashMap<>();
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
     private final GroupingStateResources resources;
     private final LongGroupingPolicy longPolicy;
+    private final CompositeGroupingPolicy compositePolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
     // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
     // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
@@ -206,6 +127,7 @@ final class GroupingState
         this.codeGeneration = codeGeneration;
         this.resources = resources;
         this.longPolicy = resources.longGroupingPolicy();
+        this.compositePolicy = resources.compositeGroupingPolicy();
         this.longDirectNextCheck = longPolicy.directMinGroups();
         groups.defaultReturnValue(-1);
     }
@@ -706,7 +628,7 @@ final class GroupingState
                     true,
                     true);
             flatPackedIdentityAdmissionDecided = true;
-            if (DEBUG_GROUPING_SHAPES) {
+            if (compositePolicy.debugGroupingShapes()) {
                 System.err.printf("[full-width-pair-packed-identity] rows=%d deferred=true%n", values[0].length());
             }
         }
@@ -753,21 +675,21 @@ final class GroupingState
 
     private void reserveFlatGroupingLookahead(int selectedRows, long newGroups)
     {
-        if (!ADAPTIVE_FLAT_GROUP_LOOKAHEAD) {
+        if (!compositePolicy.adaptiveFlatLookahead()) {
             return;
         }
         flatGroupingBatchCount++;
-        if (flatGroupingBatchCount < ADAPTIVE_FLAT_GROUP_LOOKAHEAD_START_BATCH ||
-                selectedRows < ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_ROWS ||
-                newGroups * 100 < (long) selectedRows * ADAPTIVE_FLAT_GROUP_LOOKAHEAD_MIN_NEW_PERCENT) {
+        if (flatGroupingBatchCount < compositePolicy.adaptiveFlatLookaheadStartBatch() ||
+                selectedRows < compositePolicy.adaptiveFlatLookaheadMinRows() ||
+                newGroups * 100 < (long) selectedRows * compositePolicy.adaptiveFlatLookaheadMinNewPercent()) {
             return;
         }
         // A sustained high-cardinality stream will otherwise discover the same table sizes through repeated
         // rehashes. Reserve a bounded number of observed batches ahead; short and low-cardinality inputs never
         // qualify, while an unexpectedly changing distribution remains exact because this is capacity only.
-        long expectedGroups = nextGroupId + newGroups * ADAPTIVE_FLAT_GROUP_LOOKAHEAD_BATCHES;
+        long expectedGroups = nextGroupId + newGroups * compositePolicy.adaptiveFlatLookaheadBatches();
         flatGroupingTable.ensureCapacity(expectedGroups);
-        if (DEBUG_GROUPING_SHAPES) {
+        if (compositePolicy.debugGroupingShapes()) {
             System.err.printf(
                     "[flat-group-lookahead] batch=%d rows=%d new-groups=%d current=%d expected=%d%n",
                     flatGroupingBatchCount,
@@ -957,7 +879,7 @@ final class GroupingState
         }
         initialized = true;
 
-        if (DEBUG_GROUPING_SHAPES) {
+        if (compositePolicy.debugGroupingShapes()) {
             StringBuilder shape = new StringBuilder("[grouping-shape]");
             for (Vector value : values) {
                 shape.append(' ').append(value.getClass().getSimpleName()).append('(').append(value.length());
@@ -992,27 +914,27 @@ final class GroupingState
                     true,
                     true);
             flatPackedIdentityAdmissionDecided = true;
-            if (DEBUG_GROUPING_SHAPES) {
+            if (compositePolicy.debugGroupingShapes()) {
                 System.err.printf("[full-width-pair-packed-identity] rows=%d%n", values[0].length());
             }
             return;
         }
         if (values.length >= 2 && values.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allSingleLongGroupingCandidates(values)) {
-            if (ADAPTIVE_COMPACT_LONG_GROUPING ||
-                    (GENERATED_COMPACT_LONG_PAIR_GROUPING && values.length == 2) ||
-                    values.length >= GENERATED_COMPACT_LONG_MIN_ARITY) {
+            if (compositePolicy.adaptiveCompactLong() ||
+                    (compositePolicy.generatedCompactLongPair() && values.length == 2) ||
+                    values.length >= compositePolicy.generatedCompactLongMinArity()) {
                 useMultiLongGrouping = true;
                 multiLongArity = values.length;
                 multiLongTable = AdaptiveLongGroupingTable.create(values.length, Math.max(16, values[0].length()), arrayPool, codeGeneration);
                 return;
             }
-            if (values.length == 2 && PACKED_INT_PAIR_GROUPING) {
+            if (values.length == 2 && compositePolicy.packedIntPair()) {
                 usePackedIntPairGrouping = true;
                 packedIntGroupingArity = 2;
                 initPackedIntPairTable(Math.max(16, values[0].length()));
                 return;
             }
-            if (values.length == 3 && PACKED_INT_TRIPLE_GROUPING) {
+            if (values.length == 3 && compositePolicy.packedIntTriple()) {
                 usePackedIntPairGrouping = true;
                 packedIntGroupingArity = 3;
                 initPackedIntPairTable(Math.max(16, values[0].length()));
@@ -1027,15 +949,15 @@ final class GroupingState
         }
 
         FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys, arrayPool, codeGeneration);
-        if (SHARED_DICTIONARY_COMPOSITE_GROUPING &&
+        if (compositePolicy.sharedDictionaryComposite() &&
                 values.length > 1 &&
-                values.length <= SHARED_DICTIONARY_MAX_FIELDS &&
+                values.length <= compositePolicy.sharedDictionaryMaxFields() &&
                 sharedDictionaryIds(values) != null &&
                 admitsSharedDictionaryGrouping(values, nulls, flatKeyLayout)) {
             useSharedDictionaryGrouping = true;
-            if (SHARED_DICTIONARY_FLAT_BACKING &&
-                    values.length >= SHARED_DICTIONARY_FLAT_BACKING_MIN_FIELDS &&
-                    values[0].length() >= SHARED_DICTIONARY_FLAT_BACKING_MIN_ROWS &&
+            if (compositePolicy.sharedDictionaryFlatBacking() &&
+                    values.length >= compositePolicy.sharedDictionaryFlatBackingMinFields() &&
+                    values[0].length() >= compositePolicy.sharedDictionaryFlatBackingMinRows() &&
                     flatKeyLayout != null) {
                 sharedDictionaryFlatBacking = true;
                 flatGroupingLayout = flatKeyLayout;
@@ -1043,7 +965,7 @@ final class GroupingState
                         flatKeyLayout,
                         Math.max(16, values[0].length()),
                         true);
-                if (DEBUG_GROUPING_SHAPES) {
+                if (compositePolicy.debugGroupingShapes()) {
                     System.err.printf("[shared-dictionary-flat-backing] fields=%d rows=%d%n", values.length, values[0].length());
                 }
             }
@@ -1070,17 +992,17 @@ final class GroupingState
 
     private boolean admitsFullWidthPairPackedIdentity(Vector[] values, Vector[] nulls, Mask mask)
     {
-        if (!FULL_WIDTH_PAIR_PACKED_IDENTITY || values.length != 2 ||
+        if (!compositePolicy.fullWidthPairPackedIdentity() || values.length != 2 ||
                 values[0] instanceof DictionaryVector || values[1] instanceof DictionaryVector ||
-                mask.count() < FULL_WIDTH_PAIR_PACKED_IDENTITY_MIN_BATCH_ROWS ||
+                mask.count() < compositePolicy.fullWidthPairPackedIdentityMinBatchRows() ||
                 !allSingleLongGroupingCandidates(values) ||
                 !sampleContainsFullWidthPairValue(values, nulls, mask)) {
             return false;
         }
-        int sampled = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        int sampled = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
         FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool, codeGeneration);
         int distinct = sampledDistinctFlatKeys(layout, values, nulls, mask);
-        return (long) distinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT;
+        return (long) distinct * 100 >= (long) sampled * compositePolicy.packedFlatIdentityMinDistinctPercent();
     }
 
     /**
@@ -1089,9 +1011,9 @@ final class GroupingState
      * duplicate full-width slot and reverse-map storage. Sampling uses the same evenly spaced first-batch positions
      * as cardinality admission and is conservative: a missed later wide value preserves exact generated promotion.
      */
-    private static boolean sampleContainsFullWidthPairValue(Vector[] values, Vector[] nulls, Mask mask)
+    private boolean sampleContainsFullWidthPairValue(Vector[] values, Vector[] nulls, Mask mask)
     {
-        int sampleSize = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        int sampleSize = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
         VectorAccess.LongValues first = VectorAccess.longValues(values[0]);
         VectorAccess.LongValues second = VectorAccess.longValues(values[1]);
         for (int sample = 0; sample < sampleSize; sample++) {
@@ -1121,10 +1043,10 @@ final class GroupingState
      */
     private boolean admitsSharedDictionaryGrouping(Vector[] values, Vector[] nulls, FlatKeyLayout layout)
     {
-        if (layout == null || SHARED_DICTIONARY_SAMPLE_SIZE <= 0) {
+        if (layout == null || compositePolicy.sharedDictionarySampleSize() <= 0) {
             return true;
         }
-        int sampleSize = Math.min(values[0].length(), SHARED_DICTIONARY_SAMPLE_SIZE);
+        int sampleSize = Math.min(values[0].length(), compositePolicy.sharedDictionarySampleSize());
         if (sampleSize == 0) {
             return true;
         }
@@ -1147,10 +1069,11 @@ final class GroupingState
                     distinct++;
                 }
             }
-            if (DEBUG_GROUPING_SHAPES) {
+            if (compositePolicy.debugGroupingShapes()) {
                 System.err.printf("[grouping-shared-dictionary] sampled=%d distinct-hashes=%d%n", sampleSize, distinct);
             }
-            return (long) distinct * 100 <= (long) sampleSize * SHARED_DICTIONARY_MAX_DISTINCT_PERCENT;
+            return (long) distinct * 100 <=
+                    (long) sampleSize * compositePolicy.sharedDictionaryMaxDistinctPercent();
         }
         finally {
             arrayPool.release(hashes);
@@ -1171,7 +1094,7 @@ final class GroupingState
 
     private void assignFlatGroups(Vector[] values, Vector[] nulls, Mask mask, I64Vector result)
     {
-        if (FLAT_SINGLE_KEY_RECORD_IDENTITY &&
+        if (compositePolicy.flatSingleKeyRecordIdentity() &&
                 values.length == 1 &&
                 !flatSingleIdentityAdmissionDecided &&
                 !mask.none()) {
@@ -1224,7 +1147,8 @@ final class GroupingState
                 return;
             }
 
-            boolean hashedOnly = EARLY_REJECT_MIXED_COMPOSITE && !flatGroupingTable.batchArrayModeEligible();
+            boolean hashedOnly = compositePolicy.earlyRejectMixedComposite() &&
+                    !flatGroupingTable.batchArrayModeEligible();
             for (int position : mask) {
                 long newGroupId = nextGroupId;
                 long groupId = hashedOnly
@@ -1250,14 +1174,17 @@ final class GroupingState
         // representation. The table is still empty, so replace it once with an immutable nullable identity layout.
         // A later NULL becomes an ordinary record and cannot introduce a logical-id hole or a steady-state mode
         // branch.
-        boolean largeBatch = mask.count() >= FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_BATCH_ROWS;
+        boolean largeBatch = mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
         FlatKeyLayout identityLayout = largeBatch ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration) : null;
         int sampledDistinct = largeBatch
                 ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
                 : 0;
-        int sampled = largeBatch ? Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE) : 0;
+        int sampled = largeBatch
+                ? Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize())
+                : 0;
         if (sampled > 0 &&
-                (long) sampledDistinct * 100 >= (long) sampled * FLAT_SINGLE_KEY_RECORD_IDENTITY_MIN_DISTINCT_PERCENT) {
+                (long) sampledDistinct * 100 >=
+                        (long) sampled * compositePolicy.flatSingleKeyRecordIdentityMinDistinctPercent()) {
             flatGroupingTable.releaseBuffers();
             boolean packedSlots = admitsFlatPackedIdentity(values.length, mask.count(), sampled, sampledDistinct);
             flatGroupingLayout = identityLayout;
@@ -1269,7 +1196,7 @@ final class GroupingState
             flatSingleNullInTable = true;
         }
         flatPackedIdentityAdmissionDecided = true;
-        if (DEBUG_GROUPING_SHAPES) {
+        if (compositePolicy.debugGroupingShapes()) {
             System.err.printf(
                     "[flat-single-identity] selected=%d sampled=%d distinct=%d admitted=%s%n",
                     mask.count(),
@@ -1283,7 +1210,7 @@ final class GroupingState
     private void decideFlatPackedIdentity(Vector[] values, Vector[] nulls, Mask mask)
     {
         flatPackedIdentityAdmissionDecided = true;
-        int sampled = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        int sampled = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
         // Two-field streams already have dedicated direct-pair and producer-lookahead admissions; broadening the
         // blocking hint to dictionary-backed pairs moved their allocation and translation regime. Use this extra
         // lifecycle evidence only for a dense, otherwise-unserved three-field cohort. A partial first-batch mask
@@ -1291,21 +1218,22 @@ final class GroupingState
         boolean blockingHorizon = blockingAggregationForCurrentBatch &&
                 values.length == 3 &&
                 mask.all() &&
-                mask.count() >= PACKED_FLAT_IDENTITY_BLOCKING_MIN_BATCH_ROWS;
+                mask.count() >= compositePolicy.packedFlatIdentityBlockingMinBatchRows();
         boolean sustainedInput = moreInputExpectedForCurrentBatch || blockingHorizon;
-        boolean eligibleFields = values.length <= PACKED_FLAT_IDENTITY_MAX_FIELDS || blockingHorizon;
+        boolean eligibleFields = values.length <= compositePolicy.packedFlatIdentityMaxFields() || blockingHorizon;
         int sampledDistinct = sustainedInput &&
                 flatGroupingLayout != null &&
-                PACKED_FLAT_IDENTITY_SLOTS &&
+                compositePolicy.packedFlatIdentitySlots() &&
                 eligibleFields &&
-                mask.count() >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS
+                mask.count() >= compositePolicy.packedFlatIdentityMinBatchRows()
                 ? sampledDistinctFlatKeys(flatGroupingLayout, values, nulls, mask)
                 : 0;
         boolean admitted = nextGroupId == 0 && sustainedInput && eligibleFields &&
-                PACKED_FLAT_IDENTITY_SLOTS &&
-                mask.count() >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS &&
+                compositePolicy.packedFlatIdentitySlots() &&
+                mask.count() >= compositePolicy.packedFlatIdentityMinBatchRows() &&
                 sampled > 0 &&
-                (long) sampledDistinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT &&
+                (long) sampledDistinct * 100 >=
+                        (long) sampled * compositePolicy.packedFlatIdentityMinDistinctPercent() &&
                 (!blockingHorizon || sampledDistinct == sampled);
         if (admitted) {
             flatGroupingTable.releaseBuffers();
@@ -1315,7 +1243,7 @@ final class GroupingState
                     true,
                     true);
         }
-        if (DEBUG_GROUPING_SHAPES || DEBUG_FLAT_PACKED_IDENTITY) {
+        if (compositePolicy.debugGroupingShapes() || compositePolicy.debugFlatPackedIdentity()) {
             System.err.printf(
                     "[flat-packed-identity] fields=%d selected=%d sampled=%d distinct=%d admitted=%s%n",
                     values.length,
@@ -1326,13 +1254,14 @@ final class GroupingState
         }
     }
 
-    private static boolean admitsFlatPackedIdentity(int fields, int selectedRows, int sampled, int sampledDistinct)
+    private boolean admitsFlatPackedIdentity(int fields, int selectedRows, int sampled, int sampledDistinct)
     {
-        return PACKED_FLAT_IDENTITY_SLOTS &&
-                fields <= PACKED_FLAT_IDENTITY_MAX_FIELDS &&
-                selectedRows >= PACKED_FLAT_IDENTITY_MIN_BATCH_ROWS &&
+        return compositePolicy.packedFlatIdentitySlots() &&
+                fields <= compositePolicy.packedFlatIdentityMaxFields() &&
+                selectedRows >= compositePolicy.packedFlatIdentityMinBatchRows() &&
                 sampled > 0 &&
-                (long) sampledDistinct * 100 >= (long) sampled * PACKED_FLAT_IDENTITY_MIN_DISTINCT_PERCENT;
+                (long) sampledDistinct * 100 >=
+                        (long) sampled * compositePolicy.packedFlatIdentityMinDistinctPercent();
     }
 
     /**
@@ -1344,7 +1273,7 @@ final class GroupingState
      */
     private int sampledDistinctFlatKeys(FlatKeyLayout layout, Vector[] values, Vector[] nulls, Mask mask)
     {
-        int sampleSize = Math.min(mask.count(), FLAT_SINGLE_KEY_RECORD_IDENTITY_SAMPLE_SIZE);
+        int sampleSize = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
         if (sampleSize <= 0) {
             return 0;
         }
@@ -1679,7 +1608,7 @@ final class GroupingState
             if ((!firstNull && first != (int) first) ||
                     (!secondNull && second != (int) second) ||
                     (!thirdNull && (third != (int) third ||
-                            (PACKED_INT_TRIPLE_PACKED_TAIL &&
+                            (compositePolicy.packedIntTriplePackedTail() &&
                                     (third < PACKED_INT_TRIPLE_MIN_THIRD || third > PACKED_INT_TRIPLE_MAX_THIRD))))) {
                 promotePackedIntGrouping(mask.count());
                 assignMultiLongGroups(values, nulls, mask, result);
@@ -1693,28 +1622,30 @@ final class GroupingState
             byte fragment = AbstractMultiLongGroupingTable.controlFragment(hash);
             int slot = hash & tableMask;
             while (true) {
-                int encoded = PACKED_INT_TRIPLE_COMBINED_CONTROL ? tableIds[slot] : 0;
-                byte control = PACKED_INT_TRIPLE_COMBINED_CONTROL ? (byte) (encoded >>> 24) : tableControl[slot];
+                int encoded = compositePolicy.packedIntTripleCombinedControl() ? tableIds[slot] : 0;
+                byte control = compositePolicy.packedIntTripleCombinedControl()
+                        ? (byte) (encoded >>> 24)
+                        : tableControl[slot];
                 if (control == 0) {
-                    if (PACKED_INT_TRIPLE_COMBINED_CONTROL && nextGroupId > PACKED_GROUP_ID_MASK) {
+                    if (compositePolicy.packedIntTripleCombinedControl() && nextGroupId > PACKED_GROUP_ID_MASK) {
                         promotePackedIntGrouping(mask.count());
                         assignMultiLongGroups(values, nulls, mask, result);
                         return;
                     }
                     int groupId = (int) nextGroupId++;
-                    tableIds[slot] = PACKED_INT_TRIPLE_COMBINED_CONTROL
+                    tableIds[slot] = compositePolicy.packedIntTripleCombinedControl()
                             ? (fragment & 0xFF) << 24 | groupId
                             : groupId;
                     ensureLongGroupingCapacity(groupId);
                     longKeysByGroup[groupId] = pair;
-                    if (PACKED_INT_TRIPLE_PACKED_TAIL) {
+                    if (compositePolicy.packedIntTriplePackedTail()) {
                         packedIntTripleTailByGroup[groupId] = packIntTripleTail(thirdInt, nullMask);
                     }
                     else {
                         packedIntTripleThirdByGroup[groupId] = thirdInt;
                         packedIntTripleNullMasksByGroup[groupId] = nullMask;
                     }
-                    if (!PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+                    if (!compositePolicy.packedIntTripleCombinedControl()) {
                         tableControl[slot] = fragment;
                     }
                     out[position] = groupId;
@@ -1726,7 +1657,9 @@ final class GroupingState
                     }
                     break;
                 }
-                int id = PACKED_INT_TRIPLE_COMBINED_CONTROL ? encoded & PACKED_GROUP_ID_MASK : tableIds[slot];
+                int id = compositePolicy.packedIntTripleCombinedControl()
+                        ? encoded & PACKED_GROUP_ID_MASK
+                        : tableIds[slot];
                 if (control == fragment &&
                         longKeysByGroup[id] == pair &&
                         packedIntTripleThird(id) == thirdInt &&
@@ -1763,19 +1696,19 @@ final class GroupingState
                     : new VectorAccess.LongValues[] {
                             position -> unpackFirstInt(packedByGroup[offset + position]),
                             position -> unpackSecondInt(packedByGroup[offset + position]),
-                            position -> PACKED_INT_TRIPLE_PACKED_TAIL
+                            position -> compositePolicy.packedIntTriplePackedTail()
                                     ? unpackIntTripleThird(tailByGroup[offset + position])
                                     : thirdByGroup[offset + position]};
             VectorAccess.BooleanValues[] nullAccessors = packedIntGroupingArity == 2
                     ? new VectorAccess.BooleanValues[] {neverNull, neverNull}
                     : new VectorAccess.BooleanValues[] {
-                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                            position -> ((compositePolicy.packedIntTriplePackedTail()
                                     ? (byte) (tailByGroup[offset + position] >>> 29)
                                     : nullMasksByGroup[offset + position]) & 1) != 0,
-                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                            position -> ((compositePolicy.packedIntTriplePackedTail()
                                     ? (byte) (tailByGroup[offset + position] >>> 29)
                                     : nullMasksByGroup[offset + position]) & 2) != 0,
-                            position -> ((PACKED_INT_TRIPLE_PACKED_TAIL
+                            position -> ((compositePolicy.packedIntTriplePackedTail()
                                     ? (byte) (tailByGroup[offset + position] >>> 29)
                                     : nullMasksByGroup[offset + position]) & 4) != 0};
             migratedGroups = multiLongTable.assignBatch(
@@ -1810,7 +1743,7 @@ final class GroupingState
         while (capacity < expectedSize / LONG_GROUP_LOAD_FACTOR) {
             capacity <<= 1;
         }
-        if (packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+        if (packedIntGroupingArity == 3 && compositePolicy.packedIntTripleCombinedControl()) {
             packedIntPairControl = null;
         }
         else {
@@ -1818,7 +1751,7 @@ final class GroupingState
             Arrays.fill(packedIntPairControl, (byte) 0);
         }
         longGroupIds = arrayPool.borrowInts(capacity);
-        if (packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL) {
+        if (packedIntGroupingArity == 3 && compositePolicy.packedIntTripleCombinedControl()) {
             Arrays.fill(longGroupIds, 0);
         }
         longGroupMask = capacity - 1;
@@ -1830,7 +1763,7 @@ final class GroupingState
     {
         byte[] previousControl = packedIntPairControl;
         int[] previousIds = longGroupIds;
-        boolean combinedControl = packedIntGroupingArity == 3 && PACKED_INT_TRIPLE_COMBINED_CONTROL;
+        boolean combinedControl = packedIntGroupingArity == 3 && compositePolicy.packedIntTripleCombinedControl();
         int previousCapacity = previousIds.length;
         int capacity = previousCapacity * 2;
         if (combinedControl) {
@@ -1877,14 +1810,14 @@ final class GroupingState
 
     private int packedIntTripleThird(int groupId)
     {
-        return PACKED_INT_TRIPLE_PACKED_TAIL
+        return compositePolicy.packedIntTriplePackedTail()
                 ? unpackIntTripleThird(packedIntTripleTailByGroup[groupId])
                 : packedIntTripleThirdByGroup[groupId];
     }
 
     private byte packedIntTripleNullMask(int groupId)
     {
-        return PACKED_INT_TRIPLE_PACKED_TAIL
+        return compositePolicy.packedIntTriplePackedTail()
                 ? (byte) (packedIntTripleTailByGroup[groupId] >>> 29)
                 : packedIntTripleNullMasksByGroup[groupId];
     }
@@ -2569,7 +2502,7 @@ final class GroupingState
         System.arraycopy(previous, 0, longKeysByGroup, 0, previous.length);
         arrayPool.release(previous);
         if (usePackedIntPairGrouping && packedIntGroupingArity == 3) {
-            if (PACKED_INT_TRIPLE_PACKED_TAIL) {
+            if (compositePolicy.packedIntTriplePackedTail()) {
                 int[] previousTail = packedIntTripleTailByGroup;
                 packedIntTripleTailByGroup = arrayPool.borrowInts(newSize);
                 System.arraycopy(previousTail, 0, packedIntTripleTailByGroup, 0, previousTail.length);
@@ -2590,7 +2523,7 @@ final class GroupingState
 
     void releaseBuffers()
     {
-        if (DEBUG_GROUPING_SHAPES) {
+        if (compositePolicy.debugGroupingShapes()) {
             System.err.printf(
                     "[grouping-final] groups=%d single-long=%s direct=%s id-indexed=%s disabled=%s staged-disabled=%s next-check=%d%n",
                     nextGroupId,

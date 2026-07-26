@@ -22,16 +22,21 @@ public final class GroupingStateResources
 {
     private final boolean poolZeroedLongDirectIds;
     private final LongGroupingPolicy longGroupingPolicy;
+    private final CompositeGroupingPolicy compositeGroupingPolicy;
     private final Object zeroedLongDirectIdsFamily = new Object();
     private final Object groupOperatorBufferPool = new Object();
     private final Object markDistinctMaskPool = new Object();
     private final Object markDistinctMarkerBufferPool = new Object();
     private final Object semiJoinBufferPool = new Object();
 
-    public GroupingStateResources(boolean poolZeroedLongDirectIds, LongGroupingPolicy longGroupingPolicy)
+    public GroupingStateResources(
+            boolean poolZeroedLongDirectIds,
+            LongGroupingPolicy longGroupingPolicy,
+            CompositeGroupingPolicy compositeGroupingPolicy)
     {
         this.poolZeroedLongDirectIds = poolZeroedLongDirectIds;
         this.longGroupingPolicy = requireNonNull(longGroupingPolicy, "longGroupingPolicy is null");
+        this.compositeGroupingPolicy = requireNonNull(compositeGroupingPolicy, "compositeGroupingPolicy is null");
     }
 
     boolean poolZeroedLongDirectIds()
@@ -42,6 +47,11 @@ public final class GroupingStateResources
     LongGroupingPolicy longGroupingPolicy()
     {
         return longGroupingPolicy;
+    }
+
+    CompositeGroupingPolicy compositeGroupingPolicy()
+    {
+        return compositeGroupingPolicy;
     }
 
     Object zeroedLongDirectIdsFamily()

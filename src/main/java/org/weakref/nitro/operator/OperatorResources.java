@@ -98,7 +98,8 @@ public final class OperatorResources
                 System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"));
         return new GroupingStateResources(
                 poolZeroedLongDirectIds,
-                LongGroupingPolicy.fromSystemProperties(poolZeroedLongDirectIds));
+                LongGroupingPolicy.fromSystemProperties(poolZeroedLongDirectIds),
+                CompositeGroupingPolicy.fromSystemProperties());
     }
 
     public OperatorCodeGenerationResources codeGeneration()
