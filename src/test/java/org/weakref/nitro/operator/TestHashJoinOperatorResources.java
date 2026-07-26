@@ -25,13 +25,15 @@ class TestHashJoinOperatorResources
         HashJoinIndexPolicy indexPolicy = HashJoinIndexPolicy.defaults();
         HashJoinDynamicFilterPolicy dynamicFilterPolicy = HashJoinDynamicFilterPolicy.defaults();
         HashJoinBuildPolicy buildPolicy = HashJoinBuildPolicy.defaults();
+        HashJoinOutputPolicy outputPolicy = HashJoinOutputPolicy.defaults();
         HashJoinOperatorResources first = new HashJoinOperatorResources(true);
         HashJoinOperatorResources second = new HashJoinOperatorResources(
                 true,
                 null,
                 indexPolicy,
                 dynamicFilterPolicy,
-                buildPolicy);
+                buildPolicy,
+                outputPolicy);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
@@ -41,8 +43,14 @@ class TestHashJoinOperatorResources
         assertThat(second.dynamicFilterPolicy()).isSameAs(dynamicFilterPolicy);
         assertThat(first.buildPolicy()).isEqualTo(HashJoinBuildPolicy.defaults());
         assertThat(second.buildPolicy()).isSameAs(buildPolicy);
+        assertThat(first.outputPolicy()).isEqualTo(HashJoinOutputPolicy.defaults());
+        assertThat(second.outputPolicy()).isSameAs(outputPolicy);
         assertThat(buildPolicy.maxBuildBatchRows()).isEqualTo(1 << 16);
         assertThat(buildPolicy.maxInitialPairHashBytes()).isEqualTo(512L << 20);
+        assertThat(outputPolicy.buildDictionarySparseRatio()).isEqualTo(8);
+        assertThat(outputPolicy.composeEncodedOuterDictionaryDepth()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(outputPolicy.adaptiveComposeMaxRows()).isEqualTo(1024);
+        assertThat(outputPolicy.adaptiveComposeDepth()).isEqualTo(4);
         assertThat(indexPolicy.flatDictionaryProbeCacheMaxCardinality()).isEqualTo(1 << 16);
         assertThat(indexPolicy.flatDictionaryProbeCacheMinRowsPerEntry()).isEqualTo(2);
         assertThat(indexPolicy.denseCompactPairMinCapacity()).isEqualTo(1 << 25);

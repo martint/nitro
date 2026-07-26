@@ -55,20 +55,6 @@ public class HashJoinOperator
     // nor null semantics: a null in either promoted key remains non-matching, exactly as in the residual predicate.
     private static final boolean PROMOTE_BINARY_EQUALITY_FILTER =
             Boolean.parseBoolean(System.getProperty("nitro.join.promoteBinaryEqualityFilter", "true"));
-    // Resolve a left join's build-side null mask without materializing the build value. Consumers such as
-    // count(column) need only this side stream; copying the value as well defeats Output's stream-level laziness.
-    private static final boolean DIRECT_OUTER_JOIN_NULL_STREAM =
-            Boolean.parseBoolean(System.getProperty("nitro.join.directOuterJoinNullStream", "true"));
-    // A probe-outer batch with no build matches has one logical build-side value: NULL. Preserve that
-    // shape as single-run vectors instead of allocating and clearing one dense values/nulls buffer per
-    // projected build column. The representation is type-generic and remains readable through the
-    // ordinary Vector/Streams APIs.
-    private static final boolean RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT =
-            Boolean.parseBoolean(System.getProperty("nitro.join.rleAllUnmatchedOuterJoinOutput", "true"));
-    private static final boolean DEBUG_RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT =
-            Boolean.getBoolean("nitro.join.debugRleAllUnmatchedOuterJoinOutput");
-    private static final boolean DIRECT_COMPACTED_RANGE_OUTPUT =
-            Boolean.parseBoolean(System.getProperty("nitro.join.directCompactedRangeOutput", "true"));
 
     @FunctionalInterface
     public interface JoinFilterFunction
@@ -136,56 +122,16 @@ public class HashJoinOperator
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
     private static final boolean POOL_JOIN_SCRATCH =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolScratch", "true"));
-    private static final int BUILD_DICTIONARY_SPARSE_RATIO = Integer.getInteger("nitro.hash.join.buildDictionarySparseRatio", 8);
     private static final int DUPLICATE_LIST_INITIAL_CAPACITY =
             Integer.getInteger("nitro.hash.join.duplicateListInitialCapacity", 2);
-    private static final boolean WRAP_NON_RETAINED_FIXED_WIDTH_BUILD_VALUES =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.wrapNonRetainedFixedWidthBuildValues", "true"));
-    private static final boolean CACHE_INNER_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheInnerDictionaryIds", "true"));
-    private static final boolean ALIAS_BATCH_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.aliasBatchDictionaryIds", "true"));
-    private static final boolean ALIAS_FULL_BATCH_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.aliasFullBatchDictionaryIds", "false"));
-    private static final boolean WRAP_ENCODED_OUTER_DICTIONARIES =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.wrapEncodedOuterDictionaries", "true"));
-    // Preserve shallow lazy mappings (the allocation/locality win established by q45), but do not let a long join
-    // chain turn every downstream access into an unbounded pointer chase. At this source depth, compose the mapping
-    // once and share it across columns with the same encoding chain.
-    private static final int DEFAULT_COMPOSE_ENCODED_OUTER_DICTIONARY_DEPTH =
-            Integer.getInteger("nitro.hash.join.composeEncodedOuterDictionaryDepth", Integer.MAX_VALUE);
-    // Deep row mappings are cheaper to collapse when a selective join emits only a tiny batch. The composed id
-    // array is shared by every output column with the same encoding chain; large batches retain lazy nesting.
-    private static final boolean ADAPTIVE_TINY_DICTIONARY_COMPOSITION =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.adaptiveTinyDictionaryComposition", "true"));
-    private static final int ADAPTIVE_COMPOSE_MAX_ROWS =
-            Integer.getInteger("nitro.hash.join.adaptiveComposeMaxRows", 1024);
-    private static final int ADAPTIVE_COMPOSE_DEPTH =
-            Integer.getInteger("nitro.hash.join.adaptiveComposeDepth", 4);
     private static final boolean DEFAULT_LAZY_DUPLICATE_SLOT_STATE =
             Boolean.parseBoolean(System.getProperty("nitro.join.lazyDuplicateSlotState", "false"));
     private static final boolean IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES =
             Boolean.parseBoolean(System.getProperty("nitro.join.implicitSequentialBuildRowReferences", "true"));
-    private static final boolean CACHE_COMPOSED_OUTER_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheComposedOuterDictionaryIds", "true"));
-    private static final boolean DIRECT_DENSE_SINGLE_MATCH_RANGE_OUTPUT =
-            Boolean.parseBoolean(System.getProperty("nitro.join.directDenseSingleMatchRangeOutput", "true"));
     private static final boolean ORDERED_LONG_JOIN_FILTER_PAYLOAD =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.orderedLongFilterPayload", "true"));
     private static final boolean CACHE_CURRENT_OUTER_JOIN_FILTER =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheCurrentOuterFilter", "true"));
-    // A one-to-one identity join mapping needs neither a constrained re-borrow nor a copy: the upstream column is
-    // already the exact result vector. Keep it borrowed under the still-open outer batch and forward it directly.
-    // The rule depends only on the physical row mapping and works for every re-borrow-capable operator and vector.
-    private static final boolean FORWARD_IDENTITY_REBORROW_OUTER =
-            Boolean.parseBoolean(System.getProperty("nitro.join.forwardIdentityReborrowOuter", "true"));
-    private static final boolean DEBUG_IDENTITY_REBORROW_OUTER =
-            Boolean.getBoolean("nitro.debug.identityReborrowOuter");
-    // Resolve RLE run indices for a monotonic (outer/probe-ordered) output column with a forward hint instead of a
-    // per-position binary search. Set false to force the binary search (for A/B measurement of the two paths).
-    private static final boolean RLE_RUN_INDEX_HINT = Boolean.parseBoolean(System.getProperty("nitro.join.rleRunIndexHint", "true"));
-    private static final boolean POOL_BUILD_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolBuildDictionaryIds", "true"));
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
     private static final int VALUES_FLAG = 1;
@@ -197,6 +143,7 @@ public class HashJoinOperator
     private final HashJoinIndexPolicy joinIndexPolicy;
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
     private final HashJoinBuildPolicy buildPolicy;
+    private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -220,7 +167,7 @@ public class HashJoinOperator
     // Public output ordinal -> physical concatenated [outer..., inner...] column. Keeping projection inside the join
     // preserves lazy materialization: columns omitted by the plan never get an Output wrapper or a payload borrow.
     private int[] outputChannels;
-    private int composeEncodedOuterDictionaryDepth = DEFAULT_COMPOSE_ENCODED_OUTER_DICTIONARY_DEPTH;
+    private int composeEncodedOuterDictionaryDepth;
     private boolean lazyDuplicateSlotState = DEFAULT_LAZY_DUPLICATE_SLOT_STATE;
     private boolean implicitSequentialBuildRowReferences;
     private final boolean probeOuterJoin;
@@ -444,6 +391,8 @@ public class HashJoinOperator
         this.joinIndexPolicy = operatorResources.hashJoin().indexPolicy();
         this.dynamicFilterPolicy = operatorResources.hashJoin().dynamicFilterPolicy();
         this.buildPolicy = operatorResources.hashJoin().buildPolicy();
+        this.outputPolicy = operatorResources.hashJoin().outputPolicy();
+        this.composeEncodedOuterDictionaryDepth = outputPolicy.composeEncodedOuterDictionaryDepth();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
@@ -794,7 +743,7 @@ public class HashJoinOperator
 
     private int tryEmitDirectSingleMatchPositionRange(int outputPosition)
     {
-        if (!DIRECT_DENSE_SINGLE_MATCH_RANGE_OUTPUT ||
+        if (!outputPolicy.directDenseSingleMatchRangeOutput() ||
                 joinFilters.length != 0 ||
                 probeOuterJoin ||
                 preparedOuterIndex < preparedOuterCount ||
@@ -1294,7 +1243,7 @@ public class HashJoinOperator
                 }
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(joinIndexPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
+                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1905,6 +1854,7 @@ public class HashJoinOperator
             // whose output may be tiny (q84 builds 2.9M rows and emits about 1.2K matches).
             return new LongJoinIndex(
                     joinIndexPolicy,
+                    outputPolicy,
                     arrayPool,
                     expectedSize,
                     innerSchema.length == innerJoinColumns.length,
@@ -2104,7 +2054,7 @@ public class HashJoinOperator
 
     private boolean canResolveInnerNullStreamDirectly(int outputIndex)
     {
-        if (!DIRECT_OUTER_JOIN_NULL_STREAM || !probeOuterJoin || outputIndex < outerOutputCount) {
+        if (!outputPolicy.directOuterJoinNullStream() || !probeOuterJoin || outputIndex < outerOutputCount) {
             return false;
         }
         return bufferedInner.outputStreams(outputIndex - outerOutputCount) != null;
@@ -2113,7 +2063,7 @@ public class HashJoinOperator
     private Vector materializeInnerNullStreamDirectly(int innerOutputIndex)
     {
         long start = System.nanoTime();
-        if (RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT && allRowsHaveNoMatch()) {
+        if (outputPolicy.rleAllUnmatchedOuterJoinOutput() && allRowsHaveNoMatch()) {
             Vector nulls = allTrueBooleanStream(currentOutputCount);
             if (materializationListener != null) {
                 materializationListener.record(profileName != null ? profileName : "hash_join", -1, Streams.of(Stream.NULLS, nulls), currentOutputCount, System.nanoTime() - start);
@@ -2358,13 +2308,13 @@ public class HashJoinOperator
     {
         if (source instanceof DictionaryVector || source instanceof org.weakref.nitro.data.RleVector) {
             int composeDepth = composeEncodedOuterDictionaryDepth;
-            if (composeDepth == Integer.MAX_VALUE && ADAPTIVE_TINY_DICTIONARY_COMPOSITION && currentOutputCount <= ADAPTIVE_COMPOSE_MAX_ROWS) {
-                composeDepth = ADAPTIVE_COMPOSE_DEPTH;
+            if (composeDepth == Integer.MAX_VALUE && outputPolicy.adaptiveTinyDictionaryComposition() && currentOutputCount <= outputPolicy.adaptiveComposeMaxRows()) {
+                composeDepth = outputPolicy.adaptiveComposeDepth();
             }
-            if (WRAP_ENCODED_OUTER_DICTIONARIES && encodingDepth(source) < composeDepth) {
+            if (outputPolicy.wrapEncodedOuterDictionaries() && encodingDepth(source) < composeDepth) {
                 return DictionaryVector.wrapNested(outerDictionaryIds(), currentOutputCount, source);
             }
-            if (CACHE_COMPOSED_OUTER_DICTIONARY_IDS) {
+            if (outputPolicy.cacheComposedOuterDictionaryIds()) {
                 for (int index = 0; index < composedOuterMappingCount; index++) {
                     if (sameEncodingMapping(source, composedOuterMappingSources[index])) {
                         return DictionaryVector.wrap(
@@ -2379,7 +2329,7 @@ public class HashJoinOperator
             // match, in probe order), so an RLE level resolves run indices with a forward hint instead of binary search.
             int[] ids = Arrays.copyOf(outerDictionaryIds(), currentOutputCount);
             DictionaryVector composed = wrapComposedDictionary(ids, source, true);
-            if (CACHE_COMPOSED_OUTER_DICTIONARY_IDS) {
+            if (outputPolicy.cacheComposedOuterDictionaryIds()) {
                 composedOuterMappingSources[composedOuterMappingCount] = source;
                 composedOuterMappingIds[composedOuterMappingCount] = composed.ids();
                 composedOuterMappingCount++;
@@ -2462,8 +2412,8 @@ public class HashJoinOperator
 
     private boolean aliasBatchDictionaryIds(int[] positions)
     {
-        return ALIAS_BATCH_DICTIONARY_IDS
-                || (ALIAS_FULL_BATCH_DICTIONARY_IDS && currentOutputCount == positions.length);
+        return outputPolicy.aliasBatchDictionaryIds()
+                || (outputPolicy.aliasFullBatchDictionaryIds() && currentOutputCount == positions.length);
     }
 
     private int[] currentBatchPositions(int[] positions)
@@ -2480,7 +2430,7 @@ public class HashJoinOperator
 
     private int[] innerLogicalDictionaryIds()
     {
-        if (!CACHE_INNER_DICTIONARY_IDS) {
+        if (!outputPolicy.cacheInnerDictionaryIds()) {
             return currentBatchPositions(outputInnerLogicalPositions);
         }
         if (currentInnerLogicalDictionaryIds == null) {
@@ -2491,7 +2441,7 @@ public class HashJoinOperator
 
     private int[] innerSourceDictionaryIds()
     {
-        if (!CACHE_INNER_DICTIONARY_IDS) {
+        if (!outputPolicy.cacheInnerDictionaryIds()) {
             return currentBatchPositions(innerSourcePositions());
         }
         if (currentInnerSourceDictionaryIds == null) {
@@ -2528,9 +2478,9 @@ public class HashJoinOperator
             return;
         }
         outerConstrained = true;
-        if (FORWARD_IDENTITY_REBORROW_OUTER && outerOutputIsIdentity()) {
+        if (outputPolicy.forwardIdentityReborrowOuter() && outerOutputIsIdentity()) {
             forwardOuterIdentity = true;
-            if (DEBUG_IDENTITY_REBORROW_OUTER && !identityReborrowReported) {
+            if (outputPolicy.debugIdentityReborrowOuter() && !identityReborrowReported) {
                 identityReborrowReported = true;
                 System.err.printf("[identity-reborrow] join=%s rows=%d outputs=%d%n",
                         profileName != null ? profileName : "hash_join", currentOutputCount, outputChannels.length);
@@ -2597,7 +2547,7 @@ public class HashJoinOperator
 
     private Streams materializeInnerOutput(int innerOutputIndex)
     {
-        if (RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT && allRowsHaveNoMatch()) {
+        if (outputPolicy.rleAllUnmatchedOuterJoinOutput() && allRowsHaveNoMatch()) {
             Streams schema = outputSchema(innerOutputIndex + outerOutputCount);
             if (schema == null) {
                 throw new IllegalStateException("Unable to determine inner output schema for left join");
@@ -2706,7 +2656,7 @@ public class HashJoinOperator
             }
         }
         allRowsNoMatchState = 2;
-        if (DEBUG_RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT) {
+        if (outputPolicy.debugRleAllUnmatchedOuterJoinOutput()) {
             System.err.printf("[rle-all-unmatched-outer-join] join=%s rows=%d%n",
                     profileName != null ? profileName : "hash_join",
                     currentOutputCount);
@@ -2854,13 +2804,13 @@ public class HashJoinOperator
         }
         Vector values = column.values();
         if (!(values instanceof BinaryVector binarySource)) {
-            if (WRAP_NON_RETAINED_FIXED_WIDTH_BUILD_VALUES && isRawWrappableFixedWidthValue(values)) {
+            if (outputPolicy.wrapNonRetainedFixedWidthBuildValues() && isRawWrappableFixedWidthValue(values)) {
                 return wrapRawNonRetainedValues(values);
             }
             return null;
         }
 
-        if ((long) innerBatch.length() > (long) currentOutputCount * BUILD_DICTIONARY_SPARSE_RATIO) {
+        if ((long) innerBatch.length() > (long) currentOutputCount * outputPolicy.buildDictionarySparseRatio()) {
             return wrapRawNonRetainedValues(binarySource);
         }
 
@@ -2948,12 +2898,12 @@ public class HashJoinOperator
     private int[] borrowBuildDictionaryIds(int length)
     {
         long bytes = (long) length * Integer.BYTES;
-        return POOL_BUILD_DICTIONARY_IDS && arrayPool.isRetainable(bytes) ? arrayPool.borrowInts(length) : new int[length];
+        return outputPolicy.poolBuildDictionaryIds() && arrayPool.isRetainable(bytes) ? arrayPool.borrowInts(length) : new int[length];
     }
 
     private void releaseBuildDictionaryIds(int[] ids)
     {
-        if (POOL_BUILD_DICTIONARY_IDS && arrayPool.isRetainable((long) ids.length * Integer.BYTES)) {
+        if (outputPolicy.poolBuildDictionaryIds() && arrayPool.isRetainable((long) ids.length * Integer.BYTES)) {
             arrayPool.release(ids);
         }
     }
@@ -2998,7 +2948,7 @@ public class HashJoinOperator
         return sideInput.build();
     }
 
-    private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values)
+    private DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values)
     {
         return wrapComposedDictionary(dictionaryIds, values, false);
     }
@@ -3012,7 +2962,7 @@ public class HashJoinOperator
      * through arbitrary ids and so breaks the ordering; monotonicity is dropped there. Run indices of ascending
      * positions stay ascending, so a nested RLE keeps the fast path.
      */
-    private static DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values, boolean idsMonotonic)
+    private DictionaryVector wrapComposedDictionary(int[] dictionaryIds, Vector values, boolean idsMonotonic)
     {
         Vector baseValues = values;
         boolean monotonic = idsMonotonic;
@@ -3028,7 +2978,7 @@ public class HashJoinOperator
             }
 
             if (baseValues instanceof org.weakref.nitro.data.RleVector rle) {
-                if (monotonic && RLE_RUN_INDEX_HINT) {
+                if (monotonic && outputPolicy.rleRunIndexHint()) {
                     int hint = 0;
                     for (int index = 0; index < dictionaryIds.length; index++) {
                         hint = rle.runIndexFromHint(dictionaryIds[index], hint);
@@ -3768,6 +3718,7 @@ public class HashJoinOperator
         // builder. Keep small builds on the sequential detector/hash path, where a speculative range map is not
         // amortized.
         private final HashJoinIndexPolicy policy;
+        private final HashJoinOutputPolicy outputPolicy;
         private final PrimitiveArrayPool arrayPool;
 
         // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
@@ -3861,6 +3812,7 @@ public class HashJoinOperator
 
         private LongJoinIndex(
                 HashJoinIndexPolicy policy,
+                HashJoinOutputPolicy outputPolicy,
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
@@ -3872,6 +3824,7 @@ public class HashJoinOperator
                 boolean buildRowReferencesUnused)
         {
             this.policy = requireNonNull(policy, "policy is null");
+            this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
             this.arrayPool = arrayPool;
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
@@ -4162,7 +4115,7 @@ public class HashJoinOperator
         @Override
         public boolean supportsRowRanges()
         {
-            if (!DIRECT_COMPACTED_RANGE_OUTPUT) {
+            if (!outputPolicy.directCompactedRangeOutput()) {
                 return false;
             }
             if (!finalized) {
