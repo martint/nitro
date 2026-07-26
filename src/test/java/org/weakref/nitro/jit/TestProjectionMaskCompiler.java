@@ -116,6 +116,37 @@ class TestProjectionMaskCompiler
     }
 
     @Test
+    void testCompiledUtf8LiteralEqualityUsesSelectedPositionsForOversizedDictionaries()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.literal("E"), ProjectionArgument.input()))
+                .orElseThrow();
+
+        DictionaryVector values = new DictionaryVector(
+                new int[] {4, 0, 4},
+                utf8("A", "B", "C", "D", "E"));
+        Mask mask = Mask.sparse(new int[] {0}, 3);
+        assertThat(compiled.evaluate(
+                List.of(Streams.empty(), Streams.ofValues(values)),
+                mask,
+                true)).isTrue();
+        assertThat(mask).containsExactly(0);
+
+        DictionaryVector nested = new DictionaryVector(
+                new int[] {1, 0, 1},
+                new DictionaryVector(
+                        new int[] {0, 4},
+                        utf8("A", "B", "C", "D", "E")));
+        Mask nestedMask = Mask.sparse(new int[] {0, 1}, 3);
+        assertThat(compiled.evaluate(
+                List.of(Streams.empty(), Streams.ofValues(nested)),
+                nestedMask,
+                true)).isTrue();
+        assertThat(nestedMask).containsExactly(0);
+    }
+
+    @Test
     void testCompilesProviderAuthoredUtf8InputEquality()
     {
         ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(

@@ -49,7 +49,12 @@ final class Utf8LiteralMaskSupport
                 yield true;
             }
             case DictionaryVector dictionary when dictionary.baseValues() instanceof BinaryVector base -> {
-                retainDictionary(dictionary, base, mask, selectMatches);
+                if (base.length() > mask.selectedCount()) {
+                    retainSelectedDictionaryPositions(dictionary, base, mask, selectMatches);
+                }
+                else {
+                    retainDictionary(dictionary, base, mask, selectMatches);
+                }
                 yield true;
             }
             case RleVector rle when rle.values() instanceof BinaryVector runs -> {
@@ -58,6 +63,34 @@ final class Utf8LiteralMaskSupport
             }
             default -> false;
         };
+    }
+
+    private void retainSelectedDictionaryPositions(
+            DictionaryVector dictionary,
+            BinaryVector values,
+            Mask mask,
+            boolean selectMatches)
+    {
+        byte[] data = values.data();
+        int[] offsets = values.offsets();
+        if (dictionary.dictionaryDepth() == 1) {
+            int[] ids = dictionary.ids();
+            retainMapped(mask, selectMatches, position -> {
+                int valuePosition = ids[position];
+                return matcher.matches(
+                        data,
+                        offsets[valuePosition],
+                        offsets[valuePosition + 1] - offsets[valuePosition]);
+            });
+            return;
+        }
+        retainMapped(mask, selectMatches, position -> {
+            int valuePosition = dictionary.basePosition(position);
+            return matcher.matches(
+                    data,
+                    offsets[valuePosition],
+                    offsets[valuePosition + 1] - offsets[valuePosition]);
+        });
     }
 
     private void retainDictionary(DictionaryVector dictionary, BinaryVector values, Mask mask, boolean selectMatches)
