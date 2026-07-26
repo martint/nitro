@@ -1922,7 +1922,15 @@ final class TpcdsParquetSupport
 
     public static Operator query26(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator sales = profiled("q26.scan.catalog_sales", factScan(
+        return query26(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
+    }
+
+    static Operator query26(TpcdsQueryContext context)
+    {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator sales = context.profiled("q26.scan.catalog_sales", factScan(
                 allocator,
                 tables,
                 "catalog_sales",
@@ -1934,7 +1942,7 @@ final class TpcdsParquetSupport
                 "cs_list_price",
                 "cs_coupon_amt",
                 "cs_sales_price"));
-        sales = profiled("q26.join.customer_demographics", new HashJoinOperator(
+        sales = context.profiled("q26.join.customer_demographics", new HashJoinOperator(
                 allocator,
                 sales,
                 2,
@@ -1947,7 +1955,7 @@ final class TpcdsParquetSupport
                         new String[] {"cd_demo_sk", "cd_gender", "cd_marital_status", "cd_education_status"},
                         0),
                 0).withOutputs(0, 1, 3, 4, 5, 6, 7));
-        sales = profiled("q26.join.date_dim", new HashJoinOperator(
+        sales = context.profiled("q26.join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
@@ -1960,13 +1968,13 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_year"},
                         0),
                 0).withOutputs(1, 2, 3, 4, 5, 6));
-        sales = profiled("q26.join.item", new HashJoinOperator(
+        sales = context.profiled("q26.join.item", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_item_id"),
                 0).withOutputs(1, 2, 3, 4, 5, 7));
-        sales = profiled("q26.join.promotion", new HashJoinOperator(
+        sales = context.profiled("q26.join.promotion", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
@@ -1979,8 +1987,8 @@ final class TpcdsParquetSupport
                         new String[] {"p_promo_sk", "p_channel_email", "p_channel_event"},
                         0),
                 0).withOutputs(1, 2, 3, 4, 5));
-        sales = profiled("q26.project.sales", projectInputs(allocator, primitiveRegistry, sales, 4, 0, 1, 2, 3));
-        sales = profiled("q26.group.item", new GroupedAggregationOperator(
+        sales = context.profiled("q26.project.sales", projectInputs(allocator, primitiveRegistry, sales, 4, 0, 1, 2, 3));
+        sales = context.profiled("q26.group.item", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(
@@ -1992,8 +2000,8 @@ final class TpcdsParquetSupport
                         new Sum(4),
                         new CountColumn(4)),
                 sales));
-        sales = profiled("q26.project.averages", projectQuery26Averages(allocator, primitiveRegistry, sales));
-        return profiled("q26.topn", new TopNOperator(allocator, 100, 0, false, sales));
+        sales = context.profiled("q26.project.averages", projectQuery26Averages(allocator, primitiveRegistry, sales));
+        return context.profiled("q26.topn", new TopNOperator(allocator, 100, 0, false, sales));
     }
 
     public static Operator query55(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
