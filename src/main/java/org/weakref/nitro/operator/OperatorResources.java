@@ -25,6 +25,7 @@ public final class OperatorResources
         implements AutoCloseable
 {
     private final OperatorCodeGenerationResources codeGeneration;
+    private final PooledLongHashSetPolicy pooledLongHashSetPolicy;
     private final FilterOperatorResources filter;
     private final FullJoinOperatorPolicy fullJoinPolicy;
     private final GroupIdOperatorPolicy groupIdPolicy;
@@ -37,6 +38,7 @@ public final class OperatorResources
 
     public OperatorResources(
             OperatorCodeGenerationResources codeGeneration,
+            PooledLongHashSetPolicy pooledLongHashSetPolicy,
             FilterOperatorPolicy filterPolicy,
             FullJoinOperatorPolicy fullJoinPolicy,
             GroupIdOperatorPolicy groupIdPolicy,
@@ -47,6 +49,7 @@ public final class OperatorResources
             TopNRankingOperatorPolicy topNRankingPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
+        this.pooledLongHashSetPolicy = requireNonNull(pooledLongHashSetPolicy, "pooledLongHashSetPolicy is null");
         this.filter = new FilterOperatorResources(codeGeneration.projectionMask(), requireNonNull(filterPolicy, "filterPolicy is null"));
         this.fullJoinPolicy = requireNonNull(fullJoinPolicy, "fullJoinPolicy is null");
         this.groupIdPolicy = requireNonNull(groupIdPolicy, "groupIdPolicy is null");
@@ -72,6 +75,7 @@ public final class OperatorResources
     {
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
+                PooledLongHashSetPolicy.fromSystemProperties(),
                 FilterOperatorPolicy.fromSystemProperties(),
                 FullJoinOperatorPolicy.fromSystemProperties(),
                 GroupIdOperatorPolicy.fromSystemProperties(),
@@ -89,6 +93,12 @@ public final class OperatorResources
     {
         checkOpen();
         return codeGeneration;
+    }
+
+    public PooledLongHashSetPolicy pooledLongHashSetPolicy()
+    {
+        checkOpen();
+        return pooledLongHashSetPolicy;
     }
 
     public ProjectOperatorResources project()

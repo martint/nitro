@@ -28,7 +28,7 @@ class TestPooledLongHashSet
     {
         PrimitiveArrayPool pool = new PrimitiveArrayPool(16L << 20, 0);
         Set<Long> expected = new HashSet<>();
-        PooledLongHashSet first = new PooledLongHashSet(1, pool);
+        PooledLongHashSet first = new PooledLongHashSet(1, pool, PooledLongHashSetPolicy.defaults());
         for (long value = -10_000; value <= 10_000; value++) {
             assertThat(first.add(value)).isEqualTo(expected.add(value));
             assertThat(first.add(value)).isFalse();
@@ -39,10 +39,30 @@ class TestPooledLongHashSet
         first.releaseBuffers();
 
         long reusedBefore = pool.reusedBytes();
-        PooledLongHashSet second = new PooledLongHashSet(20_001, pool);
+        PooledLongHashSet second = new PooledLongHashSet(20_001, pool, PooledLongHashSetPolicy.defaults());
         assertThat(pool.reusedBytes()).isGreaterThan(reusedBefore);
         assertThat(second.add(0)).isTrue();
         assertThat(second.add(0)).isFalse();
         second.releaseBuffers();
+    }
+
+    @Test
+    void testVectorTagPolicyIsInstanceScoped()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 0);
+        PooledLongHashSet scalar = new PooledLongHashSet(
+                16,
+                pool,
+                new PooledLongHashSetPolicy(0.5f, false, false, 100, 64, false));
+        PooledLongHashSet vector = new PooledLongHashSet(
+                16,
+                pool,
+                new PooledLongHashSetPolicy(0.9f, true, true, 0, 256, false));
+
+        assertThat(scalar.vectorTagsEnabled()).isFalse();
+        assertThat(vector.vectorTagsEnabled()).isTrue();
+
+        scalar.releaseBuffers();
+        vector.releaseBuffers();
     }
 }

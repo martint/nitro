@@ -75,7 +75,8 @@ public class AggregationOperator
         this.aggregationExecutionContext = new AggregationExecutionContext(
                 allocator,
                 allocationContext,
-                operatorResources.codeGeneration());
+                operatorResources.codeGeneration(),
+                operatorResources.pooledLongHashSetPolicy());
         this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
         this.program = requireNonNull(program, "program is null");

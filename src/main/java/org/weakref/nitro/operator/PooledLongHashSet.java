@@ -25,25 +25,15 @@ import java.util.function.LongConsumer;
 /** Compact exact scalar-long set whose backing arrays participate in the shared primitive pool. */
 final class PooledLongHashSet
 {
-    private static final float LOAD_FACTOR = Float.parseFloat(System.getProperty("nitro.distinct.scalarLongLoadFactor", "0.75"));
-    private static final boolean VECTOR_TAGS = Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "true"));
-    private static final boolean VECTOR_KEYS = Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorKeys", "true"));
-    private static final int MIN_VECTOR_TAG_NEW_KEY_PERCENT = Integer.getInteger("nitro.distinct.scalarLongVectorTagMinNewKeyPercent", 5);
-    private static final boolean DEBUG = Boolean.getBoolean("nitro.debug.scalarLongDistinct");
-    private static final VectorSpecies<Byte> TAG_SPECIES = switch (Integer.getInteger("nitro.distinct.scalarLongTagGroupBits", 128)) {
-        case 64 -> ByteVector.SPECIES_64;
-        case 128 -> ByteVector.SPECIES_128;
-        case 256 -> ByteVector.SPECIES_256;
-        case 512 -> ByteVector.SPECIES_512;
-        default -> throw new IllegalArgumentException("nitro.distinct.scalarLongTagGroupBits must be 64, 128, 256, or 512");
-    };
-    private static final int TAG_GROUP_SIZE = TAG_SPECIES.length();
     private static final VectorSpecies<Long> KEY_SPECIES = LongVector.SPECIES_512;
     private static final int KEY_GROUP_SIZE = KEY_SPECIES.length();
     private static final int MIN_CAPACITY = 16;
     private static final int MAX_CAPACITY = 1 << 30;
 
     private final PrimitiveArrayPool arrayPool;
+    private final PooledLongHashSetPolicy policy;
+    private final VectorSpecies<Byte> tagSpecies;
+    private final int tagGroupSize;
     private boolean vectorTags;
     private long[] keys;
     private byte[] tags;
@@ -54,21 +44,30 @@ final class PooledLongHashSet
     private long addCalls;
     private boolean admissionReported;
 
-    PooledLongHashSet(int expectedSize, PrimitiveArrayPool arrayPool)
+    PooledLongHashSet(int expectedSize, PrimitiveArrayPool arrayPool, PooledLongHashSetPolicy policy)
     {
-        this(expectedSize, arrayPool, VECTOR_TAGS);
+        this(expectedSize, arrayPool, policy, policy.vectorTags());
     }
 
-    PooledLongHashSet(int expectedSize, PrimitiveArrayPool arrayPool, boolean vectorTags)
+    PooledLongHashSet(int expectedSize, PrimitiveArrayPool arrayPool, PooledLongHashSetPolicy policy, boolean vectorTags)
     {
         this.arrayPool = arrayPool;
-        this.vectorTags = VECTOR_TAGS && vectorTags;
+        this.policy = policy;
+        this.tagSpecies = switch (policy.tagGroupBits()) {
+            case 64 -> ByteVector.SPECIES_64;
+            case 128 -> ByteVector.SPECIES_128;
+            case 256 -> ByteVector.SPECIES_256;
+            case 512 -> ByteVector.SPECIES_512;
+            default -> throw new IllegalArgumentException("Unsupported tag group bits: " + policy.tagGroupBits());
+        };
+        this.tagGroupSize = tagSpecies.length();
+        this.vectorTags = policy.vectorTags() && vectorTags;
         allocate(capacity(expectedSize));
     }
 
     boolean add(long key)
     {
-        if (DEBUG) {
+        if (policy.debug()) {
             addCalls++;
         }
         if (key == 0) {
@@ -89,7 +88,7 @@ final class PooledLongHashSet
     /** Adds after the owning adaptive index has closed admission and enabled the final hash representation. */
     boolean addTaggedFinal(long key)
     {
-        if (DEBUG) {
+        if (policy.debug()) {
             addCalls++;
         }
         if (key == 0) {
@@ -105,7 +104,7 @@ final class PooledLongHashSet
 
     boolean addScalarFinal(long key)
     {
-        if (DEBUG) {
+        if (policy.debug()) {
             addCalls++;
         }
         if (key == 0) {
@@ -165,11 +164,11 @@ final class PooledLongHashSet
 
     void enableVectorTags()
     {
-        if (DEBUG && !admissionReported) {
+        if (policy.debug() && !admissionReported) {
             System.err.printf("[scalar-long-distinct-admission] size=%d addCalls=%d capacity=%d%n", size, addCalls, keys.length);
             admissionReported = true;
         }
-        if (!VECTOR_TAGS || vectorTags || (long) size * 100 < addCalls * MIN_VECTOR_TAG_NEW_KEY_PERCENT) {
+        if (!policy.vectorTags() || vectorTags || (long) size * 100 < addCalls * policy.minimumVectorTagNewKeyPercent()) {
             return;
         }
         long[] previousKeys = keys;
@@ -217,7 +216,7 @@ final class PooledLongHashSet
 
     void releaseBuffers()
     {
-        if (DEBUG) {
+        if (policy.debug()) {
             System.err.printf("[scalar-long-distinct] tagged=%s size=%d addCalls=%d capacity=%d%n", vectorTags, size, addCalls, keys.length);
         }
         arrayPool.release(keys);
@@ -280,7 +279,7 @@ final class PooledLongHashSet
     {
         keys = arrayPool.borrowLongs(capacity);
         Arrays.fill(keys, 0);
-        if (vectorTags && !VECTOR_KEYS) {
+        if (vectorTags && !policy.vectorKeys()) {
             tags = arrayPool.borrowBytes(capacity);
             Arrays.fill(tags, (byte) 0);
         }
@@ -292,9 +291,9 @@ final class PooledLongHashSet
     {
         long hash = hash64(key);
         byte tag = tag(hash);
-        int group = ((int) hash) & mask & ~(TAG_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(tagGroupSize - 1);
         while (true) {
-            ByteVector groupTags = ByteVector.fromArray(TAG_SPECIES, tags, group);
+            ByteVector groupTags = ByteVector.fromArray(tagSpecies, tags, group);
             long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
             while (matchBits != 0) {
                 int slot = group + Long.numberOfTrailingZeros(matchBits);
@@ -317,7 +316,7 @@ final class PooledLongHashSet
                 }
                 return true;
             }
-            group = (group + TAG_GROUP_SIZE) & mask;
+            group = (group + tagGroupSize) & mask;
         }
     }
 
@@ -348,7 +347,7 @@ final class PooledLongHashSet
 
     private boolean addGrouped(long key)
     {
-        if (VECTOR_KEYS) {
+        if (policy.vectorKeys()) {
             return addVectorKeys(key);
         }
         return addTagged(key);
@@ -358,9 +357,9 @@ final class PooledLongHashSet
     {
         long hash = hash64(key);
         byte tag = tag(hash);
-        int group = ((int) hash) & mask & ~(TAG_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(tagGroupSize - 1);
         while (true) {
-            ByteVector groupTags = ByteVector.fromArray(TAG_SPECIES, tags, group);
+            ByteVector groupTags = ByteVector.fromArray(tagSpecies, tags, group);
             long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
             while (matchBits != 0) {
                 int slot = group + Long.numberOfTrailingZeros(matchBits);
@@ -372,7 +371,7 @@ final class PooledLongHashSet
             if (groupTags.compare(VectorOperators.EQ, (byte) 0).anyTrue()) {
                 return false;
             }
-            group = (group + TAG_GROUP_SIZE) & mask;
+            group = (group + tagGroupSize) & mask;
         }
     }
 
@@ -394,7 +393,7 @@ final class PooledLongHashSet
 
     private boolean containsGrouped(long key)
     {
-        if (VECTOR_KEYS) {
+        if (policy.vectorKeys()) {
             return containsVectorKeys(key);
         }
         return containsTagged(key);
@@ -403,9 +402,9 @@ final class PooledLongHashSet
     private void insertTaggedRehash(long key)
     {
         long hash = hash64(key);
-        int group = ((int) hash) & mask & ~(TAG_GROUP_SIZE - 1);
+        int group = ((int) hash) & mask & ~(tagGroupSize - 1);
         while (true) {
-            long emptyBits = ByteVector.fromArray(TAG_SPECIES, tags, group)
+            long emptyBits = ByteVector.fromArray(tagSpecies, tags, group)
                     .compare(VectorOperators.EQ, (byte) 0)
                     .toLong();
             if (emptyBits != 0) {
@@ -414,7 +413,7 @@ final class PooledLongHashSet
                 keys[slot] = key;
                 return;
             }
-            group = (group + TAG_GROUP_SIZE) & mask;
+            group = (group + tagGroupSize) & mask;
         }
     }
 
@@ -436,7 +435,7 @@ final class PooledLongHashSet
 
     private void insertGroupedRehash(long key)
     {
-        if (VECTOR_KEYS) {
+        if (policy.vectorKeys()) {
             insertVectorKeysRehash(key);
         }
         else {
@@ -449,7 +448,7 @@ final class PooledLongHashSet
         return (byte) ((hash >>> 56) | 0x80L);
     }
 
-    private static int capacity(int expectedSize)
+    private int capacity(int expectedSize)
     {
         if (expectedSize < 0) {
             throw new IllegalArgumentException("expectedSize is negative");
@@ -464,11 +463,8 @@ final class PooledLongHashSet
         return capacity;
     }
 
-    private static int maxFill(int capacity)
+    private int maxFill(int capacity)
     {
-        if (!(LOAD_FACTOR > 0 && LOAD_FACTOR < 1)) {
-            throw new IllegalArgumentException("nitro.distinct.scalarLongLoadFactor must be between 0 and 1: " + LOAD_FACTOR);
-        }
-        return (int) (capacity * LOAD_FACTOR);
+        return (int) (capacity * policy.loadFactor());
     }
 }

@@ -138,7 +138,11 @@ class TestOperatorResources
 
             Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");
             Streams state = new DistinctCount(0).allocate(
-                    new AggregationExecutionContext(allocator, accumulatorContext, operatorResources.codeGeneration()),
+                    new AggregationExecutionContext(
+                            allocator,
+                            accumulatorContext,
+                            operatorResources.codeGeneration(),
+                            operatorResources.pooledLongHashSetPolicy()),
                     1);
             assertThat(state.values()).isNotNull();
             allocator.release(accumulatorContext);

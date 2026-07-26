@@ -37,6 +37,7 @@ public class DistinctCount
     private final int inputColumn;
     private PrimitiveArrayPool arrayPool;
     private OperatorCodeGenerationResources codeGeneration;
+    private PooledLongHashSetPolicy pooledLongHashSetPolicy;
 
     public DistinctCount(int inputColumn)
     {
@@ -54,6 +55,7 @@ public class DistinctCount
     {
         arrayPool = context.allocator().primitiveArrays();
         codeGeneration = context.codeGeneration();
+        pooledLongHashSetPolicy = context.pooledLongHashSetPolicy();
         return allocateState(context.allocator(), context.allocationContext(), size);
     }
 
@@ -171,7 +173,11 @@ public class DistinctCount
         if (implementation != null) {
             return (DistinctIndex) implementation;
         }
-        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(keyValues, arrayPool, codeGeneration));
+        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(
+                keyValues,
+                arrayPool,
+                codeGeneration,
+                pooledLongHashSetPolicy));
         stateVector.setImplementation(index);
         return index;
     }

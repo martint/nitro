@@ -383,7 +383,8 @@ public class TestOperatorBatches
                 new AggregationExecutionContext(
                         allocator,
                         new Allocator.Context("test"),
-                        allocator.engineResources().operatorCodeGeneration()),
+                        allocator.engineResources().operatorCodeGeneration(),
+                        allocator.engineResources().operatorResources().pooledLongHashSetPolicy()),
                 1);
         accumulator.initialize(state, 0, 1);
 

@@ -62,9 +62,10 @@ final class DistinctKeySet
     public static DistinctKeySet create(
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            PooledLongHashSetPolicy pooledLongHashSetPolicy)
     {
-        return create(samples, false, arrayPool, codeGeneration);
+        return create(samples, false, arrayPool, codeGeneration, pooledLongHashSetPolicy);
     }
 
     /**
@@ -75,10 +76,11 @@ final class DistinctKeySet
     public static DistinctKeySet createGroupedLong(
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            PooledLongHashSetPolicy pooledLongHashSetPolicy)
     {
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
-            return create(samples, arrayPool, codeGeneration);
+            return create(samples, arrayPool, codeGeneration, pooledLongHashSetPolicy);
         }
         return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool));
     }
@@ -95,9 +97,10 @@ final class DistinctKeySet
             Vector[] samples,
             boolean retainNulls,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            PooledLongHashSetPolicy pooledLongHashSetPolicy)
     {
-        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration);
+        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, pooledLongHashSetPolicy);
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool);
         }
@@ -107,10 +110,11 @@ final class DistinctKeySet
     private static DistinctIndex createIndex(
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            PooledLongHashSetPolicy pooledLongHashSetPolicy)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
-            return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool);
+            return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool, pooledLongHashSetPolicy);
         }
         if (samples.length == 2 && isIntegerVector(samples[0]) && isIntegerVector(samples[1])) {
             return new LongPairDistinctIndex(
@@ -268,6 +272,7 @@ final class DistinctKeySet
         private static final int MIN_BITMAP_KEYS = 4_096;
         private static final long MAX_BITS_PER_KEY = 64;
         private final PrimitiveArrayPool arrayPool;
+        private final PooledLongHashSetPolicy pooledLongHashSetPolicy;
 
         private PooledLongHashSet pooledKeys;
         private Long2ObjectOpenHashMap<long[]> bitmapPages;
@@ -275,9 +280,10 @@ final class DistinctKeySet
         private long maximumKey = Long.MIN_VALUE;
         private int size;
 
-        private LongDistinctIndex(int expectedSize, PrimitiveArrayPool arrayPool)
+        private LongDistinctIndex(int expectedSize, PrimitiveArrayPool arrayPool, PooledLongHashSetPolicy pooledLongHashSetPolicy)
         {
             this.arrayPool = arrayPool;
+            this.pooledLongHashSetPolicy = pooledLongHashSetPolicy;
             createHash(expectedSize);
         }
 
@@ -592,7 +598,7 @@ final class DistinctKeySet
 
         private void createHash(int expectedSize)
         {
-            pooledKeys = new PooledLongHashSet(expectedSize, arrayPool, !ADAPTIVE_PAGED_BITMAP);
+            pooledKeys = new PooledLongHashSet(expectedSize, arrayPool, pooledLongHashSetPolicy, !ADAPTIVE_PAGED_BITMAP);
         }
 
         private boolean hashPresent()
