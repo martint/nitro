@@ -176,11 +176,6 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.join.lazyDuplicateSlotState", "false"));
     private static final boolean IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES =
             Boolean.parseBoolean(System.getProperty("nitro.join.implicitSequentialBuildRowReferences", "true"));
-    // Flat composite joins are usually unique. Store their common one-row case in one pooled primitive array and
-    // allocate a list only after observing a duplicate, instead of allocating a list and backing array per key.
-    // The switch retains the previous representation as a benchmark control.
-    private static final boolean FLAT_PRIMITIVE_SINGLE_ROWS =
-            Boolean.parseBoolean(System.getProperty("nitro.join.flatPrimitiveSingleRows", "true"));
     private static final boolean CACHE_COMPOSED_OUTER_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheComposedOuterDictionaryIds", "true"));
     private static final boolean DIRECT_DENSE_SINGLE_MATCH_RANGE_OUTPUT =
@@ -1996,11 +1991,11 @@ public class HashJoinOperator
             // callers may still project those inner keys.  Omit the reference only for the streaming shape, whose
             // output and residual-filter checks establish that no downstream consumer can observe inner payload.
             return new LongPairJoinIndex(
+                    joinIndexPolicy,
                     arrayPool,
                     expectedSize,
                     canStreamUnusedBuildPayload(),
-                    capInitialHash,
-                    joinIndexPolicy.initialHashExpectedCap());
+                    capInitialHash);
         }
         if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
             return new LongTripleJoinIndex(arrayPool, expectedSize);
@@ -2011,7 +2006,7 @@ public class HashJoinOperator
                 operatorResources.codeGeneration(),
                 operatorResources.flatKeyTablePolicy());
         if (layout != null) {
-            return new FlatJoinIndex(layout, expectedSize);
+            return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
         }
         return new ObjectJoinIndex(joinValues.length);
     }
@@ -6822,12 +6817,7 @@ public class HashJoinOperator
     private static final class FlatJoinIndex
             implements JoinIndex
     {
-        private static final boolean DICTIONARY_PROBE_CACHE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.flatDictionaryProbeCache", "true"));
-        private static final int DICTIONARY_PROBE_CACHE_MAX_CARDINALITY =
-                Integer.getInteger("nitro.join.flatDictionaryProbeCacheMaxCardinality", 1 << 16);
-        private static final int DICTIONARY_PROBE_CACHE_MIN_ROWS_PER_ENTRY =
-                Integer.getInteger("nitro.join.flatDictionaryProbeCacheMinRowsPerEntry", 2);
+        private final HashJoinIndexPolicy policy;
         private final PrimitiveArrayPool arrayPool;
         private final FlatGroupingTable table;
         private final boolean primitiveSingleRows;
@@ -6844,11 +6834,12 @@ public class HashJoinOperator
         private final Vector[] dictionaryProbeValues = new Vector[1];
         private boolean debugDictionaryProbeCachePrinted;
 
-        private FlatJoinIndex(FlatKeyLayout layout, int expectedSize)
+        private FlatJoinIndex(HashJoinIndexPolicy policy, FlatKeyLayout layout, int expectedSize)
         {
+            this.policy = requireNonNull(policy, "policy is null");
             this.arrayPool = layout.primitiveArrays();
             int initialSize = Math.max(16, expectedSize);
-            this.primitiveSingleRows = FLAT_PRIMITIVE_SINGLE_ROWS;
+            this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
             this.table = new FlatGroupingTable(layout, primitiveSingleRows ? initialSize : 1024, true);
             if (primitiveSingleRows) {
                 this.singleRows = arrayPool.borrowLongs(initialSize);
@@ -7025,7 +7016,7 @@ public class HashJoinOperator
          */
         private int[] prepareDictionaryProbeCache(Vector[] values, int positionCount)
         {
-            if (!DICTIONARY_PROBE_CACHE ||
+            if (!policy.flatDictionaryProbeCache() ||
                     values.length != 1 ||
                     !(values[0] instanceof DictionaryVector dictionary)) {
                 return null;
@@ -7038,8 +7029,8 @@ public class HashJoinOperator
             long generation = base.contentGeneration();
             if (generation < 0 ||
                     cardinality == 0 ||
-                    cardinality > DICTIONARY_PROBE_CACHE_MAX_CARDINALITY ||
-                    (long) cardinality * DICTIONARY_PROBE_CACHE_MIN_ROWS_PER_ENTRY > positionCount) {
+                    cardinality > policy.flatDictionaryProbeCacheMaxCardinality() ||
+                    (long) cardinality * policy.flatDictionaryProbeCacheMinRowsPerEntry() > positionCount) {
                 return null;
             }
             if (dictionaryProbeGroups == null || dictionaryProbeGroups.length < cardinality) {
@@ -7113,46 +7104,28 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
-        private static final boolean COMPACT_KEYS =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compactLongPairKeys", "true"));
-        private static final boolean COMPACT_KEY_ONLY_BUILD =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compactKeyOnlyLongPairBuild", "true"));
         // Large compact pair tables otherwise scatter both the normalized key and row reference across the full
         // hash capacity. Keep only a dense entry ordinal in each random-access slot; append exact keys and row
         // references sequentially. This is the same general separation used by native row-container hash tables,
         // while small tables retain co-located slots for one-load hit verification.
-        private static final boolean DENSE_COMPACT_ENTRIES =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseCompactPairEntries", "true"));
         // Indirection is repaid only once the legacy random slot payload spans hundreds of MiB. At 2^25 slots the
         // compact {key,row} table is 512 MiB; dense ordinals reduce that random footprint to 128 MiB and keep exact
         // keys/rows append-only. Smaller tables retain co-located slots, avoiding an extra load on cache-resident
         // probes. This is a physical table-size boundary, independent of query, columns, or logical data types.
-        private static final int DENSE_COMPACT_MIN_CAPACITY =
-                Integer.getInteger("nitro.join.denseCompactPairMinCapacity", 1 << 25);
         // A power-of-two capacity jump can also leave a large table less than half occupied. At that point dense
         // records save at least half of the random {key,row} slot footprint and repay their ordinal indirection at a
         // lower absolute boundary. Use only the exact build-row upper bound and physical capacity: ordinary well-filled
         // tables (including negative-probe-heavy layouts) keep their co-located hit path.
-        private static final boolean DENSE_COMPACT_SPARSE_ENTRIES =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseCompactSparsePairEntries", "true"));
-        private static final int DENSE_COMPACT_SPARSE_MIN_CAPACITY =
-                Integer.getInteger("nitro.join.denseCompactSparsePairMinCapacity", 1 << 23);
         // A dense payload stream from one coalesced build batch needs only the logical row position. Preserve that
         // full non-negative int domain instead of prematurely promoting at the generic 16-bit packed-position limit;
         // if a later batch appears, promote existing positions and duplicate rows exactly to ordinary long refs.
-        private static final boolean COMPACT_DENSE_SINGLE_BATCH_ROW_REFERENCES =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compactDensePairSingleBatchRowReferences", "true"));
         // Duplicate state is lazy, so a rare duplicate must not pre-size storage from the whole build. Once a dense
         // table fills its first bounded duplicate page and duplicate rows already cover at least half the distinct-key
         // count, the build has established a long reuse horizon; jump once to the exact build-row upper bound instead
         // of retaining every geometric generation in the engine-owned pool.
-        private static final boolean PRE_SIZE_DENSE_DUPLICATE_ROWS =
-                Boolean.parseBoolean(System.getProperty("nitro.join.preSizeDensePairDuplicateRows", "true"));
         // A tag match is rare on negative probes. On JDK 26, converting every 16-lane VectorMask to a scalar bitset
         // is substantially more expensive than an anyTrue reduction. Guard the conversion and pay it only when a
         // candidate key must be inspected; empty-slot tests never need lane bits during probing.
-        private static final boolean GUARD_TAG_MASK_CONVERSION =
-                Boolean.parseBoolean(System.getProperty("nitro.join.guardPairTagMaskConversion", "true"));
         // Swiss/F14-style SIMD-tag-bucket table (cf. Velox HashTable): probing scans a GROUP of slots at a time.
         // Each slot carries a 1-byte tag (top hash bits, high bit set so 0 means empty) held in a contiguous
         // byte[] separate from the keys/rows. A probe loads GROUP tags with one vector load and compares them
@@ -7161,6 +7134,7 @@ public class HashJoinOperator
         // where every collision step was another full {first,second,row} cache-miss load.
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
+        private final HashJoinIndexPolicy policy;
         private final PrimitiveArrayPool arrayPool;
 
         private byte[] tags;
@@ -7175,7 +7149,7 @@ public class HashJoinOperator
         private int[] denseRowStates32;
         private long[] denseRowStates;
         private boolean denseRowsFit32 = true;
-        private boolean denseRowsSingleBatch = COMPACT_DENSE_SINGLE_BATCH_ROW_REFERENCES;
+        private boolean denseRowsSingleBatch;
         private int denseRowsBatchIndex = -1;
         private boolean denseCompactEntries;
         private int denseEntryCount;
@@ -7184,7 +7158,7 @@ public class HashJoinOperator
         // Most warehouse keys are logically INTEGER even though the vector contract exposes longs. Pack two
         // signed-32-bit keys into one normalized long, reducing each slot from three longs to two. If a later
         // key does not fit, promote every live entry once to the full-width layout before inserting it.
-        private boolean compactKeys = COMPACT_KEYS;
+        private boolean compactKeys;
         private final boolean keyOnlyBuild;
         private int[] keyOnlyCounts;
         // Duplicate rows live in one pooled append-only store. Per-slot head/tail/count metadata links each key's
@@ -7214,25 +7188,28 @@ public class HashJoinOperator
         private long[] nativeSecond;
 
         private LongPairJoinIndex(
+                HashJoinIndexPolicy policy,
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
-                boolean capInitialHash,
-                int initialHashExpectedCap)
+                boolean capInitialHash)
         {
+            this.policy = requireNonNull(policy, "policy is null");
             this.arrayPool = arrayPool;
             this.expectedBuildRows = expectedSize;
-            this.keyOnlyBuild = keyOnlyBuild && COMPACT_KEY_ONLY_BUILD;
-            this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, initialHashExpectedCap);
-            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, initialHashExpectedCap) : expectedSize;
+            this.compactKeys = policy.compactLongPairKeys();
+            this.denseRowsSingleBatch = policy.compactDensePairSingleBatchRowReferences();
+            this.keyOnlyBuild = keyOnlyBuild && policy.compactKeyOnlyLongPairBuild();
+            this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, policy.initialHashExpectedCap());
+            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             this.initialDenseEntryCapacity = Math.max(16, initialExpectedSize);
             int capacity = GROUP;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            denseCompactEntries = DENSE_COMPACT_ENTRIES && compactKeys && !this.keyOnlyBuild &&
-                    (capacity >= DENSE_COMPACT_MIN_CAPACITY ||
-                            (DENSE_COMPACT_SPARSE_ENTRIES && capacity >= DENSE_COMPACT_SPARSE_MIN_CAPACITY &&
+            denseCompactEntries = policy.denseCompactPairEntries() && compactKeys && !this.keyOnlyBuild &&
+                    (capacity >= policy.denseCompactPairMinCapacity() ||
+                            (policy.denseCompactSparsePairEntries() && capacity >= policy.denseCompactSparsePairMinCapacity() &&
                                     expectedSize <= capacity / 2));
             allocate(capacity);
         }
@@ -8200,7 +8177,7 @@ public class HashJoinOperator
                 return;
             }
             int newCapacity = Math.multiplyExact(duplicateRowCapacity, 2);
-            if (PRE_SIZE_DENSE_DUPLICATE_ROWS && denseCompactEntries &&
+            if (policy.preSizeDensePairDuplicateRows() && denseCompactEntries &&
                     duplicateRowCount >= denseEntryCount / 2 && expectedBuildRows > newCapacity) {
                 newCapacity = expectedBuildRows;
             }
@@ -8261,24 +8238,24 @@ public class HashJoinOperator
             }
         }
 
-        private static long matchingTagBits(jdk.incubator.vector.VectorMask<Byte> matches)
+        private long matchingTagBits(jdk.incubator.vector.VectorMask<Byte> matches)
         {
-            if (GUARD_TAG_MASK_CONVERSION && !matches.anyTrue()) {
+            if (policy.guardPairTagMaskConversion() && !matches.anyTrue()) {
                 return 0;
             }
             return matches.toLong();
         }
 
-        private static boolean hasEmptyTag(ByteVector tags)
+        private boolean hasEmptyTag(ByteVector tags)
         {
             var empty = tags.compare(VectorOperators.EQ, (byte) 0);
-            return GUARD_TAG_MASK_CONVERSION ? empty.anyTrue() : empty.toLong() != 0;
+            return policy.guardPairTagMaskConversion() ? empty.anyTrue() : empty.toLong() != 0;
         }
 
-        private static int firstEmptyTag(ByteVector tags)
+        private int firstEmptyTag(ByteVector tags)
         {
             var empty = tags.compare(VectorOperators.EQ, (byte) 0);
-            return GUARD_TAG_MASK_CONVERSION ? empty.firstTrue() : Long.numberOfTrailingZeros(empty.toLong());
+            return policy.guardPairTagMaskConversion() ? empty.firstTrue() : Long.numberOfTrailingZeros(empty.toLong());
         }
 
         private static long hash64(long first, long second)

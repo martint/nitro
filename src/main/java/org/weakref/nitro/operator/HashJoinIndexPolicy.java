@@ -51,7 +51,20 @@ public record HashJoinIndexPolicy(
         boolean compactChains,
         int compactChainsMinProbeRows,
         boolean compressKeyOnlyDuplicates,
-        boolean sizeCompressedRowsByDistinctKeys)
+        boolean sizeCompressedRowsByDistinctKeys,
+        boolean flatPrimitiveSingleRows,
+        boolean flatDictionaryProbeCache,
+        int flatDictionaryProbeCacheMaxCardinality,
+        int flatDictionaryProbeCacheMinRowsPerEntry,
+        boolean compactLongPairKeys,
+        boolean compactKeyOnlyLongPairBuild,
+        boolean denseCompactPairEntries,
+        int denseCompactPairMinCapacity,
+        boolean denseCompactSparsePairEntries,
+        int denseCompactSparsePairMinCapacity,
+        boolean compactDensePairSingleBatchRowReferences,
+        boolean preSizeDensePairDuplicateRows,
+        boolean guardPairTagMaskConversion)
 {
     public static HashJoinIndexPolicy defaults()
     {
@@ -88,6 +101,19 @@ public record HashJoinIndexPolicy(
                 1 << 26,
                 true,
                 256,
+                true,
+                true,
+                true,
+                true,
+                1 << 16,
+                2,
+                true,
+                true,
+                true,
+                1 << 25,
+                true,
+                1 << 23,
+                true,
                 true,
                 true);
     }
@@ -153,7 +179,36 @@ public record HashJoinIndexPolicy(
                 booleanProperty("nitro.join.compressKeyOnlyDuplicates", defaults.compressKeyOnlyDuplicates()),
                 booleanProperty(
                         "nitro.join.sizeCompressedRowsByDistinctKeys",
-                        defaults.sizeCompressedRowsByDistinctKeys()));
+                        defaults.sizeCompressedRowsByDistinctKeys()),
+                booleanProperty("nitro.join.flatPrimitiveSingleRows", defaults.flatPrimitiveSingleRows()),
+                booleanProperty("nitro.join.flatDictionaryProbeCache", defaults.flatDictionaryProbeCache()),
+                Integer.getInteger(
+                        "nitro.join.flatDictionaryProbeCacheMaxCardinality",
+                        defaults.flatDictionaryProbeCacheMaxCardinality()),
+                Integer.getInteger(
+                        "nitro.join.flatDictionaryProbeCacheMinRowsPerEntry",
+                        defaults.flatDictionaryProbeCacheMinRowsPerEntry()),
+                booleanProperty("nitro.join.compactLongPairKeys", defaults.compactLongPairKeys()),
+                booleanProperty(
+                        "nitro.join.compactKeyOnlyLongPairBuild",
+                        defaults.compactKeyOnlyLongPairBuild()),
+                booleanProperty("nitro.join.denseCompactPairEntries", defaults.denseCompactPairEntries()),
+                Integer.getInteger(
+                        "nitro.join.denseCompactPairMinCapacity",
+                        defaults.denseCompactPairMinCapacity()),
+                booleanProperty(
+                        "nitro.join.denseCompactSparsePairEntries",
+                        defaults.denseCompactSparsePairEntries()),
+                Integer.getInteger(
+                        "nitro.join.denseCompactSparsePairMinCapacity",
+                        defaults.denseCompactSparsePairMinCapacity()),
+                booleanProperty(
+                        "nitro.join.compactDensePairSingleBatchRowReferences",
+                        defaults.compactDensePairSingleBatchRowReferences()),
+                booleanProperty(
+                        "nitro.join.preSizeDensePairDuplicateRows",
+                        defaults.preSizeDensePairDuplicateRows()),
+                booleanProperty("nitro.join.guardPairTagMaskConversion", defaults.guardPairTagMaskConversion()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)
