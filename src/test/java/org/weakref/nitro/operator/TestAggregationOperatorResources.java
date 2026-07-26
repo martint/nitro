@@ -22,9 +22,11 @@ class TestAggregationOperatorResources
     @Test
     void testBufferCompatibilityDomainIsOwnerScoped()
     {
-        AggregationOperatorResources first = new AggregationOperatorResources();
-        AggregationOperatorResources second = new AggregationOperatorResources();
+        AggregationOperatorPolicy policy = AggregationOperatorPolicy.defaults();
+        AggregationOperatorResources first = new AggregationOperatorResources(policy);
+        AggregationOperatorResources second = new AggregationOperatorResources(AggregationOperatorPolicy.defaults());
 
+        assertThat(first.policy()).isSameAs(policy);
         assertThat(first.bufferPoolGroup()).isSameAs(first.bufferPoolGroup());
         assertThat(second.bufferPoolGroup()).isNotSameAs(first.bufferPoolGroup());
     }

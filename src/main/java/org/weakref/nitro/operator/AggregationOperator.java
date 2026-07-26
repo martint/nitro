@@ -29,8 +29,6 @@ import static org.weakref.nitro.data.Stream.VALUES;
 public class AggregationOperator
         implements Operator
 {
-    private static final boolean DEFER_RESULT_MATERIALIZATION =
-            Boolean.parseBoolean(System.getProperty("nitro.aggregate.deferResultMaterialization", "true"));
     private final Allocator allocator;
     // Every live operator owns an independent lease scope. Instances under the same engine resource owner still
     // share a compatibility domain so a closed aggregate's buffers can be recycled by a later aggregate, but closing
@@ -38,6 +36,7 @@ public class AggregationOperator
     // its source.
     private final Allocator.Context allocationContext;
     private final AggregationExecutionContext aggregationExecutionContext;
+    private final boolean deferResultMaterialization;
 
     private final Operator source;
     private final List<Accumulator> aggregations;
@@ -55,13 +54,15 @@ public class AggregationOperator
     {
         this.allocator = allocator;
         operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        AggregationOperatorResources aggregationResources = operatorResources.aggregation();
         this.allocationContext = new Allocator.Context(
                 "AggregationOperator",
-                operatorResources.aggregation().bufferPoolGroup());
+                aggregationResources.bufferPoolGroup());
         this.aggregationExecutionContext = new AggregationExecutionContext(
                 allocator,
                 allocationContext,
                 operatorResources.codeGeneration());
+        this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
         this.aggregations = List.copyOf(aggregations);
 
@@ -123,12 +124,12 @@ public class AggregationOperator
                 state[i] = aggregations.get(i).allocate(aggregationExecutionContext, 1);
                 aggregations.get(i).initialize(state[i], 0, 1);
             }
-            if (!DEFER_RESULT_MATERIALIZATION) {
+            if (!deferResultMaterialization) {
                 materializeResults(state, batchState);
             }
 
             if (batchState.mask.none()) {
-                if (DEFER_RESULT_MATERIALIZATION) {
+                if (deferResultMaterialization) {
                     materializeResults(state, batchState);
                 }
                 return;
@@ -152,14 +153,14 @@ public class AggregationOperator
                                 allocator.release(allocationContext, aggregationMask);
                             }
                         }
-                        if (!DEFER_RESULT_MATERIALIZATION) {
+                        if (!deferResultMaterialization) {
                             reusableResults[aggregation] = accumulator.result(0, state[aggregation], reusableResults[aggregation], allocator, allocationContext);
                             batchState.results[aggregation] = reusableResults[aggregation];
                         }
                     }
                 }
             }
-            if (DEFER_RESULT_MATERIALIZATION) {
+            if (deferResultMaterialization) {
                 materializeResults(state, batchState);
             }
         }

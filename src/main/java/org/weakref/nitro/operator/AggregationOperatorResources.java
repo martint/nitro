@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Engine-owner-scoped compatibility domains used by global aggregation.
  *
@@ -21,7 +23,18 @@ package org.weakref.nitro.operator;
  */
 public final class AggregationOperatorResources
 {
+    private final AggregationOperatorPolicy policy;
     private final Object bufferPoolGroup = new Object();
+
+    public AggregationOperatorResources(AggregationOperatorPolicy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
+
+    AggregationOperatorPolicy policy()
+    {
+        return policy;
+    }
 
     Object bufferPoolGroup()
     {
