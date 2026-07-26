@@ -28,22 +28,25 @@ import java.util.function.Function;
  */
 public final class RangeConstraintLowerer
 {
-    private static final boolean FUSE_RANGES =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true"));
-
     private final Map<Variable, Assignment> assignments;
     private final PrimitiveRegistry registry;
+    private final boolean fuseRanges;
 
-    private RangeConstraintLowerer(EvaluationPlan plan, PrimitiveRegistry registry)
+    private RangeConstraintLowerer(EvaluationPlan plan, PrimitiveRegistry registry, boolean fuseRanges)
     {
         this.assignments = plan.assignments().stream()
                 .collect(java.util.stream.Collectors.toMap(Assignment::output, Function.identity()));
         this.registry = registry;
+        this.fuseRanges = fuseRanges;
     }
 
-    public static MaskExpression lower(EvaluationPlan plan, PrimitiveRegistry registry, MaskExpression expression)
+    public static MaskExpression lower(
+            EvaluationPlan plan,
+            PrimitiveRegistry registry,
+            MaskExpression expression,
+            boolean fuseRanges)
     {
-        return new RangeConstraintLowerer(plan, registry).lower(expression);
+        return new RangeConstraintLowerer(plan, registry, fuseRanges).lower(expression);
     }
 
     private MaskExpression lower(MaskExpression expression)
@@ -59,7 +62,7 @@ public final class RangeConstraintLowerer
     private MaskExpression lowerAnd(List<MaskExpression> sourceTerms)
     {
         List<MaskExpression> terms = sourceTerms.stream().map(this::lower).toList();
-        if (!FUSE_RANGES) {
+        if (!fuseRanges) {
             return new AndMask(terms);
         }
         for (int lowerIndex = 0; lowerIndex < terms.size(); lowerIndex++) {

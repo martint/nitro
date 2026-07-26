@@ -97,7 +97,11 @@ public class FilterOperator
                 };
             }
         }, allocator, resources.projectionMaskCompiler());
-        this.predicateMask = RangeConstraintLowerer.lower(evaluationPlan, primitiveRegistry, predicateMask);
+        this.predicateMask = RangeConstraintLowerer.lower(
+                evaluationPlan,
+                primitiveRegistry,
+                predicateMask,
+                policy.fuseConstantRanges());
         if (policy.pushStaticLongEquality()) {
             staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
         }

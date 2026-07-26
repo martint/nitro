@@ -47,7 +47,7 @@ class TestRangeConstraintLowerer
                 List.of());
         AndMask predicate = new AndMask(List.of(new ReferenceMask(lowerPredicate), new ReferenceMask(upperPredicate)));
 
-        assertThat(RangeConstraintLowerer.lower(plan, registry, predicate))
+        assertThat(RangeConstraintLowerer.lower(plan, registry, predicate, true))
                 .isEqualTo(new RangeConstrainedAndMask(
                         input,
                         3L,
@@ -72,7 +72,7 @@ class TestRangeConstraintLowerer
                 new Assignment(comparison, new Call("lt", List.of(input, new Reference(literal, Stream.VALUES))), AllMask.ALL)),
                 List.of());
 
-        assertThat(RangeConstraintLowerer.lower(plan, registry, new ReferenceMask(predicate)))
+        assertThat(RangeConstraintLowerer.lower(plan, registry, new ReferenceMask(predicate), true))
                 .isEqualTo(new ReferenceMask(predicate));
     }
 
@@ -91,7 +91,7 @@ class TestRangeConstraintLowerer
                 new Assignment(comparison, new Call("aliased_comparison", List.of(input, new Reference(literal, Stream.VALUES))), AllMask.ALL)),
                 List.of());
 
-        assertThat(RangeConstraintLowerer.lower(plan, registry, new ReferenceMask(predicate)))
+        assertThat(RangeConstraintLowerer.lower(plan, registry, new ReferenceMask(predicate), true))
                 .isEqualTo(new ReferenceMask(predicate));
     }
 }

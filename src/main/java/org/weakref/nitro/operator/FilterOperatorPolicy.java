@@ -16,16 +16,20 @@ package org.weakref.nitro.operator;
 /**
  * Engine-selected physical policies for filter execution.
  */
-public record FilterOperatorPolicy(boolean pushStaticLongEquality, boolean recycleOutputMasks)
+public record FilterOperatorPolicy(
+        boolean fuseConstantRanges,
+        boolean pushStaticLongEquality,
+        boolean recycleOutputMasks)
 {
     public static FilterOperatorPolicy defaults()
     {
-        return new FilterOperatorPolicy(true, true);
+        return new FilterOperatorPolicy(true, true, true);
     }
 
     public static FilterOperatorPolicy fromSystemProperties()
     {
         return new FilterOperatorPolicy(
+                Boolean.parseBoolean(System.getProperty("nitro.expression.fuseLongConstantRanges", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongEquality", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.filter.recycleOutputMasks", "true")));
     }
