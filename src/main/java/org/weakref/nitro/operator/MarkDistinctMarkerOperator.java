@@ -49,16 +49,6 @@ public final class MarkDistinctMarkerOperator
     private BooleanVector reusableMarker;
     private BatchState currentBatchState;
 
-    public MarkDistinctMarkerOperator(Allocator allocator, int[] distinctColumns, Operator source)
-    {
-        this(allocator, distinctColumns, source, true);
-    }
-
-    public MarkDistinctMarkerOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls)
-    {
-        this(allocator, distinctColumns, source, retainNulls, allocator.engineResources().operatorResources());
-    }
-
     public MarkDistinctMarkerOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls, OperatorResources operatorResources)
     {
         if (distinctColumns.length == 0) {

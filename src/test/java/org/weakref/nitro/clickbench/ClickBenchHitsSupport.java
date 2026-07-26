@@ -317,7 +317,12 @@ public final class ClickBenchHitsSupport
 
     public static Operator query09(Allocator allocator, Path file)
     {
-        Operator distinct = new MarkDistinctMarkerOperator(allocator, new int[] {0, 1}, clickBenchScan(allocator, file, "RegionID", "UserID"));
+        Operator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 1},
+                clickBenchScan(allocator, file, "RegionID", "UserID"),
+                true,
+                allocator.engineResources().operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -334,7 +339,12 @@ public final class ClickBenchHitsSupport
     static Operator query10(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
         Operator scan = profiled(profile, "q10.scan", clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
-        Operator distinct = profiled(profile, "q10.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 3}, scan));
+        Operator distinct = profiled(profile, "q10.mark-distinct", new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 3},
+                scan,
+                true,
+                allocator.engineResources().operatorResources()));
         List<Accumulator> aggregations = List.of(new Sum(1), new CountAll(), new Avg(2), new FilteredAccumulator(new CountAll(), 4));
         Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(0), aggregations, distinct);
         aggregated = profiled(profile, "q10.aggregate", aggregated);
@@ -344,7 +354,12 @@ public final class ClickBenchHitsSupport
     public static Operator query11(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("MobilePhoneModel", "UserID"), notEqualUtf8(0, ""));
-        Operator distinct = new MarkDistinctMarkerOperator(allocator, new int[] {0, 1}, filtered);
+        Operator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 1},
+                filtered,
+                true,
+                allocator.engineResources().operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -362,7 +377,12 @@ public final class ClickBenchHitsSupport
     {
         Operator scan = profiled(profile, "q12.scan", clickBenchScan(allocator, file, "MobilePhone", "MobilePhoneModel", "UserID"));
         Operator filtered = profiled(profile, "q12.filter", filter(allocator, primitiveRegistry, scan, notEqualUtf8(1, "")));
-        Operator distinct = profiled(profile, "q12.mark-distinct", new MarkDistinctMarkerOperator(allocator, new int[] {0, 1, 2}, filtered));
+        Operator distinct = profiled(profile, "q12.mark-distinct", new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 1, 2},
+                filtered,
+                true,
+                allocator.engineResources().operatorResources()));
         Operator aggregated = profiled(profile, "q12.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -409,7 +429,12 @@ public final class ClickBenchHitsSupport
                         notEqualUtf8(0, ""),
                         containsUtf8(2, "Google"),
                         notContainsUtf8(1, ".google.")));
-        Operator distinct = new MarkDistinctMarkerOperator(allocator, new int[] {0, 3}, filtered);
+        Operator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 3},
+                filtered,
+                true,
+                allocator.engineResources().operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -426,7 +451,12 @@ public final class ClickBenchHitsSupport
     public static Operator query14(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
         Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchPhrase", "UserID"), notEqualUtf8(0, ""));
-        Operator distinct = new MarkDistinctMarkerOperator(allocator, new int[] {0, 1}, filtered);
+        Operator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0, 1},
+                filtered,
+                true,
+                allocator.engineResources().operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),

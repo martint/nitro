@@ -3121,7 +3121,9 @@ public class TestOperators
                                         row(1L, 7L),
                                         row(1L, 8L),
                                         row(2L, 9L),
-                                        row(2L, 9L))))))
+                                        row(2L, 9L))),
+                        true,
+                        allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, 7L, 1L),
                         row(1L, 7L, 0L),
@@ -3145,7 +3147,9 @@ public class TestOperators
                                 row(1L, 30L, 300L, 2000L),
                                 row(2L, 40L, 100L, 3000L),
                                 row(2L, 50L, 200L, 3000L),
-                                row(2L, 60L, 300L, 4000L))));
+                                row(2L, 60L, 300L, 4000L))),
+                true,
+                allocator.engineResources().operatorResources());
 
         assertThat(operator(
                 new GroupedAggregationOperator(
