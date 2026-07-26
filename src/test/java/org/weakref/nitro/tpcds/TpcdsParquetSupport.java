@@ -91,9 +91,6 @@ final class TpcdsParquetSupport
             Boolean.parseBoolean(System.getProperty("nitro.tpcds.query39CompactJoinLayouts", "true"));
     private static final boolean QUERY78_COMPACT_JOIN_LAYOUTS =
             Boolean.parseBoolean(System.getProperty("nitro.tpcds.query78CompactJoinLayouts", "true"));
-    // Audit hook: counts table-scan helper calls (one per table reference) while a query operator tree is built,
-    // so a harness can compare per-query scan counts against the canonical Trino EXPLAIN plan.
-    public static final java.util.concurrent.atomic.AtomicInteger SCAN_COUNT = new java.util.concurrent.atomic.AtomicInteger();
     private static final ThreadLocal<OperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
 
     private TpcdsParquetSupport() {}
@@ -4407,7 +4404,7 @@ final class TpcdsParquetSupport
 
     private static Operator factScan(Allocator allocator, TpcdsParquetTables tables, String tableName, String... columns)
     {
-        SCAN_COUNT.incrementAndGet();
+        tables.recordScan();
         List<String> columnNames = List.of(columns);
         Operator decoder = new NitroParquetScanOperator(
                 tables.scanResources(),

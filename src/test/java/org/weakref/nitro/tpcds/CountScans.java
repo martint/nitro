@@ -48,14 +48,15 @@ public class CountScans
                 continue;
             }
             method.setAccessible(true);
-            TpcdsParquetSupport.SCAN_COUNT.set(0);
+            tables.resetScanCount();
             try {
-                Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
-                if (operator == null) {
-                    continue;
+                try (Operator operator = (Operator) method.invoke(null, new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables)) {
+                    if (operator == null) {
+                        continue;
+                    }
+                    out.append(q).append(',').append(tables.scanCount()).append('\n');
+                    System.out.println(name + ": " + tables.scanCount() + " scans");
                 }
-                out.append(q).append(',').append(TpcdsParquetSupport.SCAN_COUNT.get()).append('\n');
-                System.out.println(name + ": " + TpcdsParquetSupport.SCAN_COUNT.get() + " scans");
             }
             catch (Throwable t) {
                 System.out.println(name + ": BUILD-FAILED " + t);

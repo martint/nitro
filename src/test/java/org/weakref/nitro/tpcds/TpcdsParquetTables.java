@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 
@@ -43,6 +44,7 @@ public final class TpcdsParquetTables
     private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
     private final BenchmarkSchemaRegistry schemas = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private final Map<String, List<Path>> tableFiles = new HashMap<>();
+    private final AtomicInteger scanCount = new AtomicInteger();
 
     private TpcdsParquetTables(Path rootDirectory, String schema)
     {
@@ -113,6 +115,21 @@ public final class TpcdsParquetTables
     Schema tableSchema(String tableName, List<String> columnNames)
     {
         return schemas.tpcds(tableName, columnNames);
+    }
+
+    void recordScan()
+    {
+        scanCount.incrementAndGet();
+    }
+
+    int scanCount()
+    {
+        return scanCount.get();
+    }
+
+    void resetScanCount()
+    {
+        scanCount.set(0);
     }
 
     public Path tableDirectory(String tableName)
