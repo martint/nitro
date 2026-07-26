@@ -1156,8 +1156,11 @@ public class Allocator
      * Detaches one producer-owned vector from bulk context teardown and returns a lease that can release it back to
      * the same compatible pool after ownership has crossed one or more output boundaries.
      */
-    public BufferLeaseOwner lease(Context context, Vector vector)
+    BufferLeaseOwner leaseTransferredBuffer(Context context, Vector vector)
     {
+        if (!policy.transferableBufferLeases()) {
+            return null;
+        }
         ContextState contextState = states.get(requireNonNull(context, "context is null"));
         return contextState == null ? null : contextState.leaseVector(requireNonNull(vector, "vector is null"));
     }

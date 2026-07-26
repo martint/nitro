@@ -18,7 +18,9 @@ import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.AllocatorPolicy;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -304,6 +306,7 @@ class TestAllocator
         AllocatorPolicy policy = new AllocatorPolicy(
                 true,
                 false,
+                false,
                 4,
                 false,
                 true,
@@ -335,6 +338,12 @@ class TestAllocator
             BooleanVector nulls = new BooleanVector(5);
             Streams existing = Streams.ofValuesAndNulls(values, nulls);
             assertThat(allocator.reuseValuesAndNulls(existing, values, nulls)).isNotSameAs(existing);
+
+            I32Vector ids = allocator.allocate(context, I32Vector.class, 5, I32Vector::new);
+            DictionaryVector dictionary = DictionaryVector.wrapOwnedIds(ids, 5, values);
+            dictionary.prepareBufferTransfer(allocator, context);
+            allocator.release(context, ids);
+            assertThat(allocator.allocate(context, I32Vector.class, 5, I32Vector::new)).isSameAs(ids);
         }
     }
 

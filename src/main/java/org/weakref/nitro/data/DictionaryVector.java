@@ -21,8 +21,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class DictionaryVector
         implements Vector
 {
-    private static final boolean TRANSFERABLE_BUFFER_LEASES =
-            Boolean.parseBoolean(System.getProperty("nitro.transferableBufferLeases", "true"));
     private final int[] ids;
     private final I32Vector ownedIds;
     private final int length;
@@ -359,8 +357,8 @@ public final class DictionaryVector
     @Override
     public void prepareBufferTransfer(Allocator allocator, Allocator.Context producerContext)
     {
-        if (TRANSFERABLE_BUFFER_LEASES && ownedIds != null && transferredIdsOwner == null) {
-            transferredIdsOwner = allocator.lease(producerContext, ownedIds);
+        if (ownedIds != null && transferredIdsOwner == null) {
+            transferredIdsOwner = allocator.leaseTransferredBuffer(producerContext, ownedIds);
         }
     }
 
