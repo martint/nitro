@@ -1080,9 +1080,11 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         OperatorCpuProfile profile = new OperatorCpuProfile();
-        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
-                profile,
-                () -> TpcdsParquetSupport.query64(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables))) {
+        try (Operator query = TpcdsParquetSupport.query64(new TpcdsQueryContext(
+                new Allocator(EngineResources.createDefault()),
+                primitiveRegistry,
+                tables,
+                profile))) {
             consumeOperator(query);
         }
 
