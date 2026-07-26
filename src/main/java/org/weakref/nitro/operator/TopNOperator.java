@@ -53,7 +53,14 @@ public class TopNOperator
         this.allocator = allocator;
         this.n = n;
         this.source = source;
-        state = new TopNState(columns, descending, allocator, allocationContext, source.outputCount(), n);
+        state = new TopNState(
+                columns,
+                descending,
+                allocator.engineResources().operatorResources().joinBufferPolicy(),
+                allocator,
+                allocationContext,
+                source.outputCount(),
+                n);
     }
 
     @Override

@@ -39,7 +39,7 @@ public class TestJoinBufferSupport
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
-        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
 
         int[] positions = {19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
         double[] doubles = new double[20];
@@ -77,7 +77,7 @@ public class TestJoinBufferSupport
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
-        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
 
         Streams copied = buffers.copyPositionsFresh(
                 (Streams) null,
@@ -110,7 +110,7 @@ public class TestJoinBufferSupport
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
-        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
 
         BinaryVector dictionaryValues = utf8("alpha", "beta", "unused");
         DictionaryVector source = DictionaryVector.wrap(new int[] {0, 1, 0, 1, 0}, dictionaryValues);
@@ -143,7 +143,7 @@ public class TestJoinBufferSupport
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
-        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
 
         BinaryVector dictionaryValues = utf8("alpha", "beta");
         DictionaryVector source = DictionaryVector.wrap(new int[] {0, 1}, dictionaryValues);
@@ -184,7 +184,7 @@ public class TestJoinBufferSupport
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
-        JoinBufferSupport buffers = new JoinBufferSupport(allocator, context);
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
 
         Streams copied = buffers.copyPositionsFresh(
                 (Streams) null,

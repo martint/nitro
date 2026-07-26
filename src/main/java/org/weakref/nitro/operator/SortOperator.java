@@ -49,7 +49,14 @@ public class SortOperator
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
-        this.state = new TopNState(columns, descending, allocator, allocationContext, source.outputCount(), 256);
+        this.state = new TopNState(
+                columns,
+                descending,
+                allocator.engineResources().operatorResources().joinBufferPolicy(),
+                allocator,
+                allocationContext,
+                source.outputCount(),
+                256);
     }
 
     @Override

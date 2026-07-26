@@ -419,10 +419,11 @@ public class HashJoinOperator
                 throw new IllegalArgumentException("Join filter column is out of bounds");
             }
         }
-        this.buffers = new JoinBufferSupport(allocator, allocationContext);
+        JoinBufferPolicy joinBufferPolicy = operatorResources.joinBufferPolicy();
+        this.buffers = new JoinBufferSupport(joinBufferPolicy, allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(
                 operatorResources.bufferedJoinInputPolicy(),
-                new JoinBufferSupport(allocator, buildAllocationContext),
+                new JoinBufferSupport(joinBufferPolicy, allocator, buildAllocationContext),
                 innerOutputCount);
         this.outerSchema = new Streams[outerOutputCount];
         this.innerSchema = new Streams[innerOutputCount];

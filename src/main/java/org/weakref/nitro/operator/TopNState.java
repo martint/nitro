@@ -65,7 +65,14 @@ final class TopNState
     private Batch fallbackBatch;
 
     @SuppressWarnings("unchecked")
-    TopNState(int[] orderingColumns, boolean[] descendingByColumn, Allocator allocator, Allocator.Context allocationContext, int outputCount, int capacity)
+    TopNState(
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            JoinBufferPolicy joinBufferPolicy,
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            int outputCount,
+            int capacity)
     {
         this.allocator = allocator;
         this.allocationContext = allocationContext;
@@ -88,7 +95,7 @@ final class TopNState
         this.candidateValueInitialized = new boolean[outputCount];
         this.schema = new Streams[outputCount];
         this.exposedStreams = (Set<Stream>[]) new Set<?>[outputCount];
-        this.buffers = new JoinBufferSupport(allocator, allocationContext);
+        this.buffers = new JoinBufferSupport(joinBufferPolicy, allocator, allocationContext);
         this.pendingBatches = new Batch[capacity];
         this.pendingPositions = new int[capacity];
     }
