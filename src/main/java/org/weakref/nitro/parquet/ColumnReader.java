@@ -58,10 +58,6 @@ public final class ColumnReader
 {
     private static final boolean OWNED_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.ownedDictionaryIds", "true"));
-    private static final boolean FAST_PAGE_HEADER =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.fastPageHeader", "true"));
-    private static final int FAST_PAGE_HEADER_MAX_CHUNKS =
-            Integer.getInteger("nitro.parquet.fastPageHeaderMaxChunks", 64);
     private static final boolean REUSE_NUMERIC_DICTIONARY_SCRATCH =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseNumericDictionaryScratch", "true"));
     private static final boolean RECYCLE_BINARY_DICTIONARY_SCRATCH =
@@ -189,6 +185,7 @@ public final class ColumnReader
     private long zeroAcceptedDictionaryRowsObserved;
 
     private final RleReaderPolicy rleReaderPolicy;
+    private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -205,15 +202,6 @@ public final class ColumnReader
     // Whole-page bulk decode + gather beats per-survivor-run skip-decode only when a page is BOTH dense (lots survive,
     // so bulk decodes little extra) AND fragmented into short runs (skip would pay its per-run RLE-skip cost many
     // times). A dense-but-contiguous page (one long run, e.g. a date-clustered range) stays on the cheap skip path.
-    private static final int SKIP_PAGE_DENSE_PERCENT = Integer.getInteger("nitro.parquet.skipPageDensePercent", 50);
-    private static final int SKIP_PAGE_MIN_AVG_RUN = Integer.getInteger("nitro.parquet.skipPageMinAvgRun", 100);
-    private static final boolean BINARY_SEARCH_PAGE_SURVIVORS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.binarySearchPageSurvivors", "true"));
-    private static final int BINARY_SEARCH_PAGE_SURVIVOR_MAX_PERCENT =
-            Integer.getInteger("nitro.parquet.binarySearchPageSurvivorMaxPercent", 1);
-    private static final int BINARY_SEARCH_PAGE_MIN_SURVIVORS =
-            Integer.getInteger("nitro.parquet.binarySearchPageMinSurvivors", 64);
-    private static final boolean SKIP_WHOLE_CHUNKS = Boolean.parseBoolean(System.getProperty("nitro.parquet.skipWholeChunks", "true"));
     private boolean pageForceWholeDecode;
 
     // reusable buffers (grow to high-water mark). The decompression target is an off-heap segment from a
@@ -360,10 +348,12 @@ public final class ColumnReader
             boolean decimal,
             DecompressedPageCache decompressedPages,
             PrimitiveArrayPool arrayPool,
-            RleReaderPolicy rleReaderPolicy)
+            RleReaderPolicy rleReaderPolicy,
+            ParquetPageNavigationPolicy pageNavigationPolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
+        this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -408,7 +398,15 @@ public final class ColumnReader
      */
     public ColumnReader newSibling()
     {
-        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal, decompressedPages, arrayPool, rleReaderPolicy);
+        ColumnReader sibling = new ColumnReader(
+                physicalType,
+                optional,
+                typeLength,
+                flbaDecimal,
+                decompressedPages,
+                arrayPool,
+                rleReaderPolicy,
+                pageNavigationPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -743,7 +741,7 @@ public final class ColumnReader
             pageCursor += positions;
             count -= positions;
         }
-        if (SKIP_WHOLE_CHUNKS) {
+        if (pageNavigationPolicy.skipWholeChunks()) {
             count = skipWholeChunks(count);
         }
         while (count > 0) {
@@ -830,7 +828,7 @@ public final class ColumnReader
             pageCursor += take;
             n -= take;
         }
-        if (SKIP_WHOLE_CHUNKS) {
+        if (pageNavigationPolicy.skipWholeChunks()) {
             n = skipWholeChunks(n);
         }
         // Byte-skip whole data pages; decode only the final partial page.
@@ -2527,9 +2525,9 @@ public final class ColumnReader
         // there the per-run skip cost dominates. A dense contiguous page (few long runs, e.g. a clustered date range)
         // keeps the skip path. Decided per page (immune to date-clustered DFs where whole windows are in/out of range).
         int survivorEnd;
-        if (BINARY_SEARCH_PAGE_SURVIVORS &&
-                count >= BINARY_SEARCH_PAGE_MIN_SURVIVORS &&
-                (long) count * 100 <= (long) batchRows * BINARY_SEARCH_PAGE_SURVIVOR_MAX_PERCENT) {
+        if (pageNavigationPolicy.binarySearchPageSurvivors() &&
+                count >= pageNavigationPolicy.binarySearchPageMinSurvivors() &&
+                (long) count * 100 <= (long) batchRows * pageNavigationPolicy.binarySearchPageSurvivorMaxPercent()) {
             survivorEnd = lowerBound(survivors, sel, count, pageEnd);
         }
         else {
@@ -2540,7 +2538,7 @@ public final class ColumnReader
         }
         int survivorsInPage = survivorEnd - sel;
         pageForceWholeDecode = false;
-        if ((long) survivorsInPage * 100 >= (long) rowsThisBatch * SKIP_PAGE_DENSE_PERCENT) {
+        if ((long) survivorsInPage * 100 >= (long) rowsThisBatch * pageNavigationPolicy.skipPageDensePercent()) {
             int runCount = 0;
             int previous = -2;
             for (int survivor = sel; survivor < survivorEnd; survivor++) {
@@ -2549,7 +2547,7 @@ public final class ColumnReader
                 }
                 previous = survivors[survivor];
             }
-            pageForceWholeDecode = (long) survivorsInPage < (long) runCount * SKIP_PAGE_MIN_AVG_RUN;
+            pageForceWholeDecode = (long) survivorsInPage < (long) runCount * pageNavigationPolicy.skipPageMinAverageRun();
         }
         CompressionCodec codec = chunks.get(chunkIndex).metadata().codec;
         loadDataPageForSkip(
@@ -2915,7 +2913,8 @@ public final class ColumnReader
     private long readPageHeader(MemorySegment input, long offset, long end)
     {
         if (!pageHeaderModeDecided) {
-            useFastPageHeader = FAST_PAGE_HEADER && chunks.size() <= FAST_PAGE_HEADER_MAX_CHUNKS;
+            useFastPageHeader = pageNavigationPolicy.fastPageHeader() &&
+                    chunks.size() <= pageNavigationPolicy.fastPageHeaderMaxChunks();
             pageHeaderModeDecided = true;
         }
         if (useFastPageHeader) {

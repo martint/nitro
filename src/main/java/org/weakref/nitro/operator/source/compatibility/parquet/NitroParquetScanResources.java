@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
+import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import static java.util.Objects.requireNonNull;
@@ -33,20 +34,24 @@ public final class NitroParquetScanResources
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final RleReaderPolicy rleReaderPolicy;
+    private final ParquetPageNavigationPolicy pageNavigationPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
-            RleReaderPolicy rleReaderPolicy)
+            RleReaderPolicy rleReaderPolicy,
+            ParquetPageNavigationPolicy pageNavigationPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
+        this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
     {
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
-                RleReaderPolicy.fromSystemProperties());
+                RleReaderPolicy.fromSystemProperties(),
+                ParquetPageNavigationPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -72,5 +77,10 @@ public final class NitroParquetScanResources
     RleReaderPolicy rleReaderPolicy()
     {
         return rleReaderPolicy;
+    }
+
+    ParquetPageNavigationPolicy pageNavigationPolicy()
+    {
+        return pageNavigationPolicy;
     }
 }
