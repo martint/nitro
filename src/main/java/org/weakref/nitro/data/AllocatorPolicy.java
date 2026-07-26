@@ -23,6 +23,7 @@ public record AllocatorPolicy(
         boolean reuseTransportTuples,
         boolean transferableBufferLeases,
         BooleanCopies booleanCopies,
+        MaskFiltering maskFiltering,
         int maxPooledMasksPerBucket,
         boolean complementDifferenceMasks,
         boolean singleCopySparseMasks,
@@ -42,6 +43,7 @@ public record AllocatorPolicy(
     public AllocatorPolicy
     {
         requireNonNull(booleanCopies, "booleanCopies is null");
+        requireNonNull(maskFiltering, "maskFiltering is null");
     }
 
     public static AllocatorPolicy defaults()
@@ -51,6 +53,7 @@ public record AllocatorPolicy(
                 true,
                 true,
                 BooleanCopies.defaults(),
+                MaskFiltering.defaults(),
                 4,
                 false,
                 true,
@@ -80,6 +83,7 @@ public record AllocatorPolicy(
                 !Boolean.getBoolean("nitro.streams.disableTransportTupleReuse"),
                 booleanProperty("nitro.transferableBufferLeases", defaults.transferableBufferLeases()),
                 BooleanCopies.fromSystemProperties(),
+                MaskFiltering.fromSystemProperties(),
                 defaults.maxPooledMasksPerBucket(),
                 booleanProperty("nitro.mask.complementDifferenceMasks", defaults.complementDifferenceMasks()),
                 booleanProperty("nitro.mask.singleCopySparseMasks", defaults.singleCopySparseMasks()),
@@ -127,6 +131,28 @@ public record AllocatorPolicy(
                     booleanProperty(
                             "nitro.concatenatedBoolean.directPositionCopy",
                             defaults.directConcatenatedPositions()));
+        }
+    }
+
+    public record MaskFiltering(
+            boolean vectorizedDenseIntConstantRange,
+            boolean branchlessDenseDoubleLessThan)
+    {
+        public static MaskFiltering defaults()
+        {
+            return new MaskFiltering(true, true);
+        }
+
+        private static MaskFiltering fromSystemProperties()
+        {
+            MaskFiltering defaults = defaults();
+            return new MaskFiltering(
+                    booleanProperty(
+                            "nitro.mask.vectorizedDenseIntConstantRange",
+                            defaults.vectorizedDenseIntConstantRange()),
+                    booleanProperty(
+                            "nitro.mask.branchlessDenseDoubleLessThan",
+                            defaults.branchlessDenseDoubleLessThan()));
         }
     }
 }

@@ -360,7 +360,7 @@ public class Allocator
         Mask mask = state.borrowMask(0);
         boolean reused = mask != null;
         if (!reused) {
-            mask = Mask.all(size);
+            mask = Mask.all(size, policy.maskFiltering());
         }
         else {
             mask.selectAll(size);
@@ -376,7 +376,7 @@ public class Allocator
         Mask mask = state.borrowMask(requiredCapacity);
         boolean reused = mask != null;
         if (!reused) {
-            mask = Mask.range(start, length);
+            mask = Mask.range(start, length, policy.maskFiltering());
         }
         else if (start == 0) {
             mask.selectAll(length);
@@ -403,7 +403,7 @@ public class Allocator
         Mask result = state.borrowMask(source.selectedCount());
         boolean reused = result != null;
         if (!reused) {
-            result = source.copy();
+            result = source.copy(policy.maskFiltering());
         }
         else {
             copyMask(result, source);
@@ -418,7 +418,7 @@ public class Allocator
         Mask result = state.borrowMask(source.selectedCount());
         boolean reused = result != null;
         if (!reused) {
-            result = source.copy();
+            result = source.copy(policy.maskFiltering());
         }
         else {
             copyMask(result, source);
@@ -434,7 +434,7 @@ public class Allocator
         Mask result = state.borrowMask(source.selectedCount());
         boolean reused = result != null;
         if (!reused) {
-            result = source.copy();
+            result = source.copy(policy.maskFiltering());
         }
         else {
             copyMask(result, source);
@@ -454,16 +454,20 @@ public class Allocator
         boolean reused = mask != null;
         if (!reused) {
             if (policy.singleCopySparseMasks() && selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
-                mask = Mask.all(totalPositions);
+                mask = Mask.all(totalPositions, policy.maskFiltering());
             }
             else if (policy.singleCopySparseMasks()) {
-                mask = Mask.sparseTrusted(Arrays.copyOf(activePositions, selectedCount), selectedCount, totalPositions);
+                mask = Mask.sparseTrusted(
+                        Arrays.copyOf(activePositions, selectedCount),
+                        selectedCount,
+                        totalPositions,
+                        policy.maskFiltering());
             }
             else if (selectedCount == activePositions.length) {
-                mask = Mask.sparse(activePositions, totalPositions);
+                mask = Mask.sparse(activePositions, totalPositions, policy.maskFiltering());
             }
             else {
-                mask = Mask.sparse(Arrays.copyOf(activePositions, selectedCount), totalPositions);
+                mask = Mask.sparse(Arrays.copyOf(activePositions, selectedCount), totalPositions, policy.maskFiltering());
             }
         }
         else if (selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
@@ -484,7 +488,9 @@ public class Allocator
         Mask mask = state.borrowMask(0);
         boolean reused = mask != null;
         if (!reused) {
-            mask = totalPositions == 0 ? Mask.all(0) : Mask.none(totalPositions);
+            mask = totalPositions == 0
+                    ? Mask.all(0, policy.maskFiltering())
+                    : Mask.none(totalPositions, policy.maskFiltering());
         }
         else if (totalPositions == 0) {
             mask.selectAll(0);
@@ -511,7 +517,7 @@ public class Allocator
         boolean reused = mask != null;
         if (selectedCount == totalPositions) {
             if (!reused) {
-                mask = Mask.all(totalPositions);
+                mask = Mask.all(totalPositions, policy.maskFiltering());
             }
             else {
                 mask.selectAll(totalPositions);
@@ -520,7 +526,7 @@ public class Allocator
             return mask;
         }
         if (!reused) {
-            mask = Mask.sparse(new int[selectedCount], totalPositions);
+            mask = Mask.sparse(new int[selectedCount], totalPositions, policy.maskFiltering());
         }
         else {
             mask.positionsArrayForOverwrite(selectedCount);
@@ -1290,14 +1296,14 @@ public class Allocator
         return positions;
     }
 
-    private static Mask materializedAllDifference(Mask left, Mask right)
+    private Mask materializedAllDifference(Mask left, Mask right)
     {
         int[] positions = new int[left.size() - right.selectedCount()];
         int outputIndex = fillMaterializedAllDifference(positions, left, right);
         if (outputIndex == positions.length) {
-            return Mask.sparseTrusted(positions, outputIndex, left.size());
+            return Mask.sparseTrusted(positions, outputIndex, left.size(), policy.maskFiltering());
         }
-        return Mask.sparse(Arrays.copyOf(positions, outputIndex), left.size());
+        return Mask.sparse(Arrays.copyOf(positions, outputIndex), left.size(), policy.maskFiltering());
     }
 
     private static void fillMaterializedAllDifference(Mask result, Mask left, Mask right)

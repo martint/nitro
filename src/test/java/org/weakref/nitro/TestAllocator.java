@@ -309,6 +309,7 @@ class TestAllocator
                 false,
                 false,
                 new AllocatorPolicy.BooleanCopies(false, false, false),
+                new AllocatorPolicy.MaskFiltering(false, false),
                 4,
                 false,
                 true,
@@ -353,6 +354,17 @@ class TestAllocator
                     Mask.all(3),
                     copiedFlags);
             assertThat(copiedFlags).containsExactly(true, false, true);
+
+            Mask integerRange = allocator.allocateAllMask(context, 4);
+            integerRange.retainConstantRange(new int[] {-5, 0, 5, 10}, 0, 10, null);
+            assertThat(integerRange).containsExactly(2);
+
+            Mask doubleComparison = allocator.allocateAllMask(context, 4);
+            doubleComparison.retainConstantComparison(
+                    new double[] {3.0, -1.0, 2.0, 1.5},
+                    2.0,
+                    Mask.ComparisonOperator.LESS_THAN);
+            assertThat(doubleComparison).containsExactly(1, 3);
 
             ConcatenatedBooleanVector concatenated = new ConcatenatedBooleanVector(new Vector[] {
                     new BooleanVector(new boolean[] {false, true}),

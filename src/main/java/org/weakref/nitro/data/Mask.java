@@ -32,11 +32,8 @@ public class Mask
     private static final int[] EMPTY_POSITIONS = new int[0];
     private static final VectorSpecies<Integer> INT_SPECIES = IntVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Long> LONG_SPECIES = LongVector.SPECIES_PREFERRED;
-    private static final boolean VECTORIZED_DENSE_INT_CONSTANT_RANGE =
-            Boolean.parseBoolean(System.getProperty("nitro.mask.vectorizedDenseIntConstantRange", "true"));
-    private static final boolean BRANCHLESS_DENSE_DOUBLE_LESS_THAN =
-            Boolean.parseBoolean(System.getProperty("nitro.mask.branchlessDenseDoubleLessThan", "true"));
 
+    private final AllocatorPolicy.MaskFiltering filteringPolicy;
     private Mask trackedPrevious;
     private Mask trackedNext;
     private Object trackedOwner;
@@ -51,50 +48,75 @@ public class Mask
 
     public static Mask all(int size)
     {
+        return all(size, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask all(int size, AllocatorPolicy.MaskFiltering filteringPolicy)
+    {
         checkArgument(size >= 0, "size is negative");
-        return new Mask(size, size, true, EMPTY_POSITIONS);
+        return new Mask(size, size, true, EMPTY_POSITIONS, filteringPolicy);
     }
 
     public static Mask none(int size)
     {
+        return none(size, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask none(int size, AllocatorPolicy.MaskFiltering filteringPolicy)
+    {
         checkArgument(size >= 0, "size is negative");
-        return new Mask(size, 0, false, EMPTY_POSITIONS);
+        return new Mask(size, 0, false, EMPTY_POSITIONS, filteringPolicy);
     }
 
     public static Mask range(int start, int length)
     {
+        return range(start, length, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask range(int start, int length, AllocatorPolicy.MaskFiltering filteringPolicy)
+    {
         checkArgument(start >= 0, "start is negative");
         checkArgument(length >= 0, "length is negative");
         if (start == 0) {
-            return all(length);
+            return all(length, filteringPolicy);
         }
 
         int[] positions = new int[length];
         for (int index = 0; index < length; index++) {
             positions[index] = start + index;
         }
-        return new Mask(start + length, length, false, positions);
+        return new Mask(start + length, length, false, positions, filteringPolicy);
     }
 
     public static Mask sparse(int[] activePositions, int totalPositions)
+    {
+        return sparse(activePositions, totalPositions, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask sparse(int[] activePositions, int totalPositions, AllocatorPolicy.MaskFiltering filteringPolicy)
     {
         checkArgument(totalPositions >= 0, "totalPositions is negative");
         checkArgument(activePositions.length <= totalPositions, "More active positions than total positions");
 
         if (totalPositions == 0) {
-            return all(0);
+            return all(0, filteringPolicy);
         }
 
         if (activePositions.length == 0) {
-            return none(totalPositions);
+            return none(totalPositions, filteringPolicy);
         }
 
         int[] positions = Arrays.copyOf(activePositions, activePositions.length);
         boolean allSelected = activePositions.length == totalPositions && isAllPositions(positions, activePositions.length);
-        return new Mask(totalPositions, activePositions.length, allSelected, allSelected ? EMPTY_POSITIONS : positions);
+        return new Mask(totalPositions, activePositions.length, allSelected, allSelected ? EMPTY_POSITIONS : positions, filteringPolicy);
     }
 
     static Mask sparseTrusted(int[] activePositions, int selectedCount, int totalPositions)
+    {
+        return sparseTrusted(activePositions, selectedCount, totalPositions, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask sparseTrusted(int[] activePositions, int selectedCount, int totalPositions, AllocatorPolicy.MaskFiltering filteringPolicy)
     {
         checkArgument(totalPositions >= 0, "totalPositions is negative");
         checkArgument(selectedCount >= 0, "selectedCount is negative");
@@ -102,14 +124,19 @@ public class Mask
         checkArgument(activePositions.length >= selectedCount, "activePositions capacity is too small");
 
         if (selectedCount == 0) {
-            return none(totalPositions);
+            return none(totalPositions, filteringPolicy);
         }
 
         boolean allSelected = selectedCount == totalPositions && isAllPositions(activePositions, selectedCount);
-        return new Mask(totalPositions, selectedCount, allSelected, allSelected ? EMPTY_POSITIONS : activePositions);
+        return new Mask(totalPositions, selectedCount, allSelected, allSelected ? EMPTY_POSITIONS : activePositions, filteringPolicy);
     }
 
     static Mask allExcept(int[] excludedPositions, int excludedCount, int totalPositions)
+    {
+        return allExcept(excludedPositions, excludedCount, totalPositions, AllocatorPolicy.MaskFiltering.defaults());
+    }
+
+    static Mask allExcept(int[] excludedPositions, int excludedCount, int totalPositions, AllocatorPolicy.MaskFiltering filteringPolicy)
     {
         checkArgument(totalPositions >= 0, "totalPositions is negative");
         checkArgument(excludedCount >= 0, "excludedCount is negative");
@@ -117,10 +144,10 @@ public class Mask
         checkArgument(excludedPositions.length >= excludedCount, "excludedPositions capacity is too small");
 
         if (excludedCount == 0) {
-            return all(totalPositions);
+            return all(totalPositions, filteringPolicy);
         }
         if (excludedCount == totalPositions && isAllPositions(excludedPositions, excludedCount)) {
-            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS);
+            return new Mask(totalPositions, 0, false, EMPTY_POSITIONS, filteringPolicy);
         }
 
         return new Mask(
@@ -129,15 +156,23 @@ public class Mask
                 false,
                 Arrays.copyOf(excludedPositions, excludedCount),
                 excludedCount,
-                true);
+                true,
+                filteringPolicy);
     }
 
-    private Mask(int size, int selectedCount, boolean allSelected, int[] positions)
+    private Mask(int size, int selectedCount, boolean allSelected, int[] positions, AllocatorPolicy.MaskFiltering filteringPolicy)
     {
-        this(size, selectedCount, allSelected, positions, allSelected ? 0 : selectedCount, false);
+        this(size, selectedCount, allSelected, positions, allSelected ? 0 : selectedCount, false, filteringPolicy);
     }
 
-    private Mask(int size, int selectedCount, boolean allSelected, int[] positions, int positionCount, boolean excludedPositions)
+    private Mask(
+            int size,
+            int selectedCount,
+            boolean allSelected,
+            int[] positions,
+            int positionCount,
+            boolean excludedPositions,
+            AllocatorPolicy.MaskFiltering filteringPolicy)
     {
         checkArgument(size >= 0, "size is negative");
         checkArgument(selectedCount >= 0, "selectedCount is negative");
@@ -149,6 +184,7 @@ public class Mask
         checkArgument(!excludedPositions || !allSelected, "allSelected mask cannot use excluded positions");
         checkArgument(allSelected || (excludedPositions ? selectedCount == size - positionCount : positionCount == selectedCount), "positionCount does not match selectedCount");
 
+        this.filteringPolicy = requireNonNull(filteringPolicy, "filteringPolicy is null");
         this.size = size;
         this.selectedCount = selectedCount;
         this.allSelected = allSelected;
@@ -603,7 +639,7 @@ public class Mask
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
         int count = 0;
-        boolean vectorized = VECTORIZED_DENSE_INT_CONSTANT_RANGE && dense && nulls == null &&
+        boolean vectorized = filteringPolicy.vectorizedDenseIntConstantRange() && dense && nulls == null &&
                 lowerExclusive >= Integer.MIN_VALUE && lowerExclusive <= Integer.MAX_VALUE &&
                 upperExclusive >= Integer.MIN_VALUE && upperExclusive <= Integer.MAX_VALUE;
         if (vectorized) {
@@ -889,7 +925,7 @@ public class Mask
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
         int count = 0;
-        if (dense && BRANCHLESS_DENSE_DOUBLE_LESS_THAN && operator == ComparisonOperator.LESS_THAN) {
+        if (dense && filteringPolicy.branchlessDenseDoubleLessThan() && operator == ComparisonOperator.LESS_THAN) {
             count = retainDenseDoubleLessThan(values, size, literal, buffer);
             setSelection(size, count, count == size);
             return;
@@ -1126,7 +1162,7 @@ public class Mask
             return this;
         }
         if (n <= 0) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, filteringPolicy);
         }
         int[] result = new int[n];
         if (allSelected) {
@@ -1142,7 +1178,7 @@ public class Mask
         else {
             System.arraycopy(positions, 0, result, 0, n);
         }
-        return new Mask(size, n, n == size && isAllPositions(result, n), result);
+        return new Mask(size, n, n == size && isAllPositions(result, n), result, filteringPolicy);
     }
 
     public Mask last(int n)
@@ -1151,7 +1187,7 @@ public class Mask
             return this;
         }
         if (n <= 0) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, filteringPolicy);
         }
         int[] result = new int[n];
         if (allSelected) {
@@ -1168,7 +1204,7 @@ public class Mask
         else {
             System.arraycopy(positions, selectedCount - n, result, 0, n);
         }
-        return new Mask(size, n, n == size && isAllPositions(result, n), result);
+        return new Mask(size, n, n == size && isAllPositions(result, n), result, filteringPolicy);
     }
 
     @Override
@@ -1215,10 +1251,10 @@ public class Mask
             return copy();
         }
         if (other.all()) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, filteringPolicy);
         }
         if (allSelected) {
-            return other.complement();
+            return other.complement(filteringPolicy);
         }
         if (excludedPositions || other.excludedPositions) {
             return genericDifference(other);
@@ -1253,13 +1289,13 @@ public class Mask
     {
         checkCompatible(other);
         if (allSelected || other.all()) {
-            return all(size);
+            return all(size, filteringPolicy);
         }
         if (other.none()) {
             return copy();
         }
         if (none()) {
-            return other.copy();
+            return other.copy(filteringPolicy);
         }
         if (excludedPositions || other.excludedPositions) {
             return genericUnion(other);
@@ -1355,7 +1391,7 @@ public class Mask
     {
         checkVectorCompatibility(other);
         if (other.length() == 0 || none()) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, filteringPolicy);
         }
 
         int[] result = new int[selectedCount];
@@ -1426,17 +1462,22 @@ public class Mask
 
     public Mask complement()
     {
+        return complement(filteringPolicy);
+    }
+
+    private Mask complement(AllocatorPolicy.MaskFiltering resultPolicy)
+    {
         if (allSelected) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, resultPolicy);
         }
         if (none()) {
-            return all(size);
+            return all(size, resultPolicy);
         }
         if (excludedPositions) {
-            return create(size, positions, positionCount);
+            return create(size, positions, positionCount, resultPolicy);
         }
 
-        return allExcept(positions, selectedCount, size);
+        return allExcept(positions, selectedCount, size, resultPolicy);
     }
 
     public Mask or(Mask other)
@@ -1446,13 +1487,18 @@ public class Mask
 
     Mask copy()
     {
+        return copy(filteringPolicy);
+    }
+
+    Mask copy(AllocatorPolicy.MaskFiltering resultPolicy)
+    {
         if (allSelected) {
-            return all(size);
+            return all(size, resultPolicy);
         }
         if (excludedPositions) {
-            return new Mask(size, selectedCount, false, Arrays.copyOf(positions, positionCount), positionCount, true);
+            return new Mask(size, selectedCount, false, Arrays.copyOf(positions, positionCount), positionCount, true, resultPolicy);
         }
-        return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount));
+        return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount), resultPolicy);
     }
 
     private void ensureCapacity(int capacity)
@@ -1688,16 +1734,25 @@ public class Mask
         checkArgument(other.length() >= requiredLength, "Boolean vector is too short for mask domain");
     }
 
-    private static Mask create(int size, int[] positions, int selectedCount)
+    private Mask create(int size, int[] positions, int selectedCount)
+    {
+        return create(size, positions, selectedCount, filteringPolicy);
+    }
+
+    private static Mask create(
+            int size,
+            int[] positions,
+            int selectedCount,
+            AllocatorPolicy.MaskFiltering filteringPolicy)
     {
         boolean allSelected = selectedCount == size && isAllPositions(positions, selectedCount);
         if (selectedCount == 0) {
-            return new Mask(size, 0, false, EMPTY_POSITIONS);
+            return none(size, filteringPolicy);
         }
         if (allSelected) {
-            return all(size);
+            return all(size, filteringPolicy);
         }
-        return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount));
+        return new Mask(size, selectedCount, false, Arrays.copyOf(positions, selectedCount), filteringPolicy);
     }
 
     private static boolean isAllPositions(int[] positions, int selectedCount)
