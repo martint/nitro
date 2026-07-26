@@ -96,7 +96,7 @@ public class FilterOperator
                     default -> null;
                 };
             }
-        }, allocator, resources.projectionMaskCompiler());
+        }, allocator, resources.projectionMaskCompiler(), resources.evaluationPolicy());
         this.predicateMask = RangeConstraintLowerer.lower(
                 evaluationPlan,
                 primitiveRegistry,

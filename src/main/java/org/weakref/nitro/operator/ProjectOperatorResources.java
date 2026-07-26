@@ -24,16 +24,23 @@ import static java.util.Objects.requireNonNull;
 public final class ProjectOperatorResources
 {
     private final ProjectOperatorPolicy policy;
+    private final EvaluationOperatorPolicy evaluationPolicy;
     private final Object evaluatorBufferPoolGroup = new Object();
 
-    public ProjectOperatorResources(ProjectOperatorPolicy policy)
+    public ProjectOperatorResources(ProjectOperatorPolicy policy, EvaluationOperatorPolicy evaluationPolicy)
     {
         this.policy = requireNonNull(policy, "policy is null");
+        this.evaluationPolicy = requireNonNull(evaluationPolicy, "evaluationPolicy is null");
     }
 
     ProjectOperatorPolicy policy()
     {
         return policy;
+    }
+
+    EvaluationOperatorPolicy evaluationPolicy()
+    {
+        return evaluationPolicy;
     }
 
     Object evaluatorBufferPoolGroup()

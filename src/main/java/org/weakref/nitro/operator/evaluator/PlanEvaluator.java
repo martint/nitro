@@ -39,6 +39,7 @@ import org.weakref.nitro.function.scalar.MaskOutcome;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
+import org.weakref.nitro.operator.EvaluationOperatorPolicy;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -80,32 +81,12 @@ public final class PlanEvaluator
     private static final Set<Stream> VALUES_ONLY = java.util.EnumSet.of(Stream.VALUES);
     private static final Set<Stream> NULLS_ONLY = java.util.EnumSet.of(Stream.NULLS);
     private static final Set<Stream> ERRORS_ONLY = java.util.EnumSet.of(Stream.ERRORS);
-    private static final int DICTIONARY_PEEL_SPARSE_RATIO = Integer.getInteger("nitro.expression.dictionaryPeelSparseRatio", 8);
-    private static final boolean ADAPTIVE_MASK_REORDERING =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.adaptiveMaskReordering", "true"));
-    private static final boolean OR_SHORT_CIRCUIT_REMAINING =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.orShortCircuitRemaining", "true"));
-    private static final boolean OR_EVALUATE_FINAL_TERM_ON_FULL_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.orEvaluateFinalTermOnFullMask", "false"));
-    private static final int OR_FINAL_TERM_MIN_REMAINING_ROWS =
-            Integer.getInteger("nitro.expression.orFinalTermMinRemainingRows", 1024);
-    private static final int OR_FINAL_TERM_MIN_REMAINING_PERCENT =
-            Integer.getInteger("nitro.expression.orFinalTermMinRemainingPercent", 75);
-    private static final boolean FAST_BOOLEAN_MASK_CLASSIFIER =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.fastBooleanMaskClassifier", "true"));
-    private static final boolean IN_PLACE_FLAT_BOOLEAN_CLASSIFIER =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.inPlaceFlatBooleanClassifier", "true"));
-    private static final boolean INPUT_MASK_RESOLVER =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.inputMaskResolver", "true"));
-    private static final boolean DIRECT_PRIMITIVE_INPUT_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.directPrimitiveInputMask", "true"));
-    private static final boolean RECYCLE_CONTROL_FRAMES =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.recycleControlFrames", "true"));
     private static final byte UNKNOWN_DICTIONARY_MATCH = 0;
     private static final byte DICTIONARY_MISMATCH = 1;
     private static final byte DICTIONARY_MATCH = 2;
 
     private final EvaluationPlan plan;
+    private final EvaluationOperatorPolicy policy;
     private final PrimitiveRegistry primitiveRegistry;
     private final InputResolver input;
     private final Allocator allocator;
@@ -147,9 +128,15 @@ public final class PlanEvaluator
         }
     }
 
-    public PlanEvaluator(EvaluationPlan plan, PrimitiveRegistry primitiveRegistry, InputResolver input, Allocator allocator, ProjectionMaskCompiler projectionMaskCompiler)
+    public PlanEvaluator(
+            EvaluationPlan plan,
+            PrimitiveRegistry primitiveRegistry,
+            InputResolver input,
+            Allocator allocator,
+            ProjectionMaskCompiler projectionMaskCompiler,
+            EvaluationOperatorPolicy policy)
     {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler);
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator"), false, projectionMaskCompiler, policy);
     }
 
     public PlanEvaluator(
@@ -158,10 +145,11 @@ public final class PlanEvaluator
             InputResolver input,
             Allocator allocator,
             ProjectionMaskCompiler projectionMaskCompiler,
+            EvaluationOperatorPolicy policy,
             Object poolGroup,
             boolean requireProjectedCompanionStreams)
     {
-        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams, projectionMaskCompiler);
+        this(plan, primitiveRegistry, input, allocator, new Allocator.Context("PlanEvaluator", poolGroup), requireProjectedCompanionStreams, projectionMaskCompiler, policy);
     }
 
     private PlanEvaluator(
@@ -171,10 +159,12 @@ public final class PlanEvaluator
             Allocator allocator,
             Allocator.Context allocationContext,
             boolean requireProjectedCompanionStreams,
-            ProjectionMaskCompiler projectionMaskCompiler)
+            ProjectionMaskCompiler projectionMaskCompiler,
+            EvaluationOperatorPolicy policy)
     {
         this.allocationContext = allocationContext;
         this.plan = plan;
+        this.policy = requireNonNull(policy, "policy is null");
         this.primitiveRegistry = primitiveRegistry;
         this.input = input;
         this.allocator = allocator;
@@ -411,7 +401,7 @@ public final class PlanEvaluator
         Set<Stream> requestedStreams = requestedStreamsFor(reference);
         Set<Stream> hardRequestedStreams = hardRequestedStreamsFor(reference);
         List<Streams> inputs;
-        if (RECYCLE_CONTROL_FRAMES) {
+        if (policy.recycleControlFrames()) {
             ArrayList<Streams> frame = callInputFrames.computeIfAbsent(call, _ -> new ArrayList<>(call.arguments().size()));
             frame.clear();
             inputs = frame;
@@ -598,9 +588,9 @@ public final class PlanEvaluator
         return new DictionaryPeeling(sharedIds, rowCount, baseMask, List.copyOf(peeledInputs));
     }
 
-    private static boolean dictionaryPeelTooSparse(int rowCount, int baseLength)
+    private boolean dictionaryPeelTooSparse(int rowCount, int baseLength)
     {
-        return (long) baseLength > (long) rowCount * DICTIONARY_PEEL_SPARSE_RATIO;
+        return (long) baseLength > (long) rowCount * policy.dictionaryPeelSparseRatio();
     }
 
     private Streams peelDictionaryCompatibleStreams(Streams streams, int[] sharedIds, int rowCount, int baseLength)
@@ -973,7 +963,7 @@ public final class PlanEvaluator
 
     private Mask tryResolveInputMask(Reference reference, Mask mask, boolean selectTrue)
     {
-        if (!INPUT_MASK_RESOLVER) {
+        if (!policy.inputMaskResolver()) {
             return null;
         }
         return input.resolveMask(reference, mask, selectTrue, allocator, allocationContext);
@@ -1340,7 +1330,7 @@ public final class PlanEvaluator
 
     private Mask classifyTrueBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
-        if (FAST_BOOLEAN_MASK_CLASSIFIER && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
+        if (policy.fastBooleanMaskClassifier() && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
             return allocator.intersectMask(allocationContext, mask, booleanValues);
         }
 
@@ -1365,7 +1355,7 @@ public final class PlanEvaluator
 
     private Mask classifyFalseBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
-        if (FAST_BOOLEAN_MASK_CLASSIFIER && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
+        if (policy.fastBooleanMaskClassifier() && values instanceof BooleanVector booleanValues && VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
             return allocator.differenceMask(allocationContext, mask, booleanValues);
         }
 
@@ -1532,7 +1522,7 @@ public final class PlanEvaluator
 
     private Mask tryEvaluatePreboundMask(Reference reference, Mask mask, boolean selectTrue)
     {
-        if (!DIRECT_PRIMITIVE_INPUT_MASK || reference.stream() != Stream.VALUES ||
+        if (!policy.directPrimitiveInputMask() || reference.stream() != Stream.VALUES ||
                 !(reference.producer() instanceof Variable variable)) {
             return null;
         }
@@ -1559,7 +1549,7 @@ public final class PlanEvaluator
         }
 
         Vector values = evaluate(directInput, mask).get(directInput.stream());
-        if (IN_PLACE_FLAT_BOOLEAN_CLASSIFIER && values instanceof BooleanVector booleanValues) {
+        if (policy.inPlaceFlatBooleanClassifier() && values instanceof BooleanVector booleanValues) {
             mask.retainBooleans(booleanValues.values(), selectTrue);
             return mask;
         }
@@ -2259,14 +2249,14 @@ public final class PlanEvaluator
         return matches;
     }
 
-    private static boolean shouldEvaluateFullDictionary(BinaryVector values, Mask mask)
+    private boolean shouldEvaluateFullDictionary(BinaryVector values, Mask mask)
     {
         return shouldEvaluateFullDictionary(values.length(), mask);
     }
 
-    private static boolean shouldEvaluateFullDictionary(int valueCount, Mask mask)
+    private boolean shouldEvaluateFullDictionary(int valueCount, Mask mask)
     {
-        return valueCount <= (long) mask.selectedCount() * DICTIONARY_PEEL_SPARSE_RATIO;
+        return valueCount <= (long) mask.selectedCount() * policy.dictionaryPeelSparseRatio();
     }
 
     private static Int2ByteOpenHashMap dictionaryMatchCache(Mask mask)
@@ -2590,7 +2580,7 @@ public final class PlanEvaluator
         terms = orderTerms(terms, BooleanOperator.OR);
         try {
             Mask acceptedMask = emptyMask(mask.size());
-            if (!OR_SHORT_CIRCUIT_REMAINING) {
+            if (!policy.orShortCircuitRemaining()) {
                 for (MaskExpression term : terms) {
                     Mask termTrueMask = evaluateMeasuredTrueMask(term, mask, BooleanOperator.OR);
                     acceptedMask = unionMasks(acceptedMask, termTrueMask, mask.size());
@@ -2627,15 +2617,15 @@ public final class PlanEvaluator
         }
     }
 
-    private static boolean shouldEvaluateFinalOrTermOnFullMask(List<MaskExpression> terms, int index, Mask mask, Mask remainingMask, Mask termTrueMask)
+    private boolean shouldEvaluateFinalOrTermOnFullMask(List<MaskExpression> terms, int index, Mask mask, Mask remainingMask, Mask termTrueMask)
     {
-        if (!OR_EVALUATE_FINAL_TERM_ON_FULL_MASK || index + 2 != terms.size() || termTrueMask.none()) {
+        if (!policy.orEvaluateFinalTermOnFullMask() || index + 2 != terms.size() || termTrueMask.none()) {
             return false;
         }
         int inputRows = mask.selectedCount();
         int finalRemainingRows = remainingMask.selectedCount() - termTrueMask.selectedCount();
-        return finalRemainingRows >= OR_FINAL_TERM_MIN_REMAINING_ROWS &&
-                finalRemainingRows * 100L >= inputRows * (long) OR_FINAL_TERM_MIN_REMAINING_PERCENT;
+        return finalRemainingRows >= policy.orFinalTermMinRemainingRows() &&
+                finalRemainingRows * 100L >= inputRows * (long) policy.orFinalTermMinRemainingPercent();
     }
 
     private MaskOutcome evaluateMeasuredOutcome(MaskExpression term, Mask mask, BooleanOperator operator)
@@ -2768,7 +2758,7 @@ public final class PlanEvaluator
         Vector values = evaluate(reference, mask).get(reference.stream());
         Vector errors = optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
         Vector nulls = optionalBooleanStream(reference.producer(), Stream.NULLS, mask);
-        if (IN_PLACE_FLAT_BOOLEAN_CLASSIFIER && values instanceof BooleanVector booleanValues &&
+        if (policy.inPlaceFlatBooleanClassifier() && values instanceof BooleanVector booleanValues &&
                 VectorAccess.isAllFalseNulls(nulls) && VectorAccess.isAllFalseNulls(errors)) {
             mask.retainBooleans(booleanValues.values(), true);
             return;
@@ -2857,11 +2847,11 @@ public final class PlanEvaluator
 
     private List<MaskExpression> orderTerms(List<MaskExpression> terms, BooleanOperator operator)
     {
-        if (!ADAPTIVE_MASK_REORDERING) {
+        if (!policy.adaptiveMaskReordering()) {
             return terms;
         }
 
-        if (RECYCLE_CONTROL_FRAMES) {
+        if (policy.recycleControlFrames()) {
             if (termOrderFrames == null) {
                 termOrderFrames = new TermOrderFrames();
             }
@@ -2888,7 +2878,7 @@ public final class PlanEvaluator
 
     private void releaseOrderedTerms()
     {
-        if (ADAPTIVE_MASK_REORDERING && RECYCLE_CONTROL_FRAMES) {
+        if (policy.adaptiveMaskReordering() && policy.recycleControlFrames()) {
             termOrderFrames.release();
         }
     }

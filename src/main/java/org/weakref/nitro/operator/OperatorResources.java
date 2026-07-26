@@ -50,10 +50,13 @@ public final class OperatorResources
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.distinctKeySetPolicy = requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
-        this.filter = new FilterOperatorResources(codeGeneration.projectionMask(), requireNonNull(filterPolicy, "filterPolicy is null"));
+        this.project = requireNonNull(project, "project is null");
+        this.filter = new FilterOperatorResources(
+                codeGeneration.projectionMask(),
+                project.evaluationPolicy(),
+                requireNonNull(filterPolicy, "filterPolicy is null"));
         this.fullJoinPolicy = requireNonNull(fullJoinPolicy, "fullJoinPolicy is null");
         this.groupIdPolicy = requireNonNull(groupIdPolicy, "groupIdPolicy is null");
-        this.project = requireNonNull(project, "project is null");
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.grouping = requireNonNull(grouping, "grouping is null");
@@ -73,13 +76,14 @@ public final class OperatorResources
      */
     public static OperatorResources createDefault(HashJoinMaterializationListener hashJoinMaterializationListener)
     {
+        EvaluationOperatorPolicy evaluationPolicy = EvaluationOperatorPolicy.fromSystemProperties();
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
                 DistinctKeySetPolicy.fromSystemProperties(),
                 FilterOperatorPolicy.fromSystemProperties(),
                 FullJoinOperatorPolicy.fromSystemProperties(),
                 GroupIdOperatorPolicy.fromSystemProperties(),
-                new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties()),
+                new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties(), evaluationPolicy),
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),

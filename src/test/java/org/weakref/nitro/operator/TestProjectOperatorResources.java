@@ -23,10 +23,12 @@ class TestProjectOperatorResources
     void testEvaluatorCompatibilityDomainIsOwnerScoped()
     {
         ProjectOperatorPolicy policy = ProjectOperatorPolicy.defaults();
-        ProjectOperatorResources first = new ProjectOperatorResources(policy);
-        ProjectOperatorResources second = new ProjectOperatorResources(policy);
+        EvaluationOperatorPolicy evaluationPolicy = EvaluationOperatorPolicy.defaults();
+        ProjectOperatorResources first = new ProjectOperatorResources(policy, evaluationPolicy);
+        ProjectOperatorResources second = new ProjectOperatorResources(policy, evaluationPolicy);
 
         assertThat(first.policy()).isSameAs(policy);
+        assertThat(first.evaluationPolicy()).isSameAs(evaluationPolicy);
         assertThat(first.evaluatorBufferPoolGroup()).isSameAs(first.evaluatorBufferPoolGroup());
         assertThat(second.evaluatorBufferPoolGroup()).isNotSameAs(first.evaluatorBufferPoolGroup());
     }

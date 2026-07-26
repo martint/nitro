@@ -45,6 +45,7 @@ import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
+import org.weakref.nitro.operator.EvaluationOperatorPolicy;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -3570,7 +3571,8 @@ public class TestPlanEvaluator
                 primitiveRegistry,
                 input,
                 allocator,
-                allocator.engineResources().operatorCodeGeneration().projectionMask());
+                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                EvaluationOperatorPolicy.defaults());
     }
 
     private static PlanEvaluator planEvaluator(
@@ -3580,7 +3582,7 @@ public class TestPlanEvaluator
             Allocator allocator,
             ProjectionMaskCompiler projectionMaskCompiler)
     {
-        return new PlanEvaluator(plan, primitiveRegistry, input, allocator, projectionMaskCompiler);
+        return new PlanEvaluator(plan, primitiveRegistry, input, allocator, projectionMaskCompiler, EvaluationOperatorPolicy.defaults());
     }
 
     private static PlanEvaluator planEvaluator(
@@ -3607,6 +3609,7 @@ public class TestPlanEvaluator
                 input,
                 allocator,
                 allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                EvaluationOperatorPolicy.defaults(),
                 poolGroup,
                 requireProjectedCompanionStreams);
     }
@@ -3626,6 +3629,7 @@ public class TestPlanEvaluator
                 input,
                 allocator,
                 projectionMaskCompiler,
+                EvaluationOperatorPolicy.defaults(),
                 poolGroup,
                 requireProjectedCompanionStreams);
     }

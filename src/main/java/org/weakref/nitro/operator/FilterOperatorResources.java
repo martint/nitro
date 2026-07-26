@@ -20,11 +20,15 @@ import static java.util.Objects.requireNonNull;
 /**
  * Explicit engine-owned dependencies used by filter operators.
  */
-public record FilterOperatorResources(ProjectionMaskCompiler projectionMaskCompiler, FilterOperatorPolicy policy)
+public record FilterOperatorResources(
+        ProjectionMaskCompiler projectionMaskCompiler,
+        EvaluationOperatorPolicy evaluationPolicy,
+        FilterOperatorPolicy policy)
 {
     public FilterOperatorResources
     {
         requireNonNull(projectionMaskCompiler, "projectionMaskCompiler is null");
+        requireNonNull(evaluationPolicy, "evaluationPolicy is null");
         requireNonNull(policy, "policy is null");
     }
 }

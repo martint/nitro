@@ -294,6 +294,7 @@ public class ProjectOperator
                         inputResolver,
                         allocator,
                         operatorResources.codeGeneration().projectionMask(),
+                        operatorResources.project().evaluationPolicy(),
                         operatorResources.project().evaluatorBufferPoolGroup(),
                         true)
                 : new PlanEvaluator(
@@ -302,6 +303,7 @@ public class ProjectOperator
                         inputResolver,
                         allocator,
                         operatorResources.codeGeneration().projectionMask(),
+                        operatorResources.project().evaluationPolicy(),
                         new Object(),
                         true);
     }
