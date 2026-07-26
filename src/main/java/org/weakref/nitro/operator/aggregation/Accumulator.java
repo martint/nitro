@@ -25,7 +25,14 @@ import org.weakref.nitro.data.Vector;
  * groups increases, and eventually materialize result streams from the accumulated state.
  */
 public interface Accumulator
+        extends AggregationUnit
 {
+    @Override
+    default int outputCount()
+    {
+        return 1;
+    }
+
     /**
      * Returns the input columns defining DISTINCT semantics for this accumulator, or {@code null}
      * when it consumes every row selected by the incoming mask.
@@ -103,6 +110,13 @@ public interface Accumulator
         return result(maxGroup, state, output, allocator, allocationContext);
     }
 
+    @Override
+    default Streams result(int output, int maxGroup, Streams state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        return result(maxGroup, state, mask, existing, allocator, allocationContext);
+    }
+
     /**
      * Copies the aggregate result for one group into a caller-owned output bundle.
      * <p>
@@ -119,8 +133,29 @@ public interface Accumulator
         return null;
     }
 
+    @Override
+    default Streams copyResultPosition(int output, int group, int maxGroup, Streams state, Streams existing, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        return copyResultPosition(group, maxGroup, state, existing, outputPosition, size, allocator, allocationContext);
+    }
+
     /**
      * Materializes result streams for groups {@code 0..maxGroup}.
      */
     Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext);
+
+    @Override
+    default Streams result(int output, int maxGroup, Streams state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        return result(maxGroup, state, existing, allocator, allocationContext);
+    }
+
+    private static void requireOnlyOutput(int output)
+    {
+        if (output != 0) {
+            throw new IndexOutOfBoundsException("single-output accumulator result: " + output);
+        }
+    }
 }

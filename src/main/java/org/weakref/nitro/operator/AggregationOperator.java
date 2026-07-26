@@ -19,6 +19,8 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
+import org.weakref.nitro.operator.aggregation.AggregationProgram;
+import org.weakref.nitro.operator.aggregation.AggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.List;
@@ -39,7 +41,9 @@ public class AggregationOperator
     private final boolean deferResultMaterialization;
 
     private final Operator source;
-    private final List<Accumulator> aggregations;
+    private final AggregationProgram program;
+    private final List<AggregationUnit> units;
+    private final int[][] outputsByUnit;
 
     private final Streams[] reusableResults;
     private BatchState currentBatchState;
@@ -47,10 +51,20 @@ public class AggregationOperator
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, aggregations, source, allocator.engineResources().operatorResources());
+        this(allocator, AggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
     }
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
+    {
+        this(allocator, AggregationProgram.independent(aggregations), source, operatorResources);
+    }
+
+    public AggregationOperator(Allocator allocator, AggregationProgram program, Operator source)
+    {
+        this(allocator, program, source, allocator.engineResources().operatorResources());
+    }
+
+    public AggregationOperator(Allocator allocator, AggregationProgram program, Operator source, OperatorResources operatorResources)
     {
         this.allocator = allocator;
         operatorResources = requireNonNull(operatorResources, "operatorResources is null");
@@ -64,15 +78,17 @@ public class AggregationOperator
                 operatorResources.codeGeneration());
         this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
-        this.aggregations = List.copyOf(aggregations);
+        this.program = requireNonNull(program, "program is null");
+        this.units = program.units();
+        this.outputsByUnit = outputsByUnit(program);
 
-        reusableResults = new Streams[this.aggregations.size()];
+        reusableResults = new Streams[program.outputs().size()];
     }
 
     @Override
     public int outputCount()
     {
-        return aggregations.size();
+        return program.outputs().size();
     }
 
     @Override
@@ -119,10 +135,10 @@ public class AggregationOperator
         if (!batchState.filled) {
             batchState.filled = true;
 
-            Streams[] state = new Streams[aggregations.size()];
+            Streams[] state = new Streams[units.size()];
             for (int i = 0; i < state.length; i++) {
-                state[i] = aggregations.get(i).allocate(aggregationExecutionContext, 1);
-                aggregations.get(i).initialize(state[i], 0, 1);
+                state[i] = units.get(i).allocate(aggregationExecutionContext, 1);
+                units.get(i).initialize(state[i], 0, 1);
             }
             if (!deferResultMaterialization) {
                 materializeResults(state, batchState);
@@ -141,12 +157,12 @@ public class AggregationOperator
                     if (mask.none()) {
                         continue;
                     }
-                    for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-                        Accumulator accumulator = aggregations.get(aggregation);
-                        int filterColumn = accumulator.filterInputColumn();
+                    for (int unit = 0; unit < units.size(); unit++) {
+                        AggregationUnit aggregationUnit = units.get(unit);
+                        int filterColumn = aggregationUnit.filterInputColumn();
                         Mask aggregationMask = filterColumn < 0 ? mask : filterMask(batch, filterColumn, mask);
                         try {
-                            accumulator.accumulate(state[aggregation], 0, aggregationMask, StreamAccessors.forBatch(batch));
+                            aggregationUnit.accumulate(state[unit], 0, aggregationMask, StreamAccessors.forBatch(batch));
                         }
                         finally {
                             if (aggregationMask != mask) {
@@ -154,8 +170,7 @@ public class AggregationOperator
                             }
                         }
                         if (!deferResultMaterialization) {
-                            reusableResults[aggregation] = accumulator.result(0, state[aggregation], reusableResults[aggregation], allocator, allocationContext);
-                            batchState.results[aggregation] = reusableResults[aggregation];
+                            materializeUnitResults(unit, state[unit], batchState);
                         }
                     }
                 }
@@ -168,15 +183,43 @@ public class AggregationOperator
 
     private void materializeResults(Streams[] state, BatchState batchState)
     {
-        for (int aggregation = 0; aggregation < aggregations.size(); aggregation++) {
-            reusableResults[aggregation] = aggregations.get(aggregation).result(
+        for (int unit = 0; unit < units.size(); unit++) {
+            materializeUnitResults(unit, state[unit], batchState);
+        }
+    }
+
+    private void materializeUnitResults(int unit, Streams state, BatchState batchState)
+    {
+        AggregationUnit aggregationUnit = units.get(unit);
+        for (int output : outputsByUnit[unit]) {
+            AggregationProgram.Output binding = program.outputs().get(output);
+            reusableResults[output] = aggregationUnit.result(
+                    binding.result(),
                     0,
-                    state[aggregation],
-                    reusableResults[aggregation],
+                    state,
+                    reusableResults[output],
                     allocator,
                     allocationContext);
-            batchState.results[aggregation] = reusableResults[aggregation];
+            batchState.results[output] = reusableResults[output];
         }
+    }
+
+    private static int[][] outputsByUnit(AggregationProgram program)
+    {
+        int[] counts = new int[program.units().size()];
+        for (AggregationProgram.Output output : program.outputs()) {
+            counts[output.unit()]++;
+        }
+        int[][] outputsByUnit = new int[counts.length][];
+        for (int unit = 0; unit < counts.length; unit++) {
+            outputsByUnit[unit] = new int[counts[unit]];
+        }
+        int[] indexes = new int[counts.length];
+        for (int output = 0; output < program.outputs().size(); output++) {
+            int unit = program.outputs().get(output).unit();
+            outputsByUnit[unit][indexes[unit]++] = output;
+        }
+        return outputsByUnit;
     }
 
     private Mask filterMask(Batch batch, int filterColumn, Mask mask)
@@ -201,7 +244,7 @@ public class AggregationOperator
 
     private final class BatchState
     {
-        private final Streams[] results = new Streams[aggregations.size()];
+        private final Streams[] results = new Streams[program.outputs().size()];
         private Mask mask;
         private boolean filled;
 

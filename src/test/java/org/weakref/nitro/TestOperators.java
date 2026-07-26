@@ -58,6 +58,9 @@ import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
+import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
+import org.weakref.nitro.operator.aggregation.AggregationProgram;
+import org.weakref.nitro.operator.aggregation.AggregationUnit;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.ConditionalSum;
@@ -68,6 +71,7 @@ import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
+import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
@@ -101,6 +105,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
+import static java.lang.Math.toIntExact;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -1411,6 +1416,48 @@ public class TestOperators
                                 row(20L, 2L, 7L, 8L),
                                 row(30L, 1L, null, 9L))))))
                 .matchesExactly(List.of(row(10L, 6L), row(20L, 0L), row(30L, null)));
+    }
+
+    @Test
+    void testPhysicalAggregationProgramRoutesMultipleResultsFromOneUnit()
+    {
+        SumAndCountUnit unit = new SumAndCountUnit(0);
+        AggregationProgram program = new AggregationProgram(
+                List.of(unit),
+                List.of(
+                        new AggregationProgram.Output(0, 1),
+                        new AggregationProgram.Output(0, 0)));
+
+        assertThat(operator(new AggregationOperator(
+                allocator,
+                program,
+                new ConstantTableOperator(allocator, 1, List.of(row(3L), row(5L), row(7L))))))
+                .matchesExactly(List.of(row(3L, 15L)));
+        assertThat(unit.accumulationCalls).isEqualTo(1);
+    }
+
+    @Test
+    void testGroupedPhysicalAggregationProgramRoutesMultipleResultsFromOneUnit()
+    {
+        SumAndCountUnit unit = new SumAndCountUnit(1);
+        AggregationProgram program = new AggregationProgram(
+                List.of(unit),
+                List.of(
+                        new AggregationProgram.Output(0, 1),
+                        new AggregationProgram.Output(0, 0)));
+
+        assertThat(operator(new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(0),
+                program,
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(row(10L, 3L), row(20L, 11L), row(10L, 5L))),
+                allocator.engineResources().operatorResources())))
+                .matchesExactly(List.of(row(10L, 2L, 8L), row(20L, 1L, 11L)));
+        assertThat(unit.accumulationCalls).isEqualTo(1);
     }
 
     @Test
@@ -4597,5 +4644,100 @@ public class TestOperators
     private static Reference values(Producer producer)
     {
         return new Reference(producer, Stream.VALUES);
+    }
+
+    /**
+     * Test-only physical unit with shared state and two results. Its identity is deliberately
+     * opaque to the operators; only the program's unit/result bindings describe the output shape.
+     */
+    private static final class SumAndCountUnit
+            implements AggregationUnit
+    {
+        private final int inputColumn;
+        private int accumulationCalls;
+
+        private SumAndCountUnit(int inputColumn)
+        {
+            this.inputColumn = inputColumn;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return 2;
+        }
+
+        @Override
+        public Streams allocate(AggregationExecutionContext context, int size)
+        {
+            return Streams.of(
+                    context.allocator().allocate(context.allocationContext(), I64Vector.class, size, I64Vector::new),
+                    null,
+                    context.allocator().allocate(context.allocationContext(), I64Vector.class, size, I64Vector::new));
+        }
+
+        @Override
+        public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
+        {
+            return Streams.of(
+                    allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new),
+                    null,
+                    allocator.allocateOrGrow(allocationContext, (I64Vector) state.get(Stream.ERRORS), I64Vector.class, size, I64Vector::new));
+        }
+
+        @Override
+        public void initialize(Streams state, int offset, int length)
+        {
+            java.util.Arrays.fill(((I64Vector) state.values()).values(), offset, offset + length, 0);
+            java.util.Arrays.fill(((I64Vector) state.get(Stream.ERRORS)).values(), offset, offset + length, 0);
+        }
+
+        @Override
+        public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
+        {
+            accumulationCalls++;
+            I64Vector sums = (I64Vector) state.values();
+            I64Vector counts = (I64Vector) state.get(Stream.ERRORS);
+            VectorAccess.LongValues values = VectorAccess.longValues(streams.values(inputColumn));
+            for (int position : mask) {
+                sums.values()[group] += values.value(position);
+                counts.values()[group]++;
+            }
+        }
+
+        @Override
+        public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+        {
+            accumulationCalls++;
+            I64Vector sums = (I64Vector) state.values();
+            I64Vector counts = (I64Vector) state.get(Stream.ERRORS);
+            I64Vector groupIds = (I64Vector) groups;
+            VectorAccess.LongValues values = VectorAccess.longValues(streams.values(inputColumn));
+            for (int position : mask) {
+                int group = toIntExact(groupIds.values()[position]);
+                sums.values()[group] += values.value(position);
+                counts.values()[group]++;
+            }
+        }
+
+        @Override
+        public Streams result(int output, int maxGroup, Streams state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector source = output == 0 ? (I64Vector) state.values() : (I64Vector) state.get(Stream.ERRORS);
+            I64Vector values = allocator.allocateOrGrow(
+                    allocationContext,
+                    existing == null ? null : (I64Vector) existing.values(),
+                    I64Vector.class,
+                    maxGroup + 1,
+                    I64Vector::new);
+            System.arraycopy(source.values(), 0, values.values(), 0, maxGroup + 1);
+            BooleanVector nulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    existing == null ? null : existing.getOrNull(Stream.NULLS),
+                    maxGroup + 1);
+            java.util.Arrays.fill(nulls.values(), 0, maxGroup + 1, false);
+            return Streams.reuseValuesAndNulls(existing, values, nulls);
+        }
     }
 }
