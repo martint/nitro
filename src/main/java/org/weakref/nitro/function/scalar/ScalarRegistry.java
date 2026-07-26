@@ -13,9 +13,6 @@
  */
 package org.weakref.nitro.function.scalar;
 
-import org.weakref.nitro.core.function.FunctionCapability;
-
-import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -26,22 +23,9 @@ public final class ScalarRegistry
 {
     private final Map<String, ScalarDescriptor> descriptors = new LinkedHashMap<>();
 
-    public ScalarDescriptor register(Class<?> functionClass)
+    public ScalarDescriptor register(ScalarDescriptor descriptor)
     {
-        requireNonNull(functionClass, "functionClass is null");
-
-        ScalarFunction scalarFunction = functionClass.getAnnotation(ScalarFunction.class);
-        checkArgument(scalarFunction != null, "Function class is missing @ScalarFunction: %s", functionClass.getName());
-        checkArgument(PrimitiveFunction.class.isAssignableFrom(functionClass), "Function class must implement PrimitiveFunction: %s", functionClass.getName());
-
-        ScalarDescriptor descriptor = new ScalarDescriptor(
-                scalarFunction.name(),
-                scalarFunction.deterministic(),
-                instantiate(functionClass.asSubclass(PrimitiveFunction.class)),
-                java.util.Arrays.stream(scalarFunction.capabilities())
-                        .map(ScalarRegistry::instantiateCapability)
-                        .toList());
-
+        requireNonNull(descriptor, "descriptor is null");
         checkArgument(descriptors.putIfAbsent(descriptor.name(), descriptor) == null, "Scalar function already registered: %s", descriptor.name());
         return descriptor;
     }
@@ -51,27 +35,5 @@ public final class ScalarRegistry
         ScalarDescriptor descriptor = descriptors.get(name);
         checkArgument(descriptor != null, "Unknown scalar function: %s", name);
         return descriptor;
-    }
-
-    private static PrimitiveFunction instantiate(Class<? extends PrimitiveFunction> functionClass)
-    {
-        return (PrimitiveFunction) instantiateComponent(functionClass);
-    }
-
-    private static FunctionCapability instantiateCapability(Class<? extends FunctionCapability> capabilityClass)
-    {
-        return (FunctionCapability) instantiateComponent(capabilityClass);
-    }
-
-    private static Object instantiateComponent(Class<?> implementationClass)
-    {
-        try {
-            var constructor = implementationClass.getDeclaredConstructor();
-            constructor.setAccessible(true);
-            return constructor.newInstance();
-        }
-        catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException exception) {
-            throw new IllegalArgumentException("Unable to instantiate scalar function component: " + implementationClass.getName(), exception);
-        }
     }
 }

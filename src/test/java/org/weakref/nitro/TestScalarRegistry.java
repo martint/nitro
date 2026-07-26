@@ -19,6 +19,7 @@ import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
@@ -45,7 +46,7 @@ public class TestScalarRegistry
     {
         ScalarRegistry registry = new ScalarRegistry();
 
-        ScalarDescriptor descriptor = registry.register(TestAddI64.class);
+        ScalarDescriptor descriptor = registry.register(new AnnotatedScalarLoader().load(TestAddI64.class));
 
         assertThat(descriptor.name()).isEqualTo("add");
         assertThat(descriptor.deterministic()).isTrue();
@@ -59,7 +60,7 @@ public class TestScalarRegistry
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
 
-        ScalarDescriptor descriptor = scalarRegistry.register(AddI64.class);
+        ScalarDescriptor descriptor = scalarRegistry.register(new AnnotatedScalarLoader().load(AddI64.class));
         primitiveRegistry.register(descriptor);
 
         assertThat(descriptor.implementation()).isInstanceOf(AddI64.class);
@@ -72,7 +73,7 @@ public class TestScalarRegistry
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
 
-        ScalarDescriptor descriptor = scalarRegistry.register(IsNullI64.class);
+        ScalarDescriptor descriptor = scalarRegistry.register(new AnnotatedScalarLoader().load(IsNullI64.class));
         primitiveRegistry.register(descriptor);
 
         assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
@@ -93,7 +94,7 @@ public class TestScalarRegistry
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
 
-        ScalarDescriptor descriptor = scalarRegistry.register(EqualF64.class);
+        ScalarDescriptor descriptor = scalarRegistry.register(new AnnotatedScalarLoader().load(EqualF64.class));
         primitiveRegistry.register(descriptor);
 
         assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
@@ -108,7 +109,7 @@ public class TestScalarRegistry
     @Test
     void testLongMaskExecutionComesFromCapabilityMetadata()
     {
-        ScalarDescriptor descriptor = new ScalarRegistry().register(EqualI64.class);
+        ScalarDescriptor descriptor = new ScalarRegistry().register(new AnnotatedScalarLoader().load(EqualI64.class));
 
         assertThat(descriptor.implementation()).isNotInstanceOf(MaskEvaluablePrimitiveFunction.class);
         assertThat(descriptor.capabilities()).anyMatch(EqualI64Optimization.class::isInstance);

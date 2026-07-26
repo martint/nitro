@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro;
 
+import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64;
@@ -88,6 +89,7 @@ public final class TestPrimitiveFunctions
     public static PrimitiveRegistry primitiveRegistry()
     {
         ScalarRegistry scalarRegistry = new ScalarRegistry();
+        AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
         for (Class<?> functionClass : List.of(
                 AddI64.class,
@@ -153,7 +155,7 @@ public final class TestPrimitiveFunctions
                 SubstringUtf8.class,
                 UpperUtf8.class,
                 YearOfDate.class)) {
-            primitiveRegistry.register(scalarRegistry.register(functionClass));
+            primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(functionClass)));
         }
         return primitiveRegistry;
     }

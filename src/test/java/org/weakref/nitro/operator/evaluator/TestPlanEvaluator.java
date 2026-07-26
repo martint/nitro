@@ -31,6 +31,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
@@ -3657,13 +3658,14 @@ public class TestPlanEvaluator
     private static PrimitiveRegistry builtinPrimitiveRegistry()
     {
         ScalarRegistry scalarRegistry = new ScalarRegistry();
+        AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
-        primitiveRegistry.register(scalarRegistry.register(AddI64.class));
-        primitiveRegistry.register(scalarRegistry.register(DivideScaleRoundI64.class));
-        primitiveRegistry.register(scalarRegistry.register(EqualI64.class));
-        primitiveRegistry.register(scalarRegistry.register(InUtf8.class));
-        primitiveRegistry.register(scalarRegistry.register(LessThanI64.class));
-        primitiveRegistry.register(scalarRegistry.register(ScaledRelativeDifferenceGtI64.class));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(AddI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(DivideScaleRoundI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(EqualI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(InUtf8.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(ScaledRelativeDifferenceGtI64.class)));
         return primitiveRegistry;
     }
 
