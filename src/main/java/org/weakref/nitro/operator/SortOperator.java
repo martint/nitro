@@ -22,11 +22,8 @@ public class SortOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("SortOperator", SortOperator.class);
-    private static final boolean COLUMNAR_BUFFER =
-            Boolean.parseBoolean(System.getProperty("nitro.sort.columnarBuffer", "true"));
-    private static final int COLUMNAR_BUFFER_MAX_COLUMNS =
-            Integer.getInteger("nitro.sort.columnarBufferMaxColumns", 8);
 
+    private final SortOperatorPolicy policy;
     private final Allocator allocator;
     private final Operator source;
     private final TopNState state;
@@ -46,6 +43,7 @@ public class SortOperator
         if (columns.length != descending.length) {
             throw new IllegalArgumentException("Sort ordering columns and directions must have the same length");
         }
+        this.policy = allocator.engineResources().operatorResources().sortPolicy();
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
@@ -102,7 +100,7 @@ public class SortOperator
             // is copied before the next output is borrowed and the source is not advanced until the batch is closed;
             // computed projections may therefore recycle a previously borrowed evaluator vector without invalidating
             // the sort buffer. This requires ordinary batch-lifetime borrowing, not cross-borrow/cross-batch retention.
-            if (COLUMNAR_BUFFER && outputCount() <= COLUMNAR_BUFFER_MAX_COLUMNS) {
+            if (policy.columnarBuffer() && outputCount() <= policy.columnarBufferMaxColumns()) {
                 Mask mask = batch.borrowMask();
                 // An empty physical batch contributes no rows and therefore must not replace an already buffered
                 // column with whatever partial schema streams that batch happens to expose.  This matters for lazy
