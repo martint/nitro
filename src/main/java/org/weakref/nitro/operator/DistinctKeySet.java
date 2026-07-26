@@ -30,24 +30,6 @@ import static java.lang.Math.toIntExact;
 
 final class DistinctKeySet
 {
-    private static final boolean DEBUG_DISTINCT_SHAPES = Boolean.getBoolean("nitro.debug.distinctShapes");
-    private static final boolean SHARED_DICTIONARY_POSITION_RESOLVER =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryPositionResolver", "true"));
-    private static final boolean SHARED_DICTIONARY_NULL_RESOLVER =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryNullResolver", "true"));
-    private static final boolean SHARED_DICTIONARY_BASE_POSITION_CACHE =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.sharedDictionaryBasePositionCache", "true"));
-    private static final boolean ADAPTIVE_COMPACT_MULTI_LONG =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveCompactMultiLong", "true"));
-    private static final boolean ADAPTIVE_RETAIN_NULLS_BATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveRetainNullsBatch", "true"));
-    private static final boolean ADAPTIVE_COMPACT_LONG_PAIR =
-            Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveCompactLongPair", "true"));
-    private static final int ADAPTIVE_COMPACT_LONG_PAIR_SAMPLE_SIZE =
-            Integer.getInteger("nitro.distinct.adaptiveCompactLongPairSampleSize", 256);
-    private static final int ADAPTIVE_COMPACT_MULTI_LONG_MIN_ARITY =
-            Integer.getInteger("nitro.distinct.adaptiveCompactMultiLongMinArity", 3);
-
     private final DistinctIndex index;
 
     private DistinctKeySet(DistinctIndex index)
@@ -63,9 +45,9 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            PooledLongHashSetPolicy pooledLongHashSetPolicy)
+            DistinctKeySetPolicy policy)
     {
-        return create(samples, false, arrayPool, codeGeneration, pooledLongHashSetPolicy);
+        return create(samples, false, arrayPool, codeGeneration, policy);
     }
 
     /**
@@ -77,12 +59,12 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            PooledLongHashSetPolicy pooledLongHashSetPolicy)
+            DistinctKeySetPolicy policy)
     {
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
-            return create(samples, arrayPool, codeGeneration, pooledLongHashSetPolicy);
+            return create(samples, arrayPool, codeGeneration, policy);
         }
-        return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool));
+        return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy));
     }
 
     /**
@@ -98,11 +80,11 @@ final class DistinctKeySet
             boolean retainNulls,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            PooledLongHashSetPolicy pooledLongHashSetPolicy)
+            DistinctKeySetPolicy policy)
     {
-        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, pooledLongHashSetPolicy);
+        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, policy);
         if (retainNulls) {
-            index = new RetainNullsDistinctIndex(index, samples.length, arrayPool);
+            index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
         return new DistinctKeySet(index);
     }
@@ -111,23 +93,24 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            PooledLongHashSetPolicy pooledLongHashSetPolicy)
+            DistinctKeySetPolicy policy)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
-            return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool, pooledLongHashSetPolicy);
+            return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool, policy);
         }
         if (samples.length == 2 && isIntegerVector(samples[0]) && isIntegerVector(samples[1])) {
             return new LongPairDistinctIndex(
                     Math.max(16, samples[0].length()),
-                    ADAPTIVE_COMPACT_LONG_PAIR && admitsAdaptiveCompactLongPair(samples),
+                    policy.adaptiveCompactLongPair() && admitsAdaptiveCompactLongPair(samples, policy),
                     arrayPool,
-                    codeGeneration);
+                    codeGeneration,
+                    policy);
         }
-        if (ADAPTIVE_COMPACT_MULTI_LONG &&
-                samples.length >= ADAPTIVE_COMPACT_MULTI_LONG_MIN_ARITY &&
+        if (policy.adaptiveCompactMultiLong() &&
+                samples.length >= policy.adaptiveCompactMultiLongMinArity() &&
                 samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY &&
                 allIntegerVectors(samples)) {
-            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration);
+            return new AdaptiveMultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration, policy);
         }
         if (samples.length == 3 && isIntegerVector(samples[0]) && isIntegerVector(samples[1]) && isIntegerVector(samples[2])) {
             return new LongTripleDistinctIndex(Math.max(16, samples[0].length()));
@@ -140,7 +123,7 @@ final class DistinctKeySet
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration);
         if (layout != null) {
-            return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool);
+            return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool, policy);
         }
         return new ObjectDistinctIndex(samples.length);
     }
@@ -150,10 +133,10 @@ final class DistinctKeySet
      * evenly spaced first-batch sample avoids admitting a full-width long pair merely because its schema has two
      * integer columns; any later out-of-domain value still promotes the retained table exactly.
      */
-    private static boolean admitsAdaptiveCompactLongPair(Vector[] samples)
+    private static boolean admitsAdaptiveCompactLongPair(Vector[] samples, DistinctKeySetPolicy policy)
     {
         int length = samples[0].length();
-        int sampleSize = Math.min(length, ADAPTIVE_COMPACT_LONG_PAIR_SAMPLE_SIZE);
+        int sampleSize = Math.min(length, policy.adaptiveCompactLongPairSampleSize());
         if (sampleSize == 0) {
             return false;
         }
@@ -164,13 +147,13 @@ final class DistinctKeySet
             long firstValue = first.value(position);
             long secondValue = second.value(position);
             if (firstValue != (int) firstValue || secondValue != (int) secondValue) {
-                if (DEBUG_DISTINCT_SHAPES) {
+                if (policy.debugDistinctShapes()) {
                     System.err.printf("[adaptive-pair-distinct] rows=%d sample=%d compact=false%n", length, sampleSize);
                 }
                 return false;
             }
         }
-        if (DEBUG_DISTINCT_SHAPES) {
+        if (policy.debugDistinctShapes()) {
             System.err.printf("[adaptive-pair-distinct] rows=%d sample=%d compact=true%n", length, sampleSize);
         }
         return true;
@@ -264,15 +247,13 @@ final class DistinctKeySet
     private static final class LongDistinctIndex
             implements DistinctIndex
     {
-        private static final boolean ADAPTIVE_PAGED_BITMAP =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptivePagedLongBitmap", "true"));
         private static final int PAGE_SHIFT = 16;
         private static final int PAGE_BITS = 1 << PAGE_SHIFT;
         private static final int PAGE_WORDS = PAGE_BITS / Long.SIZE;
         private static final int MIN_BITMAP_KEYS = 4_096;
         private static final long MAX_BITS_PER_KEY = 64;
         private final PrimitiveArrayPool arrayPool;
-        private final PooledLongHashSetPolicy pooledLongHashSetPolicy;
+        private final DistinctKeySetPolicy policy;
 
         private PooledLongHashSet pooledKeys;
         private Long2ObjectOpenHashMap<long[]> bitmapPages;
@@ -280,10 +261,10 @@ final class DistinctKeySet
         private long maximumKey = Long.MIN_VALUE;
         private int size;
 
-        private LongDistinctIndex(int expectedSize, PrimitiveArrayPool arrayPool, PooledLongHashSetPolicy pooledLongHashSetPolicy)
+        private LongDistinctIndex(int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
-            this.pooledLongHashSetPolicy = pooledLongHashSetPolicy;
+            this.policy = policy;
             createHash(expectedSize);
         }
 
@@ -312,7 +293,7 @@ final class DistinctKeySet
             if (bitmapPages != null && mask.all()) {
                 return addDenseBitmapBatch(keyValues, keyNulls, mask.size(), distinctPositions);
             }
-            if (bitmapPages == null && (!ADAPTIVE_PAGED_BITMAP || size >= MIN_BITMAP_KEYS)) {
+            if (bitmapPages == null && (!policy.adaptivePagedLongBitmap() || size >= MIN_BITMAP_KEYS)) {
                 pooledKeys.enableVectorTags();
                 return addFinalHashBatch(keyValues, keyNulls, mask, distinctPositions);
             }
@@ -506,7 +487,7 @@ final class DistinctKeySet
             // Representation selection is a bounded admission phase, not a permanent steady-state tax. A stream
             // whose first window is sparse remains a hash set; continuing to maintain its extrema and retest the
             // same predicate made wide 64-bit domains pay several operations for every later distinct key.
-            if (ADAPTIVE_PAGED_BITMAP && size <= MIN_BITMAP_KEYS) {
+            if (policy.adaptivePagedLongBitmap() && size <= MIN_BITMAP_KEYS) {
                 minimumKey = Math.min(minimumKey, key);
                 maximumKey = Math.max(maximumKey, key);
                 if (size == MIN_BITMAP_KEYS && denseEnoughForBitmap()) {
@@ -598,7 +579,7 @@ final class DistinctKeySet
 
         private void createHash(int expectedSize)
         {
-            pooledKeys = new PooledLongHashSet(expectedSize, arrayPool, pooledLongHashSetPolicy, !ADAPTIVE_PAGED_BITMAP);
+            pooledKeys = new PooledLongHashSet(expectedSize, arrayPool, policy.pooledLongHashSetPolicy(), !policy.adaptivePagedLongBitmap());
         }
 
         private boolean hashPresent()
@@ -638,20 +619,18 @@ final class DistinctKeySet
     private static final class FlatDistinctIndex
             implements DistinctIndex
     {
-        private static final boolean EMPTY_BINARY_FAST_PATH =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.emptyBinaryFastPath", "true"));
-        private static final boolean FILTER_SENTINEL_BEFORE_HASH =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.filterSentinelBeforeHash", "true"));
         private final PrimitiveArrayPool arrayPool;
         private final FlatKeyLayout layout;
+        private final DistinctKeySetPolicy policy;
         private final FlatGroupingTable table;
         private int[] probePositions;
         private boolean emptyBinarySeen;
 
-        private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool)
+        private FlatDistinctIndex(FlatKeyLayout layout, int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
             this.layout = layout;
+            this.policy = policy;
             // A set assigns one monotonically increasing ordinal per retained record and never exposes or
             // reorders that ordinal. Record index is therefore the exact group id: let the general table's
             // identity mode avoid a redundant slot->group array and reverse group->record map.
@@ -689,7 +668,7 @@ final class DistinctKeySet
             table.beginBatch(values, nulls);
             try {
                 layout.admitFrequentDictionarySentinel(values, mask);
-                if (FILTER_SENTINEL_BEFORE_HASH && hasTrackedSentinel(values)) {
+                if (policy.filterSentinelBeforeHash() && hasTrackedSentinel(values)) {
                     return addFlatBinaryBatch(values, nulls, mask, distinctPositions, nullFree);
                 }
                 table.prepareBatchHashes(values, nulls, mask);
@@ -763,12 +742,12 @@ final class DistinctKeySet
 
         private boolean hasTrackedSentinel(Vector[] values)
         {
-            return EMPTY_BINARY_FAST_PATH && layout.hasTrackedSentinel(values);
+            return policy.emptyBinaryFastPath() && layout.hasTrackedSentinel(values);
         }
 
         private boolean isTrackedSentinel(Vector[] values, int position)
         {
-            return EMPTY_BINARY_FAST_PATH && layout.isTrackedSentinel(values, position);
+            return policy.emptyBinaryFastPath() && layout.isTrackedSentinel(values, position);
         }
 
         private static boolean hasNull(Vector[] nulls, int position)
@@ -903,10 +882,9 @@ final class DistinctKeySet
         private static final VectorAccess.BooleanValues ALWAYS_FALSE = _ -> false;
         private static final int[] EMPTY_POSITIONS = new int[0];
         private static final long[] EMPTY_GROUPS = new long[0];
-        private static final boolean DIRECT_COMPACT_BATCH =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.adaptiveDirectBatch", "true"));
 
         private final PrimitiveArrayPool arrayPool;
+        private final DistinctKeySetPolicy policy;
         private final LongGroupingTable table;
         private final VectorAccess.LongValues[] keyAccessors;
         private final VectorAccess.BooleanValues[] nullAccessors;
@@ -933,9 +911,11 @@ final class DistinctKeySet
                 int arity,
                 int expectedSize,
                 PrimitiveArrayPool arrayPool,
-                OperatorCodeGenerationResources codeGeneration)
+                OperatorCodeGenerationResources codeGeneration,
+                DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
+            this.policy = policy;
             table = AdaptiveLongGroupingTable.createDistinct(arity, expectedSize, arrayPool, codeGeneration);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
@@ -958,7 +938,7 @@ final class DistinctKeySet
             prepareAccessors(values);
             singlePosition[0] = position;
             long startGroupId = nextGroupId;
-            if (DIRECT_COMPACT_BATCH) {
+            if (policy.adaptiveDirectBatch()) {
                 nextGroupId = ((AdaptiveLongGroupingTable) table).assignDistinctBatch(
                         keyAccessors, singlePosition, 1, values[0].length(), singleDistinctPosition, startGroupId);
             }
@@ -975,7 +955,7 @@ final class DistinctKeySet
             prepareAccessors(values);
             ensurePositionCapacity(mask.selectedCount());
             int positionCount = 0;
-            if (SHARED_DICTIONARY_NULL_RESOLVER && prepareSharedDictionaryNullAccessors(nulls)) {
+            if (policy.sharedDictionaryNullResolver() && prepareSharedDictionaryNullAccessors(nulls)) {
                 boolean cacheBasePositions = prepareSharedDictionaryBasePositionCache();
                 for (int position : mask) {
                     int basePosition = sharedDictionaryPositionResolver.resolve(position);
@@ -1062,7 +1042,7 @@ final class DistinctKeySet
         private int assignAndCollect(int[] positions, int positionCount, int resultLength, int[] distinctPositions)
         {
             long startGroupId = nextGroupId;
-            if (DIRECT_COMPACT_BATCH) {
+            if (policy.adaptiveDirectBatch()) {
                 nextGroupId = ((AdaptiveLongGroupingTable) table).assignDistinctBatch(
                         keyAccessors, positions, positionCount, resultLength, distinctPositions, startGroupId);
                 return toIntExact(nextGroupId - startGroupId);
@@ -1090,7 +1070,7 @@ final class DistinctKeySet
             sharedDictionaryPositionResolver = null;
             sharedDictionaryBases = null;
             sharedDictionaryNullBases = null;
-            if (SHARED_DICTIONARY_POSITION_RESOLVER && prepareSharedDictionaryAccessors(values)) {
+            if (policy.sharedDictionaryPositionResolver() && prepareSharedDictionaryAccessors(values)) {
                 Arrays.fill(nullAccessors, ALWAYS_FALSE);
                 return;
             }
@@ -1145,7 +1125,7 @@ final class DistinctKeySet
                 nullAccessors[index] = VectorAccess.booleanValues(current);
             }
             sharedDictionaryNullBases = bases;
-            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryNullResolverPrinted) {
+            if (policy.debugDistinctShapes() && !debugSharedDictionaryNullResolverPrinted) {
                 debugSharedDictionaryNullResolverPrinted = true;
                 System.err.printf("[shared-dictionary-distinct-nulls] keys=%d rows=%d depth=%d%n",
                         nulls.length,
@@ -1189,7 +1169,7 @@ final class DistinctKeySet
             SharedDictionaryPositionResolver resolver = new SharedDictionaryPositionResolver(mappings);
             sharedDictionaryPositionResolver = resolver;
             sharedDictionaryBases = bases;
-            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryResolverPrinted) {
+            if (policy.debugDistinctShapes() && !debugSharedDictionaryResolverPrinted) {
                 debugSharedDictionaryResolverPrinted = true;
                 System.err.printf("[shared-dictionary-distinct] keys=%d rows=%d depth=%d%n",
                         values.length,
@@ -1213,7 +1193,7 @@ final class DistinctKeySet
          */
         private boolean prepareSharedDictionaryBasePositionCache()
         {
-            if (!SHARED_DICTIONARY_BASE_POSITION_CACHE || sharedDictionaryBases == null || sharedDictionaryNullBases == null) {
+            if (!policy.sharedDictionaryBasePositionCache() || sharedDictionaryBases == null || sharedDictionaryNullBases == null) {
                 return false;
             }
             if (!readContentGenerations(sharedDictionaryBases, sharedDictionaryGenerationScratch) ||
@@ -1239,7 +1219,7 @@ final class DistinctKeySet
                 cachedSharedDictionaryGenerations = sharedDictionaryGenerationScratch.clone();
                 cachedSharedDictionaryNullGenerations = sharedDictionaryNullGenerationScratch.clone();
             }
-            if (DEBUG_DISTINCT_SHAPES && !debugSharedDictionaryBaseCachePrinted) {
+            if (policy.debugDistinctShapes() && !debugSharedDictionaryBaseCachePrinted) {
                 debugSharedDictionaryBaseCachePrinted = true;
                 System.err.printf("[shared-dictionary-distinct-base-cache] keys=%d base=%d words=%d depth=%d%n",
                         sharedDictionaryBases.length,
@@ -1374,14 +1354,9 @@ final class DistinctKeySet
             implements DistinctIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
-        private static final boolean TAGGED_HASH_TABLE =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.taggedLongPairHash", "true"));
-        private static final boolean NULL_FREE_BATCH =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.longPairNullFreeBatch", "true"));
-        private static final int ADAPTIVE_COMPACT_START_BATCH =
-                Integer.getInteger("nitro.distinct.adaptiveCompactLongPairStartBatch", 4);
         private final PrimitiveArrayPool arrayPool;
         private final OperatorCodeGenerationResources codeGeneration;
+        private final DistinctKeySetPolicy policy;
 
         private long[] firstKeys;
         private long[] secondKeys;
@@ -1399,10 +1374,12 @@ final class DistinctKeySet
                 int expectedSize,
                 boolean adaptiveCompactCandidate,
                 PrimitiveArrayPool arrayPool,
-                OperatorCodeGenerationResources codeGeneration)
+                OperatorCodeGenerationResources codeGeneration,
+                DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
             this.codeGeneration = codeGeneration;
+            this.policy = policy;
             this.adaptiveCompactCandidate = adaptiveCompactCandidate;
             int capacity = DistinctKeySet.capacity(expectedSize);
             allocate(capacity);
@@ -1412,7 +1389,7 @@ final class DistinctKeySet
         {
             firstKeys = arrayPool.borrowLongs(capacity);
             secondKeys = arrayPool.borrowLongs(capacity);
-            if (TAGGED_HASH_TABLE) {
+            if (policy.taggedLongPairHash()) {
                 tags = arrayPool.borrowBytes(capacity);
                 Arrays.fill(tags, (byte) 0);
                 occupied = null;
@@ -1437,7 +1414,7 @@ final class DistinctKeySet
             // Once this pair has earned migration, sizing the old table for the next batch would immediately
             // allocate, rehash, and release a representation that will not process that batch. Scalar adds still
             // retain their exact grow-on-demand guard in addKey().
-            if (adaptiveCompactCandidate && batchCount + 1 >= ADAPTIVE_COMPACT_START_BATCH) {
+            if (adaptiveCompactCandidate && batchCount + 1 >= policy.adaptiveCompactLongPairStartBatch()) {
                 return;
             }
             ensureCapacity(size + Math.max(0, additionalEntries));
@@ -1480,7 +1457,7 @@ final class DistinctKeySet
             VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
             VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
             VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
-            boolean nullFree = NULL_FREE_BATCH &&
+            boolean nullFree = policy.longPairNullFreeBatch() &&
                     VectorAccess.isAllFalseNulls(nulls[0]) &&
                     VectorAccess.isAllFalseNulls(nulls[1]);
             int count = 0;
@@ -1548,7 +1525,7 @@ final class DistinctKeySet
                 return true;
             }
             batchCount++;
-            if (!adaptiveCompactCandidate || batchCount < ADAPTIVE_COMPACT_START_BATCH) {
+            if (!adaptiveCompactCandidate || batchCount < policy.adaptiveCompactLongPairStartBatch()) {
                 pendingAdditional = 0;
                 return false;
             }
@@ -1556,11 +1533,12 @@ final class DistinctKeySet
                     2,
                     Math.max(16, size + pendingAdditional),
                     arrayPool,
-                    codeGeneration);
+                    codeGeneration,
+                    policy);
             adaptiveDelegate.importPairs(this);
             releaseTableBuffers();
             pendingAdditional = 0;
-            if (DEBUG_DISTINCT_SHAPES) {
+            if (policy.debugDistinctShapes()) {
                 System.err.printf("[adaptive-pair-distinct-migrate] batch=%d keys=%d%n", batchCount, size);
             }
             return true;
@@ -1584,7 +1562,7 @@ final class DistinctKeySet
 
         private int findSlot(long first, long second)
         {
-            if (TAGGED_HASH_TABLE) {
+            if (policy.taggedLongPairHash()) {
                 long hash = hash64(first, second);
                 byte tag = hashTag(hash);
                 int index = ((int) hash) & mask;
@@ -1627,7 +1605,7 @@ final class DistinctKeySet
             size = 0;
 
             for (int index = 0; index < previousFirstKeys.length; index++) {
-                if (TAGGED_HASH_TABLE ? previousTags[index] == 0 : !previousOccupied[index]) {
+                if (policy.taggedLongPairHash() ? previousTags[index] == 0 : !previousOccupied[index]) {
                     continue;
                 }
                 int newIndex = findSlot(previousFirstKeys[index], previousSecondKeys[index]);
@@ -1644,12 +1622,12 @@ final class DistinctKeySet
 
         private boolean isOccupied(int index)
         {
-            return TAGGED_HASH_TABLE ? tags[index] != 0 : occupied[index];
+            return policy.taggedLongPairHash() ? tags[index] != 0 : occupied[index];
         }
 
         private void markOccupied(int index, long first, long second)
         {
-            if (TAGGED_HASH_TABLE) {
+            if (policy.taggedLongPairHash()) {
                 tags[index] = hashTag(hash64(first, second));
             }
             else {
@@ -1660,7 +1638,7 @@ final class DistinctKeySet
         @Override
         public void releaseBuffers()
         {
-            if (DEBUG_DISTINCT_SHAPES) {
+            if (policy.debugDistinctShapes()) {
                 System.err.printf("[adaptive-pair-distinct-final] batches=%d keys=%d migrated=%s%n", batchCount, size, adaptiveDelegate != null);
             }
             if (adaptiveDelegate != null) {
@@ -1707,8 +1685,6 @@ final class DistinctKeySet
     private static final class GroupedLongDistinctIndex
             implements DistinctIndex
     {
-        private static final boolean INLINE_SMALL_GROUPS =
-                Boolean.parseBoolean(System.getProperty("nitro.distinct.inlineSmallGroupedLong", "true"));
         private static final int MAX_RESERVED_BATCH_GROUPS = 1 << 16;
         private static final float LOAD_FACTOR = 0.75f;
         private static final int INITIAL_TABLE_SIZE = 16;
@@ -1718,6 +1694,7 @@ final class DistinctKeySet
         private static final int INLINE_GROUPS_PER_CHUNK_MASK = INLINE_GROUPS_PER_CHUNK - 1;
         private static final int INLINE_CHUNK_LONGS = INLINE_GROUPS_PER_CHUNK * INLINE_CAPACITY;
         private final PrimitiveArrayPool arrayPool;
+        private final DistinctKeySetPolicy policy;
 
         private long[][] tables = new long[16][];
         private int[] sizes = new int[16];
@@ -1725,9 +1702,10 @@ final class DistinctKeySet
         private long[][] inlineChunks = new long[16][];
         private boolean inlineSmallGroups;
 
-        private GroupedLongDistinctIndex(PrimitiveArrayPool arrayPool)
+        private GroupedLongDistinctIndex(PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
         {
             this.arrayPool = arrayPool;
+            this.policy = policy;
         }
 
         @Override
@@ -1770,7 +1748,7 @@ final class DistinctKeySet
             // A dense chunk replaces one small Java array per group. Wait until the observed group domain is
             // large enough for those object headers and allocation sites to dominate the fixed chunk cost.
             // Admission is monotonic: representation selection disappears from the steady-state row loop.
-            if (INLINE_SMALL_GROUPS && groupCount > MAX_RESERVED_BATCH_GROUPS) {
+            if (policy.inlineSmallGroupedLong() && groupCount > MAX_RESERVED_BATCH_GROUPS) {
                 inlineSmallGroups = true;
             }
             // With millions of groups, eagerly growing the three group-metadata arrays at every batch boundary
@@ -2361,12 +2339,14 @@ final class DistinctKeySet
         private boolean debugAdaptiveRetainNullBatchPrinted;
 
         private final PrimitiveArrayPool arrayPool;
+        private final DistinctKeySetPolicy policy;
 
-        private RetainNullsDistinctIndex(DistinctIndex delegate, int keyCount, PrimitiveArrayPool arrayPool)
+        private RetainNullsDistinctIndex(DistinctIndex delegate, int keyCount, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
         {
             this.delegate = delegate;
             this.keyCount = keyCount;
             this.arrayPool = arrayPool;
+            this.policy = policy;
             this.probeKeys = new OperatorKeySemantics.Key[keyCount];
             this.nullAccessors = new VectorAccess.BooleanValues[keyCount];
         }
@@ -2393,10 +2373,10 @@ final class DistinctKeySet
             if (!hasNullStream(nulls)) {
                 return delegate.addBatch(values, nulls, mask, distinctPositions);
             }
-            if (ADAPTIVE_RETAIN_NULLS_BATCH) {
+            if (policy.adaptiveRetainNullsBatch()) {
                 int distinctCount = delegate.addRetainingNullBatch(values, nulls, mask, distinctPositions);
                 if (distinctCount >= 0) {
-                    if (DEBUG_DISTINCT_SHAPES && !debugAdaptiveRetainNullBatchPrinted) {
+                    if (policy.debugDistinctShapes() && !debugAdaptiveRetainNullBatchPrinted) {
                         System.err.printf("[adaptive-retain-null-distinct] keys=%d delegate=%s%n",
                                 keyCount, delegate.getClass().getSimpleName());
                         debugAdaptiveRetainNullBatchPrinted = true;

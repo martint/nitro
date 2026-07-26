@@ -245,7 +245,7 @@ public class GroupedAggregationOperator
                 allocator,
                 allocationContext,
                 operatorResources.codeGeneration(),
-                operatorResources.pooledLongHashSetPolicy());
+                operatorResources.distinctKeySetPolicy());
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
@@ -817,7 +817,7 @@ public class GroupedAggregationOperator
                     allocator,
                     allocationContext,
                     operatorResources.codeGeneration(),
-                    operatorResources.pooledLongHashSetPolicy());
+                    operatorResources.distinctKeySetPolicy());
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
                     int filterColumn = aggregations[aggregationIndex].filterInputColumn();
@@ -1192,7 +1192,7 @@ public class GroupedAggregationOperator
                 Allocator allocator,
                 Allocator.Context allocationContext,
                 OperatorCodeGenerationResources codeGeneration,
-                PooledLongHashSetPolicy pooledLongHashSetPolicy)
+                DistinctKeySetPolicy distinctKeySetPolicy)
         {
             arrayPool = allocator.primitiveArrays();
             if (mask.none()) {
@@ -1213,8 +1213,8 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration, pooledLongHashSetPolicy)
-                            : DistinctKeySet.create(values, arrayPool, codeGeneration, pooledLongHashSetPolicy);
+                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration, distinctKeySetPolicy)
+                            : DistinctKeySet.create(values, arrayPool, codeGeneration, distinctKeySetPolicy);
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());

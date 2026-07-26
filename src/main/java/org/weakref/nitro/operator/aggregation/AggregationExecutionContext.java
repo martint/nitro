@@ -14,8 +14,8 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.operator.DistinctKeySetPolicy;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
-import org.weakref.nitro.operator.PooledLongHashSetPolicy;
 
 import static java.util.Objects.requireNonNull;
 
@@ -26,13 +26,13 @@ public record AggregationExecutionContext(
         Allocator allocator,
         Allocator.Context allocationContext,
         OperatorCodeGenerationResources codeGeneration,
-        PooledLongHashSetPolicy pooledLongHashSetPolicy)
+        DistinctKeySetPolicy distinctKeySetPolicy)
 {
     public AggregationExecutionContext
     {
         requireNonNull(allocator, "allocator is null");
         requireNonNull(allocationContext, "allocationContext is null");
         requireNonNull(codeGeneration, "codeGeneration is null");
-        requireNonNull(pooledLongHashSetPolicy, "pooledLongHashSetPolicy is null");
+        requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
     }
 }

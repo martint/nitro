@@ -41,7 +41,7 @@ public final class MarkDistinctMarkerOperator
     private final boolean retainNulls;
     private final Operator source;
     private final OperatorCodeGenerationResources codeGeneration;
-    private final PooledLongHashSetPolicy pooledLongHashSetPolicy;
+    private final DistinctKeySetPolicy distinctKeySetPolicy;
     private final Vector[] values;
     private final Vector[] nulls;
 
@@ -61,7 +61,7 @@ public final class MarkDistinctMarkerOperator
                 operatorResources.grouping().markDistinctMarkerBufferPool());
         this.arrayPool = allocator.primitiveArrays();
         this.codeGeneration = operatorResources.codeGeneration();
-        this.pooledLongHashSetPolicy = operatorResources.pooledLongHashSetPolicy();
+        this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
         this.source = source;
@@ -220,7 +220,7 @@ public final class MarkDistinctMarkerOperator
                         retainNulls,
                         arrayPool,
                         codeGeneration,
-                        pooledLongHashSetPolicy);
+                        distinctKeySetPolicy);
             }
             distinctKeySet.reserveAdditional(mask.selectedCount());
             batchState.distinctCount = distinctKeySet.addBatch(values, nulls, mask, distinctPositions);

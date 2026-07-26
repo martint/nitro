@@ -142,7 +142,7 @@ class TestOperatorResources
                             allocator,
                             accumulatorContext,
                             operatorResources.codeGeneration(),
-                            operatorResources.pooledLongHashSetPolicy()),
+                            operatorResources.distinctKeySetPolicy()),
                     1);
             assertThat(state.values()).isNotNull();
             allocator.release(accumulatorContext);

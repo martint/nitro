@@ -76,7 +76,7 @@ public class AggregationOperator
                 allocator,
                 allocationContext,
                 operatorResources.codeGeneration(),
-                operatorResources.pooledLongHashSetPolicy());
+                operatorResources.distinctKeySetPolicy());
         this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
         this.program = requireNonNull(program, "program is null");

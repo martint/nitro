@@ -14,6 +14,7 @@
 package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.AggregationOperatorResources;
+import org.weakref.nitro.operator.DistinctKeySetPolicy;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
 import org.weakref.nitro.operator.FullJoinOperatorPolicy;
 import org.weakref.nitro.operator.GroupIdOperatorPolicy;
@@ -21,7 +22,6 @@ import org.weakref.nitro.operator.GroupingStateResources;
 import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.OperatorResources;
-import org.weakref.nitro.operator.PooledLongHashSetPolicy;
 import org.weakref.nitro.operator.ProjectOperatorResources;
 import org.weakref.nitro.operator.TopNRankingOperatorPolicy;
 
@@ -54,7 +54,7 @@ public final class EngineResources
                 new AllocationResources(primitiveArrays, nativeBuffers),
                 new OperatorResources(
                         operatorCodeGeneration,
-                        PooledLongHashSetPolicy.fromSystemProperties(),
+                        DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),
                         FullJoinOperatorPolicy.fromSystemProperties(),
                         GroupIdOperatorPolicy.fromSystemProperties(),
@@ -77,7 +77,7 @@ public final class EngineResources
                 allocationResources,
                 new OperatorResources(
                         operatorCodeGeneration,
-                        PooledLongHashSetPolicy.fromSystemProperties(),
+                        DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),
                         FullJoinOperatorPolicy.fromSystemProperties(),
                         GroupIdOperatorPolicy.fromSystemProperties(),
