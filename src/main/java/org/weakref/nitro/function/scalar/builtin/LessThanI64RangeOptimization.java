@@ -13,7 +13,10 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.FunctionCallSite;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
+import org.weakref.nitro.core.function.mask.RangeBoundProvider;
+import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
@@ -24,9 +27,6 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.evaluator.RangeBoundProvider;
-import org.weakref.nitro.operator.evaluator.ir.RangeConstraint;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 import java.util.Optional;
@@ -55,23 +55,23 @@ public final class LessThanI64RangeOptimization
     }
 
     @Override
-    public Optional<RangeBound> rangeBound(List<Reference> arguments, LiteralResolver literals)
+    public Optional<RangeBound> rangeBound(FunctionCallSite callSite)
     {
-        if (arguments.size() != 2) {
+        if (callSite.argumentCount() != 2) {
             return Optional.empty();
         }
-        Optional<Object> left = literals.resolve(arguments.get(0));
-        Optional<Object> right = literals.resolve(arguments.get(1));
+        Optional<Object> left = callSite.argument(0).literal();
+        Optional<Object> right = callSite.argument(1).literal();
         if (left.orElse(null) instanceof Long lower && right.isEmpty()) {
             return Optional.of(new RangeBound(
-                    arguments.get(1),
+                    1,
                     lower,
                     RangeConstraint.Position.LOWER_EXCLUSIVE,
                     this));
         }
         if (right.orElse(null) instanceof Long upper && left.isEmpty()) {
             return Optional.of(new RangeBound(
-                    arguments.get(0),
+                    0,
                     upper,
                     RangeConstraint.Position.UPPER_EXCLUSIVE,
                     this));

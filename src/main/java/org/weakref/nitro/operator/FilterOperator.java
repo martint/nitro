@@ -13,20 +13,20 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.function.mask.StaticLongEqualityProvider;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.operator.evaluator.EvaluatorFunctionCallSite;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
-import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpression;
 import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstraintLowerer;
@@ -35,7 +35,6 @@ import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.Optional;
-import java.util.OptionalLong;
 
 public class FilterOperator
         implements Operator
@@ -123,21 +122,9 @@ public class FilterOperator
             return Optional.empty();
         }
         return provider.orElseThrow()
-                .staticLongEquality(call.arguments(), reference -> literalLong(plan, reference))
-                .flatMap(equality -> dynamicFilter(equality.input(), equality.value()));
-    }
-
-    private static OptionalLong literalLong(EvaluationPlan plan, Reference reference)
-    {
-        if (!(reference instanceof Reference(Variable literal, Stream stream)) || stream != Stream.VALUES) {
-            return OptionalLong.empty();
-        }
-        Assignment literalAssignment = assignment(plan, literal);
-        if (literalAssignment == null || literalAssignment.mask() != AllMask.ALL
-                || !(literalAssignment.operation() instanceof Literal(Long value))) {
-            return OptionalLong.empty();
-        }
-        return OptionalLong.of(value);
+                .staticLongEquality(new EvaluatorFunctionCallSite(call, plan, primitiveRegistry))
+                .filter(equality -> equality.inputArgument() < call.arguments().size())
+                .flatMap(equality -> dynamicFilter(call.arguments().get(equality.inputArgument()), equality.value()));
     }
 
     private static Optional<DynamicFilter> dynamicFilter(Reference inputReference, long value)

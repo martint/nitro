@@ -13,16 +13,15 @@
  */
 package org.weakref.nitro.function.scalar.builtin;
 
+import org.weakref.nitro.core.function.mask.FunctionCallSite;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
+import org.weakref.nitro.core.function.mask.StaticLongEqualityProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
-import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
-import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalLong;
 
 public final class EqualI64Optimization
         implements StaticLongEqualityProvider, MaskCodeProvider
@@ -42,18 +41,18 @@ public final class EqualI64Optimization
     }
 
     @Override
-    public Optional<StaticLongEquality> staticLongEquality(List<Reference> arguments, LiteralResolver literals)
+    public Optional<StaticLongEquality> staticLongEquality(FunctionCallSite callSite)
     {
-        if (arguments.size() != 2) {
+        if (callSite.argumentCount() != 2) {
             return Optional.empty();
         }
-        OptionalLong left = literals.resolve(arguments.get(0));
-        OptionalLong right = literals.resolve(arguments.get(1));
-        if (left.isPresent() && right.isEmpty()) {
-            return Optional.of(new StaticLongEquality(arguments.get(1), left.getAsLong()));
+        Optional<Object> left = callSite.argument(0).literal();
+        Optional<Object> right = callSite.argument(1).literal();
+        if (left.orElse(null) instanceof Long value && right.isEmpty()) {
+            return Optional.of(new StaticLongEquality(1, value));
         }
-        if (right.isPresent() && left.isEmpty()) {
-            return Optional.of(new StaticLongEquality(arguments.get(0), right.getAsLong()));
+        if (right.orElse(null) instanceof Long value && left.isEmpty()) {
+            return Optional.of(new StaticLongEquality(0, value));
         }
         return Optional.empty();
     }

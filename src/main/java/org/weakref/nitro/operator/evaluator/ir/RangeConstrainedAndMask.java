@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.core.function.mask.RangeConstraint;
+
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;

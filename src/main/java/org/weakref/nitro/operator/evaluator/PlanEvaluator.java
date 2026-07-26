@@ -14,12 +14,11 @@
 package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
-import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.mask.DictionaryMaskOptimization;
 import org.weakref.nitro.core.function.mask.DictionaryMaskOptimizationProvider;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
-import org.weakref.nitro.core.function.mask.FunctionCallSite;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
+import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -55,7 +54,6 @@ import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask;
-import org.weakref.nitro.operator.evaluator.ir.RangeConstraint;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
@@ -71,7 +69,6 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -248,47 +245,6 @@ public final class PlanEvaluator
             call = nestedCall;
         }
         return reference;
-    }
-
-    private record EvaluatorFunctionCallSite(Call call, Map<Variable, Assignment> assignments, PrimitiveRegistry primitiveRegistry)
-            implements FunctionCallSite
-    {
-        @Override
-        public int argumentCount()
-        {
-            return call.arguments().size();
-        }
-
-        @Override
-        public Argument argument(int index)
-        {
-            Reference reference = call.arguments().get(index);
-            Assignment assignment = reference.producer() instanceof Variable variable ? assignments.get(variable) : null;
-            return new Argument()
-            {
-                @Override
-                public Optional<Object> literal()
-                {
-                    return assignment != null && assignment.operation() instanceof Literal literal
-                            ? Optional.ofNullable(literal.value())
-                            : Optional.empty();
-                }
-
-                @Override
-                public Optional<FunctionCallSite> call()
-                {
-                    return assignment != null && assignment.operation() instanceof Call nestedCall
-                            ? Optional.of(new EvaluatorFunctionCallSite(nestedCall, assignments, primitiveRegistry))
-                            : Optional.empty();
-                }
-            };
-        }
-
-        @Override
-        public <T extends FunctionCapability> Optional<T> capability(Class<T> capabilityType)
-        {
-            return primitiveRegistry.capability(call, capabilityType);
-        }
     }
 
     public Streams evaluate(Reference reference, Mask mask)

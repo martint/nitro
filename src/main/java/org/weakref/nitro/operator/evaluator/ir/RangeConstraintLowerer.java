@@ -13,13 +13,14 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
+import org.weakref.nitro.core.function.mask.RangeBoundProvider;
+import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.operator.evaluator.EvaluatorFunctionCallSite;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
-import org.weakref.nitro.operator.evaluator.RangeBoundProvider;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Function;
 
 /**
@@ -62,12 +63,12 @@ public final class RangeConstraintLowerer
             return new AndMask(terms);
         }
         for (int lowerIndex = 0; lowerIndex < terms.size(); lowerIndex++) {
-            RangeBoundProvider.RangeBound lower = rangeBound(terms.get(lowerIndex));
+            BoundRange lower = rangeBound(terms.get(lowerIndex));
             if (lower == null || lower.position() != RangeConstraint.Position.LOWER_EXCLUSIVE) {
                 continue;
             }
             for (int upperIndex = 0; upperIndex < terms.size(); upperIndex++) {
-                RangeBoundProvider.RangeBound upper = rangeBound(terms.get(upperIndex));
+                BoundRange upper = rangeBound(terms.get(upperIndex));
                 if (upper == null ||
                         upper.position() != RangeConstraint.Position.UPPER_EXCLUSIVE ||
                         !upper.input().equals(lower.input()) ||
@@ -92,7 +93,7 @@ public final class RangeConstraintLowerer
         return new AndMask(terms);
     }
 
-    private RangeBoundProvider.RangeBound rangeBound(MaskExpression expression)
+    private BoundRange rangeBound(MaskExpression expression)
     {
         if (!(expression instanceof ReferenceMask(Reference reference))) {
             return null;
@@ -104,21 +105,22 @@ public final class RangeConstraintLowerer
         if (assignment == null || assignment.mask() != AllMask.ALL || !(assignment.operation() instanceof Call call)) {
             return null;
         }
-        return registry.capability(call, RangeBoundProvider.class)
-                .flatMap(provider -> provider.rangeBound(call.arguments(), this::literal))
+        RangeBoundProvider.RangeBound bound = registry.capability(call, RangeBoundProvider.class)
+                .flatMap(provider -> provider.rangeBound(new EvaluatorFunctionCallSite(call, assignments, registry)))
                 .orElse(null);
+        if (bound == null || bound.inputArgument() >= call.arguments().size()) {
+            return null;
+        }
+        return new BoundRange(
+                call.arguments().get(bound.inputArgument()),
+                bound.bound(),
+                bound.position(),
+                bound.kernel());
     }
 
-    private Optional<Object> literal(Reference reference)
-    {
-        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
-            return Optional.empty();
-        }
-        Assignment assignment = assignments.get(variable);
-        if (assignment == null || assignment.mask() != AllMask.ALL ||
-                !(assignment.operation() instanceof Literal(Object value))) {
-            return Optional.empty();
-        }
-        return Optional.of(value);
-    }
+    private record BoundRange(
+            Reference input,
+            Object bound,
+            RangeConstraint.Position position,
+            RangeConstraint.Kernel kernel) {}
 }
