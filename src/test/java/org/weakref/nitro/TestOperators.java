@@ -4668,69 +4668,66 @@ public class TestOperators
         }
 
         @Override
-        public Streams allocate(AggregationExecutionContext context, int size)
+        public Object allocate(AggregationExecutionContext context, int size)
         {
-            return Streams.of(
-                    context.allocator().allocate(context.allocationContext(), I64Vector.class, size, I64Vector::new),
-                    null,
-                    context.allocator().allocate(context.allocationContext(), I64Vector.class, size, I64Vector::new));
+            return new State(new long[size], new long[size]);
         }
 
         @Override
-        public Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size)
+        public Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int size)
         {
-            return Streams.of(
-                    allocator.allocateOrGrow(allocationContext, (I64Vector) state.values(), I64Vector.class, size, I64Vector::new),
-                    null,
-                    allocator.allocateOrGrow(allocationContext, (I64Vector) state.get(Stream.ERRORS), I64Vector.class, size, I64Vector::new));
+            State current = (State) state;
+            return new State(
+                    java.util.Arrays.copyOf(current.sums, size),
+                    java.util.Arrays.copyOf(current.counts, size));
         }
 
         @Override
-        public void initialize(Streams state, int offset, int length)
+        public void initialize(Object state, int offset, int length)
         {
-            java.util.Arrays.fill(((I64Vector) state.values()).values(), offset, offset + length, 0);
-            java.util.Arrays.fill(((I64Vector) state.get(Stream.ERRORS)).values(), offset, offset + length, 0);
+            State current = (State) state;
+            java.util.Arrays.fill(current.sums, offset, offset + length, 0);
+            java.util.Arrays.fill(current.counts, offset, offset + length, 0);
         }
 
         @Override
-        public void accumulate(Streams state, int group, Mask mask, StreamAccessor streams)
+        public void accumulate(Object state, int group, Mask mask, StreamAccessor streams)
         {
             accumulationCalls++;
-            I64Vector sums = (I64Vector) state.values();
-            I64Vector counts = (I64Vector) state.get(Stream.ERRORS);
+            State current = (State) state;
             VectorAccess.LongValues values = VectorAccess.longValues(streams.values(inputColumn));
             for (int position : mask) {
-                sums.values()[group] += values.value(position);
-                counts.values()[group]++;
+                current.sums[group] += values.value(position);
+                current.counts[group]++;
             }
         }
 
         @Override
-        public void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+        public void accumulate(Object state, Vector groups, Mask mask, StreamAccessor streams)
         {
             accumulationCalls++;
-            I64Vector sums = (I64Vector) state.values();
-            I64Vector counts = (I64Vector) state.get(Stream.ERRORS);
+            State current = (State) state;
             I64Vector groupIds = (I64Vector) groups;
             VectorAccess.LongValues values = VectorAccess.longValues(streams.values(inputColumn));
             for (int position : mask) {
                 int group = toIntExact(groupIds.values()[position]);
-                sums.values()[group] += values.value(position);
-                counts.values()[group]++;
+                current.sums[group] += values.value(position);
+                current.counts[group]++;
             }
         }
 
         @Override
-        public Streams result(int output, int maxGroup, Streams state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+        public Streams result(int output, int maxGroup, Object state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
         {
-            I64Vector source = output == 0 ? (I64Vector) state.values() : (I64Vector) state.get(Stream.ERRORS);
+            State current = (State) state;
+            long[] source = output == 0 ? current.sums : current.counts;
             I64Vector values = allocator.allocateOrGrow(
                     allocationContext,
                     existing == null ? null : (I64Vector) existing.values(),
                     I64Vector.class,
                     maxGroup + 1,
                     I64Vector::new);
-            System.arraycopy(source.values(), 0, values.values(), 0, maxGroup + 1);
+            System.arraycopy(source, 0, values.values(), 0, maxGroup + 1);
             BooleanVector nulls = VectorAccess.writableBooleanVector(
                     allocator,
                     allocationContext,
@@ -4739,5 +4736,7 @@ public class TestOperators
             java.util.Arrays.fill(nulls.values(), 0, maxGroup + 1, false);
             return Streams.reuseValuesAndNulls(existing, values, nulls);
         }
+
+        private record State(long[] sums, long[] counts) {}
     }
 }

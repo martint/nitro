@@ -61,20 +61,44 @@ public interface Accumulator
      */
     Streams allocate(AggregationExecutionContext context, int size);
 
+    @Override
+    default Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int size)
+    {
+        return grow(allocator, allocationContext, (Streams) state, size);
+    }
+
     /**
      * Ensures the supplied state can hold at least {@code size} groups.
      */
     Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size);
+
+    @Override
+    default void initialize(Object state, int offset, int length)
+    {
+        initialize((Streams) state, offset, length);
+    }
 
     /**
      * Initializes the state slots in {@code [offset, offset + length)}.
      */
     void initialize(Streams state, int offset, int length);
 
+    @Override
+    default void accumulate(Object state, int group, Mask mask, StreamAccessor streams)
+    {
+        accumulate((Streams) state, group, mask, streams);
+    }
+
     /**
      * Accumulates rows selected by {@code mask} into a single known group id.
      */
     void accumulate(Streams state, int group, Mask mask, StreamAccessor streams);
+
+    @Override
+    default void accumulateDistinctSelected(Object state, int group, Mask mask, StreamAccessor streams)
+    {
+        accumulateDistinctSelected((Streams) state, group, mask, streams);
+    }
 
     /**
      * Accumulates rows selected by {@code mask} after DISTINCT has already been applied for this
@@ -85,10 +109,22 @@ public interface Accumulator
         accumulate(state, group, mask, streams);
     }
 
+    @Override
+    default void accumulate(Object state, Vector groups, Mask mask, StreamAccessor streams)
+    {
+        accumulate((Streams) state, groups, mask, streams);
+    }
+
     /**
      * Accumulates rows selected by {@code mask} using per-row group ids from {@code groups}.
      */
     void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams);
+
+    @Override
+    default void accumulateDistinctSelected(Object state, Vector groups, Mask mask, StreamAccessor streams)
+    {
+        accumulateDistinctSelected((Streams) state, groups, mask, streams);
+    }
 
     /**
      * Accumulates rows selected by {@code mask} using per-row group ids after DISTINCT has already
@@ -110,11 +146,16 @@ public interface Accumulator
         return result(maxGroup, state, output, allocator, allocationContext);
     }
 
-    @Override
     default Streams result(int output, int maxGroup, Streams state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
     {
         requireOnlyOutput(output);
         return result(maxGroup, state, mask, existing, allocator, allocationContext);
+    }
+
+    @Override
+    default Streams result(int output, int maxGroup, Object state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return result(output, maxGroup, (Streams) state, mask, existing, allocator, allocationContext);
     }
 
     /**
@@ -133,11 +174,16 @@ public interface Accumulator
         return null;
     }
 
-    @Override
     default Streams copyResultPosition(int output, int group, int maxGroup, Streams state, Streams existing, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
     {
         requireOnlyOutput(output);
         return copyResultPosition(group, maxGroup, state, existing, outputPosition, size, allocator, allocationContext);
+    }
+
+    @Override
+    default Streams copyResultPosition(int output, int group, int maxGroup, Object state, Streams existing, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return copyResultPosition(output, group, maxGroup, (Streams) state, existing, outputPosition, size, allocator, allocationContext);
     }
 
     /**
@@ -145,11 +191,16 @@ public interface Accumulator
      */
     Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext);
 
-    @Override
     default Streams result(int output, int maxGroup, Streams state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
     {
         requireOnlyOutput(output);
         return result(maxGroup, state, existing, allocator, allocationContext);
+    }
+
+    @Override
+    default Streams result(int output, int maxGroup, Object state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return result(output, maxGroup, (Streams) state, existing, allocator, allocationContext);
     }
 
     private static void requireOnlyOutput(int output)

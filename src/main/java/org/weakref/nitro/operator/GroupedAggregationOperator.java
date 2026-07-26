@@ -86,7 +86,7 @@ public class GroupedAggregationOperator
     private final GroupingState inlineGroupingState;
     private final Vector[] inlineGroupValues;
     private final Vector[] inlineGroupNulls;
-    private Streams[] states;
+    private Object[] states;
     private int stateCapacity;
     private int maxGroup = -1;
     private boolean done;
@@ -302,7 +302,7 @@ public class GroupedAggregationOperator
             return computeInlineGroupedResults();
         }
 
-        states = new Streams[aggregations.length];
+        states = new Object[aggregations.length];
         stateCapacity = 0;
         long maxObservedGroup = -1;
         while (source.hasNext()) {
@@ -355,7 +355,7 @@ public class GroupedAggregationOperator
 
     private Mask computeInlineGroupedResults()
     {
-        states = new Streams[aggregations.length];
+        states = new Object[aggregations.length];
         stateCapacity = 0;
         long maxObservedGroup = -1;
         while (source.hasNext()) {
@@ -636,7 +636,7 @@ public class GroupedAggregationOperator
     private void refreshFusedStateVectors()
     {
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedStateVectors[index] = (LongStateUpdate) states[fusedAggregationIndexes[index]].values();
+            fusedStateVectors[index] = (LongStateUpdate) ((Streams) states[fusedAggregationIndexes[index]]).values();
         }
         fusedStateVectorsBound = true;
     }
@@ -915,7 +915,7 @@ public class GroupedAggregationOperator
     {
         PhysicalAggregationProgram.Output binding = program.outputs().get(output);
         PhysicalAggregationUnit unit = aggregations[binding.unit()];
-        Streams state = states[binding.unit()];
+        Object state = states[binding.unit()];
         Streams streams = result[output];
         if (streams != null && batchState.aggregationMaterializedMask[output] != null && batchState.mask.equals(batchState.aggregationMaterializedMask[output])) {
             return streams;

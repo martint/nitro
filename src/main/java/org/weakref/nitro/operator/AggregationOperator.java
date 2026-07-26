@@ -135,7 +135,7 @@ public class AggregationOperator
         if (!batchState.filled) {
             batchState.filled = true;
 
-            Streams[] state = new Streams[units.size()];
+            Object[] state = new Object[units.size()];
             for (int i = 0; i < state.length; i++) {
                 state[i] = units.get(i).allocate(aggregationExecutionContext, 1);
                 units.get(i).initialize(state[i], 0, 1);
@@ -181,14 +181,14 @@ public class AggregationOperator
         }
     }
 
-    private void materializeResults(Streams[] state, BatchState batchState)
+    private void materializeResults(Object[] state, BatchState batchState)
     {
         for (int unit = 0; unit < units.size(); unit++) {
             materializeUnitResults(unit, state[unit], batchState);
         }
     }
 
-    private void materializeUnitResults(int unit, Streams state, BatchState batchState)
+    private void materializeUnitResults(int unit, Object state, BatchState batchState)
     {
         PhysicalAggregationUnit aggregationUnit = units.get(unit);
         for (int output : outputsByUnit[unit]) {

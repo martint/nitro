@@ -40,35 +40,35 @@ public interface PhysicalAggregationUnit
         return -1;
     }
 
-    Streams allocate(AggregationExecutionContext context, int size);
+    Object allocate(AggregationExecutionContext context, int size);
 
-    Streams grow(Allocator allocator, Allocator.Context allocationContext, Streams state, int size);
+    Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int size);
 
-    void initialize(Streams state, int offset, int length);
+    void initialize(Object state, int offset, int length);
 
-    void accumulate(Streams state, int group, Mask mask, StreamAccessor streams);
+    void accumulate(Object state, int group, Mask mask, StreamAccessor streams);
 
-    default void accumulateDistinctSelected(Streams state, int group, Mask mask, StreamAccessor streams)
+    default void accumulateDistinctSelected(Object state, int group, Mask mask, StreamAccessor streams)
     {
         accumulate(state, group, mask, streams);
     }
 
-    void accumulate(Streams state, Vector groups, Mask mask, StreamAccessor streams);
+    void accumulate(Object state, Vector groups, Mask mask, StreamAccessor streams);
 
-    default void accumulateDistinctSelected(Streams state, Vector groups, Mask mask, StreamAccessor streams)
+    default void accumulateDistinctSelected(Object state, Vector groups, Mask mask, StreamAccessor streams)
     {
         accumulate(state, groups, mask, streams);
     }
 
-    default Streams result(int output, int maxGroup, Streams state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
+    default Streams result(int output, int maxGroup, Object state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
     {
         return result(output, maxGroup, state, existing, allocator, allocationContext);
     }
 
-    default Streams copyResultPosition(int output, int group, int maxGroup, Streams state, Streams existing, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+    default Streams copyResultPosition(int output, int group, int maxGroup, Object state, Streams existing, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
     {
         return null;
     }
 
-    Streams result(int output, int maxGroup, Streams state, Streams existing, Allocator allocator, Allocator.Context allocationContext);
+    Streams result(int output, int maxGroup, Object state, Streams existing, Allocator allocator, Allocator.Context allocationContext);
 }
