@@ -14,7 +14,9 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.AllocatorPolicy;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
@@ -293,6 +295,40 @@ class TestAllocator
         allocator.release(context, sameLength);
         assertThat(allocator.borrowAllFalseBoolean(context, 5)).isSameAs(first);
         assertThat(allocator.totalBytes(context)).isZero();
+    }
+
+    @Test
+    void testAllocatorUsesOwnerSuppliedPolicy()
+    {
+        AllocatorPolicy policy = new AllocatorPolicy(
+                true,
+                4,
+                false,
+                true,
+                true,
+                true,
+                64L << 20,
+                64L << 20,
+                1,
+                0,
+                3,
+                0,
+                true,
+                false,
+                true,
+                true);
+        try (AllocationResources resources = new AllocationResources(
+                new PrimitiveArrayPool(1 << 20, 0),
+                new PrimitiveArrayPool(1 << 20, 0),
+                policy);
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("test");
+
+            Vector first = allocator.borrowAllFalseBoolean(context, 5);
+            Vector second = allocator.borrowAllFalseBoolean(context, 5);
+
+            assertThat(first).isNotSameAs(second);
+        }
     }
 
     private record TestResource(AtomicInteger closes)

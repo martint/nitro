@@ -36,38 +36,6 @@ import static java.util.Objects.requireNonNull;
 public class Allocator
         implements AutoCloseable
 {
-    private static final boolean DIRECT_SINGLE_RUN_RLE =
-            Boolean.parseBoolean(System.getProperty("nitro.directSingleRunRle", "true"));
-    private static final int MAX_POOLED_MASKS_PER_BUCKET = 4;
-    private static final boolean COMPLEMENT_DIFFERENCE_MASKS =
-            Boolean.parseBoolean(System.getProperty("nitro.mask.complementDifferenceMasks", "false"));
-    private static final boolean SINGLE_COPY_SPARSE_MASKS =
-            Boolean.parseBoolean(System.getProperty("nitro.mask.singleCopySparseMasks", "true"));
-    private static final boolean LOCAL_VECTOR_WORKING_SET =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.localVectorWorkingSet", "true"));
-    private static final boolean ADAPTIVE_VECTOR_POOL_HIGH_WATER =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.adaptiveVectorPoolHighWater", "true"));
-    private static final long MAX_LOCAL_VECTOR_POOL_BYTES =
-            Long.getLong("nitro.allocator.maxLocalVectorPoolBytes", 64L << 20);
-    private static final long MAX_COMPATIBLE_VECTOR_POOL_BYTES =
-            Long.getLong("nitro.allocator.maxCompatibleVectorPoolBytes", MAX_LOCAL_VECTOR_POOL_BYTES);
-    private static final int COMPATIBLE_VECTOR_POOL_RETENTION_MULTIPLIER =
-            Integer.getInteger("nitro.allocator.compatibleVectorPoolRetentionMultiplier", 1);
-    private static final int COMPATIBLE_POOL_LOCAL_RESERVE =
-            Integer.getInteger("nitro.allocator.compatiblePoolLocalReserve", 0);
-    private static final int MIN_COMPATIBILITY_DOMAIN_GROUPS =
-            Integer.getInteger("nitro.allocator.minCompatibilityDomainGroups", 3);
-    private static final int COMPATIBLE_MASK_POOL_LOCAL_RESERVE =
-            Integer.getInteger("nitro.allocator.compatibleMaskPoolLocalReserve", COMPATIBLE_POOL_LOCAL_RESERVE);
-    private static final boolean FAST_VECTOR_POOL_ORDER_REMOVE =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.fastVectorPoolOrderRemove", "true"));
-    private static final boolean SHARED_ALL_FALSE_BOOLEAN =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.sharedAllFalseBoolean", "true"));
-    private static final boolean DIRECT_VECTOR_FACTORY =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.directVectorFactory", "true"));
-    private static final boolean INDEXED_VECTOR_TREE_TRAVERSAL =
-            Boolean.parseBoolean(System.getProperty("nitro.allocator.indexedVectorTreeTraversal", "true"));
-
     private final Map<Context, ContextState> states = new HashMap<>();
     private final Map<Object, PoolState> pools = new HashMap<>();
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
@@ -76,6 +44,7 @@ public class Allocator
     private final AllocationResources allocationResources;
     private final EngineResources engineResources;
     private final PrimitiveArrayPool primitiveArrays;
+    private final AllocatorPolicy policy;
     private final MemoryReservation memoryReservation;
     private Context lastContext;
     private ContextState lastContextState;
@@ -93,6 +62,7 @@ public class Allocator
         this.engineResources = requireNonNull(engineResources, "engineResources is null");
         this.allocationResources = engineResources.allocationResources();
         this.primitiveArrays = allocationResources.primitiveArrays();
+        this.policy = allocationResources.allocatorPolicy();
         this.memoryReservation = memoryReservation;
     }
 
@@ -106,6 +76,7 @@ public class Allocator
         this.engineResources = null;
         this.allocationResources = requireNonNull(allocationResources, "allocationResources is null");
         this.primitiveArrays = allocationResources.primitiveArrays();
+        this.policy = allocationResources.allocatorPolicy();
         this.memoryReservation = memoryReservation;
     }
 
@@ -149,7 +120,7 @@ public class Allocator
 
     public <T extends Vector> T allocate(Context context, Class<T> vectorType, int size, IntFunction<T> allocator)
     {
-        if (DIRECT_VECTOR_FACTORY) {
+        if (policy.directVectorFactory()) {
             ContextState state = state(context);
             T vector = state.borrowVector(vectorType, size, true, vectorType);
             boolean reused = vector != null;
@@ -192,7 +163,7 @@ public class Allocator
 
     public RleVector allocateSingleRunRle(Context context, int count, Vector value)
     {
-        if (!DIRECT_SINGLE_RUN_RLE) {
+        if (!policy.directSingleRunRle()) {
             return allocateRle(context, new int[] {count}, value);
         }
         RleVector vector = new RleVector(new int[] {count}, value);
@@ -212,7 +183,7 @@ public class Allocator
      */
     public Vector borrowAllFalseBoolean(Context context, int length)
     {
-        if (!SHARED_ALL_FALSE_BOOLEAN) {
+        if (!policy.sharedAllFalseBoolean()) {
             BooleanVector vector = allocate(context, BooleanVector.class, length, BooleanVector::new);
             vector.markAllFalse();
             return vector;
@@ -457,10 +428,10 @@ public class Allocator
         Mask mask = state.borrowMask(selectedCount);
         boolean reused = mask != null;
         if (!reused) {
-            if (SINGLE_COPY_SPARSE_MASKS && selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
+            if (policy.singleCopySparseMasks() && selectedCount == totalPositions && isAllPositions(activePositions, totalPositions)) {
                 mask = Mask.all(totalPositions);
             }
-            else if (SINGLE_COPY_SPARSE_MASKS) {
+            else if (policy.singleCopySparseMasks()) {
                 mask = Mask.sparseTrusted(Arrays.copyOf(activePositions, selectedCount), selectedCount, totalPositions);
             }
             else if (selectedCount == activePositions.length) {
@@ -626,11 +597,11 @@ public class Allocator
     public Mask differenceMask(Context context, Mask left, Mask right)
     {
         ContextState state = state(context);
-        int requiredCapacity = COMPLEMENT_DIFFERENCE_MASKS && left.all() && !right.all() ? right.selectedCount() : left.selectedCount();
+        int requiredCapacity = policy.complementDifferenceMasks() && left.all() && !right.all() ? right.selectedCount() : left.selectedCount();
         Mask result = state.borrowMask(requiredCapacity);
         boolean reused = result != null;
         if (!reused) {
-            result = COMPLEMENT_DIFFERENCE_MASKS || !left.all() || right.all()
+            result = policy.complementDifferenceMasks() || !left.all() || right.all()
                     ? left.difference(right)
                     : materializedAllDifference(left, right);
         }
@@ -641,7 +612,7 @@ public class Allocator
             result.clear(left.size());
         }
         else if (left.all()) {
-            if (COMPLEMENT_DIFFERENCE_MASKS) {
+            if (policy.complementDifferenceMasks()) {
                 int[] positions = result.positionsArrayForOverwrite(right.selectedCount());
                 for (int index = 0; index < right.selectedCount(); index++) {
                     positions[index] = right.position(index);
@@ -903,7 +874,7 @@ public class Allocator
         }
         for (ContextState state : pendingCompatibilityStates) {
             state.configureCompatibility(
-                    contributors.get(state.compatibilityCandidate()).size() >= Math.max(1, MIN_COMPATIBILITY_DOMAIN_GROUPS));
+                    contributors.get(state.compatibilityCandidate()).size() >= Math.max(1, policy.minCompatibilityDomainGroups()));
         }
         pendingCompatibilityStates.clear();
     }
@@ -1132,7 +1103,7 @@ public class Allocator
 
     private void transferVector(Vector vector, Context preferredContext)
     {
-        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+        if (policy.indexedVectorTreeTraversal()) {
             for (int index = 0; index < vector.childVectorCount(); index++) {
                 transferVector(vector.childVector(index), preferredContext);
             }
@@ -1157,7 +1128,7 @@ public class Allocator
     private void transferOwnedVector(Context context, Vector vector)
     {
         vector.prepareBufferTransfer(this, context);
-        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+        if (policy.indexedVectorTreeTraversal()) {
             for (int index = 0; index < vector.childVectorCount(); index++) {
                 transferOwnedVector(context, vector.childVector(index));
             }
@@ -1201,7 +1172,7 @@ public class Allocator
 
     private void releaseVectorTree(Context context, Vector vector)
     {
-        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+        if (policy.indexedVectorTreeTraversal()) {
             for (int index = 0; index < vector.childVectorCount(); index++) {
                 releaseVectorTree(context, vector.childVector(index));
             }
@@ -1217,7 +1188,7 @@ public class Allocator
         if (retained.contains(vector)) {
             return;
         }
-        if (INDEXED_VECTOR_TREE_TRAVERSAL) {
+        if (policy.indexedVectorTreeTraversal()) {
             for (int index = 0; index < vector.childVectorCount(); index++) {
                 releaseUnreferencedVectorTree(context, vector.childVector(index), retained);
             }
@@ -1399,7 +1370,7 @@ public class Allocator
             return allocator.primitiveArrays.borrow(family, minimumCapacity, vectorType);
         }
 
-        private static <T extends Vector> T borrowVector(
+        private <T extends Vector> T borrowVector(
                 PoolState source,
                 Object family,
                 int minimumCapacity,
@@ -1446,7 +1417,7 @@ public class Allocator
             if ((family != null || allocator.memoryReservation != null) && inUseVectors.add(vector)) {
                 if (family != null) {
                     int inUse = inUseVectorCounts.merge(family, 1, Integer::sum);
-                    if (ADAPTIVE_VECTOR_POOL_HIGH_WATER) {
+                    if (allocator.policy.adaptiveVectorPoolHighWater()) {
                         vectorHighWater.merge(family, inUse, Math::max);
                     }
                 }
@@ -1652,17 +1623,17 @@ public class Allocator
 
         private void addVectorToPool(Object family, int capacity, int maxRetained, Vector vector)
         {
-            if (!LOCAL_VECTOR_WORKING_SET && maxRetained > 0 && allocator.primitiveArrays.retain(family, capacity, vector.retainedBytes(), vector)) {
+            if (!allocator.policy.localVectorWorkingSet() && maxRetained > 0 && allocator.primitiveArrays.retain(family, capacity, vector.retainedBytes(), vector)) {
                 allocator.releaseResident(vector.retainedBytes());
                 return;
             }
-            if (maxRetained <= 0 || MAX_LOCAL_VECTOR_POOL_BYTES <= 0) {
+            if (maxRetained <= 0 || allocator.policy.maxLocalVectorPoolBytes() <= 0) {
                 allocator.releaseResident(vector.retainedBytes());
                 return;
             }
             int retentionLimit = Math.max(maxRetained, vectorHighWater.getOrDefault(family, 0));
             if (compatibilityActive()) {
-                int reserve = COMPATIBLE_POOL_LOCAL_RESERVE;
+                int reserve = allocator.policy.compatiblePoolLocalReserve();
                 retentionLimit = Math.min(retentionLimit, Math.max(0, reserve));
             }
             // Keep the active allocator's reuse pool in front of the engine-owned cross-execution pool. In particular,
@@ -1681,7 +1652,7 @@ public class Allocator
             while (order.size() > retentionLimit) {
                 evictLocalVector(order.getFirst());
             }
-            while (pool.vectorPoolBytes > MAX_LOCAL_VECTOR_POOL_BYTES && !pool.vectorPoolGlobalOrder.isEmpty()) {
+            while (pool.vectorPoolBytes > allocator.policy.maxLocalVectorPoolBytes() && !pool.vectorPoolGlobalOrder.isEmpty()) {
                 evictLocalVector(pool.vectorPoolGlobalOrder.getFirst());
             }
         }
@@ -1721,11 +1692,11 @@ public class Allocator
             compatibilityPool.vectorPoolBytes += vector.retainedBytes();
             int compatibilityRetentionLimit = (int) Math.min(
                     Integer.MAX_VALUE,
-                    (long) vector.poolMaxRetained() * Math.max(1, COMPATIBLE_VECTOR_POOL_RETENTION_MULTIPLIER));
+                    (long) vector.poolMaxRetained() * Math.max(1, allocator.policy.compatibleVectorPoolRetentionMultiplier()));
             while (order.size() > compatibilityRetentionLimit) {
                 evictCompatibilityVector(order.getFirst());
             }
-            while (compatibilityPool.vectorPoolBytes > MAX_COMPATIBLE_VECTOR_POOL_BYTES && !compatibilityPool.vectorPoolGlobalOrder.isEmpty()) {
+            while (compatibilityPool.vectorPoolBytes > allocator.policy.maxCompatibleVectorPoolBytes() && !compatibilityPool.vectorPoolGlobalOrder.isEmpty()) {
                 evictCompatibilityVector(compatibilityPool.vectorPoolGlobalOrder.getFirst());
             }
         }
@@ -1752,14 +1723,14 @@ public class Allocator
         {
             ArrayDeque<Mask> bucket = pool.maskPool.computeIfAbsent(mask.capacity(), _ -> new ArrayDeque<>());
             bucket.addLast(mask);
-            int localLimit = compatibilityActive() ? Math.max(0, COMPATIBLE_MASK_POOL_LOCAL_RESERVE) : MAX_POOLED_MASKS_PER_BUCKET;
+            int localLimit = compatibilityActive() ? Math.max(0, allocator.policy.compatibleMaskPoolLocalReserve()) : allocator.policy.maxPooledMasksPerBucket();
             while (bucket.size() > localLimit) {
                 Mask excess = bucket.removeFirst();
                 if (compatibilityPool != pool) {
                     ArrayDeque<Mask> compatibleBucket = compatibilityPool.maskPool
                             .computeIfAbsent(excess.capacity(), _ -> new ArrayDeque<>());
                     compatibleBucket.addLast(excess);
-                    while (compatibleBucket.size() > MAX_POOLED_MASKS_PER_BUCKET) {
+                    while (compatibleBucket.size() > allocator.policy.maxPooledMasksPerBucket()) {
                         discardMaskResident(compatibleBucket.removeFirst());
                     }
                 }
@@ -1798,7 +1769,7 @@ public class Allocator
             removeVectorFromPool(pool, family, capacity, vector);
         }
 
-        private static void removeVectorFromPool(PoolState source, Object family, int capacity, Vector vector)
+        private void removeVectorFromPool(PoolState source, Object family, int capacity, Vector vector)
         {
             TreeMap<Integer, ArrayDeque<Vector>> vectors = source.vectorPool.get(family);
             if (vectors == null) {
@@ -1819,9 +1790,9 @@ public class Allocator
             }
         }
 
-        private static boolean removeFromOrder(ArrayDeque<Vector> order, Vector vector)
+        private boolean removeFromOrder(ArrayDeque<Vector> order, Vector vector)
         {
-            if (!FAST_VECTOR_POOL_ORDER_REMOVE) {
+            if (!allocator.policy.fastVectorPoolOrderRemove()) {
                 return order.remove(vector);
             }
             if (order.peekFirst() == vector) {

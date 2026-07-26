@@ -31,12 +31,22 @@ public final class AllocationResources
 
     private final PrimitiveArrayPool primitiveArrays;
     private final PrimitiveArrayPool nativeBuffers;
+    private final AllocatorPolicy allocatorPolicy;
     private boolean closed;
 
     public AllocationResources(PrimitiveArrayPool primitiveArrays, PrimitiveArrayPool nativeBuffers)
     {
+        this(primitiveArrays, nativeBuffers, AllocatorPolicy.defaults());
+    }
+
+    public AllocationResources(
+            PrimitiveArrayPool primitiveArrays,
+            PrimitiveArrayPool nativeBuffers,
+            AllocatorPolicy allocatorPolicy)
+    {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
+        this.allocatorPolicy = requireNonNull(allocatorPolicy, "allocatorPolicy is null");
     }
 
     /**
@@ -52,7 +62,8 @@ public final class AllocationResources
                         Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
                 new PrimitiveArrayPool(
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
-                        Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)));
+                        Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
+                AllocatorPolicy.fromSystemProperties());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -65,6 +76,12 @@ public final class AllocationResources
     {
         checkOpen();
         return nativeBuffers;
+    }
+
+    public AllocatorPolicy allocatorPolicy()
+    {
+        checkOpen();
+        return allocatorPolicy;
     }
 
     @Override
