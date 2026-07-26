@@ -690,15 +690,24 @@ public class GroupedAggregationOperator
         // the amortized-doubling headroom into a linear, O(n^2)-copy reallocation on every batch.
         int needed = toIntExact(maxObservedGroup + 1);
         boolean grow = stateCapacity < needed;
+        boolean stateVectorsChanged = false;
         for (int index = 0; index < aggregations.length; index++) {
             Accumulator accumulator = aggregations[index];
             if (states[index] == null) {
                 states[index] = accumulator.allocate(aggregationExecutionContext, newCapacity);
+                stateVectorsChanged = true;
             }
             else if (grow) {
                 states[index] = accumulator.grow(allocator, allocationContext, states[index], newCapacity);
+                stateVectorsChanged = true;
             }
             accumulator.initialize(states[index], toIntExact(previousMaxGroup + 1), toIntExact(maxObservedGroup - previousMaxGroup));
+        }
+        if (stateVectorsChanged) {
+            // A staged batch can replace state vectors after a generated batch has cached their physical update
+            // interfaces. A later generated batch must bind the replacements, not keep writing through an old,
+            // smaller vector.
+            fusedStateVectorsBound = false;
         }
         if (grow) {
             stateCapacity = newCapacity;

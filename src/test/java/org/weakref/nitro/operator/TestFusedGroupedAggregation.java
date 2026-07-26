@@ -131,6 +131,57 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void fusedRebindsStateAfterStagedGrowth()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+
+        int firstSize = 4_096;
+        long[] firstKeys = new long[firstSize];
+        int[] firstIds = new int[firstSize];
+        for (int index = 0; index < firstSize; index++) {
+            firstKeys[index] = index;
+            firstIds[index] = index;
+            reference.computeIfAbsent((long) index, _ -> new long[2])[0]++;
+        }
+        pages.add(TableOperator.Page.values(
+                firstSize,
+                new Vector[] {DictionaryVector.ofTrustedIds(firstIds, new I64Vector(firstKeys))},
+                Mask.all(firstSize)));
+
+        // A depth-two dictionary cannot use the generated physical binding, so this batch grows the same logical
+        // aggregation state through the staged path.
+        int stagedSize = 100_000 - firstSize;
+        long[] stagedKeys = new long[stagedSize];
+        int[] stagedIds = new int[stagedSize];
+        int[] nestedIds = new int[stagedSize];
+        for (int index = 0; index < stagedSize; index++) {
+            long key = firstSize + index;
+            stagedKeys[index] = key;
+            stagedIds[index] = index;
+            nestedIds[index] = index;
+            reference.computeIfAbsent(key, _ -> new long[2])[0]++;
+        }
+        DictionaryVector nestedKeys = DictionaryVector.ofTrustedIds(
+                stagedIds,
+                DictionaryVector.ofTrustedIds(nestedIds, new I64Vector(stagedKeys)));
+        pages.add(TableOperator.Page.values(stagedSize, new Vector[] {nestedKeys}, Mask.all(stagedSize)));
+
+        // Adjacent reuse makes the generated path eligible again above its ordinary local boundary. It must update
+        // the state vector installed by the staged batch, not the smaller vector retained from the first batch.
+        int finalSize = 4_096;
+        long[] finalKeys = new long[] {99_999};
+        int[] finalIds = new int[finalSize];
+        reference.get(99_999L)[0] += finalSize;
+        pages.add(TableOperator.Page.values(
+                finalSize,
+                new Vector[] {DictionaryVector.ofTrustedIds(finalIds, new I64Vector(finalKeys))},
+                Mask.all(finalSize)));
+
+        assertGroupedSumAndCount(pages, List.of(new CountAll()), reference, false);
+    }
+
+    @Test
     void fusedHighCardinalityAdjacentRunsRemainFused()
     {
         // Cross the ordinary 64K local-state boundary. Once adjacent reuse is physically proven, switching
