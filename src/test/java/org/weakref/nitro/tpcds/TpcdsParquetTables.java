@@ -13,6 +13,9 @@
  */
 package org.weakref.nitro.tpcds;
 
+import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
+import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 
 import java.io.IOException;
@@ -38,6 +41,7 @@ public final class TpcdsParquetTables
     private final Path rootDirectory;
     private final String schema;
     private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
+    private final BenchmarkSchemaRegistry schemas = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private final Map<String, List<Path>> tableFiles = new HashMap<>();
 
     private TpcdsParquetTables(Path rootDirectory, String schema)
@@ -104,6 +108,11 @@ public final class TpcdsParquetTables
     public NitroParquetScanResources scanResources()
     {
         return scanResources;
+    }
+
+    Schema tableSchema(String tableName, List<String> columnNames)
+    {
+        return schemas.tpcds(tableName, columnNames);
     }
 
     public Path tableDirectory(String tableName)
