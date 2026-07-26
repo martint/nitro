@@ -648,16 +648,25 @@ final class TpcdsParquetSupport
 
     public static Operator query22(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator inventory = query22Rollup(allocator, primitiveRegistry, tables);
-        inventory = profiled("q22.project.output", projectQuery22Output(allocator, primitiveRegistry, inventory, 5, 6));
-        return profiled("q22.topn", new TopNOperator(allocator, 100, new int[] {4, 0, 1, 2, 3}, new boolean[] {false, false, false, false, false}, inventory));
+        return query22(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
     }
 
-    private static Operator query22Rollup(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    static Operator query22(TpcdsQueryContext context)
     {
-        Operator inventory = query22InventoryRollupSource(allocator, primitiveRegistry, tables);
-        inventory = profiled("q22.group_id", new GroupIdOperator(
-                allocator,
+        Operator inventory = query22Rollup(context);
+        inventory = context.profiled(
+                "q22.project.output",
+                projectQuery22Output(context.allocator(), context.primitiveRegistry(), inventory, 5, 6));
+        return context.profiled(
+                "q22.topn",
+                new TopNOperator(context.allocator(), 100, new int[] {4, 0, 1, 2, 3}, new boolean[] {false, false, false, false, false}, inventory));
+    }
+
+    private static Operator query22Rollup(TpcdsQueryContext context)
+    {
+        Operator inventory = query22InventoryRollupSource(context);
+        inventory = context.profiled("q22.group_id", new GroupIdOperator(
+                context.allocator(),
                 inventory,
                 new int[][] {
                         {-1, -1, -1, -1, 4, 5},
@@ -665,16 +674,21 @@ final class TpcdsParquetSupport
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
                         {0, 1, 2, 3, 4, 5}}));
-        return profiled("q22.group.rollup", new GroupedAggregationOperator(
-                allocator,
+        return context.profiled("q22.group.rollup", new GroupedAggregationOperator(
+                context.allocator(),
                 List.of(0, 1, 2, 3, 6),
                 List.of(new Sum(4), new Sum(5)),
                 inventory));
     }
 
-    private static Operator query22InventoryRollupSource(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query22InventoryRollupSource(TpcdsQueryContext context)
     {
-        Operator inventory = profiled("q22.scan.inventory", scannedTable(allocator, tables, "inventory", "inv_date_sk", "inv_item_sk", "inv_quantity_on_hand"));
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator inventory = context.profiled(
+                "q22.scan.inventory",
+                scannedTable(allocator, tables, "inventory", "inv_date_sk", "inv_item_sk", "inv_quantity_on_hand"));
         HashJoinOperator dateJoin = new HashJoinOperator(
                 allocator,
                 inventory,
@@ -688,8 +702,8 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_month_seq"},
                         0),
                 0);
-        inventory = profiled("q22.join.date_dim", QUERY22_COMPACT_JOIN_LAYOUTS ? dateJoin.withOutputs(1, 2) : dateJoin);
-        inventory = profiled("q22.group.by_item", new GroupedAggregationOperator(
+        inventory = context.profiled("q22.join.date_dim", QUERY22_COMPACT_JOIN_LAYOUTS ? dateJoin.withOutputs(1, 2) : dateJoin);
+        inventory = context.profiled("q22.group.by_item", new GroupedAggregationOperator(
                 allocator,
                 List.of(QUERY22_COMPACT_JOIN_LAYOUTS ? 0 : 1),
                 List.of(QUERY22_COMPACT_JOIN_LAYOUTS ? 0 : 1),
@@ -701,11 +715,11 @@ final class TpcdsParquetSupport
                 0,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_product_name", "i_brand", "i_class", "i_category"),
                 0);
-        inventory = profiled("q22.join.item", QUERY22_COMPACT_JOIN_LAYOUTS ? itemJoin.withOutputs(4, 5, 6, 7, 1, 2) : itemJoin);
+        inventory = context.profiled("q22.join.item", QUERY22_COMPACT_JOIN_LAYOUTS ? itemJoin.withOutputs(4, 5, 6, 7, 1, 2) : itemJoin);
         if (QUERY22_COMPACT_JOIN_LAYOUTS) {
             return inventory;
         }
-        return profiled("q22.project.rollup_source", projectInputs(allocator, primitiveRegistry, inventory, 4, 5, 6, 7, 1, 2));
+        return context.profiled("q22.project.rollup_source", projectInputs(allocator, primitiveRegistry, inventory, 4, 5, 6, 7, 1, 2));
     }
 
     private static Operator projectQuery22Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int sumIndex, int countIndex)

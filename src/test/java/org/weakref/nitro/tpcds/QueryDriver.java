@@ -54,9 +54,22 @@ public final class QueryDriver
         }
         if (operatorCpuProfile) {
             OperatorCpuProfile profile = new OperatorCpuProfile();
+            Method contextualMethod;
+            try {
+                contextualMethod = TpcdsParquetSupport.class.getDeclaredMethod(query, TpcdsQueryContext.class);
+                contextualMethod.setAccessible(true);
+            }
+            catch (NoSuchMethodException ignored) {
+                contextualMethod = null;
+            }
             long start = System.nanoTime();
             for (int i = 0; i < measured; i++) {
-                sink += TpcdsParquetSupport.withOperatorCpuProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
+                if (contextualMethod != null) {
+                    sink += runContextualUnchecked(contextualMethod, registry, tables, rowSink, profile);
+                }
+                else {
+                    sink += TpcdsParquetSupport.withOperatorCpuProfile(profile, () -> runUnchecked(method, registry, tables, rowSink));
+                }
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, rows-sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
@@ -138,6 +151,27 @@ public final class QueryDriver
     {
         try {
             Operator operator = (Operator) method.invoke(null, profile.newAllocator(), registry, tables);
+            if (rowSink) {
+                return org.weakref.nitro.OperatorAssertions.OperatorAssert.toRows(operator).size();
+            }
+            return consume(operator);
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static long runContextualUnchecked(
+            Method method,
+            PrimitiveRegistry registry,
+            TpcdsParquetTables tables,
+            boolean rowSink,
+            OperatorCpuProfile profile)
+    {
+        try {
+            Operator operator = (Operator) method.invoke(
+                    null,
+                    new TpcdsQueryContext(new Allocator(EngineResources.createDefault()), registry, tables, profile));
             if (rowSink) {
                 return org.weakref.nitro.OperatorAssertions.OperatorAssert.toRows(operator).size();
             }
