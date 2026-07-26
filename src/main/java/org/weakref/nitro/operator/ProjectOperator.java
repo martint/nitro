@@ -42,20 +42,6 @@ import static java.util.Objects.requireNonNull;
 public class ProjectOperator
         implements Operator
 {
-    private static final boolean SHARE_EVALUATOR_BUFFER_POOL =
-            Boolean.parseBoolean(System.getProperty("nitro.project.shareEvaluatorBufferPool", "true"));
-    private static final boolean FORWARD_SINGLE_POSITION_ONLY = Boolean.getBoolean("nitro.project.forwardSinglePositionOnly");
-    private static final boolean RECYCLE_EVALUATOR_OUTPUTS =
-            Boolean.parseBoolean(System.getProperty("nitro.project.recycleEvaluatorOutputs", "true"));
-    private static final boolean REUSE_PLAN_EVALUATOR =
-            Boolean.parseBoolean(System.getProperty("nitro.project.reusePlanEvaluator", "true"));
-    // Fuse the qualifying outputs of a projection into one monomorphic shared loop (see FusedProjectionCompiler).
-    // The substitution is byte-identical and only fires for an output whose slice has at least two operations (a
-    // multi-op arithmetic/comparison/CASE chain the interpreter would materialize intermediates for). Keep a property
-    // opt-out for controlled comparisons and environments where runtime compilation is intentionally unavailable.
-    private static final boolean COMPILE_EXPRESSIONS =
-            Boolean.parseBoolean(System.getProperty("nitro.project.compileExpressions", "true"));
-
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
     private final Schema outputSchema;
@@ -74,6 +60,9 @@ public class ProjectOperator
     private final Map<Producer, Integer> fusedOrdinal = new HashMap<>();
     private final PrimitiveExecutionContext executionContext;
     private final PlanEvaluator reusablePlanEvaluator;
+    private final boolean shareEvaluatorBufferPool;
+    private final boolean forwardSinglePositionOnly;
+    private final boolean recycleEvaluatorOutputs;
 
     private final Operator source;
     private BatchState currentBatchState;
@@ -108,13 +97,17 @@ public class ProjectOperator
         this.primitiveRegistry = primitiveRegistry;
         this.outputReferences = evaluationPlan.outputs();
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        ProjectOperatorPolicy policy = operatorResources.project().policy();
+        this.shareEvaluatorBufferPool = policy.shareEvaluatorBufferPool();
+        this.forwardSinglePositionOnly = policy.forwardSinglePositionOnly();
+        this.recycleEvaluatorOutputs = policy.recycleEvaluatorOutputs();
         if (outputSchema.size() != outputReferences.size()) {
             throw new IllegalArgumentException("output schema does not match projection output count");
         }
         this.passThroughProjection = outputReferences.stream().allMatch(reference -> reference.producer() instanceof Input);
         this.executionContext = new PrimitiveExecutionContext(allocator);
-        this.reusablePlanEvaluator = REUSE_PLAN_EVALUATOR ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
-        CompiledMultiProjection compiled = COMPILE_EXPRESSIONS
+        this.reusablePlanEvaluator = policy.reusePlanEvaluator() ? newPlanEvaluator(this::resolveEvaluatorInput) : null;
+        CompiledMultiProjection compiled = policy.compileExpressions()
                 ? operatorResources.codeGeneration().fusedProjection()
                         .tryCompile(evaluationPlan, primitiveRegistry, outputReferences)
                         .orElse(null)
@@ -158,12 +151,12 @@ public class ProjectOperator
             if (outputReference.producer() instanceof Input input) {
                 Output selected = sourceBatch.output(input.index())
                         .select(exposedStreams(sourceBatch, outputReference));
-                outputs[outputIndex] = FORWARD_SINGLE_POSITION_ONLY
+                outputs[outputIndex] = forwardSinglePositionOnly
                         ? selected.forwardSinglePositionOnly((stream, vector) -> allocator.transfer(allocationContext, vector), (_, _) -> {})
                         : selected.forward((stream, vector) -> allocator.transfer(allocationContext, vector), (_, _) -> {});
             }
             else {
-                outputs[outputIndex] = RECYCLE_EVALUATOR_OUTPUTS
+                outputs[outputIndex] = recycleEvaluatorOutputs
                         ? new Output(
                                 exposedStreams(sourceBatch, outputReference),
                                 stream -> evaluateOutput(batchState, outputReference, stream),
@@ -294,7 +287,7 @@ public class ProjectOperator
 
     private PlanEvaluator newPlanEvaluator(PlanEvaluator.InputResolver inputResolver)
     {
-        return SHARE_EVALUATOR_BUFFER_POOL
+        return shareEvaluatorBufferPool
                 ? new PlanEvaluator(
                         evaluationPlan,
                         primitiveRegistry,
@@ -457,7 +450,7 @@ public class ProjectOperator
             // Batch.close() closes every Output before invoking this action, so all exposed evaluator/fused results
             // have either been released or transferred. Remaining tracked vectors are scratch/intermediates and are
             // now safe to return to their pools.
-            if (RECYCLE_EVALUATOR_OUTPUTS) {
+            if (recycleEvaluatorOutputs) {
                 planEvaluator.resetForReuse();
                 for (Allocator.Context context : executionContext.allocationContexts()) {
                     allocator.releaseIfPresent(context);

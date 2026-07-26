@@ -60,7 +60,7 @@ public final class OperatorResources
     {
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
-                new ProjectOperatorResources(),
+                new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties()),
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),

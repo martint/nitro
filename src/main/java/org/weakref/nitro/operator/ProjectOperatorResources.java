@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Engine-owner-scoped compatibility domains used by projection evaluation.
  *
@@ -21,7 +23,18 @@ package org.weakref.nitro.operator;
  */
 public final class ProjectOperatorResources
 {
+    private final ProjectOperatorPolicy policy;
     private final Object evaluatorBufferPoolGroup = new Object();
+
+    public ProjectOperatorResources(ProjectOperatorPolicy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
+
+    ProjectOperatorPolicy policy()
+    {
+        return policy;
+    }
 
     Object evaluatorBufferPoolGroup()
     {
