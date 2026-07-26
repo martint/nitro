@@ -21,10 +21,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 public final class ConcatenatedBooleanVector
         implements Vector
 {
-    private static final boolean MONOTONIC_POSITION_COPY =
-            Boolean.parseBoolean(System.getProperty("nitro.concatenatedBoolean.monotonicPositionCopy", "true"));
-    private static final boolean DIRECT_POSITION_COPY =
-            Boolean.parseBoolean(System.getProperty("nitro.concatenatedBoolean.directPositionCopy", "true"));
     private final Vector[] segments;
     private final int[] offsets;
     private final int length;
@@ -106,8 +102,8 @@ public final class ConcatenatedBooleanVector
     public Vector copyPositionsInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int[] sourcePositions, int sourceCount, int outputStart, int size)
     {
         BooleanVector target = ensureBooleanCapacity(allocator, allocationContext, existing, size);
-        boolean orderedPositions = MONOTONIC_POSITION_COPY && isMostlyNonDecreasing(sourcePositions, sourceCount);
-        if (DIRECT_POSITION_COPY && orderedPositions) {
+        boolean orderedPositions = allocator.monotonicConcatenatedBooleanPositionCopy() && isMostlyNonDecreasing(sourcePositions, sourceCount);
+        if (allocator.directConcatenatedBooleanPositionCopy() && orderedPositions) {
             copyPositionsDirect(sourcePositions, sourceCount, target.values(), outputStart);
             return target;
         }

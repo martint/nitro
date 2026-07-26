@@ -181,6 +181,21 @@ public class Allocator
         return reuseOrCreateStreams(existing, values, nulls, null);
     }
 
+    public void copyBooleanValues(Vector input, Mask mask, boolean[] output)
+    {
+        VectorAccess.copyBooleanValues(input, mask, output, policy.booleanCopies().directDense());
+    }
+
+    boolean monotonicConcatenatedBooleanPositionCopy()
+    {
+        return policy.booleanCopies().monotonicConcatenatedPositions();
+    }
+
+    boolean directConcatenatedBooleanPositionCopy()
+    {
+        return policy.booleanCopies().directConcatenatedPositions();
+    }
+
     /**
      * Returns a read-only Boolean vector of {@code length} false values.
      *

@@ -15,9 +15,6 @@ package org.weakref.nitro.data;
 
 public final class VectorAccess
 {
-    private static final boolean DIRECT_DENSE_BOOLEAN_COPY =
-            Boolean.parseBoolean(System.getProperty("nitro.scalar.directDenseIsNullBooleanCopy", "true"));
-
     private VectorAccess() {}
 
     /**
@@ -25,10 +22,10 @@ public final class VectorAccess
      * the boxed mask iterator and polymorphic accessor used by the compatibility path. This is shared by typed
      * IS NULL functions because their output values are exactly the input's physical null stream.
      */
-    public static void copyBooleanValues(Vector input, Mask mask, boolean[] output)
+    static void copyBooleanValues(Vector input, Mask mask, boolean[] output, boolean directDense)
     {
         if (input == null) {
-            if (DIRECT_DENSE_BOOLEAN_COPY && mask.all()) {
+            if (directDense && mask.all()) {
                 java.util.Arrays.fill(output, 0, mask.size(), false);
             }
             else {
@@ -38,11 +35,11 @@ public final class VectorAccess
             }
             return;
         }
-        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all() && input instanceof BooleanVector flat) {
+        if (directDense && mask.all() && input instanceof BooleanVector flat) {
             System.arraycopy(flat.values(), 0, output, 0, mask.size());
             return;
         }
-        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all() && input instanceof DictionaryVector dictionary &&
+        if (directDense && mask.all() && input instanceof DictionaryVector dictionary &&
                 dictionary.values() instanceof BooleanVector dictionaryValues) {
             int[] ids = dictionary.ids();
             boolean[] dictionaryFlags = dictionaryValues.values();
@@ -52,7 +49,7 @@ public final class VectorAccess
             return;
         }
         BooleanValues values = booleanValues(input);
-        if (DIRECT_DENSE_BOOLEAN_COPY && mask.all()) {
+        if (directDense && mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
                 output[position] = values.value(position);
             }

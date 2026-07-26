@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Immutable policy for allocator representation and local/compatible retention behavior.
  */
@@ -20,6 +22,7 @@ public record AllocatorPolicy(
         boolean directSingleRunRle,
         boolean reuseTransportTuples,
         boolean transferableBufferLeases,
+        BooleanCopies booleanCopies,
         int maxPooledMasksPerBucket,
         boolean complementDifferenceMasks,
         boolean singleCopySparseMasks,
@@ -36,12 +39,18 @@ public record AllocatorPolicy(
         boolean directVectorFactory,
         boolean indexedVectorTreeTraversal)
 {
+    public AllocatorPolicy
+    {
+        requireNonNull(booleanCopies, "booleanCopies is null");
+    }
+
     public static AllocatorPolicy defaults()
     {
         return new AllocatorPolicy(
                 true,
                 true,
                 true,
+                BooleanCopies.defaults(),
                 4,
                 false,
                 true,
@@ -70,6 +79,7 @@ public record AllocatorPolicy(
                 booleanProperty("nitro.directSingleRunRle", defaults.directSingleRunRle()),
                 !Boolean.getBoolean("nitro.streams.disableTransportTupleReuse"),
                 booleanProperty("nitro.transferableBufferLeases", defaults.transferableBufferLeases()),
+                BooleanCopies.fromSystemProperties(),
                 defaults.maxPooledMasksPerBucket(),
                 booleanProperty("nitro.mask.complementDifferenceMasks", defaults.complementDifferenceMasks()),
                 booleanProperty("nitro.mask.singleCopySparseMasks", defaults.singleCopySparseMasks()),
@@ -94,5 +104,29 @@ public record AllocatorPolicy(
     private static boolean booleanProperty(String name, boolean defaultValue)
     {
         return Boolean.parseBoolean(System.getProperty(name, Boolean.toString(defaultValue)));
+    }
+
+    public record BooleanCopies(
+            boolean directDense,
+            boolean monotonicConcatenatedPositions,
+            boolean directConcatenatedPositions)
+    {
+        public static BooleanCopies defaults()
+        {
+            return new BooleanCopies(true, true, true);
+        }
+
+        private static BooleanCopies fromSystemProperties()
+        {
+            BooleanCopies defaults = defaults();
+            return new BooleanCopies(
+                    booleanProperty("nitro.scalar.directDenseIsNullBooleanCopy", defaults.directDense()),
+                    booleanProperty(
+                            "nitro.concatenatedBoolean.monotonicPositionCopy",
+                            defaults.monotonicConcatenatedPositions()),
+                    booleanProperty(
+                            "nitro.concatenatedBoolean.directPositionCopy",
+                            defaults.directConcatenatedPositions()));
+        }
     }
 }

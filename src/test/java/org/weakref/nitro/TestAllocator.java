@@ -18,6 +18,7 @@ import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.AllocatorPolicy;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
@@ -307,6 +308,7 @@ class TestAllocator
                 true,
                 false,
                 false,
+                new AllocatorPolicy.BooleanCopies(false, false, false),
                 4,
                 false,
                 true,
@@ -344,6 +346,26 @@ class TestAllocator
             dictionary.prepareBufferTransfer(allocator, context);
             allocator.release(context, ids);
             assertThat(allocator.allocate(context, I32Vector.class, 5, I32Vector::new)).isSameAs(ids);
+
+            boolean[] copiedFlags = new boolean[3];
+            allocator.copyBooleanValues(
+                    new BooleanVector(new boolean[] {true, false, true}),
+                    Mask.all(3),
+                    copiedFlags);
+            assertThat(copiedFlags).containsExactly(true, false, true);
+
+            ConcatenatedBooleanVector concatenated = new ConcatenatedBooleanVector(new Vector[] {
+                    new BooleanVector(new boolean[] {false, true}),
+                    new BooleanVector(new boolean[] {true, false})});
+            BooleanVector copiedPositions = (BooleanVector) concatenated.copyPositionsInto(
+                    allocator,
+                    context,
+                    null,
+                    new int[] {3, 0, 2},
+                    3,
+                    0,
+                    3);
+            assertThat(copiedPositions.values()).containsExactly(false, false, true);
         }
     }
 
