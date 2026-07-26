@@ -23,7 +23,8 @@ public record AdaptiveLongGroupingPolicy(
         int highDensityPairTerminalJumpSlots,
         boolean groupedProbe,
         int groupedProbeMinSlots,
-        boolean debugShapes)
+        boolean debugShapes,
+        boolean debugGeneratedTableShapes)
 {
     public AdaptiveLongGroupingPolicy
     {
@@ -50,6 +51,7 @@ public record AdaptiveLongGroupingPolicy(
                 1 << 22,
                 true,
                 1 << 20,
+                false,
                 false);
     }
 
@@ -69,7 +71,8 @@ public record AdaptiveLongGroupingPolicy(
                 defaults.highDensityPairTerminalJumpSlots(),
                 booleanProperty("nitro.group.adaptiveLongGroupedProbe", defaults.groupedProbe()),
                 defaults.groupedProbeMinSlots(),
-                Boolean.getBoolean("nitro.debug.adaptiveLongGrouping"));
+                Boolean.getBoolean("nitro.debug.adaptiveLongGrouping"),
+                Boolean.getBoolean("nitro.debug.multiLongTableShapes"));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

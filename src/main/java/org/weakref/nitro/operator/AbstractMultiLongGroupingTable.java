@@ -35,7 +35,6 @@ abstract class AbstractMultiLongGroupingTable
 {
     static final float LOAD_FACTOR = 0.75f;
     static final long EMPTY_GROUP_ID = -1L;
-    private static final boolean DEBUG_TABLE_SHAPES = Boolean.getBoolean("nitro.debug.multiLongTableShapes");
 
     // Distinct odd 64-bit multipliers, one per key column; the generated hash multiplies key i by
     // HASH_PRIMES[i], sums with nullMask, then applies a Murmur3 finalizer — matching the hand-written mixers.
@@ -55,6 +54,7 @@ abstract class AbstractMultiLongGroupingTable
     final int arity;
     final int stride;
     final boolean storesGroupIds;
+    private final boolean debugTableShapes;
     private final PrimitiveArrayPool arrayPool;
     long[] entries;
     byte[] nullMasks;
@@ -74,11 +74,17 @@ abstract class AbstractMultiLongGroupingTable
         return (byte) ((hash >>> 24) | 0x80);
     }
 
-    AbstractMultiLongGroupingTable(PrimitiveArrayPool arrayPool, int arity, int expectedSize, boolean retainGroupKeys)
+    AbstractMultiLongGroupingTable(
+            PrimitiveArrayPool arrayPool,
+            int arity,
+            int expectedSize,
+            boolean retainGroupKeys,
+            AdaptiveLongGroupingPolicy policy)
     {
         this.arrayPool = arrayPool;
         this.arity = arity;
         this.storesGroupIds = retainGroupKeys;
+        this.debugTableShapes = policy.debugGeneratedTableShapes();
         this.stride = arity + (storesGroupIds ? 1 : 0);
         int capacity = 16;
         while (capacity < expectedSize / LOAD_FACTOR) {
@@ -246,7 +252,7 @@ abstract class AbstractMultiLongGroupingTable
     @Override
     public final void releaseBuffers()
     {
-        if (DEBUG_TABLE_SHAPES && storesGroupIds) {
+        if (debugTableShapes && storesGroupIds) {
             System.err.printf("[multi-long-table] arity=%d groups=%d capacity=%d stride=%d%n", arity, size, control.length, stride);
         }
         arrayPool.release(entries);

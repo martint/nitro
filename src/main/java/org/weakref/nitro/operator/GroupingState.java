@@ -965,7 +965,11 @@ final class GroupingState
             // is emitted as bytecode so the keys live in registers exactly like the former 2/3/4-key tables.
             useMultiLongGrouping = true;
             multiLongArity = values.length;
-            multiLongTable = codeGeneration.multiLongGrouping().create(values.length, Math.max(16, values[0].length()), arrayPool);
+            multiLongTable = codeGeneration.multiLongGrouping().create(
+                    values.length,
+                    Math.max(16, values[0].length()),
+                    arrayPool,
+                    adaptiveLongGroupingPolicy);
             return;
         }
 
@@ -1711,7 +1715,8 @@ final class GroupingState
         multiLongTable = codeGeneration.multiLongGrouping().create(
                 multiLongArity,
                 Math.max(16, toIntExact(Math.min(Integer.MAX_VALUE, nextGroupId + upcomingRows))),
-                arrayPool);
+                arrayPool,
+                adaptiveLongGroupingPolicy);
         long[] packedByGroup = longKeysByGroup;
         int[] thirdByGroup = packedIntTripleThirdByGroup;
         byte[] nullMasksByGroup = packedIntTripleNullMasksByGroup;

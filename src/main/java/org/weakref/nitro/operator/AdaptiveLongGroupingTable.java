@@ -631,7 +631,11 @@ class AdaptiveLongGroupingTable
         if (policy.debugShapes()) {
             System.err.printf("[adaptive-long-grouping] promote arity=%d groups=%d slots=%d%n", arity, groupCount, slots.length);
         }
-        LongGroupingTable target = codeGeneration.multiLongGrouping().create(arity, Math.max(16, toIntExact(groupCount)), arrayPool);
+        LongGroupingTable target = codeGeneration.multiLongGrouping().create(
+                arity,
+                Math.max(16, toIntExact(groupCount)),
+                arrayPool,
+                policy);
         if (groupCount != 0) {
             VectorAccess.LongValues[] values = new VectorAccess.LongValues[arity];
             VectorAccess.BooleanValues[] nulls = new VectorAccess.BooleanValues[arity];

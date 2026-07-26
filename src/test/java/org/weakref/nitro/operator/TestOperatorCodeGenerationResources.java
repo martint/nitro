@@ -88,11 +88,11 @@ class TestOperatorCodeGenerationResources
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1 << 20, 0);
 
         AbstractMultiLongGroupingTable firstTable =
-                first.multiLongGrouping().create(2, 16, arrayPool);
+                first.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
         AbstractMultiLongGroupingTable reusedShape =
-                first.multiLongGrouping().create(2, 16, arrayPool);
+                first.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
         AbstractMultiLongGroupingTable isolatedShape =
-                second.multiLongGrouping().create(2, 16, arrayPool);
+                second.multiLongGrouping().create(2, 16, arrayPool, AdaptiveLongGroupingPolicy.defaults());
         assertThat(reusedShape.getClass()).isSameAs(firstTable.getClass());
         assertThat(isolatedShape.getClass()).isNotSameAs(firstTable.getClass());
 
@@ -111,6 +111,7 @@ class TestOperatorCodeGenerationResources
                 1 << 22,
                 true,
                 1 << 20,
+                false,
                 false);
         AdaptiveLongGroupingTable differentlyConfiguredAdaptive =
                 AdaptiveLongGroupingTable.create(2, 16, arrayPool, first, lowLoadFactorPolicy);
@@ -139,7 +140,11 @@ class TestOperatorCodeGenerationResources
         first.close();
 
         assertThat(firstTable.getClass()).isNotNull();
-        assertThatThrownBy(() -> retainedGenerator.create(2, 16, arrayPool))
+        assertThatThrownBy(() -> retainedGenerator.create(
+                2,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Multi-long grouping table generator is closed");
         assertThatThrownBy(first::dictionaryHash)

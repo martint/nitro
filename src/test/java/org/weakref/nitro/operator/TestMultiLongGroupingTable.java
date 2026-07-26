@@ -62,7 +62,11 @@ class TestMultiLongGroupingTable
             positions[position] = position;
         }
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDistinct(arity, 16, arrayPool);
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDistinct(
+                arity,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
         assertThat(table.stride).isEqualTo(arity);
         assertThat(table.keysByGroup).isNull();
         assertThat(table.assignDistinctBatchNullFree(keyAccessors, nullAccessors, positions, rows, positions, 0))
@@ -98,7 +102,11 @@ class TestMultiLongGroupingTable
             long[] compactResult = new long[rows];
             long[] referenceResult = new long[rows];
             LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(arity, 16, arrayPool);
+            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
+                    arity,
+                    16,
+                    arrayPool,
+                    AdaptiveLongGroupingPolicy.defaults());
             long compactCount = compact.assignBatch(keyAccessors, nullAccessors, positions, rows, compactResult, 0);
             long referenceCount = reference.assignBatch(keyAccessors, nullAccessors, positions, rows, referenceResult, 0);
             assertThat(compactResult).isEqualTo(referenceResult);
@@ -166,7 +174,11 @@ class TestMultiLongGroupingTable
                 nonNullAccessors[column] = ignored -> false;
             }
             LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(arity, 16, arrayPool);
+            LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
+                    arity,
+                    16,
+                    arrayPool,
+                    AdaptiveLongGroupingPolicy.defaults());
             compact.ensureCapacity(rows);
             long compactCount = compact.assignBatch(keyAccessors, null, null, rows, compactResult, 0);
             long referenceCount = reference.assignBatch(keyAccessors, nonNullAccessors, positions, rows, referenceResult, 0);
@@ -290,7 +302,11 @@ class TestMultiLongGroupingTable
         long[] compactResult = new long[rows];
         long[] referenceResult = new long[rows];
         LongGroupingTable compact = AdaptiveLongGroupingTable.create(arity, 16, arrayPool, codeGeneration, adaptiveLongGroupingPolicy);
-        LongGroupingTable reference = codeGeneration.multiLongGrouping().create(arity, 16, arrayPool);
+        LongGroupingTable reference = codeGeneration.multiLongGrouping().create(
+                arity,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
         compact.ensureCapacity(rows);
         long compactCount = compact.assignBatch(keyAccessors, partialNullAccessors, null, rows, compactResult, 0);
         long referenceCount = reference.assignBatch(keyAccessors, referenceNullAccessors, positions, rows, referenceResult, 0);
@@ -334,7 +350,11 @@ class TestMultiLongGroupingTable
         }
         long[] result = new long[rows];
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().create(arity, 16, arrayPool);
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().create(
+                arity,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
         long nextGroupId = table.assignBatch(keyAccessors, nullAccessors, positions, rows, result, 0L);
 
         // Reference: first-seen ids over the canonical (nullMask, key-or-0) tuple.

@@ -140,7 +140,12 @@ final class DistinctKeySet
             return new LongQuadDistinctIndex(Math.max(16, samples[0].length()));
         }
         if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
-            return new MultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration);
+            return new MultiLongDistinctIndex(
+                    samples.length,
+                    Math.max(16, samples[0].length()),
+                    arrayPool,
+                    codeGeneration,
+                    adaptiveLongGroupingPolicy);
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration, flatKeyTablePolicy);
         if (layout != null) {
@@ -805,9 +810,14 @@ final class DistinctKeySet
                 int arity,
                 int expectedSize,
                 PrimitiveArrayPool arrayPool,
-                OperatorCodeGenerationResources codeGeneration)
+                OperatorCodeGenerationResources codeGeneration,
+                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy)
         {
-            table = codeGeneration.multiLongGrouping().createDistinct(arity, expectedSize, arrayPool);
+            table = codeGeneration.multiLongGrouping().createDistinct(
+                    arity,
+                    expectedSize,
+                    arrayPool,
+                    adaptiveLongGroupingPolicy);
             keyAccessors = new VectorAccess.LongValues[arity];
             nullAccessors = new VectorAccess.BooleanValues[arity];
         }
