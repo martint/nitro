@@ -34,6 +34,7 @@ import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
+import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.nio.file.Path;
@@ -336,7 +337,8 @@ public final class NitroParquetScanOperator
                 resources.directNumericBatchDecodeAdmission(),
                 resources.decompressedPageCachePolicy(),
                 resources.rleReaderPolicy(),
-                resources.pageNavigationPolicy());
+                resources.pageNavigationPolicy(),
+                resources.readerDiagnostics());
     }
 
     private NitroParquetScanOperator(
@@ -348,7 +350,8 @@ public final class NitroParquetScanOperator
             Object directNumericBatchDecodeAdmissionKey,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy)
+            ParquetPageNavigationPolicy pageNavigationPolicy,
+            ParquetReaderDiagnostics readerDiagnostics)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -391,7 +394,8 @@ public final class NitroParquetScanOperator
                     decompressedPages,
                     arrayPool,
                     rleReaderPolicy,
-                    pageNavigationPolicy);
+                    pageNavigationPolicy,
+                    readerDiagnostics);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];

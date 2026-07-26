@@ -62,8 +62,6 @@ public final class ColumnReader
             Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseNumericDictionaryScratch", "true"));
     private static final boolean RECYCLE_BINARY_DICTIONARY_SCRATCH =
             Boolean.parseBoolean(System.getProperty("nitro.parquet.recycleBinaryDictionaryScratch", "true"));
-    private static final boolean DEBUG_DICTIONARY_FILTER_SUMMARY =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.debugDictionaryFilterSummary", "false"));
     private final PrimitiveArrayPool arrayPool;
 
     public enum Kind
@@ -164,8 +162,6 @@ public final class ColumnReader
             "nitro.parquet.directNumericDictionaryBatchDecode", Boolean.toString(DIRECT_NUMERIC_BATCH_DECODE)));
     private static final boolean DIRECT_NUMERIC_PLAIN_BATCH_DECODE = Boolean.parseBoolean(System.getProperty(
             "nitro.parquet.directNumericPlainBatchDecode", Boolean.toString(DIRECT_NUMERIC_BATCH_DECODE)));
-    private static final boolean DEBUG_DIRECT_NUMERIC_BATCH_DECODE =
-            Boolean.getBoolean("nitro.debug.directNumericBatchDecode");
 
     private record Chunk(MemorySegment segment, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source) {}
 
@@ -186,6 +182,7 @@ public final class ColumnReader
 
     private final RleReaderPolicy rleReaderPolicy;
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
+    private final ParquetReaderDiagnostics diagnostics;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -211,10 +208,6 @@ public final class ColumnReader
     private final Decompressor snappy = SnappyDecompressor.create();
     private MemorySegment decompressSegment = scratchArena.allocate(0);
     private long decompressCapacity;
-    private static final boolean DEBUG_DECOMPRESSION =
-            Boolean.getBoolean("nitro.debug.decompression") || Boolean.getBoolean("nitro.parquet.decompressionStats");
-    private static final boolean DEBUG_VERSIONED_DICTIONARY_PREDICATES =
-            Boolean.getBoolean("nitro.debug.versionedDictionaryPredicates");
     private long compressedPageCount;
     private long compressedPageBytes;
     private long uncompressedPageBytes;
@@ -349,11 +342,13 @@ public final class ColumnReader
             DecompressedPageCache decompressedPages,
             PrimitiveArrayPool arrayPool,
             RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy)
+            ParquetPageNavigationPolicy pageNavigationPolicy,
+            ParquetReaderDiagnostics diagnostics)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
         this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
+        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -406,7 +401,8 @@ public final class ColumnReader
                 decompressedPages,
                 arrayPool,
                 rleReaderPolicy,
-                pageNavigationPolicy);
+                pageNavigationPolicy,
+                diagnostics);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -427,7 +423,7 @@ public final class ColumnReader
     @Override
     public void close()
     {
-        if (DEBUG_DIRECT_NUMERIC_BATCH_DECODE && directDictionaryRows + directPlainRows > 0) {
+        if (diagnostics.directNumericBatchDecode() && directDictionaryRows + directPlainRows > 0) {
             System.err.printf(
                     "[direct-numeric-batch-decode] kind=%s optional=%s dictionaryRows=%d plainRows=%d%n",
                     kind,
@@ -435,7 +431,7 @@ public final class ColumnReader
                     directDictionaryRows,
                     directPlainRows);
         }
-        if (DEBUG_DICTIONARY_FILTER_SUMMARY && dictionaryFilterRowsObserved > 0) {
+        if (diagnostics.dictionaryFilterSummary() && dictionaryFilterRowsObserved > 0) {
             System.err.printf(
                     "[dictionary-filter] kind=%s optional=%s rows=%d acceptedRows=%d directRows=%d lastDictionary=%d lastAccepted=%d branchless=%s%n",
                     kind,
@@ -1473,7 +1469,7 @@ public final class ColumnReader
         boolean warmBranchyTable = sameChunk &&
                 (long) acceptedCount * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionarySize &&
                 (long) acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR < dictionarySize;
-        if (DEBUG_VERSIONED_DICTIONARY_PREDICATES &&
+        if (diagnostics.versionedDictionaryPredicates() &&
                 !versionedDictionaryPredicateReuseReported &&
                 sameChunk &&
                 !warmBranchyTable) {
@@ -2978,7 +2974,7 @@ public final class ColumnReader
                 return cached;
             }
         }
-        if (DEBUG_DECOMPRESSION) {
+        if (diagnostics.decompression()) {
             compressedPageCount++;
             compressedPageBytes += compressedSize;
             uncompressedPageBytes += uncompressedSize;

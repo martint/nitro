@@ -85,6 +85,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanO
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
+import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.io.IOException;
@@ -728,7 +729,7 @@ public class TestParquetOperator
                 org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults(), ParquetReaderDiagnostics.disabled())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
                     reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -764,7 +765,7 @@ public class TestParquetOperator
                 org.weakref.nitro.parquet.ParquetFile secondFile = org.weakref.nitro.parquet.ParquetFile.open(second)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = firstFile.column("x");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults(), ParquetReaderDiagnostics.disabled())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : firstFile.rowGroups()) {
                     reader.addChunk(firstFile.data(), firstFile.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -830,7 +831,7 @@ public class TestParquetOperator
         try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), GENERIC_PAGE_NAVIGATION)) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), GENERIC_PAGE_NAVIGATION, ParquetReaderDiagnostics.disabled())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
                     reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -869,7 +870,7 @@ public class TestParquetOperator
         try (org.weakref.nitro.parquet.ParquetFile parquet = org.weakref.nitro.parquet.ParquetFile.open(file)) {
             org.weakref.nitro.parquet.ParquetFile.Column column = parquet.column("maybe");
             try (org.weakref.nitro.parquet.ColumnReader reader = new org.weakref.nitro.parquet.ColumnReader(
-                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults())) {
+                    column.type(), column.optional(), column.typeLength(), column.decimal(), null, arrayPool, RleReaderPolicy.defaults(), ParquetPageNavigationPolicy.defaults(), ParquetReaderDiagnostics.disabled())) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
                     reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }
@@ -2693,7 +2694,8 @@ public class TestParquetOperator
                 null,
                 arrayPool,
                 RleReaderPolicy.defaults(),
-                ParquetPageNavigationPolicy.defaults());
+                ParquetPageNavigationPolicy.defaults(),
+                ParquetReaderDiagnostics.disabled());
         for (ParquetFile file : files) {
             ParquetFile.Column column = file.column(columnName);
             for (org.apache.parquet.format.RowGroup rowGroup : file.rowGroups()) {

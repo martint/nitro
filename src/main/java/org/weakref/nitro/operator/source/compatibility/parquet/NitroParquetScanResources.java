@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
+import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import static java.util.Objects.requireNonNull;
@@ -35,15 +36,18 @@ public final class NitroParquetScanResources
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final RleReaderPolicy rleReaderPolicy;
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
+    private final ParquetReaderDiagnostics readerDiagnostics;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy)
+            ParquetPageNavigationPolicy pageNavigationPolicy,
+            ParquetReaderDiagnostics readerDiagnostics)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
         this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
+        this.readerDiagnostics = requireNonNull(readerDiagnostics, "readerDiagnostics is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -51,7 +55,8 @@ public final class NitroParquetScanResources
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
                 RleReaderPolicy.fromSystemProperties(),
-                ParquetPageNavigationPolicy.fromSystemProperties());
+                ParquetPageNavigationPolicy.fromSystemProperties(),
+                ParquetReaderDiagnostics.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -82,5 +87,10 @@ public final class NitroParquetScanResources
     ParquetPageNavigationPolicy pageNavigationPolicy()
     {
         return pageNavigationPolicy;
+    }
+
+    ParquetReaderDiagnostics readerDiagnostics()
+    {
+        return readerDiagnostics;
     }
 }
