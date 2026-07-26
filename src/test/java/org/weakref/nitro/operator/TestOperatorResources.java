@@ -45,6 +45,7 @@ class TestOperatorResources
         assertThat(first.aggregation()).isNotSameAs(second.aggregation());
         assertThat(first.hashJoin()).isNotSameAs(second.hashJoin());
         assertThat(first.grouping()).isNotSameAs(second.grouping());
+        assertThat(first.topNRankingPolicy()).isNotSameAs(second.topNRankingPolicy());
 
         first.close();
         assertThatIllegalStateException()
@@ -58,6 +59,9 @@ class TestOperatorResources
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::groupIdPolicy)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::topNRankingPolicy)
                 .withMessage("Operator resources are closed");
         assertThat(second.codeGeneration()).isNotNull();
         second.close();

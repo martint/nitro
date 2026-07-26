@@ -26,11 +26,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 
+import static java.util.Objects.requireNonNull;
+
 public class TopNRankingOperator
         implements Operator
 {
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.topnranking.maxBatchRows", 4_096);
-
     private final Allocator.Context allocationContext = new Allocator.Context("TopNRankingOperator");
 
     private final Allocator allocator;
@@ -39,6 +39,7 @@ public class TopNRankingOperator
     private final boolean[] descendingByColumn;
     private final int[] partitionColumns;
     private final int limit;
+    private final int maxBatchRows;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -47,12 +48,25 @@ public class TopNRankingOperator
     private int currentOutputPosition;
     private boolean loaded;
 
-    public TopNRankingOperator(Allocator allocator, int limit, int[] orderingColumns, boolean[] descendingByColumn, Operator source)
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            TopNRankingOperatorPolicy policy)
     {
-        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source);
+        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, policy);
     }
 
-    public TopNRankingOperator(Allocator allocator, int limit, int[] partitionColumns, int[] orderingColumns, boolean[] descendingByColumn, Operator source)
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            TopNRankingOperatorPolicy policy)
     {
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopNRanking requires at least one ordering column");
@@ -66,6 +80,7 @@ public class TopNRankingOperator
         this.descendingByColumn = descendingByColumn.clone();
         this.partitionColumns = partitionColumns.clone();
         this.limit = limit;
+        this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
     }
 
     @Override
@@ -89,7 +104,7 @@ public class TopNRankingOperator
         if (!loaded) {
             load();
         }
-        int batchSize = Math.min(BATCH_SIZE, selectedRows.size() - currentOutputPosition);
+        int batchSize = Math.min(maxBatchRows, selectedRows.size() - currentOutputPosition);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < source.outputCount(); outputIndex++) {
             Streams batchStreams = materializeSourceColumnBatch(outputIndex, currentOutputPosition, batchSize);

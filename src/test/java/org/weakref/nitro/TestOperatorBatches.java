@@ -932,7 +932,8 @@ public class TestOperatorBatches
                 5_000,
                 new int[] {0},
                 new boolean[] {false},
-                new ConstantTableOperator(allocator, 1, rows))) {
+                new ConstantTableOperator(allocator, 1, rows),
+                allocator.engineResources().operatorResources().topNRankingPolicy())) {
             int batchCount = 0;
             int rowCount = 0;
             long firstRank = Long.MIN_VALUE;
@@ -1073,7 +1074,8 @@ public class TestOperatorBatches
                         row("alpha", 2L),
                         row("alpha", 1L),
                         row("beta", 2L),
-                        row("beta", 1L))))) {
+                        row("beta", 1L))),
+                allocator.engineResources().operatorResources().topNRankingPolicy())) {
             assertThat(operator(operator)).matchesExactly(List.of(
                     row("alpha", 1L, 1L),
                     row("alpha", 2L, 2L),
@@ -1112,7 +1114,8 @@ public class TestOperatorBatches
                 new BatchSliceOperator(
                         allocator,
                         257,
-                        new ConstantTableOperator(allocator, 6, rows)))) {
+                        new ConstantTableOperator(allocator, 6, rows)),
+                allocator.engineResources().operatorResources().topNRankingPolicy())) {
             assertThat(operator(operator)).matchesExactly(expected);
         }
     }
@@ -1149,7 +1152,8 @@ public class TestOperatorBatches
                         new BatchSliceOperator(
                                 allocator,
                                 257,
-                                new ConstantTableOperator(allocator, 6, rows))),
+                                new ConstantTableOperator(allocator, 6, rows)),
+                        allocator.engineResources().operatorResources().topNRankingPolicy()),
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
@@ -1192,7 +1196,8 @@ public class TestOperatorBatches
                                 new BatchSliceOperator(
                                         allocator,
                                         257,
-                                        new ConstantTableOperator(allocator, 6, rows))),
+                                        new ConstantTableOperator(allocator, 6, rows)),
+                                allocator.engineResources().operatorResources().topNRankingPolicy()),
                         new int[] {0, 1, 2, 3},
                         new int[0],
                         new boolean[0],

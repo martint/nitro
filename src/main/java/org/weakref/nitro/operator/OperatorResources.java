@@ -32,6 +32,7 @@ public final class OperatorResources
     private final AggregationOperatorResources aggregation;
     private final HashJoinOperatorResources hashJoin;
     private final GroupingStateResources grouping;
+    private final TopNRankingOperatorPolicy topNRankingPolicy;
     private boolean closed;
 
     public OperatorResources(
@@ -42,7 +43,8 @@ public final class OperatorResources
             ProjectOperatorResources project,
             AggregationOperatorResources aggregation,
             HashJoinOperatorResources hashJoin,
-            GroupingStateResources grouping)
+            GroupingStateResources grouping,
+            TopNRankingOperatorPolicy topNRankingPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.filter = new FilterOperatorResources(codeGeneration.projectionMask(), requireNonNull(filterPolicy, "filterPolicy is null"));
@@ -52,6 +54,7 @@ public final class OperatorResources
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.grouping = requireNonNull(grouping, "grouping is null");
+        this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
     }
 
     /**
@@ -78,7 +81,8 @@ public final class OperatorResources
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
                         hashJoinMaterializationListener),
                 new GroupingStateResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))));
+                        System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))),
+                TopNRankingOperatorPolicy.fromSystemProperties());
     }
 
     public OperatorCodeGenerationResources codeGeneration()
@@ -127,6 +131,12 @@ public final class OperatorResources
     {
         checkOpen();
         return grouping;
+    }
+
+    public TopNRankingOperatorPolicy topNRankingPolicy()
+    {
+        checkOpen();
+        return topNRankingPolicy;
     }
 
     @Override

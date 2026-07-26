@@ -2337,7 +2337,7 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2)),
                 grouped);
         grouped = projectQuery86Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -2358,7 +2358,7 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2), new Sum(3)),
                 grouped);
         grouped = projectQuery36Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {false}, grouped);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {false}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5, 0, 1}, new boolean[] {true, false, false, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -2973,7 +2973,7 @@ final class TpcdsParquetSupport
                 List.of(new Sum(8)),
                 grouped);
         grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped);
     }
 
@@ -2998,7 +2998,7 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2)),
                 grouped);
         grouped = projectQuery70Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped);
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -4178,7 +4178,7 @@ final class TpcdsParquetSupport
         Operator joined = query44AverageRows(allocator, primitiveRegistry, tables);
         joined = filter(allocator, primitiveRegistry, joined, query44ThresholdPredicate(1, 2));
         joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1);
-        joined = new TopNRankingOperator(allocator, 10, new int[] {1}, new boolean[] {descending}, joined);
+        joined = new TopNRankingOperator(allocator, 10, new int[] {1}, new boolean[] {descending}, joined, allocator.engineResources().operatorResources().topNRankingPolicy());
         return projectInputs(allocator, primitiveRegistry, joined, 0, 2);
     }
 
@@ -8831,7 +8831,8 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2},
                 new int[] {3, 4},
                 new boolean[] {false, false},
-                facts));
+                facts,
+                context.allocator().engineResources().operatorResources().topNRankingPolicy()));
         return context.profiled("q57.project.ranked_sales", projectInputs(context.allocator(), context.primitiveRegistry(), facts, 0, 1, 2, 3, 4, 5, 6));
     }
 
@@ -9396,7 +9397,8 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2, 3},
                 new int[] {4, 5},
                 new boolean[] {false, false},
-                facts));
+                facts,
+                allocator.engineResources().operatorResources().topNRankingPolicy()));
     }
 
     private static Operator projectQuery31Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int countyIndex, int storeQuarterOneIndex, int storeQuarterTwoIndex, int storeQuarterThreeIndex, int webQuarterOneIndex, int webQuarterTwoIndex, int webQuarterThreeIndex)
