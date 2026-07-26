@@ -125,6 +125,7 @@ public class HashJoinOperator
     private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinFilterPolicy filterPolicy;
     private final HashJoinExecutionPolicy executionPolicy;
+    private final FlatKeyTablePolicy.ValueIds valueIdPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -375,6 +376,7 @@ public class HashJoinOperator
         this.outputPolicy = operatorResources.hashJoin().outputPolicy();
         this.filterPolicy = operatorResources.hashJoin().filterPolicy();
         this.executionPolicy = operatorResources.hashJoin().executionPolicy();
+        this.valueIdPolicy = operatorResources.flatKeyTablePolicy().valueIds();
         this.composeEncodedOuterDictionaryDepth = outputPolicy.composeEncodedOuterDictionaryDepth();
         this.lazyDuplicateSlotState = executionPolicy.lazyDuplicateSlotState();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
@@ -2852,7 +2854,7 @@ public class HashJoinOperator
         // column is high cardinality and cache a NOT_DICTIONARY marker so the caller wraps the raw
         // build column directly.
         int distinctLimit = Math.max(16, length / 2);
-        ValueIdInterner interner = new ValueIdInterner(distinctLimit);
+        ValueIdInterner interner = new ValueIdInterner(distinctLimit, valueIdPolicy);
         byte[] data = source.data();
         long totalBytes = 0;
         for (int position = 0; position < length; position++) {

@@ -22,6 +22,8 @@ import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.Arrays;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Interns the distinct byte-string values of a key column to dense integer ids (0, 1, 2, …) that are stable
  * across batches — the Velox {@code VectorHasher} "value id" technique. The same value always maps to the same
@@ -42,10 +44,9 @@ import java.util.Arrays;
 final class ValueIdInterner
 {
     static final int TOO_MANY = -1;
-    private static final boolean RECOGNIZE_EMPTY_AFTER_OVERFLOW =
-            Boolean.parseBoolean(System.getProperty("nitro.group.recognizeEmptyAfterOverflow", "true"));
 
     private final int maxDistinct;
+    private final FlatKeyTablePolicy.ValueIds policy;
 
     // Swiss/F14-style open-addressing slot table: slots[h] = id + 1 (0 = empty), with a parallel byte tag per
     // slot (top hash bits | 0x80; 0 = empty). A probe scans GROUP slots with one vector tag-compare, so the
@@ -72,14 +73,15 @@ final class ValueIdInterner
     private boolean overflowed;
     private int emptyId = TOO_MANY;
 
-    ValueIdInterner(int maxDistinct)
+    ValueIdInterner(int maxDistinct, FlatKeyTablePolicy.ValueIds policy)
     {
-        this(maxDistinct, 1024);
+        this(maxDistinct, 1024, policy);
     }
 
-    ValueIdInterner(int maxDistinct, int initialDataCapacity)
+    private ValueIdInterner(int maxDistinct, int initialDataCapacity, FlatKeyTablePolicy.ValueIds policy)
     {
         this.maxDistinct = maxDistinct;
+        this.policy = requireNonNull(policy, "policy is null");
         int capacity = 16;
         this.slots = new int[capacity];
         this.slotTags = new byte[capacity];
@@ -109,7 +111,7 @@ final class ValueIdInterner
     int intern(byte[] value, int offset, int length)
     {
         if (overflowed) {
-            return RECOGNIZE_EMPTY_AFTER_OVERFLOW && length == 0 ? emptyId : TOO_MANY;
+            return policy.recognizeEmptyAfterOverflow() && length == 0 ? emptyId : TOO_MANY;
         }
         long hash = hash(value, offset, length);
         byte tag = (byte) ((hash >>> 56) | 0x80L);
@@ -177,7 +179,7 @@ final class ValueIdInterner
      */
     int find(byte[] value, int offset, int length)
     {
-        if (RECOGNIZE_EMPTY_AFTER_OVERFLOW && length == 0 && emptyId >= 0) {
+        if (policy.recognizeEmptyAfterOverflow() && length == 0 && emptyId >= 0) {
             return emptyId;
         }
         long hash = hash(value, offset, length);

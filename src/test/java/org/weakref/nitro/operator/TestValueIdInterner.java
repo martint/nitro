@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestValueIdInterner
 {
+    private static final FlatKeyTablePolicy.ValueIds DEFAULT_POLICY = FlatKeyTablePolicy.ValueIds.defaults();
+
     private static byte[] bytes(String value)
     {
         return value.getBytes(StandardCharsets.UTF_8);
@@ -35,7 +37,7 @@ class TestValueIdInterner
     @Test
     void assignsDenseIdsInFirstSeenOrder()
     {
-        ValueIdInterner interner = new ValueIdInterner(1000);
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
         assertThat(intern(interner, "A")).isEqualTo(0);
         assertThat(intern(interner, "N")).isEqualTo(1);
         assertThat(intern(interner, "R")).isEqualTo(2);
@@ -45,7 +47,7 @@ class TestValueIdInterner
     @Test
     void sameValueSameIdAcrossRepeatedCalls()
     {
-        ValueIdInterner interner = new ValueIdInterner(1000);
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
         int a = intern(interner, "alpha");
         int b = intern(interner, "beta");
         // Re-intern in a different order, as a later batch would: ids must be stable.
@@ -58,7 +60,7 @@ class TestValueIdInterner
     @Test
     void reconstructsTheOriginalValue()
     {
-        ValueIdInterner interner = new ValueIdInterner(1000);
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
         int id = intern(interner, "charlie");
         assertThat(interner.value(id)).isEqualTo(bytes("charlie"));
         assertThat(interner.valueLength(id)).isEqualTo(7);
@@ -71,7 +73,7 @@ class TestValueIdInterner
     @Test
     void internsBySubrange()
     {
-        ValueIdInterner interner = new ValueIdInterner(1000);
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
         byte[] data = bytes("xxhelloyy");
         int hello = interner.intern(data, 2, 5);
         byte[] other = bytes("hello");
@@ -85,7 +87,7 @@ class TestValueIdInterner
     @Test
     void distinguishesPrefixesAndDifferentLengths()
     {
-        ValueIdInterner interner = new ValueIdInterner(1000);
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
         int ab = intern(interner, "ab");
         int abc = intern(interner, "abc");
         int empty = intern(interner, "");
@@ -98,7 +100,7 @@ class TestValueIdInterner
     @Test
     void overflowsPastTheCeiling()
     {
-        ValueIdInterner interner = new ValueIdInterner(3);
+        ValueIdInterner interner = new ValueIdInterner(3, DEFAULT_POLICY);
         assertThat(intern(interner, "")).isEqualTo(0);
         assertThat(intern(interner, "a")).isEqualTo(1);
         assertThat(intern(interner, "b")).isEqualTo(2);
@@ -116,9 +118,21 @@ class TestValueIdInterner
     }
 
     @Test
+    void canDisableEmptyRecognitionAfterOverflow()
+    {
+        ValueIdInterner interner = new ValueIdInterner(1, new FlatKeyTablePolicy.ValueIds(false));
+        assertThat(intern(interner, "")).isZero();
+        assertThat(intern(interner, "overflow")).isEqualTo(ValueIdInterner.TOO_MANY);
+
+        assertThat(intern(interner, "")).isEqualTo(ValueIdInterner.TOO_MANY);
+        byte[] empty = bytes("");
+        assertThat(interner.find(empty, 0, empty.length)).isZero();
+    }
+
+    @Test
     void staysCorrectAcrossManyDistinctValuesWithResizes()
     {
-        ValueIdInterner interner = new ValueIdInterner(100_000);
+        ValueIdInterner interner = new ValueIdInterner(100_000, DEFAULT_POLICY);
         int count = 50_000;
         for (int index = 0; index < count; index++) {
             assertThat(intern(interner, "value-" + index)).isEqualTo(index);

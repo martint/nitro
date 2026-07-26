@@ -19,22 +19,26 @@ import static java.util.Objects.requireNonNull;
 ///
 /// Grouping, joins, and distinct execution receive the same immutable instance from their operator-resource owner.
 /// The property-backed factory is used only by the standalone composition root.
-public record FlatKeyTablePolicy(Layout layout, Table table)
+public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
 {
     public FlatKeyTablePolicy
     {
         requireNonNull(layout, "layout is null");
         requireNonNull(table, "table is null");
+        requireNonNull(valueIds, "valueIds is null");
     }
 
     public static FlatKeyTablePolicy defaults()
     {
-        return new FlatKeyTablePolicy(Layout.defaults(), Table.defaults());
+        return new FlatKeyTablePolicy(Layout.defaults(), Table.defaults(), ValueIds.defaults());
     }
 
     public static FlatKeyTablePolicy fromSystemProperties()
     {
-        return new FlatKeyTablePolicy(Layout.fromSystemProperties(), Table.fromSystemProperties());
+        return new FlatKeyTablePolicy(
+                Layout.fromSystemProperties(),
+                Table.fromSystemProperties(),
+                ValueIds.fromSystemProperties());
     }
 
     public record Layout(
@@ -301,6 +305,22 @@ public record FlatKeyTablePolicy(Layout layout, Table table)
                             "nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality",
                             defaults.singleDictionaryGroupCacheMaxCardinality()),
                     booleanProperty("nitro.flatGrouping.identityGroupIds", defaults.identityGroupIds()));
+        }
+    }
+
+    public record ValueIds(boolean recognizeEmptyAfterOverflow)
+    {
+        public static ValueIds defaults()
+        {
+            return new ValueIds(true);
+        }
+
+        public static ValueIds fromSystemProperties()
+        {
+            ValueIds defaults = defaults();
+            return new ValueIds(booleanProperty(
+                    "nitro.group.recognizeEmptyAfterOverflow",
+                    defaults.recognizeEmptyAfterOverflow()));
         }
     }
 

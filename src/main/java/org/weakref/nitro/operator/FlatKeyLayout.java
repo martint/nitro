@@ -502,7 +502,7 @@ class FlatKeyLayout
                     int physicalPosition = binaryEntry(index, position);
                     ValueIdInterner interner = fieldInterners[index];
                     if (interner == null) {
-                        interner = new ValueIdInterner(policy.valueIdCeiling());
+                        interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
                         fieldInterners[index] = interner;
                     }
                     valueId = interner.intern(binary.data(), binary.startOffset(physicalPosition), binary.length(physicalPosition));
@@ -669,7 +669,7 @@ class FlatKeyLayout
                     if (policy.singleRunBinaryIdOnly() && policy.idOnlyBinaryRecords()) {
                         ValueIdInterner interner = fieldInterners[index];
                         if (interner == null) {
-                            interner = new ValueIdInterner(policy.valueIdCeiling());
+                            interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
                             fieldInterners[index] = interner;
                         }
                         fieldBinaryConstantGlobalId[index] = interner.intern(
@@ -1498,7 +1498,7 @@ class FlatKeyLayout
         }
         ValueIdInterner interner = fieldInterners[fieldIndex];
         if (interner == null) {
-            interner = new ValueIdInterner(policy.valueIdCeiling());
+            interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
             fieldInterners[fieldIndex] = interner;
         }
         int entryCount = dictionary.length();
