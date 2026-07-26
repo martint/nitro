@@ -506,7 +506,7 @@ public final class FusedProjectionCompiler
         out.append("import org.weakref.nitro.data.I64Vector;\n");
         out.append("import org.weakref.nitro.data.Vector;\n");
         out.append("import org.weakref.nitro.data.Streams;\n");
-        out.append("import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;\n");
+        out.append("import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;\n");
         out.append("import org.weakref.nitro.data.Stream;\n");
         out.append("public final class ").append(simpleName).append(" implements org.weakref.nitro.jit.FusedMultiProjection {\n");
         Map<String, Integer> utf8Constants = utf8Constants(slice);

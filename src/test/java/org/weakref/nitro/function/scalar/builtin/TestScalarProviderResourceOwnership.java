@@ -15,7 +15,7 @@ package org.weakref.nitro.function.scalar.builtin;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 
 import java.util.Set;
 

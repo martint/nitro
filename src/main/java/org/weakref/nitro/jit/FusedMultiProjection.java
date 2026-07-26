@@ -16,7 +16,7 @@ package org.weakref.nitro.jit;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
-import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 
 import java.util.List;
 import java.util.Set;

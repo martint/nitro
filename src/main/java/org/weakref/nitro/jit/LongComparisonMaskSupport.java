@@ -23,8 +23,8 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.operator.evaluator.MaskOutcome;
-import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.MaskOutcome;
+import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 
 import java.util.List;
 

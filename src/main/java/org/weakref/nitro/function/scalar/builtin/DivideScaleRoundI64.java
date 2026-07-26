@@ -24,9 +24,9 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarFunction;
-import org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext;
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.math.BigInteger;
 import java.util.List;

@@ -14,7 +14,6 @@
 package org.weakref.nitro.function.scalar;
 
 import org.weakref.nitro.core.function.FunctionCapability;
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;

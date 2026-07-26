@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.evaluator;
 
 import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.InvocationBinding;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 
 import java.util.List;
 

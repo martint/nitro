@@ -16,6 +16,7 @@ package org.weakref.nitro.operator.evaluator;
 import org.weakref.nitro.core.function.FunctionCapability;
 import org.weakref.nitro.core.function.ResolvedCall;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 

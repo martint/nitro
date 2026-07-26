@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator.evaluator;
 
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
+
 import java.lang.classfile.ClassFile;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
@@ -37,8 +39,8 @@ public final class PrimitiveCallSiteBinder
     private static final ClassDesc CD_SET = ClassDesc.of("java.util.Set");
     private static final ClassDesc CD_MASK = ClassDesc.of("org.weakref.nitro.data.Mask");
     private static final ClassDesc CD_STREAMS = ClassDesc.of("org.weakref.nitro.data.Streams");
-    private static final ClassDesc CD_EXECUTION_CONTEXT = ClassDesc.of("org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext");
-    private static final ClassDesc CD_PRIMITIVE = ClassDesc.of("org.weakref.nitro.operator.evaluator.PrimitiveFunction");
+    private static final ClassDesc CD_EXECUTION_CONTEXT = ClassDesc.of("org.weakref.nitro.function.scalar.PrimitiveExecutionContext");
+    private static final ClassDesc CD_PRIMITIVE = ClassDesc.of("org.weakref.nitro.function.scalar.PrimitiveFunction");
 
     private static final MethodTypeDesc APPLY_TYPE = MethodTypeDesc.of(CD_STREAMS, CD_LIST, CD_MASK, CD_SET, CD_STREAMS, CD_EXECUTION_CONTEXT);
     private static final MethodTypeDesc REQUIRED_INPUT_STREAMS_TYPE = MethodTypeDesc.of(CD_SET, CD_int, CD_SET);

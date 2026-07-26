@@ -13,8 +13,8 @@
  */
 package org.weakref.nitro.legacy.pipeline;
 
+import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.jit.InMemoryCompiler;
-import org.weakref.nitro.operator.evaluator.PrimitiveFunction;
 
 import java.util.TreeSet;
 
@@ -86,7 +86,7 @@ public final class BatchFunctionCompiler
         StringBuilder out = new StringBuilder();
         out.append("package ").append(PACKAGE).append(";\n");
         out.append("public final class ").append(simpleName)
-                .append(" implements org.weakref.nitro.operator.evaluator.PrimitiveFunction {\n");
+                .append(" implements org.weakref.nitro.function.scalar.PrimitiveFunction {\n");
         out.append("  private static final org.weakref.nitro.data.Stream V = org.weakref.nitro.data.Stream.VALUES;\n");
         if (vector) {
             out.append("  private static final jdk.incubator.vector.VectorSpecies<Long> S = jdk.incubator.vector.LongVector.SPECIES_PREFERRED;\n");
@@ -96,7 +96,7 @@ public final class BatchFunctionCompiler
                 + "org.weakref.nitro.data.Mask mask, "
                 + "java.util.Set<org.weakref.nitro.data.Stream> requestedStreams, "
                 + "org.weakref.nitro.data.Streams output, "
-                + "org.weakref.nitro.operator.evaluator.PrimitiveExecutionContext context) {\n");
+                + "org.weakref.nitro.function.scalar.PrimitiveExecutionContext context) {\n");
         out.append("    if (!requestedStreams.contains(V)) { return org.weakref.nitro.data.Streams.empty(); }\n");
         for (int column : columns) {
             out.append("    long[] in").append(column).append(" = ((org.weakref.nitro.data.I64Vector) inputs.get(")
