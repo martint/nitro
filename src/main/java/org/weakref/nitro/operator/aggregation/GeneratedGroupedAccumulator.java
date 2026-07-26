@@ -14,6 +14,10 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.data.Streams;
+
+import java.util.List;
 
 /**
  * Marks an {@link Accumulator} whose state implements the long-update SPI and whose provider declares
@@ -22,10 +26,22 @@ import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
  * accumulator dispatch.
  */
 public interface GeneratedGroupedAccumulator
-        extends Accumulator
+        extends Accumulator, GeneratedGroupedAggregationUnit
 {
     /**
      * Declares the provider-supplied physical update that a generated grouping loop executes.
      */
     GroupedAggregationUpdate generatedGroupedUpdate();
+
+    @Override
+    default List<GroupedAggregationUpdate> generatedGroupedUpdates()
+    {
+        return List.of(generatedGroupedUpdate());
+    }
+
+    @Override
+    default void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset)
+    {
+        targets[offset] = (LongStateUpdate) ((Streams) state).values();
+    }
 }

@@ -18,6 +18,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
@@ -66,10 +68,10 @@ import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAggregationUnit;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
-import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
@@ -1457,7 +1459,7 @@ public class TestOperators
                         List.of(row(10L, 3L), row(20L, 11L), row(10L, 5L))),
                 allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(row(10L, 2L, 8L), row(20L, 1L, 11L)));
-        assertThat(unit.accumulationCalls).isEqualTo(1);
+        assertThat(unit.accumulationCalls).isZero();
     }
 
     @Test
@@ -4651,7 +4653,7 @@ public class TestOperators
      * opaque to the operators; only the program's unit/result bindings describe the output shape.
      */
     private static final class SumAndCountUnit
-            implements PhysicalAggregationUnit
+            implements GeneratedGroupedAggregationUnit
     {
         private final int inputColumn;
         private int accumulationCalls;
@@ -4665,6 +4667,22 @@ public class TestOperators
         public int outputCount()
         {
             return 2;
+        }
+
+        @Override
+        public List<GroupedAggregationUpdate> generatedGroupedUpdates()
+        {
+            return List.of(
+                    GroupedAggregationUpdate.inputValue(inputColumn),
+                    GroupedAggregationUpdate.constant(1));
+        }
+
+        @Override
+        public void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset)
+        {
+            State current = (State) state;
+            targets[offset] = (group, value) -> current.sums[group] += value;
+            targets[offset + 1] = (group, value) -> current.counts[group] += value;
         }
 
         @Override

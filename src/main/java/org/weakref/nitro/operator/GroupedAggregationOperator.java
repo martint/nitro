@@ -27,7 +27,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
-import org.weakref.nitro.operator.aggregation.GeneratedGroupedAccumulator;
+import org.weakref.nitro.operator.aggregation.GeneratedGroupedAggregationUnit;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.StreamAccessors;
@@ -102,6 +102,7 @@ public class GroupedAggregationOperator
     private FusedGroupingKernel fusedKernel;
     private GroupedAggregationUpdate[] fusedSpecs;
     private int[] fusedAggregationIndexes;
+    private int[] fusedStateOffsets;
     private GeneratedLongGroupingBindings fusedBindings;
     private LongStateUpdate[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
@@ -426,10 +427,19 @@ public class GroupedAggregationOperator
             return;
         }
         fusedAggregationIndexes = plainAggregationIndexes.clone();
-        fusedSpecs = new GroupedAggregationUpdate[fusedAggregationIndexes.length];
+        fusedStateOffsets = new int[fusedAggregationIndexes.length + 1];
+        List<GroupedAggregationUpdate> updates = new ArrayList<>();
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedSpecs[index] = ((GeneratedGroupedAccumulator) aggregations[fusedAggregationIndexes[index]]).generatedGroupedUpdate();
+            List<GroupedAggregationUpdate> unitUpdates = List.copyOf(
+                    ((GeneratedGroupedAggregationUnit) aggregations[fusedAggregationIndexes[index]]).generatedGroupedUpdates());
+            if (unitUpdates.isEmpty()) {
+                throw new IllegalArgumentException("generated grouped aggregation unit has no updates");
+            }
+            fusedStateOffsets[index] = updates.size();
+            updates.addAll(unitUpdates);
         }
+        fusedStateOffsets[fusedAggregationIndexes.length] = updates.size();
+        fusedSpecs = updates.toArray(GroupedAggregationUpdate[]::new);
         fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
         fusedStateVectors = new LongStateUpdate[fusedSpecs.length];
     }
@@ -437,7 +447,7 @@ public class GroupedAggregationOperator
     private boolean allPlainAggregationsFusible()
     {
         for (int aggregationIndex : plainAggregationIndexes) {
-            if (!(aggregations[aggregationIndex] instanceof GeneratedGroupedAccumulator)) {
+            if (!(aggregations[aggregationIndex] instanceof GeneratedGroupedAggregationUnit)) {
                 return false;
             }
         }
@@ -636,7 +646,16 @@ public class GroupedAggregationOperator
     private void refreshFusedStateVectors()
     {
         for (int index = 0; index < fusedAggregationIndexes.length; index++) {
-            fusedStateVectors[index] = (LongStateUpdate) ((Streams) states[fusedAggregationIndexes[index]]).values();
+            int unitIndex = fusedAggregationIndexes[index];
+            ((GeneratedGroupedAggregationUnit) aggregations[unitIndex]).bindGeneratedGroupedState(
+                    states[unitIndex],
+                    fusedStateVectors,
+                    fusedStateOffsets[index]);
+            for (int target = fusedStateOffsets[index]; target < fusedStateOffsets[index + 1]; target++) {
+                if (fusedStateVectors[target] == null) {
+                    throw new IllegalStateException("generated grouped aggregation unit did not bind update " + (target - fusedStateOffsets[index]));
+                }
+            }
         }
         fusedStateVectorsBound = true;
     }
