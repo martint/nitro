@@ -209,13 +209,6 @@ public class HashJoinOperator
             Integer.getInteger("nitro.hash.join.denseUnusedBuildMembershipMinKeys", 1 << 12);
     private static final int COMPACT_COMPLETED_DIRECT_RANGE_MIN_SIZE =
             Integer.getInteger("nitro.hash.join.compactCompletedDirectRangeMinSize", 256);
-    // Velox-style dynamic filtering: once the (small) build side is materialized, push its single-column key
-    // membership down the probe chain so a skip-decode scan can eliminate non-matching rows during decode. On by
-    // default (a non-selective filter self-abandons after a warmup in the scan, so the build-side collection is the
-    // only residual cost); disable with -Dnitro.dynamicFilter=false.
-    private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
-    private static final boolean SHARE_SPARSE_LONG_RANGE_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.shareSparseLongRange", "true"));
     // A one-to-one identity join mapping needs neither a constrained re-borrow nor a copy: the upstream column is
     // already the exact result vector. Keep it borrowed under the still-open outer batch and forward it directly.
     // The rule depends only on the physical row mapping and works for every re-borrow-capable operator and vector.
@@ -223,53 +216,12 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.join.forwardIdentityReborrowOuter", "true"));
     private static final boolean DEBUG_IDENTITY_REBORROW_OUTER =
             Boolean.getBoolean("nitro.debug.identityReborrowOuter");
-    // A multi-key join emits one dynamic filter per key column (each a necessary join condition). Disable to restrict
-    // dynamic filters to single-key joins with -Dnitro.dynamicFilter.multiKey=false.
-    private static final boolean MULTI_KEY_DYNAMIC_FILTER = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.multiKey", "true"));
     // Resolve RLE run indices for a monotonic (outer/probe-ordered) output column with a forward hint instead of a
     // per-position binary search. Set false to force the binary search (for A/B measurement of the two paths).
     private static final boolean RLE_RUN_INDEX_HINT = Boolean.parseBoolean(System.getProperty("nitro.join.rleRunIndexHint", "true"));
     private static final boolean POOL_BUILD_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolBuildDictionaryIds", "true"));
-    // A 64K-entry set remains small relative to the join index and captures selective medium-sized dimensions (q54).
-    // Collection is independently bounded by DYNAMIC_FILTER_BUILD_ROW_LIMIT, so large build sides do not pay for it.
-    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 16);
-    // Buffered builds already expose their exact row count before indexing. Use that bounded cardinality to size the
-    // optional membership set once instead of repeatedly rehashing it from FastUtil's tiny default. The value count
-    // remains only an upper bound on distinct keys, and the existing distinct-value cap still abandons nonselective
-    // filters. Disable only for adjacent A/B measurement.
-    private static final boolean PRE_SIZE_DYNAMIC_FILTER_VALUE_SETS =
-            Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.preSizeValueSets", "true"));
-    // When the build-row admission bound is no larger than the distinct-value cap, an admitted single-key filter
-    // can append every build key to bounded pooled storage and deduplicate once at publication. This removes a hash
-    // probe from the build loop while preserving the exact final membership representation.
-    private static final boolean DEFER_DYNAMIC_FILTER_DEDUPLICATION =
-            Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.deferDeduplication", "true"));
-    private static final int DEFER_DYNAMIC_FILTER_MIN_ROWS =
-            Integer.getInteger("nitro.dynamicFilter.deferDeduplicationMinRows", 4096);
-    private static final double DEFER_DYNAMIC_FILTER_MAX_DENSITY =
-            Double.parseDouble(System.getProperty("nitro.dynamicFilter.deferDeduplicationMaxDensity", "0.005"));
-    // Set construction already visits every build key. Retain exact bounds during that visit so conversion to the
-    // immutable dense membership representation needs one distinct-key traversal rather than two.
-    private static final boolean TRACK_DYNAMIC_FILTER_VALUE_RANGE =
-            Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter.trackValueRange", "true"));
-    // Skip dynamic-filter key collection for large build sides. These sets are expensive to collect and often
-    // non-selective (e.g. full dimensions), while genuinely useful runtime filters are usually small date/status
-    // domains. Set to a huge value to disable the gate (always collect), for A/B measurement.
-    private static final long DYNAMIC_FILTER_BUILD_ROW_LIMIT = Long.getLong("nitro.dynamicFilter.buildRowLimit", 1L << 16);
-    // A conventional build-first hash join cannot filter a very large build from a much smaller probe. For an inner
-    // join whose build pipeline advertises dynamic-filter support, spool the probe up to a strict bound. If it ends
-    // within that bound, its complete per-key value sets are necessary join conditions and can be pushed into the
-    // build before any build payload is decoded. If it does not end, the spool simply replays the prefix and the
-    // ordinary build-first path remains exact. Admission uses only physical cardinality/capability signals.
-    private static final boolean PROBE_FIRST_BUILD_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.probeFirstBuildFilter", "true"));
-    private static final long PROBE_FIRST_MIN_BUILD_ROWS =
-            Long.getLong("nitro.hash.join.probeFirstMinBuildRows", 4L << 20);
-    private static final int PROBE_FIRST_MAX_PROBE_ROWS =
-            Integer.getInteger("nitro.hash.join.probeFirstMaxProbeRows", 1 << 16);
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
-    private static final boolean DEBUG_DYNAMIC_FILTER = Boolean.getBoolean("nitro.debug.dynamicFilter");
     private static final boolean DEBUG_JOIN_INDEX = Boolean.getBoolean("nitro.debug.joinIndex");
     private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
     private static final int VALUES_FLAG = 1;
@@ -279,6 +231,7 @@ public class HashJoinOperator
     private final Allocator allocator;
     private final OperatorResources operatorResources;
     private final HashJoinIndexPolicy joinIndexPolicy;
+    private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -524,6 +477,7 @@ public class HashJoinOperator
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.joinIndexPolicy = operatorResources.hashJoin().indexPolicy();
+        this.dynamicFilterPolicy = operatorResources.hashJoin().dynamicFilterPolicy();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
@@ -594,8 +548,8 @@ public class HashJoinOperator
         this.preparedRangeStarts = joinScratch.preparedRangeStarts;
         this.preparedRangeCounts = joinScratch.preparedRangeCounts;
         this.currentOutputs = new Streams[totalOutputCount];
-        this.buildKeysViable = DYNAMIC_FILTER_ENABLED && !probeOuterJoin
-                && (innerJoinColumns.length == 1 || MULTI_KEY_DYNAMIC_FILTER);
+        this.buildKeysViable = dynamicFilterPolicy.enabled() && !probeOuterJoin
+                && (innerJoinColumns.length == 1 || dynamicFilterPolicy.multiKey());
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
 
@@ -1042,7 +996,7 @@ public class HashJoinOperator
             return;
         }
         dynamicFilterPushed = true;
-        if (DEBUG_DYNAMIC_FILTER) {
+        if (dynamicFilterPolicy.debug()) {
             System.err.printf("[dynamic-filter] join=%s viable=%s abandoned=%s keys=%s collected=%d%n",
                     profileName, buildKeysViable, buildKeysAbandoned,
                     buildKeyValues == null ? "null" : java.util.Arrays.toString(java.util.Arrays.stream(buildKeyValues)
@@ -1052,7 +1006,7 @@ public class HashJoinOperator
         if (buildKeysAbandoned) {
             // A large single-long build may still have an exact bounded-range membership bitset owned by its join
             // index. Share that immutable representation with the probe scan instead of rebuilding a huge hash set.
-            if (SHARE_SPARSE_LONG_RANGE_FILTER && innerJoinColumns.length == 1 && joinIndex instanceof LongJoinIndex longIndex) {
+            if (dynamicFilterPolicy.shareSparseLongRange() && innerJoinColumns.length == 1 && joinIndex instanceof LongJoinIndex longIndex) {
                 DynamicFilter filter = longIndex.sparseDynamicFilter(outerJoinColumns[0]);
                 if (filter != null) {
                     outer.pushDynamicFilter(filter);
@@ -1077,7 +1031,7 @@ public class HashJoinOperator
         }
         for (int column = 0; column < buildKeyValues.length; column++) {
             if (!buildKeyColumnAbandoned[column] && buildKeyValues[column] != null && !buildKeyValues[column].isEmpty()) {
-                DynamicFilter filter = TRACK_DYNAMIC_FILTER_VALUE_RANGE && buildKeyMins != null
+                DynamicFilter filter = dynamicFilterPolicy.trackValueRange() && buildKeyMins != null
                         ? DynamicFilter.fromValues(outerJoinColumns[column], buildKeyValues[column], buildKeyMins[column], buildKeyMaxs[column])
                         : DynamicFilter.fromValues(outerJoinColumns[column], buildKeyValues[column]);
                 outer.pushDynamicFilter(filter);
@@ -1087,16 +1041,18 @@ public class HashJoinOperator
 
     private void prepareProbeFirstBuildFilter()
     {
-        if (!PROBE_FIRST_BUILD_FILTER ||
+        if (!dynamicFilterPolicy.probeFirstBuildFilter() ||
                 probeOuterJoin ||
                 !supportsInnerDynamicFilterPushdown() ||
-                inner.exactOutputRows() < PROBE_FIRST_MIN_BUILD_ROWS) {
+                inner.exactOutputRows() < dynamicFilterPolicy.probeFirstMinBuildRows()) {
             return;
         }
         ProbeSpool spool = new ProbeSpool(allocator, outer, outerOutputCount);
         probeSource = spool;
-        it.unimi.dsi.fastutil.longs.LongSet[] values = spool.prepare(outerJoinColumns, PROBE_FIRST_MAX_PROBE_ROWS);
-        if (DEBUG_DYNAMIC_FILTER) {
+        it.unimi.dsi.fastutil.longs.LongSet[] values = spool.prepare(
+                outerJoinColumns,
+                dynamicFilterPolicy.probeFirstMaxProbeRows());
+        if (dynamicFilterPolicy.debug()) {
             System.err.printf("[probe-first-build-filter] join=%s probeRows=%d complete=%s keySizes=%s%n",
                     profileName != null ? profileName : "hash_join",
                     spool.bufferedRows(),
@@ -1154,17 +1110,17 @@ public class HashJoinOperator
             }
             long value = joinValues[column].value(position);
             if (buildKeyValues[column] == null) {
-                int expectedValues = PRE_SIZE_DYNAMIC_FILTER_VALUE_SETS
-                        ? Math.min(expectedInnerRowCount(), DYNAMIC_FILTER_MAX_VALUES + 1)
+                int expectedValues = dynamicFilterPolicy.preSizeValueSets()
+                        ? Math.min(expectedInnerRowCount(), dynamicFilterPolicy.maxValues() + 1)
                         : 16;
                 buildKeyValues[column] = new LongOpenHashSet(expectedValues);
             }
             buildKeyValues[column].add(value);
-            if (TRACK_DYNAMIC_FILTER_VALUE_RANGE) {
+            if (dynamicFilterPolicy.trackValueRange()) {
                 buildKeyMins[column] = Math.min(buildKeyMins[column], value);
                 buildKeyMaxs[column] = Math.max(buildKeyMaxs[column], value);
             }
-            if (buildKeyValues[column].size() > DYNAMIC_FILTER_MAX_VALUES) {
+            if (buildKeyValues[column].size() > dynamicFilterPolicy.maxValues()) {
                 buildKeyColumnAbandoned[column] = true;   // not selective enough to be worth a runtime filter
                 buildKeyValues[column] = null;
             }
@@ -1180,21 +1136,21 @@ public class HashJoinOperator
 
     private boolean usesCollectedBuildKeys(int keyCount)
     {
-        return DEFER_DYNAMIC_FILTER_DEDUPLICATION && keyCount == 1 && collectedBuildKeyAdmission > 0;
+        return dynamicFilterPolicy.deferDeduplication() && keyCount == 1 && collectedBuildKeyAdmission > 0;
     }
 
     private void promoteBuildKeySetToCollectedIfReady()
     {
-        if (!DEFER_DYNAMIC_FILTER_DEDUPLICATION ||
-                DYNAMIC_FILTER_BUILD_ROW_LIMIT > DYNAMIC_FILTER_MAX_VALUES ||
+        if (!dynamicFilterPolicy.deferDeduplication() ||
+                dynamicFilterPolicy.buildRowLimit() > dynamicFilterPolicy.maxValues() ||
                 collectedBuildKeyAdmission != 0 ||
-                buildKeyValues[0].size() < DEFER_DYNAMIC_FILTER_MIN_ROWS) {
+                buildKeyValues[0].size() < dynamicFilterPolicy.deferDeduplicationMinRows()) {
             return;
         }
         long span = buildKeyMaxs[0] - buildKeyMins[0] + 1;
         double density = span <= 0 ? 1 : (double) buildKeyValues[0].size() / span;
-        boolean admitted = density <= DEFER_DYNAMIC_FILTER_MAX_DENSITY;
-        if (DEBUG_DYNAMIC_FILTER) {
+        boolean admitted = density <= dynamicFilterPolicy.deferDeduplicationMaxDensity();
+        if (dynamicFilterPolicy.debug()) {
             System.err.printf("[deferred-dynamic-filter-admission] join=%s distinct=%d span=%d density=%.6f admitted=%s%n",
                     profileName,
                     buildKeyValues[0].size(),
@@ -1206,7 +1162,9 @@ public class HashJoinOperator
             collectedBuildKeyAdmission = -1;
             return;
         }
-        int expectedValues = Math.min(DYNAMIC_FILTER_MAX_VALUES, Math.max(expectedInnerRowCount(), buildKeyValues[0].size()));
+        int expectedValues = Math.min(
+                dynamicFilterPolicy.maxValues(),
+                Math.max(expectedInnerRowCount(), buildKeyValues[0].size()));
         collectedBuildKeys = arrayPool.borrowLongs(expectedValues);
         for (long value : buildKeyValues[0]) {
             collectedBuildKeys[collectedBuildKeyCount++] = value;
@@ -1221,12 +1179,14 @@ public class HashJoinOperator
             return;
         }
         if (collectedBuildKeys == null) {
-            int expectedValues = Math.min(expectedInnerRowCount(), DYNAMIC_FILTER_MAX_VALUES);
+            int expectedValues = Math.min(expectedInnerRowCount(), dynamicFilterPolicy.maxValues());
             collectedBuildKeys = arrayPool.borrowLongs(Math.max(16, expectedValues));
             initializeBuildKeyRanges(1);
         }
         if (collectedBuildKeyCount == collectedBuildKeys.length) {
-            int newLength = Math.min(DYNAMIC_FILTER_MAX_VALUES, Math.multiplyExact(collectedBuildKeys.length, 2));
+            int newLength = Math.min(
+                    dynamicFilterPolicy.maxValues(),
+                    Math.multiplyExact(collectedBuildKeys.length, 2));
             if (newLength == collectedBuildKeys.length) {
                 buildKeysAbandoned = true;
                 releaseCollectedBuildKeys();
@@ -1252,7 +1212,7 @@ public class HashJoinOperator
 
     private void initializeBuildKeyRanges(int keyCount)
     {
-        if (!TRACK_DYNAMIC_FILTER_VALUE_RANGE) {
+        if (!dynamicFilterPolicy.trackValueRange()) {
             return;
         }
         buildKeyMins = arrayPool.borrowLongs(keyCount);
@@ -1284,7 +1244,7 @@ public class HashJoinOperator
         if (PRUNE_ZERO_BITWISE_OVERLAP_BUILD_ROWS && singleLongBitwiseOverlapJoinFilter) {
             expectedIndexedInnerRows = (int) Math.min(Integer.MAX_VALUE, bufferedInner.rowCount());
         }
-        // A dynamic filter caps at DYNAMIC_FILTER_MAX_VALUES distinct build values. If the build side alone has more
+        // A dynamic filter caps its distinct build values. If the build side alone has more
         // rows than that, its key membership set will either overflow the cap (and be abandoned) or — for a rare
         // low-cardinality key — yield a value set so large the probe scan discards it as non-selective. Either way the
         // per-row set insertion is wasted, and it dominates large-build joins (TPC-DS q84). Skip collection up front.
@@ -1294,7 +1254,7 @@ public class HashJoinOperator
             for (BufferedJoinInput.InnerBatch batch : bufferedInner.batches()) {
                 totalInnerRows += batch.length();
             }
-            if (totalInnerRows > DYNAMIC_FILTER_BUILD_ROW_LIMIT) {
+            if (totalInnerRows > dynamicFilterPolicy.buildRowLimit()) {
                 buildKeysAbandoned = true;
             }
         }
@@ -1375,7 +1335,7 @@ public class HashJoinOperator
                     }
                 }
                 streamedInnerRows += mask.count();
-                if (buildKeysViable && streamedInnerRows > DYNAMIC_FILTER_BUILD_ROW_LIMIT) {
+                if (buildKeysViable && streamedInnerRows > dynamicFilterPolicy.buildRowLimit()) {
                     buildKeysAbandoned = true;
                     releaseCollectedBuildKeys();
                     buildKeyValues = null;

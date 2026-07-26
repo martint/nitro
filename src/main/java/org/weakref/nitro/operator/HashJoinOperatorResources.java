@@ -26,18 +26,27 @@ public final class HashJoinOperatorResources
     private final boolean shareBufferPoolAcrossOperators;
     private final HashJoinMaterializationListener materializationListener;
     private final HashJoinIndexPolicy indexPolicy;
+    private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
     private final Object sharedBufferPoolGroup = new Object();
 
     public HashJoinOperatorResources(boolean shareBufferPoolAcrossOperators)
     {
-        this(shareBufferPoolAcrossOperators, null, HashJoinIndexPolicy.defaults());
+        this(
+                shareBufferPoolAcrossOperators,
+                null,
+                HashJoinIndexPolicy.defaults(),
+                HashJoinDynamicFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
             boolean shareBufferPoolAcrossOperators,
             HashJoinMaterializationListener materializationListener)
     {
-        this(shareBufferPoolAcrossOperators, materializationListener, HashJoinIndexPolicy.defaults());
+        this(
+                shareBufferPoolAcrossOperators,
+                materializationListener,
+                HashJoinIndexPolicy.defaults(),
+                HashJoinDynamicFilterPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -45,9 +54,23 @@ public final class HashJoinOperatorResources
             HashJoinMaterializationListener materializationListener,
             HashJoinIndexPolicy indexPolicy)
     {
+        this(
+                shareBufferPoolAcrossOperators,
+                materializationListener,
+                indexPolicy,
+                HashJoinDynamicFilterPolicy.defaults());
+    }
+
+    public HashJoinOperatorResources(
+            boolean shareBufferPoolAcrossOperators,
+            HashJoinMaterializationListener materializationListener,
+            HashJoinIndexPolicy indexPolicy,
+            HashJoinDynamicFilterPolicy dynamicFilterPolicy)
+    {
         this.shareBufferPoolAcrossOperators = shareBufferPoolAcrossOperators;
         this.materializationListener = materializationListener;
         this.indexPolicy = requireNonNull(indexPolicy, "indexPolicy is null");
+        this.dynamicFilterPolicy = requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
     }
 
     Object bufferPoolCompatibilityGroup(Object localPoolGroup)
@@ -63,5 +86,10 @@ public final class HashJoinOperatorResources
     HashJoinIndexPolicy indexPolicy()
     {
         return indexPolicy;
+    }
+
+    HashJoinDynamicFilterPolicy dynamicFilterPolicy()
+    {
+        return dynamicFilterPolicy;
     }
 }

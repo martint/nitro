@@ -23,13 +23,20 @@ class TestHashJoinOperatorResources
     void testSharedCompatibilityDomainIsOwnerScoped()
     {
         HashJoinIndexPolicy indexPolicy = HashJoinIndexPolicy.defaults();
+        HashJoinDynamicFilterPolicy dynamicFilterPolicy = HashJoinDynamicFilterPolicy.defaults();
         HashJoinOperatorResources first = new HashJoinOperatorResources(true);
-        HashJoinOperatorResources second = new HashJoinOperatorResources(true, null, indexPolicy);
+        HashJoinOperatorResources second = new HashJoinOperatorResources(
+                true,
+                null,
+                indexPolicy,
+                dynamicFilterPolicy);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
         assertThat(first.indexPolicy()).isEqualTo(HashJoinIndexPolicy.defaults());
         assertThat(second.indexPolicy()).isSameAs(indexPolicy);
+        assertThat(first.dynamicFilterPolicy()).isEqualTo(HashJoinDynamicFilterPolicy.defaults());
+        assertThat(second.dynamicFilterPolicy()).isSameAs(dynamicFilterPolicy);
         assertThat(indexPolicy.flatDictionaryProbeCacheMaxCardinality()).isEqualTo(1 << 16);
         assertThat(indexPolicy.flatDictionaryProbeCacheMinRowsPerEntry()).isEqualTo(2);
         assertThat(indexPolicy.denseCompactPairMinCapacity()).isEqualTo(1 << 25);
