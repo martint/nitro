@@ -88,9 +88,17 @@ public final class OperatorResources
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
                         hashJoinMaterializationListener),
-                new GroupingStateResources(Boolean.parseBoolean(
-                        System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"))),
+                createDefaultGroupingResources(),
                 TopNRankingOperatorPolicy.fromSystemProperties());
+    }
+
+    private static GroupingStateResources createDefaultGroupingResources()
+    {
+        boolean poolZeroedLongDirectIds = Boolean.parseBoolean(
+                System.getProperty("nitro.group.zeroedLongDirectIdsPool", "true"));
+        return new GroupingStateResources(
+                poolZeroedLongDirectIds,
+                LongGroupingPolicy.fromSystemProperties(poolZeroedLongDirectIds));
     }
 
     public OperatorCodeGenerationResources codeGeneration()

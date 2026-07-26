@@ -110,8 +110,6 @@ final class GroupingState
             Boolean.parseBoolean(System.getProperty("nitro.group.fullWidthPairPackedIdentity", "true"));
     private static final int FULL_WIDTH_PAIR_PACKED_IDENTITY_MIN_BATCH_ROWS =
             Integer.getInteger("nitro.group.fullWidthPairPackedIdentityMinBatchRows", 1 << 10);
-    private static final boolean LONG_GROUP_RUN_CACHE =
-            Boolean.parseBoolean(System.getProperty("nitro.group.longRunCache", "true"));
     private static final boolean ADAPTIVE_FLAT_GROUP_LOOKAHEAD =
             Boolean.parseBoolean(System.getProperty("nitro.group.adaptiveFlatLookahead", "true"));
     private static final int ADAPTIVE_FLAT_GROUP_LOOKAHEAD_START_BATCH =
@@ -126,53 +124,20 @@ final class GroupingState
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
     private final GroupingStateResources resources;
+    private final LongGroupingPolicy longPolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
     // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
     // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
     // longKeysByGroup. Ids remain dense first-seen order in both layouts; the hash only chooses the slot.
     private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
-    private final boolean idIndexedLongGrouping =
-            Boolean.parseBoolean(System.getProperty("nitro.group.idIndexedLong", "true"));
-    private final int idIndexedLongGroupingMinGroups =
-            Integer.getInteger("nitro.group.idIndexedLongMinGroups", 1 << 20);
-    private final int idIndexedLongGroupingMaxGroups =
-            Math.min(Integer.getInteger("nitro.group.idIndexedLongMaxGroups", ID_INDEXED_LONG_GROUP_MASK), ID_INDEXED_LONG_GROUP_MASK);
-    private final boolean idIndexedLongDenseRehash =
-            Boolean.parseBoolean(System.getProperty("nitro.group.idIndexedLongDenseRehash", "true"));
-    private final int idIndexedLongActivationCapacityMultiplier =
-            Integer.getInteger("nitro.group.idIndexedLongActivationCapacityMultiplier", 16);
     private static final int ID_INDEXED_LONG_GROUP_MASK = 0x03FF_FFFF;
     private static final int ID_INDEXED_LONG_HASH_SHIFT = 26;
-    private static final boolean LONG_DIRECT_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.longDirectGrouping", "true"));
-    private static final int LONG_DIRECT_MIN_GROUPS =
-            Integer.getInteger("nitro.group.longDirectMinGroups", 1 << 13);
-    private static final int LONG_DIRECT_MAX_RANGE =
-            Integer.getInteger("nitro.group.longDirectMaxRange", 1 << 17);
-    private static final int LONG_DIRECT_LATEST_ADMISSION_GROUPS =
-            Integer.getInteger("nitro.group.longDirectLatestAdmissionGroups", 1 << 14);
     // Staged aggregation can amortize migration over a much larger high-cardinality stream without coupling a
     // direct lookup to every accumulator update. Keep this admission separate from the fused kernel: broadening
     // the fused range reduced wall time on some shapes but substantially increased retired work and allocation.
-    private static final int STAGED_LONG_DIRECT_MAX_RANGE =
-            Integer.getInteger("nitro.group.stagedLongDirectMaxRange", 1 << 22);
-    private static final int STAGED_LONG_DIRECT_LATEST_ADMISSION_GROUPS =
-            Integer.getInteger("nitro.group.stagedLongDirectLatestAdmissionGroups", 1 << 20);
-    private static final boolean STAGED_COMPRESSED_LONG_DIRECT_GROUPING =
-            Boolean.parseBoolean(System.getProperty("nitro.group.stagedCompressedLongDirectGrouping", "true"));
-    private static final int STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS =
-            Integer.getInteger("nitro.group.stagedCompressedLongDirectMinGroups", 1 << 20);
-    private static final int STAGED_COMPRESSED_LONG_DIRECT_MAX_RANGE =
-            Integer.getInteger("nitro.group.stagedCompressedLongDirectMaxRange", 1 << 26);
-    private static final int STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS =
-            Integer.getInteger("nitro.group.stagedCompressedLongDirectLatestAdmissionGroups", 1 << 23);
     // Recycling a direct table through the dedicated zeroed family clears only occupied keys. That removes the
     // capacity-sized fill which made a somewhat wider sparse domain unprofitable, so admit up to 13 slots/group
     // with that lifecycle. The ordinary generic pool retains the established 11.5 slots/group threshold.
-    private final int longDirectMaxRangePerGroupNumerator;
-    private static final int LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR =
-            Integer.getInteger("nitro.group.longDirectMaxRangePerGroupDenominator", 2);
-    private static final boolean DEBUG_LONG_DIRECT_GROUPING = Boolean.getBoolean("nitro.debug.longDirectGrouping");
     // Package-private so the fused grouped-aggregation kernel (operator package) can inline the probe over
     // this table directly instead of paying a per-row method call.
     long[] longGroupKeys;
@@ -209,7 +174,7 @@ final class GroupingState
     private long longDirectConstantBits;
     private boolean longDirectGroupingDisabled;
     private boolean stagedLongDirectGroupingDisabled;
-    private int longDirectNextCheck = LONG_DIRECT_MIN_GROUPS;
+    private int longDirectNextCheck;
     private boolean usePackedIntPairGrouping;
     private int packedIntGroupingArity;
     private byte[] packedIntPairControl;
@@ -240,9 +205,8 @@ final class GroupingState
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
         this.resources = resources;
-        this.longDirectMaxRangePerGroupNumerator = Integer.getInteger(
-                "nitro.group.longDirectMaxRangePerGroupNumerator",
-                resources.poolZeroedLongDirectIds() ? 26 : 23);
+        this.longPolicy = resources.longGroupingPolicy();
+        this.longDirectNextCheck = longPolicy.directMinGroups();
         groups.defaultReturnValue(-1);
     }
 
@@ -270,7 +234,7 @@ final class GroupingState
 
     boolean prepareSingleLongDirectGrouping(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
     {
-        if (!LONG_DIRECT_GROUPING || longDirectGroupingDisabled) {
+        if (!longPolicy.direct() || longDirectGroupingDisabled) {
             return false;
         }
         // The generated fused kernel indexes raw keys directly. Compressed direct tables are admitted only after
@@ -287,8 +251,8 @@ final class GroupingState
         // A large first batch can cross the ordinary latest-admission threshold before there has been any
         // opportunity to inspect the domain. Always allow that first check; only a later failed check closes
         // admission. This remains bounded to one historical-key pass for a sparse/high-key workload.
-        if (!useLongDirectGrouping && nextGroupId > LONG_DIRECT_LATEST_ADMISSION_GROUPS &&
-                longDirectNextCheck != LONG_DIRECT_MIN_GROUPS) {
+        if (!useLongDirectGrouping && nextGroupId > longPolicy.directLatestAdmissionGroups() &&
+                longDirectNextCheck != longPolicy.directMinGroups()) {
             longDirectGroupingDisabled = true;
             return false;
         }
@@ -300,7 +264,7 @@ final class GroupingState
             int position = positions == null ? index : positions[index];
             int keyPosition = keyIds == null ? position : keyIds[position];
             long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
-            if (key < 0 || key >= LONG_DIRECT_MAX_RANGE) {
+            if (key < 0 || key >= longPolicy.directMaxRange()) {
                 disableLongDirectGrouping();
                 longDirectGroupingDisabled = true;
                 return false;
@@ -308,7 +272,7 @@ final class GroupingState
             batchMax = Math.max(batchMax, key);
         }
 
-        return prepareSingleLongDirectGrouping(mask.count(), batchMax, LONG_DIRECT_MAX_RANGE);
+        return prepareSingleLongDirectGrouping(mask.count(), batchMax, longPolicy.directMaxRange());
     }
 
     private boolean prepareSingleLongDirectGrouping(
@@ -316,18 +280,18 @@ final class GroupingState
             VectorAccess.LongValues keyValues,
             VectorAccess.BooleanValues nullValues)
     {
-        if (!LONG_DIRECT_GROUPING || longDirectGroupingDisabled ||
-                (stagedLongDirectGroupingDisabled && !STAGED_COMPRESSED_LONG_DIRECT_GROUPING)) {
+        if (!longPolicy.direct() || longDirectGroupingDisabled ||
+                (stagedLongDirectGroupingDisabled && !longPolicy.stagedCompressedDirect())) {
             return false;
         }
         if (!useLongDirectGrouping && nextGroupId < longDirectNextCheck) {
             return false;
         }
-        int latestAdmissionGroups = STAGED_COMPRESSED_LONG_DIRECT_GROUPING
-                ? STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS
-                : STAGED_LONG_DIRECT_LATEST_ADMISSION_GROUPS;
+        int latestAdmissionGroups = longPolicy.stagedCompressedDirect()
+                ? longPolicy.stagedCompressedDirectLatestAdmissionGroups()
+                : longPolicy.stagedDirectLatestAdmissionGroups();
         if (!useLongDirectGrouping && nextGroupId > latestAdmissionGroups &&
-                longDirectNextCheck != LONG_DIRECT_MIN_GROUPS) {
+                longDirectNextCheck != longPolicy.directMinGroups()) {
             longDirectGroupingDisabled = true;
             return false;
         }
@@ -342,7 +306,7 @@ final class GroupingState
                 continue;
             }
             long key = keyValues.value(position);
-            if (key < 0 || key >= STAGED_LONG_DIRECT_MAX_RANGE) {
+            if (key < 0 || key >= longPolicy.stagedDirectMaxRange()) {
                 rawDomain = false;
             }
             batchMax = Math.max(batchMax, key);
@@ -352,19 +316,19 @@ final class GroupingState
         }
         if (!stagedLongDirectGroupingDisabled &&
                 rawDomain &&
-                prepareSingleLongDirectGrouping(mask.count(), batchMax, STAGED_LONG_DIRECT_MAX_RANGE)) {
+                prepareSingleLongDirectGrouping(mask.count(), batchMax, longPolicy.stagedDirectMaxRange())) {
             return true;
         }
-        if (STAGED_COMPRESSED_LONG_DIRECT_GROUPING &&
-                nextGroupId < STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS &&
+        if (longPolicy.stagedCompressedDirect() &&
+                nextGroupId < longPolicy.stagedCompressedDirectMinGroups() &&
                 (!rawDomain || stagedLongDirectGroupingDisabled)) {
-            longDirectNextCheck = STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS;
+            longDirectNextCheck = longPolicy.stagedCompressedDirectMinGroups();
             return false;
         }
-        if (STAGED_COMPRESSED_LONG_DIRECT_GROUPING && nextGroupId >= STAGED_COMPRESSED_LONG_DIRECT_MIN_GROUPS) {
+        if (longPolicy.stagedCompressedDirect() && nextGroupId >= longPolicy.stagedCompressedDirectMinGroups()) {
             return prepareCompressedLongDirectGrouping(mask, keyValues, nullValues);
         }
-        if (!rawDomain && !STAGED_COMPRESSED_LONG_DIRECT_GROUPING) {
+        if (!rawDomain && !longPolicy.stagedCompressedDirect()) {
             disableLongDirectGrouping();
             longDirectGroupingDisabled = true;
         }
@@ -428,11 +392,11 @@ final class GroupingState
                 compressedMax = Math.max(compressedMax, Long.compress(keyValues.value(position), compressionMask));
             }
         }
-        if (compressedMax >= STAGED_COMPRESSED_LONG_DIRECT_MAX_RANGE ||
-                (compressedMax + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
-                        > Math.max(1, nextGroupId) * longDirectMaxRangePerGroupNumerator) {
+        if (compressedMax >= longPolicy.stagedCompressedDirectMaxRange() ||
+                (compressedMax + 1) * longPolicy.directMaxRangePerGroupDenominator()
+                        > Math.max(1, nextGroupId) * longPolicy.directMaxRangePerGroupNumerator()) {
             longDirectNextCheck = toIntExact(Math.min(
-                    (long) STAGED_COMPRESSED_LONG_DIRECT_LATEST_ADMISSION_GROUPS,
+                    (long) longPolicy.stagedCompressedDirectLatestAdmissionGroups(),
                     Math.max(nextGroupId + 1, nextGroupId * 2)));
             return false;
         }
@@ -475,8 +439,8 @@ final class GroupingState
                 return true;
             }
             long possibleGroups = Math.max(1, nextGroupId + batchCount);
-            if ((batchMax + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
-                    > possibleGroups * longDirectMaxRangePerGroupNumerator) {
+            if ((batchMax + 1) * longPolicy.directMaxRangePerGroupDenominator()
+                    > possibleGroups * longPolicy.directMaxRangePerGroupNumerator()) {
                 disableLongDirectGrouping();
                 longDirectGroupingDisabled = true;
                 return false;
@@ -494,15 +458,15 @@ final class GroupingState
             }
             long key = longKeysByGroup[group];
             if (key < 0 || key >= maxRange) {
-                if (!STAGED_COMPRESSED_LONG_DIRECT_GROUPING) {
+                if (!longPolicy.stagedCompressedDirect()) {
                     longDirectGroupingDisabled = true;
                 }
                 return false;
             }
             max = Math.max(max, key);
         }
-        if (max < 0 || (max + 1) * LONG_DIRECT_MAX_RANGE_PER_GROUP_DENOMINATOR
-                > Math.max(1, nextGroupId) * longDirectMaxRangePerGroupNumerator) {
+        if (max < 0 || (max + 1) * longPolicy.directMaxRangePerGroupDenominator()
+                > Math.max(1, nextGroupId) * longPolicy.directMaxRangePerGroupNumerator()) {
             return false;
         }
         rebuildLongDirectTable(toPowerOfTwoCapacity(toIntExact(max + 1)), max);
@@ -523,19 +487,19 @@ final class GroupingState
     boolean prepareSingleLongIdIndexedGrouping(boolean runHeavyInput, long maximumNextGroupId)
     {
         if (useIdIndexedLongGrouping) {
-            if (maximumNextGroupId >= idIndexedLongGroupingMaxGroups) {
+            if (maximumNextGroupId >= longPolicy.idIndexedMaxGroups()) {
                 rebuildOrdinaryLongGroupingTable();
                 return false;
             }
             return true;
         }
-        if (!idIndexedLongGrouping || useLongDirectGrouping || !runHeavyInput || nextGroupId < idIndexedLongGroupingMinGroups || maximumNextGroupId >= idIndexedLongGroupingMaxGroups) {
+        if (!longPolicy.idIndexed() || useLongDirectGrouping || !runHeavyInput || nextGroupId < longPolicy.idIndexedMinGroups() || maximumNextGroupId >= longPolicy.idIndexedMaxGroups()) {
             return false;
         }
         long[] previousKeys = longGroupKeys;
         int[] previousIds = longGroupIds;
         int targetCapacity = previousIds.length;
-        for (int multiplier = 1; multiplier < idIndexedLongActivationCapacityMultiplier; multiplier <<= 1) {
+        for (int multiplier = 1; multiplier < longPolicy.idIndexedActivationCapacityMultiplier(); multiplier <<= 1) {
             if (targetCapacity >= ID_INDEXED_LONG_GROUP_MASK / 2) {
                 break;
             }
@@ -1429,7 +1393,7 @@ final class GroupingState
         boolean directBatchPrepared = false;
         // Keep a rejected/non-candidate state on the original compact hash loop. In particular, do not pay a
         // helper call on every later batch after one out-of-domain key has permanently closed admission.
-        if (LONG_DIRECT_GROUPING && !longDirectGroupingDisabled && !stagedLongDirectGroupingDisabled &&
+        if (longPolicy.direct() && !longDirectGroupingDisabled && !stagedLongDirectGroupingDisabled &&
                 (useLongDirectGrouping || nextGroupId >= longDirectNextCheck)) {
             directBatchPrepared = prepareSingleLongDirectGrouping(mask, keyValues, nullValues);
         }
@@ -1510,7 +1474,7 @@ final class GroupingState
         boolean cached = longRunCacheValid;
         long cachedKey = longRunCacheKey;
         int cachedGroupId = longRunCacheGroupId;
-        boolean useRunCache = LONG_GROUP_RUN_CACHE && hasFrequentLongRuns(keyValues, nullValues, mask, cached, cachedKey);
+        boolean useRunCache = longPolicy.runCache() && hasFrequentLongRuns(keyValues, nullValues, mask, cached, cachedKey);
         if (!useRunCache) {
             for (int position : mask) {
                 if (nullValues.value(position)) {
@@ -1982,7 +1946,7 @@ final class GroupingState
         Arrays.fill(longGroupIds, useIdIndexedLongGrouping ? 0 : -1);
         longGroupMask = capacity - 1;
         longGroupMaxFill = (int) (capacity * LONG_GROUP_LOAD_FACTOR);
-        if (useIdIndexedLongGrouping && idIndexedLongDenseRehash) {
+        if (useIdIndexedLongGrouping && longPolicy.idIndexedDenseRehash()) {
             // Dense group ids and the canonical reverse map are a cheaper iteration domain than the sparse old
             // slots. This also removes the unpredictable occupied/empty branch from large-table rehashes.
             for (int id = 0; id < longGroupCount; id++) {
@@ -2044,7 +2008,7 @@ final class GroupingState
         longGroupMask = capacity - 1;
         longGroupMaxFill = capacity;
         useLongDirectGrouping = true;
-        if (DEBUG_LONG_DIRECT_GROUPING) {
+        if (longPolicy.debugDirect()) {
             System.err.printf(
                     "[long-direct-grouping] enable groups=%d max=%d capacity=%d compressed=%s mask=%x%n",
                     nextGroupId,
@@ -2090,7 +2054,7 @@ final class GroupingState
         useCompressedLongDirectGrouping = false;
         longDirectCompressionMask = -1;
         longDirectConstantBits = 0;
-        if (DEBUG_LONG_DIRECT_GROUPING) {
+        if (longPolicy.debugDirect()) {
             System.err.printf("[long-direct-grouping] disable groups=%d hashCapacity=%d%n", nextGroupId, capacity);
         }
     }

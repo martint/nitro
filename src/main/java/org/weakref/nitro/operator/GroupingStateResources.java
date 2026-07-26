@@ -13,26 +13,35 @@
  */
 package org.weakref.nitro.operator;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Engine-owner-scoped pooling policy and identity used by grouping state.
  */
 public final class GroupingStateResources
 {
     private final boolean poolZeroedLongDirectIds;
+    private final LongGroupingPolicy longGroupingPolicy;
     private final Object zeroedLongDirectIdsFamily = new Object();
     private final Object groupOperatorBufferPool = new Object();
     private final Object markDistinctMaskPool = new Object();
     private final Object markDistinctMarkerBufferPool = new Object();
     private final Object semiJoinBufferPool = new Object();
 
-    public GroupingStateResources(boolean poolZeroedLongDirectIds)
+    public GroupingStateResources(boolean poolZeroedLongDirectIds, LongGroupingPolicy longGroupingPolicy)
     {
         this.poolZeroedLongDirectIds = poolZeroedLongDirectIds;
+        this.longGroupingPolicy = requireNonNull(longGroupingPolicy, "longGroupingPolicy is null");
     }
 
     boolean poolZeroedLongDirectIds()
     {
         return poolZeroedLongDirectIds;
+    }
+
+    LongGroupingPolicy longGroupingPolicy()
+    {
+        return longGroupingPolicy;
     }
 
     Object zeroedLongDirectIdsFamily()

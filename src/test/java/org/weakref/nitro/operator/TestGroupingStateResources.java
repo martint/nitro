@@ -22,9 +22,11 @@ class TestGroupingStateResources
     @Test
     void testPoolFamilyIsOwnerScoped()
     {
-        GroupingStateResources first = new GroupingStateResources(true);
-        GroupingStateResources second = new GroupingStateResources(true);
+        LongGroupingPolicy policy = LongGroupingPolicy.defaults(true);
+        GroupingStateResources first = new GroupingStateResources(true, policy);
+        GroupingStateResources second = new GroupingStateResources(true, policy);
 
+        assertThat(first.longGroupingPolicy()).isSameAs(policy);
         assertThat(first.poolZeroedLongDirectIds()).isTrue();
         assertThat(first.zeroedLongDirectIdsFamily()).isSameAs(first.zeroedLongDirectIdsFamily());
         assertThat(second.zeroedLongDirectIdsFamily()).isNotSameAs(first.zeroedLongDirectIdsFamily());
@@ -33,6 +35,6 @@ class TestGroupingStateResources
     @Test
     void testPoolingPolicyIsConstructed()
     {
-        assertThat(new GroupingStateResources(false).poolZeroedLongDirectIds()).isFalse();
+        assertThat(new GroupingStateResources(false, LongGroupingPolicy.defaults(false)).poolZeroedLongDirectIds()).isFalse();
     }
 }
