@@ -27,6 +27,7 @@ class TestHashJoinOperatorResources
         HashJoinBuildPolicy buildPolicy = HashJoinBuildPolicy.defaults();
         HashJoinOutputPolicy outputPolicy = HashJoinOutputPolicy.defaults();
         HashJoinFilterPolicy filterPolicy = HashJoinFilterPolicy.defaults();
+        HashJoinExecutionPolicy executionPolicy = HashJoinExecutionPolicy.defaults();
         HashJoinOperatorResources first = new HashJoinOperatorResources(true);
         HashJoinOperatorResources second = new HashJoinOperatorResources(
                 true,
@@ -35,7 +36,8 @@ class TestHashJoinOperatorResources
                 dynamicFilterPolicy,
                 buildPolicy,
                 outputPolicy,
-                filterPolicy);
+                filterPolicy,
+                executionPolicy);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
@@ -49,6 +51,10 @@ class TestHashJoinOperatorResources
         assertThat(second.outputPolicy()).isSameAs(outputPolicy);
         assertThat(first.filterPolicy()).isEqualTo(HashJoinFilterPolicy.defaults());
         assertThat(second.filterPolicy()).isSameAs(filterPolicy);
+        assertThat(first.executionPolicy()).isEqualTo(HashJoinExecutionPolicy.defaults());
+        assertThat(second.executionPolicy()).isSameAs(executionPolicy);
+        assertThat(executionPolicy.maxBatchRows()).isEqualTo(10_000);
+        assertThat(executionPolicy.duplicateListInitialCapacity()).isEqualTo(2);
         assertThat(buildPolicy.maxBuildBatchRows()).isEqualTo(1 << 16);
         assertThat(buildPolicy.maxInitialPairHashBytes()).isEqualTo(512L << 20);
         assertThat(outputPolicy.buildDictionarySparseRatio()).isEqualTo(8);

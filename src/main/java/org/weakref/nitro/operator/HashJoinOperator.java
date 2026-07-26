@@ -111,15 +111,6 @@ public class HashJoinOperator
         }
     }
 
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
-    private static final boolean POOL_JOIN_SCRATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolScratch", "true"));
-    private static final int DUPLICATE_LIST_INITIAL_CAPACITY =
-            Integer.getInteger("nitro.hash.join.duplicateListInitialCapacity", 2);
-    private static final boolean DEFAULT_LAZY_DUPLICATE_SLOT_STATE =
-            Boolean.parseBoolean(System.getProperty("nitro.join.lazyDuplicateSlotState", "false"));
-    private static final boolean IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES =
-            Boolean.parseBoolean(System.getProperty("nitro.join.implicitSequentialBuildRowReferences", "true"));
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
     private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
     private static final int VALUES_FLAG = 1;
@@ -133,6 +124,7 @@ public class HashJoinOperator
     private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinFilterPolicy filterPolicy;
+    private final HashJoinExecutionPolicy executionPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -157,7 +149,7 @@ public class HashJoinOperator
     // preserves lazy materialization: columns omitted by the plan never get an Output wrapper or a payload borrow.
     private int[] outputChannels;
     private int composeEncodedOuterDictionaryDepth;
-    private boolean lazyDuplicateSlotState = DEFAULT_LAZY_DUPLICATE_SLOT_STATE;
+    private boolean lazyDuplicateSlotState;
     private boolean implicitSequentialBuildRowReferences;
     private final boolean probeOuterJoin;
     private final int[] outerJoinColumns;
@@ -217,7 +209,7 @@ public class HashJoinOperator
     private final int[] outputInnerRunUniqueStarts;
     private final int[] outputInnerRunUniqueCounts;
     private final int[] preparedOuterPositions;
-    private final LongList[] preparedOuterMatches = new LongList[BATCH_SIZE];
+    private final LongList[] preparedOuterMatches;
     private SingleLongList[] preparedSingleMatches;
     // Flat single-match output: when the build is unique, the probe writes one build row reference per
     // outer row here and produceBatch emits from it without a LongList or per-row virtual dispatch.
@@ -382,7 +374,9 @@ public class HashJoinOperator
         this.buildPolicy = operatorResources.hashJoin().buildPolicy();
         this.outputPolicy = operatorResources.hashJoin().outputPolicy();
         this.filterPolicy = operatorResources.hashJoin().filterPolicy();
+        this.executionPolicy = operatorResources.hashJoin().executionPolicy();
         this.composeEncodedOuterDictionaryDepth = outputPolicy.composeEncodedOuterDictionaryDepth();
+        this.lazyDuplicateSlotState = executionPolicy.lazyDuplicateSlotState();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
@@ -435,10 +429,11 @@ public class HashJoinOperator
         int effectiveJoinKeyCount = outerJoinColumns.length + (promotedBinaryEqualityFilter ? 1 : 0);
         this.currentOuterJoinValues = new Vector[effectiveJoinKeyCount];
         this.currentOuterJoinNulls = new Vector[effectiveJoinKeyCount];
-        JoinScratch pooledScratch = POOL_JOIN_SCRATCH
-                ? arrayPool.borrow(JoinScratch.class, BATCH_SIZE, JoinScratch.class)
+        int maxBatchRows = executionPolicy.maxBatchRows();
+        JoinScratch pooledScratch = executionPolicy.poolScratch()
+                ? arrayPool.borrow(JoinScratch.class, maxBatchRows, JoinScratch.class)
                 : null;
-        this.joinScratch = pooledScratch != null ? pooledScratch : new JoinScratch(BATCH_SIZE);
+        this.joinScratch = pooledScratch != null ? pooledScratch : new JoinScratch(maxBatchRows);
         this.outputOuterPositions = joinScratch.outputOuterPositions;
         this.outputInnerRows = joinScratch.outputInnerRows;
         this.outputInnerLogicalPositions = joinScratch.outputInnerLogicalPositions;
@@ -452,6 +447,7 @@ public class HashJoinOperator
         this.preparedSingleRefs32 = joinScratch.preparedSingleRefs32;
         this.preparedRangeStarts = joinScratch.preparedRangeStarts;
         this.preparedRangeCounts = joinScratch.preparedRangeCounts;
+        this.preparedOuterMatches = new LongList[maxBatchRows];
         this.currentOutputs = new Streams[totalOutputCount];
         this.buildKeysViable = dynamicFilterPolicy.enabled() && !probeOuterJoin
                 && (innerJoinColumns.length == 1 || dynamicFilterPolicy.multiKey());
@@ -540,7 +536,7 @@ public class HashJoinOperator
         boolean logicalPositionsReady = false;
         boolean rowReferencesWritten = false;
         Batch outputOuterBatch = currentOuterBatch;
-        while (outputPosition < BATCH_SIZE) {
+        while (outputPosition < executionPolicy.maxBatchRows()) {
             if (outerRemaining == 0) {
                 if (outputPosition > 0) {
                     break;
@@ -608,7 +604,7 @@ public class HashJoinOperator
                 continue;
             }
 
-            while (currentMatchIndex < currentMatchCount && outputPosition < BATCH_SIZE) {
+            while (currentMatchIndex < currentMatchCount && outputPosition < executionPolicy.maxBatchRows()) {
                 int matchIndex = currentMatchIndex;
                 long rowReference;
                 if (singleMatchPositionProbe) {
@@ -669,7 +665,7 @@ public class HashJoinOperator
     private Mask produceRangeBatch()
     {
         int outputPosition = 0;
-        while (outputPosition < BATCH_SIZE) {
+        while (outputPosition < executionPolicy.maxBatchRows()) {
             if (outerRemaining == 0) {
                 if (outputPosition > 0) {
                     break;
@@ -686,7 +682,7 @@ public class HashJoinOperator
                         outerRemaining = 0;
                         continue;
                     }
-                    preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, BATCH_SIZE);
+                    preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, executionPolicy.maxBatchRows());
                     preparedOuterIndex = 0;
                     for (int index = 0; index < preparedOuterCount; index++) {
                         preparedOuterPositions[index] = currentOuterMask.position(currentOuterMaskIndex++);
@@ -710,7 +706,7 @@ public class HashJoinOperator
                 continue;
             }
 
-            int emitted = Math.min(currentMatchCount - currentMatchIndex, BATCH_SIZE - outputPosition);
+            int emitted = Math.min(currentMatchCount - currentMatchIndex, executionPolicy.maxBatchRows() - outputPosition);
             Arrays.fill(outputOuterPositions, outputPosition, outputPosition + emitted, currentOuterPosition);
             joinIndex.copyRowRange(currentMatchRangeStart + currentMatchIndex, outputInnerRows, outputPosition, emitted);
             currentMatchIndex += emitted;
@@ -743,7 +739,7 @@ public class HashJoinOperator
         }
         int probeCount = Math.min(
                 Math.min(currentOuterMask.count() - currentOuterMaskIndex, outerRemaining),
-                BATCH_SIZE - outputPosition);
+                executionPolicy.maxBatchRows() - outputPosition);
         if (probeCount <= 0) {
             return -1;
         }
@@ -771,7 +767,7 @@ public class HashJoinOperator
     private void prepareOuterProbeChunk()
     {
         long start = System.nanoTime();
-        preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, BATCH_SIZE);
+        preparedOuterCount = Math.min(currentOuterMask.count() - currentOuterMaskIndex, executionPolicy.maxBatchRows());
         preparedOuterIndex = 0;
         singleMatchProbe = joinIndex.supportsSingleMatchRefs();
         singleMatchPositionProbe = singleMatchProbe && !probeOuterJoin && joinIndex.supportsSingleMatchPositions();
@@ -807,7 +803,7 @@ public class HashJoinOperator
     private SingleLongList[] preparedSingleMatches()
     {
         if (preparedSingleMatches == null) {
-            preparedSingleMatches = createSingleLongLists(BATCH_SIZE);
+            preparedSingleMatches = createSingleLongLists(executionPolicy.maxBatchRows());
         }
         return preparedSingleMatches;
     }
@@ -1233,7 +1229,7 @@ public class HashJoinOperator
                 }
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
+                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, executionPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1845,6 +1841,7 @@ public class HashJoinOperator
             return new LongJoinIndex(
                     joinIndexPolicy,
                     outputPolicy,
+                    executionPolicy,
                     arrayPool,
                     expectedSize,
                     innerSchema.length == innerJoinColumns.length,
@@ -1861,13 +1858,14 @@ public class HashJoinOperator
             // output and residual-filter checks establish that no downstream consumer can observe inner payload.
             return new LongPairJoinIndex(
                     joinIndexPolicy,
+                    executionPolicy,
                     arrayPool,
                     expectedSize,
                     canStreamUnusedBuildPayload(),
                     capInitialHash);
         }
         if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
-            return new LongTripleJoinIndex(arrayPool, expectedSize);
+            return new LongTripleJoinIndex(executionPolicy, arrayPool, expectedSize);
         }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(
                 joinValues,
@@ -1918,9 +1916,9 @@ public class HashJoinOperator
         matchedOuterPositions = null;
         allocator.release(allocationContext);
         allocator.release(buildAllocationContext);
-        if (POOL_JOIN_SCRATCH && !joinScratchReleased) {
+        if (executionPolicy.poolScratch() && !joinScratchReleased) {
             joinScratchReleased = true;
-            arrayPool.retain(JoinScratch.class, BATCH_SIZE, joinScratch.retainedBytes(), joinScratch);
+            arrayPool.retain(JoinScratch.class, executionPolicy.maxBatchRows(), joinScratch.retainedBytes(), joinScratch);
         }
     }
 
@@ -1982,7 +1980,7 @@ public class HashJoinOperator
     public HashJoinOperator withDirectExactBuildCoalescing()
     {
         bufferedInner.enableDirectExactCoalesce();
-        implicitSequentialBuildRowReferences = IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES;
+        implicitSequentialBuildRowReferences = executionPolicy.implicitSequentialBuildRowReferences();
         return this;
     }
 
@@ -1993,7 +1991,7 @@ public class HashJoinOperator
      */
     public HashJoinOperator withDirectBoundedBuildCoalescing()
     {
-        implicitSequentialBuildRowReferences = bufferedInner.enableDirectBoundedCoalesce() && IMPLICIT_SEQUENTIAL_BUILD_ROW_REFERENCES;
+        implicitSequentialBuildRowReferences = bufferedInner.enableDirectBoundedCoalesce() && executionPolicy.implicitSequentialBuildRowReferences();
         return this;
     }
 
@@ -2160,7 +2158,7 @@ public class HashJoinOperator
     private int[] innerSourcePositions()
     {
         if (joinScratch.outputInnerSourcePositions == null) {
-            joinScratch.outputInnerSourcePositions = new int[BATCH_SIZE];
+            joinScratch.outputInnerSourcePositions = new int[executionPolicy.maxBatchRows()];
         }
         return joinScratch.outputInnerSourcePositions;
     }
@@ -2168,7 +2166,7 @@ public class HashJoinOperator
     private int[] innerUniqueSourcePositions()
     {
         if (joinScratch.outputInnerUniqueSourcePositions == null) {
-            joinScratch.outputInnerUniqueSourcePositions = new int[BATCH_SIZE];
+            joinScratch.outputInnerUniqueSourcePositions = new int[executionPolicy.maxBatchRows()];
         }
         return joinScratch.outputInnerUniqueSourcePositions;
     }
@@ -2176,7 +2174,7 @@ public class HashJoinOperator
     private int[] retainedInnerMaskPositionsScratch()
     {
         if (joinScratch.retainedInnerMaskPositionsScratch == null) {
-            joinScratch.retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
+            joinScratch.retainedInnerMaskPositionsScratch = new int[executionPolicy.maxBatchRows()];
         }
         return joinScratch.retainedInnerMaskPositionsScratch;
     }
@@ -3709,6 +3707,7 @@ public class HashJoinOperator
         // amortized.
         private final HashJoinIndexPolicy policy;
         private final HashJoinOutputPolicy outputPolicy;
+        private final HashJoinExecutionPolicy executionPolicy;
         private final PrimitiveArrayPool arrayPool;
 
         // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
@@ -3803,6 +3802,7 @@ public class HashJoinOperator
         private LongJoinIndex(
                 HashJoinIndexPolicy policy,
                 HashJoinOutputPolicy outputPolicy,
+                HashJoinExecutionPolicy executionPolicy,
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
@@ -3815,6 +3815,7 @@ public class HashJoinOperator
         {
             this.policy = requireNonNull(policy, "policy is null");
             this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
+            this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
@@ -4109,7 +4110,7 @@ public class HashJoinOperator
                 return false;
             }
             if (!finalized) {
-                finalizeForProbe(BATCH_SIZE);
+                finalizeForProbe(executionPolicy.maxBatchRows());
             }
             return rangeCompacted;
         }
@@ -4171,7 +4172,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches()
         {
             if (chainMatches == null) {
-                chainMatches = createChainLongLists(BATCH_SIZE);
+                chainMatches = createChainLongLists(executionPolicy.maxBatchRows());
             }
             return chainMatches;
         }
@@ -7007,6 +7008,7 @@ public class HashJoinOperator
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
         private final HashJoinIndexPolicy policy;
+        private final HashJoinExecutionPolicy executionPolicy;
         private final PrimitiveArrayPool arrayPool;
 
         private byte[] tags;
@@ -7061,12 +7063,14 @@ public class HashJoinOperator
 
         private LongPairJoinIndex(
                 HashJoinIndexPolicy policy,
+                HashJoinExecutionPolicy executionPolicy,
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
                 boolean capInitialHash)
         {
             this.policy = requireNonNull(policy, "policy is null");
+            this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
             this.expectedBuildRows = expectedSize;
             this.compactKeys = policy.compactLongPairKeys();
@@ -7330,7 +7334,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches()
         {
             if (chainMatches == null) {
-                chainMatches = createChainLongLists(BATCH_SIZE);
+                chainMatches = createChainLongLists(executionPolicy.maxBatchRows());
             }
             return chainMatches;
         }
@@ -8153,6 +8157,7 @@ public class HashJoinOperator
         // read rather than a {first,second,third,row} cache-miss load.
         private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
         private static final int GROUP = SPECIES.length();
+        private final HashJoinExecutionPolicy executionPolicy;
         private final PrimitiveArrayPool arrayPool;
 
         private byte[] tags;
@@ -8172,8 +8177,9 @@ public class HashJoinOperator
         private long[] nativeSecond;
         private long[] nativeThird;
 
-        private LongTripleJoinIndex(PrimitiveArrayPool arrayPool, int expectedSize)
+        private LongTripleJoinIndex(HashJoinExecutionPolicy executionPolicy, PrimitiveArrayPool arrayPool, int expectedSize)
         {
+            this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
             int capacity = GROUP;
             while (capacity < expectedSize / LOAD_FACTOR) {
@@ -8470,7 +8476,7 @@ public class HashJoinOperator
                     if (entries[base] == first && entries[base + 1] == second && entries[base + 2] == third) {
                         tripleHasDuplicates = true;
                         if (rowsBySlot[slot] == null) {
-                            LongArrayList rows = new LongArrayList(DUPLICATE_LIST_INITIAL_CAPACITY);
+                            LongArrayList rows = new LongArrayList(executionPolicy.duplicateListInitialCapacity());
                             rows.add(entries[base + 3]);
                             rows.add(rowReference);
                             rowsBySlot[slot] = rows;

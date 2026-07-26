@@ -109,7 +109,8 @@ public final class OperatorResources
                         HashJoinDynamicFilterPolicy.fromSystemProperties(),
                         HashJoinBuildPolicy.fromSystemProperties(),
                         HashJoinOutputPolicy.fromSystemProperties(),
-                        HashJoinFilterPolicy.fromSystemProperties()),
+                        HashJoinFilterPolicy.fromSystemProperties(),
+                        HashJoinExecutionPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 TopNRankingOperatorPolicy.fromSystemProperties());
     }
