@@ -22,11 +22,14 @@ class TestHashJoinOperatorResources
     @Test
     void testSharedCompatibilityDomainIsOwnerScoped()
     {
+        HashJoinIndexPolicy indexPolicy = HashJoinIndexPolicy.defaults();
         HashJoinOperatorResources first = new HashJoinOperatorResources(true);
-        HashJoinOperatorResources second = new HashJoinOperatorResources(true);
+        HashJoinOperatorResources second = new HashJoinOperatorResources(true, null, indexPolicy);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
+        assertThat(first.indexPolicy()).isEqualTo(HashJoinIndexPolicy.defaults());
+        assertThat(second.indexPolicy()).isSameAs(indexPolicy);
         assertThat(first.bufferPoolCompatibilityGroup(firstLocal))
                 .isSameAs(first.bufferPoolCompatibilityGroup(secondLocal));
         assertThat(second.bufferPoolCompatibilityGroup(new Object()))

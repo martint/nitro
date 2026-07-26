@@ -96,7 +96,8 @@ public final class OperatorResources
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
-                        hashJoinMaterializationListener),
+                        hashJoinMaterializationListener,
+                        HashJoinIndexPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 TopNRankingOperatorPolicy.fromSystemProperties());
     }

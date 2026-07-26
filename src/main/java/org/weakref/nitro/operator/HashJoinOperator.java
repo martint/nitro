@@ -283,6 +283,7 @@ public class HashJoinOperator
     private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private final Allocator allocator;
     private final OperatorResources operatorResources;
+    private final HashJoinIndexPolicy joinIndexPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -527,6 +528,7 @@ public class HashJoinOperator
 
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.joinIndexPolicy = operatorResources.hashJoin().indexPolicy();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
@@ -1368,7 +1370,7 @@ public class HashJoinOperator
                 }
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
+                        joinIndex = new LongJoinIndex(joinIndexPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1854,18 +1856,18 @@ public class HashJoinOperator
         // A random prefix of a bounded duplicate domain can look entirely unique. For a very large build, admit
         // bounded range state when the observed domain itself fits; exact fallback remains available if later keys
         // escape the ceiling. Wide-domain samples retain the ordinary pre-sized hash path.
-        return expectedRows >= 10_000_000 && sampleMin >= 0 && sampleMax < LongJoinIndex.MAX_DIRECT_BUILD_KEY;
+        return expectedRows >= 10_000_000 && sampleMin >= 0 && sampleMax < joinIndexPolicy.maxDirectBuildKey();
     }
 
     private boolean shouldUseGroupedLongHash(BufferedJoinInput.InnerBatch batch, Vector[] joinValues)
     {
-        if (!LongJoinIndex.GROUPED_HASH_TABLE || joinValues.length != 1 || !isSingleLongJoinCandidate(joinValues[0])) {
+        if (!joinIndexPolicy.groupedLongHashTable() || joinValues.length != 1 || !isSingleLongJoinCandidate(joinValues[0])) {
             return false;
         }
-        if (!LongJoinIndex.SPARSE_AWARE_HASH_LAYOUT) {
+        if (!joinIndexPolicy.sparseAwareLongHashLayout()) {
             return true;
         }
-        if (expectedInnerRowCount() < LongJoinIndex.SPARSE_AWARE_SCALAR_MIN_ROWS) {
+        if (expectedInnerRowCount() < joinIndexPolicy.sparseAwareScalarMinRows()) {
             return true;
         }
         int sampleSize = Math.min(batch.length(), 4096);
@@ -1885,19 +1887,19 @@ public class HashJoinOperator
         // Compare with the known full build cardinality, not sample cardinality: a random prefix of a dense table
         // spans most of its domain and would otherwise be misclassified as sparse (TPC-H q7 customer/orders).
         long expectedRows = expectedInnerRowCount();
-        return range <= 0 || range > LongJoinIndex.MAX_ARRAY_RANGE || range < expectedRows * LongJoinIndex.SPARSE_RANGE_MIN_RATIO;
+        return range <= 0 || range > LongJoinIndex.MAX_ARRAY_RANGE || range < expectedRows * joinIndexPolicy.sparseLongRangeMinRatio();
     }
 
     private boolean shouldUseKeyOnlyDirectRangeBuild(BufferedJoinInput.InnerBatch batch, Vector[] joinValues)
     {
-        if (!LongJoinIndex.KEY_ONLY_DIRECT_RANGE_BUILD ||
+        if (!joinIndexPolicy.keyOnlyDirectRangeBuild() ||
                 joinValues.length != 1 ||
                 innerSchema.length != innerJoinColumns.length ||
                 !isSingleLongJoinCandidate(joinValues[0])) {
             return false;
         }
         int expectedRows = expectedInnerRowCount();
-        if (expectedRows < LongJoinIndex.KEY_ONLY_DIRECT_RANGE_MIN_ROWS) {
+        if (expectedRows < joinIndexPolicy.keyOnlyDirectRangeMinRows()) {
             return false;
         }
         int sampleSize = Math.min(batch.length(), 4096);
@@ -1916,7 +1918,7 @@ public class HashJoinOperator
         // randomly probe a much larger map than the ordinary hash table. Compare the observed domain with the known
         // full build cardinality so shuffled dense dimensions admit while wide sparse fact-key domains reject.
         return sampleMin >= 0 &&
-                sampleMax < LongJoinIndex.MAX_DIRECT_BUILD_KEY &&
+                sampleMax < joinIndexPolicy.maxDirectBuildKey() &&
                 sampleRange > 0 &&
                 sampleRange <= 2L * expectedRows;
     }
@@ -1978,6 +1980,7 @@ public class HashJoinOperator
             // through the existing chains, but avoid eagerly copying every reference into CSR form before a probe
             // whose output may be tiny (q84 builds 2.9M rows and emits about 1.2K matches).
             return new LongJoinIndex(
+                    joinIndexPolicy,
                     arrayPool,
                     expectedSize,
                     innerSchema.length == innerJoinColumns.length,
@@ -1992,7 +1995,12 @@ public class HashJoinOperator
             // A schema containing only join keys is not enough to prove the stored row reference is disposable:
             // callers may still project those inner keys.  Omit the reference only for the streaming shape, whose
             // output and residual-filter checks establish that no downstream consumer can observe inner payload.
-            return new LongPairJoinIndex(arrayPool, expectedSize, canStreamUnusedBuildPayload(), capInitialHash);
+            return new LongPairJoinIndex(
+                    arrayPool,
+                    expectedSize,
+                    canStreamUnusedBuildPayload(),
+                    capInitialHash,
+                    joinIndexPolicy.initialHashExpectedCap());
         }
         if (joinValues.length == 3 && isSingleLongJoinCandidate(joinValues[0]) && isSingleLongJoinCandidate(joinValues[1]) && isSingleLongJoinCandidate(joinValues[2])) {
             return new LongTripleJoinIndex(arrayPool, expectedSize);
@@ -3824,57 +3832,7 @@ public class HashJoinOperator
             implements JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
-        private static final int INITIAL_HASH_EXPECTED_CAP = Integer.getInteger("nitro.join.initialHashExpectedCap", 1 << 18);
         private static final int EMPTY = -1;
-        private static final boolean DENSE_BUILD_FAST_PATH = Boolean.parseBoolean(System.getProperty("nitro.join.denseBuildFastPath", "true"));
-        private static final boolean COMPACT_DIRECT_ROW_REFERENCES = Boolean.parseBoolean(System.getProperty("nitro.join.compactDirectRowReferences", "true"));
-        private static final boolean COMPACT_CHAIN_ROW_REFERENCES = Boolean.parseBoolean(System.getProperty("nitro.join.compactChainRowReferences", "true"));
-        private static final boolean PRE_SIZE_CAPPED_ROW_STORAGE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.preSizeCappedRowStorage", "true"));
-        private static final boolean COMPUTE_DENSE_SINGLE_BATCH_ROW_REFERENCES =
-                Boolean.parseBoolean(System.getProperty("nitro.join.computeDenseSingleBatchRowReferences", "true"));
-        private static final boolean DENSE_SINGLE_BATCH_PROBE_SPECIALIZATION =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchProbeSpecialization", "true"));
-        private static final boolean DENSE_SINGLE_BATCH_MATCH_POSITIONS =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchMatchPositions", "true"));
-        private static final boolean DENSE_SINGLE_BATCH_RANGE_PROBE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseSingleBatchRangeProbe", "true"));
-        private static final boolean COMPACT_DENSE_SINGLE_MATCH_REFS =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compactDenseSingleMatchRefs", "true"));
-        private static final boolean DENSE_DICTIONARY_PROBE_CACHE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.denseDictionaryProbeCache", "true"));
-        private static final boolean GROUPED_HASH_TABLE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.groupedLongHashTable", "true"));
-        private static final boolean SPARSE_AWARE_HASH_LAYOUT =
-                Boolean.parseBoolean(System.getProperty("nitro.join.sparseAwareLongHashLayout", "true"));
-        private static final int SPARSE_AWARE_SCALAR_MIN_ROWS =
-                Integer.getInteger("nitro.join.sparseAwareScalarMinRows", 1 << 20);
-        private static final boolean LAZY_UNIQUE_CHAIN_STATE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.lazyUniqueChainState", "true"));
-        private static final boolean SPARSE_DIRECT_DUPLICATE_STATE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.sparseDirectDuplicateState", "true"));
-        private static final boolean COMPRESSED_DIRECT_BUILD_BATCH_LOOP =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compressedDirectBuildBatchLoop", "true"));
-        private static final int SPARSE_DIRECT_DUPLICATE_MIN_EXPECTED_DOMAIN_RATIO =
-                Integer.getInteger("nitro.join.sparseDirectDuplicateMinExpectedDomainRatio", 4);
-        private static final int SPARSE_DIRECT_DUPLICATE_MIN_EXPECTED_ROWS =
-                Integer.getInteger("nitro.join.sparseDirectDuplicateMinExpectedRows", 1 << 20);
-        private static final boolean DEBUG_DIRECT_DUPLICATE_STATE =
-                Boolean.getBoolean("nitro.join.debugDirectDuplicateState");
-        private static final boolean DEBUG_COMPRESSED_DIRECT_RANGE =
-                Boolean.getBoolean("nitro.join.debugCompressedDirectRange");
-        private static final boolean COMPRESSED_DIRECT_RANGE =
-                Boolean.parseBoolean(System.getProperty("nitro.join.compressedDirectRange", "true"));
-        private static final int COMPRESSED_DIRECT_RANGE_MIN_KEYS =
-                Integer.getInteger("nitro.join.compressedDirectRangeMinKeys", 1 << 20);
-        private static final int COMPRESSED_DIRECT_RANGE_MAX_ENTRIES =
-                Integer.getInteger("nitro.join.compressedDirectRangeMaxEntries", 1 << 24);
-        private static final int COMPRESSED_DIRECT_RANGE_MAX_RATIO =
-                Integer.getInteger("nitro.join.compressedDirectRangeMaxRatio", 6);
-        private static final boolean SPARSE_RANGE_MEMBERSHIP =
-                Boolean.parseBoolean(System.getProperty("nitro.join.sparseLongRangeMembership", "true"));
-        private static final int SPARSE_RANGE_MIN_RATIO =
-                Integer.getInteger("nitro.join.sparseLongRangeMinRatio", 4);
         private static final VectorSpecies<Byte> HASH_TAG_SPECIES = ByteVector.SPECIES_128;
         private static final int HASH_TAG_GROUP = HASH_TAG_SPECIES.length();
         private static final int NO_MATCH_ROW_REFERENCE32 = -1;
@@ -3885,10 +3843,7 @@ public class HashJoinOperator
         // ordinary hash representation; duplicates retain their exact multiplicity through the existing direct
         // builder. Keep small builds on the sequential detector/hash path, where a speculative range map is not
         // amortized.
-        private static final boolean KEY_ONLY_DIRECT_RANGE_BUILD =
-                Boolean.parseBoolean(System.getProperty("nitro.join.keyOnlyDirectRangeBuild", "true"));
-        private static final int KEY_ONLY_DIRECT_RANGE_MIN_ROWS =
-                Integer.getInteger("nitro.join.keyOnlyDirectRangeMinRows", 1 << 20);
+        private final HashJoinIndexPolicy policy;
         private final PrimitiveArrayPool arrayPool;
 
         // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
@@ -3924,7 +3879,6 @@ public class HashJoinOperator
         // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
         // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
         private static final int MAX_ARRAY_RANGE = 1 << 26; // cap direct array at ~64M entries (512MB)
-        private static final int MAX_DIRECT_BUILD_KEY = Integer.getInteger("nitro.join.maxDirectBuildKey", 1 << 26);
         private long minKey = Long.MAX_VALUE;
         private long maxKey = Long.MIN_VALUE;
         private boolean hasDuplicates;
@@ -3937,11 +3891,11 @@ public class HashJoinOperator
         // has no false positives; the hash table is consulted only for keys whose bit is present.
         private long[] sparseMembership;
         private int sparseMembershipRange;
-        private boolean rowReferencesFit32 = COMPACT_DIRECT_ROW_REFERENCES;
-        private boolean denseBuildCandidate = DENSE_BUILD_FAST_PATH;
+        private boolean rowReferencesFit32;
+        private boolean denseBuildCandidate;
         private long denseFirstKey;
         private long denseNextKey;
-        private boolean denseSingleBatchRowReferenceCandidate = COMPUTE_DENSE_SINGLE_BATCH_ROW_REFERENCES;
+        private boolean denseSingleBatchRowReferenceCandidate;
         private boolean denseSingleBatchRowReferenceMode;
         private int denseRowReferenceBatchIndex;
         private int denseRowReferenceFirstPosition;
@@ -3950,11 +3904,6 @@ public class HashJoinOperator
         // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous slice of
         // orderedRows[rangeStart[slot] .. +slotCount[slot]) in FIFO order, so a probe reads a sequential range instead
         // of pointer-chasing chainNext (the one-to-many output loop's cost). Opt-out for A/B.
-        private static final boolean COMPACT_CHAINS = Boolean.parseBoolean(System.getProperty("nitro.join.compactChains", "true"));
-        private static final int COMPACT_CHAINS_MIN_PROBE_ROWS = Integer.getInteger("nitro.join.compactChainsMinProbeRows", 256);
-        private static final boolean COMPRESS_KEY_ONLY_DUPLICATES = Boolean.parseBoolean(System.getProperty("nitro.join.compressKeyOnlyDuplicates", "true"));
-        private static final boolean SIZE_COMPRESSED_ROW_STORAGE_BY_DISTINCT_KEYS =
-                Boolean.parseBoolean(System.getProperty("nitro.join.sizeCompressedRowsByDistinctKeys", "true"));
         private final boolean compactChains;
         private final boolean compressDuplicateReferences;
         private final boolean lazyDuplicateSlotState;
@@ -3987,6 +3936,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches;
 
         private LongJoinIndex(
+                HashJoinIndexPolicy policy,
                 PrimitiveArrayPool arrayPool,
                 int expectedSize,
                 boolean keyOnlyBuild,
@@ -3997,12 +3947,16 @@ public class HashJoinOperator
                 boolean keyOnlyDirectRangeBuild,
                 boolean buildRowReferencesUnused)
         {
+            this.policy = requireNonNull(policy, "policy is null");
             this.arrayPool = arrayPool;
-            this.compactChains = COMPACT_CHAINS && !keyOnlyBuild;
-            this.compressDuplicateReferences = keyOnlyBuild && COMPRESS_KEY_ONLY_DUPLICATES;
+            this.rowReferencesFit32 = policy.compactDirectRowReferences();
+            this.denseBuildCandidate = policy.denseBuildFastPath();
+            this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
+            this.compactChains = policy.compactChains() && !keyOnlyBuild;
+            this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
             this.lazyDuplicateSlotState = lazyDuplicateSlotState;
             this.expectedBuildRows = expectedSize;
-            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, INITIAL_HASH_EXPECTED_CAP) : expectedSize;
+            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             int capacity = 16;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
@@ -4014,13 +3968,13 @@ public class HashJoinOperator
             // hash cap only forces geometric growth and temporarily retains every obsolete generation in the
             // engine-owned primitive pool.
             int initialRows = Math.max(16,
-                    compressDuplicateReferences && SIZE_COMPRESSED_ROW_STORAGE_BY_DISTINCT_KEYS
+                    compressDuplicateReferences && policy.sizeCompressedRowsByDistinctKeys()
                             ? initialExpectedSize
-                            : capInitialHash && PRE_SIZE_CAPPED_ROW_STORAGE ? expectedSize : initialExpectedSize);
+                            : capInitialHash && policy.preSizeCappedRowStorage() ? expectedSize : initialExpectedSize);
             rowCapacity = initialRows;
-            preferCompactRowReferences = capInitialHash && COMPACT_CHAIN_ROW_REFERENCES;
+            preferCompactRowReferences = capInitialHash && policy.compactChainRowReferences();
             this.buildRowReferencesUnused = buildRowReferencesUnused;
-            this.groupedHashTable = GROUPED_HASH_TABLE && groupedHashTable;
+            this.groupedHashTable = policy.groupedLongHashTable() && groupedHashTable;
             this.implicitSequentialRowReferences = implicitSequentialRowReferences;
             if (!implicitSequentialRowReferences) {
                 if (preferCompactRowReferences) {
@@ -4030,7 +3984,7 @@ public class HashJoinOperator
                     rowReferences = arrayPool.borrowLongs(initialRows);
                 }
             }
-            if (!lazyDuplicateSlotState || !LAZY_UNIQUE_CHAIN_STATE) {
+            if (!lazyDuplicateSlotState || !policy.lazyUniqueChainState()) {
                 chainNext = arrayPool.borrowInts(initialRows);
             }
             if (DEBUG_JOIN_INDEX && keyOnlyDirectRangeBuild) {
@@ -4040,7 +3994,7 @@ public class HashJoinOperator
                 directRangeBuild = true;
                 int directCapacity = 1024;
                 if (keyOnlyDirectRangeBuild) {
-                    long required = Math.min((long) MAX_DIRECT_BUILD_KEY, (long) expectedSize + 1);
+                    long required = Math.min((long) policy.maxDirectBuildKey(), (long) expectedSize + 1);
                     while (directCapacity < required) {
                         directCapacity <<= 1;
                     }
@@ -4135,7 +4089,7 @@ public class HashJoinOperator
             // Once the dense duplicate arrays exist, sparse state can no longer be admitted. Select the compact
             // key-only loop once per source batch instead of carrying generic and sparse representation branches
             // through every remaining build row.
-            return COMPRESSED_DIRECT_BUILD_BATCH_LOOP && directRangeBuild && compressDuplicateReferences && directBuildTail != null;
+            return policy.compressedDirectBuildBatchLoop() && directRangeBuild && compressDuplicateReferences && directBuildTail != null;
         }
 
         private void addCompressedDirectRangeRows(
@@ -4189,7 +4143,7 @@ public class HashJoinOperator
         {
             buildKeyAnd &= key;
             buildKeyOr |= key;
-            if (key < 0 || key >= MAX_DIRECT_BUILD_KEY) {
+            if (key < 0 || key >= policy.maxDirectBuildKey()) {
                 addRow(key, rowReference);
                 return;
             }
@@ -4413,7 +4367,7 @@ public class HashJoinOperator
             }
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
-            if (DENSE_SINGLE_BATCH_PROBE_SPECIALIZATION && denseSingleBatchRowReferenceMode) {
+            if (policy.denseSingleBatchProbeSpecialization() && denseSingleBatchRowReferenceMode) {
                 matchDenseSingleBatchRows(values, nulls, hasNulls, positions, positionCount, refs);
                 return;
             }
@@ -4484,7 +4438,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return COMPACT_DENSE_SINGLE_MATCH_REFS && denseSingleBatchRowReferenceMode && rowReferencesFit32;
+            return policy.compactDenseSingleMatchReferences() && denseSingleBatchRowReferenceMode && rowReferencesFit32;
         }
 
         @Override
@@ -4493,7 +4447,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return DENSE_SINGLE_BATCH_MATCH_POSITIONS && denseSingleBatchRowReferenceMode;
+            return policy.denseSingleBatchMatchPositions() && denseSingleBatchRowReferenceMode;
         }
 
         @Override
@@ -4502,7 +4456,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return DENSE_SINGLE_BATCH_RANGE_PROBE && denseSingleBatchRowReferenceMode;
+            return policy.denseSingleBatchRangeProbe() && denseSingleBatchRowReferenceMode;
         }
 
         @Override
@@ -5309,7 +5263,7 @@ public class HashJoinOperator
 
         private boolean useDenseDictionaryProbeCache(int dictionarySize, int positionCount)
         {
-            return DENSE_DICTIONARY_PROBE_CACHE && dictionarySize * 2 <= positionCount;
+            return policy.denseDictionaryProbeCache() && dictionarySize * 2 <= positionCount;
         }
 
         private int[] denseDictionaryPositions(long[] dictionaryValues, long min, long max, int firstPosition)
@@ -5786,7 +5740,7 @@ public class HashJoinOperator
                 maxKey = key;
             }
             if (directRangeBuild) {
-                if (key >= 0 && key < MAX_DIRECT_BUILD_KEY) {
+                if (key >= 0 && key < policy.maxDirectBuildKey()) {
                     addDirectRangeRow((int) key, rowReference);
                     return;
                 }
@@ -5916,9 +5870,9 @@ public class HashJoinOperator
         {
             return directBuildTail == null &&
                     (sparseDirectDuplicateStateAdmitted ||
-                            (SPARSE_DIRECT_DUPLICATE_STATE &&
-                                    expectedBuildRows >= SPARSE_DIRECT_DUPLICATE_MIN_EXPECTED_ROWS &&
-                                    (long) directBuildHead.length >= (long) expectedBuildRows * SPARSE_DIRECT_DUPLICATE_MIN_EXPECTED_DOMAIN_RATIO));
+                            (policy.sparseDirectDuplicateState() &&
+                                    expectedBuildRows >= policy.sparseDirectDuplicateMinExpectedRows() &&
+                                    (long) directBuildHead.length >= (long) expectedBuildRows * policy.sparseDirectDuplicateMinExpectedDomainRatio()));
         }
 
         private void addSparseDirectRangeDuplicate(int key, int entry, long rowReference)
@@ -5978,21 +5932,21 @@ public class HashJoinOperator
 
         private int directEntryHead(int entry)
         {
-            return SPARSE_DIRECT_DUPLICATE_STATE && entry < EMPTY
+            return policy.sparseDirectDuplicateState() && entry < EMPTY
                     ? directDuplicateHead[decodeDirectDuplicateGroup(entry)]
                     : entry;
         }
 
         private int directEntryTail(int key, int entry)
         {
-            return SPARSE_DIRECT_DUPLICATE_STATE && entry < EMPTY
+            return policy.sparseDirectDuplicateState() && entry < EMPTY
                     ? directDuplicateTail[decodeDirectDuplicateGroup(entry)]
                     : directBuildTail == null ? directEntryHead(entry) : directBuildTail[key];
         }
 
         private int directEntryCount(int key, int entry)
         {
-            if (SPARSE_DIRECT_DUPLICATE_STATE && entry < EMPTY) {
+            if (policy.sparseDirectDuplicateState() && entry < EMPTY) {
                 return directDuplicateCount[decodeDirectDuplicateGroup(entry)];
             }
             if (directBuildCount == null || directBuildCount[key] == 0) {
@@ -6210,7 +6164,7 @@ public class HashJoinOperator
                 compressedDirectMin = compressedMin;
                 arrayPool.release(starts);
                 starts = null;
-                if (DEBUG_COMPRESSED_DIRECT_RANGE) {
+                if (policy.debugCompressedDirectRange()) {
                     System.err.printf(
                             "[compressed-direct-range] admitted rows=%d keys=%d variableBits=%d range=%d ratio=%.3f bytes=%d%n",
                             rowCount,
@@ -6275,7 +6229,7 @@ public class HashJoinOperator
                 if (COMPACT_COMPLETED_DIRECT_RANGE_BUILD) {
                     compactCompletedDirectRangeBuild();
                 }
-                if (DEBUG_DIRECT_DUPLICATE_STATE && hasDuplicates) {
+                if (policy.debugDirectDuplicateState() && hasDuplicates) {
                     System.err.printf(
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
                             directDuplicateGroups > 0 ? "sparse" : "dense",
@@ -6291,7 +6245,7 @@ public class HashJoinOperator
             if (hasDuplicates) {
                 // No direct array mode with duplicate keys; compact the multi-row chains so the probe reads a
                 // contiguous range instead of chasing chainNext (the one-to-many output loop's dominant cost).
-                if (compactChains && initialProbeRows >= COMPACT_CHAINS_MIN_PROBE_ROWS) {
+                if (compactChains && initialProbeRows >= policy.compactChainsMinProbeRows()) {
                     compactChains();
                 }
                 return;
@@ -6485,11 +6439,11 @@ public class HashJoinOperator
 
         private void buildSparseRangeMembership()
         {
-            if (!SPARSE_RANGE_MEMBERSHIP || keys == null || sparseMembership != null) {
+            if (!policy.sparseLongRangeMembership() || keys == null || sparseMembership != null) {
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > MAX_ARRAY_RANGE || range < (long) size * SPARSE_RANGE_MIN_RATIO) {
+            if (range <= 0 || range > MAX_ARRAY_RANGE || range < (long) size * policy.sparseLongRangeMinRatio()) {
                 return;
             }
             sparseMembershipRange = (int) range;
@@ -6506,9 +6460,9 @@ public class HashJoinOperator
 
         private boolean prepareCompressedDirectRanges()
         {
-            if (!COMPRESSED_DIRECT_RANGE ||
+            if (!policy.compressedDirectRange() ||
                     keys == null ||
-                    size < COMPRESSED_DIRECT_RANGE_MIN_KEYS ||
+                    size < policy.compressedDirectRangeMinKeys() ||
                     rowCount > COMPRESSED_DIRECT_START_MASK ||
                     maximumMatchCount > COMPRESSED_DIRECT_MAX_COUNT ||
                     (long) size * 2 > keys.length) {
@@ -6521,8 +6475,8 @@ public class HashJoinOperator
             }
             long range = 1L << variableBits;
             if (range <= 0 ||
-                    range > COMPRESSED_DIRECT_RANGE_MAX_ENTRIES ||
-                    range > (long) size * COMPRESSED_DIRECT_RANGE_MAX_RATIO) {
+                    range > policy.compressedDirectRangeMaxEntries() ||
+                    range > (long) size * policy.compressedDirectRangeMaxRatio()) {
                 return false;
             }
             compressedDirectVariableMask = variableMask;
@@ -7259,13 +7213,18 @@ public class HashJoinOperator
         private long[] nativeFirst;
         private long[] nativeSecond;
 
-        private LongPairJoinIndex(PrimitiveArrayPool arrayPool, int expectedSize, boolean keyOnlyBuild, boolean capInitialHash)
+        private LongPairJoinIndex(
+                PrimitiveArrayPool arrayPool,
+                int expectedSize,
+                boolean keyOnlyBuild,
+                boolean capInitialHash,
+                int initialHashExpectedCap)
         {
             this.arrayPool = arrayPool;
             this.expectedBuildRows = expectedSize;
             this.keyOnlyBuild = keyOnlyBuild && COMPACT_KEY_ONLY_BUILD;
-            this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, LongJoinIndex.INITIAL_HASH_EXPECTED_CAP);
-            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, LongJoinIndex.INITIAL_HASH_EXPECTED_CAP) : expectedSize;
+            this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, initialHashExpectedCap);
+            int initialExpectedSize = capInitialHash ? Math.min(expectedSize, initialHashExpectedCap) : expectedSize;
             this.initialDenseEntryCapacity = Math.max(16, initialExpectedSize);
             int capacity = GROUP;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {

@@ -25,19 +25,29 @@ public final class HashJoinOperatorResources
 {
     private final boolean shareBufferPoolAcrossOperators;
     private final HashJoinMaterializationListener materializationListener;
+    private final HashJoinIndexPolicy indexPolicy;
     private final Object sharedBufferPoolGroup = new Object();
 
     public HashJoinOperatorResources(boolean shareBufferPoolAcrossOperators)
     {
-        this(shareBufferPoolAcrossOperators, null);
+        this(shareBufferPoolAcrossOperators, null, HashJoinIndexPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
             boolean shareBufferPoolAcrossOperators,
             HashJoinMaterializationListener materializationListener)
     {
+        this(shareBufferPoolAcrossOperators, materializationListener, HashJoinIndexPolicy.defaults());
+    }
+
+    public HashJoinOperatorResources(
+            boolean shareBufferPoolAcrossOperators,
+            HashJoinMaterializationListener materializationListener,
+            HashJoinIndexPolicy indexPolicy)
+    {
         this.shareBufferPoolAcrossOperators = shareBufferPoolAcrossOperators;
         this.materializationListener = materializationListener;
+        this.indexPolicy = requireNonNull(indexPolicy, "indexPolicy is null");
     }
 
     Object bufferPoolCompatibilityGroup(Object localPoolGroup)
@@ -48,5 +58,10 @@ public final class HashJoinOperatorResources
     HashJoinMaterializationListener materializationListener()
     {
         return materializationListener;
+    }
+
+    HashJoinIndexPolicy indexPolicy()
+    {
+        return indexPolicy;
     }
 }
