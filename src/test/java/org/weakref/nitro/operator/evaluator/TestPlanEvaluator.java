@@ -36,9 +36,11 @@ import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
+import org.weakref.nitro.function.scalar.builtin.InUtf8DictionaryMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
+import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -3132,8 +3134,18 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testInUtf8SubstringDictionaryLiteralReferenceMaskUsesPrimitiveTrueMask()
+    void testDictionaryMaskOptimizationUsesCapabilitiesInsteadOfFunctionNames()
     {
+        PrimitiveRegistry registry = primitiveRegistry();
+        registry.register(
+                "test_slice_alias",
+                new SubstringUtf8(),
+                new SubstringUtf8BinarySliceProjection());
+        registry.register(
+                "test_membership_alias",
+                new InUtf8(),
+                new InUtf8DictionaryMaskOptimization());
+
         Variable start = new Variable(0);
         Variable length = new Variable(1);
         Variable substring = new Variable(2);
@@ -3146,7 +3158,7 @@ public class TestPlanEvaluator
                         new Assignment(length, new Literal(5L), AllMask.ALL),
                         new Assignment(
                                 substring,
-                                new Call("substring_utf8", List.of(
+                                new Call("test_slice_alias", List.of(
                                         new Reference(new Input(0), Stream.VALUES),
                                         new Reference(start, Stream.VALUES),
                                         new Reference(length, Stream.VALUES))),
@@ -3155,7 +3167,7 @@ public class TestPlanEvaluator
                         new Assignment(secondLiteral, new Literal("81792"), AllMask.ALL),
                         new Assignment(
                                 matches,
-                                new Call("in_utf8", List.of(
+                                new Call("test_membership_alias", List.of(
                                         new Reference(substring, Stream.VALUES),
                                         new Reference(firstLiteral, Stream.VALUES),
                                         new Reference(secondLiteral, Stream.VALUES))),
@@ -3175,7 +3187,7 @@ public class TestPlanEvaluator
 
         PlanEvaluator evaluator = planEvaluator(
                 plan,
-                primitiveRegistry(),
+                registry,
                 inputResolver(Map.of(
                         new Reference(new Input(0), Stream.VALUES), values,
                         new Reference(new Input(0), Stream.NULLS), nulls)),

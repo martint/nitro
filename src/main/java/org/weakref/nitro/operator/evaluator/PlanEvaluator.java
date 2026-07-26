@@ -14,7 +14,11 @@
 package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
+import org.weakref.nitro.core.function.FunctionCapability;
+import org.weakref.nitro.core.function.mask.DictionaryMaskOptimization;
+import org.weakref.nitro.core.function.mask.DictionaryMaskOptimizationProvider;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
+import org.weakref.nitro.core.function.mask.FunctionCallSite;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.data.Allocator;
@@ -31,7 +35,6 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
-import org.weakref.nitro.function.scalar.builtin.Utf8Support;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
@@ -64,11 +67,10 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalLong;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
 public final class PlanEvaluator
@@ -98,13 +100,9 @@ public final class PlanEvaluator
             Boolean.parseBoolean(System.getProperty("nitro.expression.directPrimitiveInputMask", "true"));
     private static final boolean RECYCLE_CONTROL_FRAMES =
             Boolean.parseBoolean(System.getProperty("nitro.expression.recycleControlFrames", "true"));
-    private static final boolean ASCII_SUBSTRING_IN_SET_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.asciiSubstringInSetMask", "true"));
-    private static final boolean PACKED_ASCII_PREFIX_SUBSTRING_IN_SET_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.expression.packedAsciiPrefixSubstringInSetMask", "true"));
-    private static final byte UNKNOWN_SUBSTRING_MATCH = 0;
-    private static final byte SUBSTRING_MISMATCH = 1;
-    private static final byte SUBSTRING_MATCH = 2;
+    private static final byte UNKNOWN_DICTIONARY_MATCH = 0;
+    private static final byte DICTIONARY_MISMATCH = 1;
+    private static final byte DICTIONARY_MATCH = 2;
 
     private final EvaluationPlan plan;
     private final PrimitiveRegistry primitiveRegistry;
@@ -112,6 +110,7 @@ public final class PlanEvaluator
     private final Allocator allocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
+    private final Map<Variable, BoundDictionaryMaskOptimization> dictionaryMaskOptimizations;
     private final Map<Variable, PreboundMask> preboundMasks;
     private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
@@ -181,6 +180,7 @@ public final class PlanEvaluator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
+        this.dictionaryMaskOptimizations = bindDictionaryMaskOptimizations(assignments, primitiveRegistry);
         this.preboundMasks = bindPreboundMasks(
                 plan,
                 primitiveRegistry,
@@ -192,6 +192,99 @@ public final class PlanEvaluator
         this.projectedStreamsByProducer = projectedStreamsByProducer(plan.outputs());
         this.requireProjectedCompanionStreams = requireProjectedCompanionStreams;
         this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
+    }
+
+    private static Map<Variable, BoundDictionaryMaskOptimization> bindDictionaryMaskOptimizations(
+            Map<Variable, Assignment> assignments,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        Map<Variable, BoundDictionaryMaskOptimization> bindings = new HashMap<>();
+        for (Map.Entry<Variable, Assignment> entry : assignments.entrySet()) {
+            if (!(entry.getValue().operation() instanceof Call call)) {
+                continue;
+            }
+            DictionaryMaskOptimizationProvider provider =
+                    primitiveRegistry.capabilityOrNull(call, DictionaryMaskOptimizationProvider.class);
+            if (provider == null) {
+                continue;
+            }
+            DictionaryMaskOptimization optimization =
+                    provider.bind(new EvaluatorFunctionCallSite(call, assignments, primitiveRegistry)).orElse(null);
+            if (optimization == null) {
+                continue;
+            }
+            Reference source = resolveArgumentPath(call, optimization.sourceArgumentPath(), assignments);
+            if (source != null) {
+                bindings.put(entry.getKey(), new BoundDictionaryMaskOptimization(source, optimization.predicate()));
+            }
+        }
+        return Map.copyOf(bindings);
+    }
+
+    private static Reference resolveArgumentPath(Call root, List<Integer> path, Map<Variable, Assignment> assignments)
+    {
+        Call call = root;
+        Reference reference = null;
+        for (int depth = 0; depth < path.size(); depth++) {
+            int argument = path.get(depth);
+            if (argument < 0 || argument >= call.arguments().size()) {
+                return null;
+            }
+            reference = call.arguments().get(argument);
+            if (depth + 1 == path.size()) {
+                return reference;
+            }
+            if (!(reference.producer() instanceof Variable variable)) {
+                return null;
+            }
+            Assignment assignment = assignments.get(variable);
+            if (assignment == null || !(assignment.operation() instanceof Call nestedCall)) {
+                return null;
+            }
+            call = nestedCall;
+        }
+        return reference;
+    }
+
+    private record EvaluatorFunctionCallSite(Call call, Map<Variable, Assignment> assignments, PrimitiveRegistry primitiveRegistry)
+            implements FunctionCallSite
+    {
+        @Override
+        public int argumentCount()
+        {
+            return call.arguments().size();
+        }
+
+        @Override
+        public Argument argument(int index)
+        {
+            Reference reference = call.arguments().get(index);
+            Assignment assignment = reference.producer() instanceof Variable variable ? assignments.get(variable) : null;
+            return new Argument()
+            {
+                @Override
+                public Optional<Object> literal()
+                {
+                    return assignment != null && assignment.operation() instanceof Literal literal
+                            ? Optional.ofNullable(literal.value())
+                            : Optional.empty();
+                }
+
+                @Override
+                public Optional<FunctionCallSite> call()
+                {
+                    return assignment != null && assignment.operation() instanceof Call nestedCall
+                            ? Optional.of(new EvaluatorFunctionCallSite(nestedCall, assignments, primitiveRegistry))
+                            : Optional.empty();
+                }
+            };
+        }
+
+        @Override
+        public <T extends FunctionCapability> Optional<T> capability(Class<T> capabilityType)
+        {
+            return primitiveRegistry.capability(call, capabilityType);
+        }
     }
 
     public Streams evaluate(Reference reference, Mask mask)
@@ -1428,9 +1521,9 @@ public final class PlanEvaluator
 
     private Mask tryEvaluatePrimitiveMask(Reference reference, Mask mask, boolean selectTrue)
     {
-        Mask substringInSetMask = tryEvaluateSubstringInSetMask(reference, mask, selectTrue);
-        if (substringInSetMask != null) {
-            return substringInSetMask;
+        Mask dictionaryPredicateMask = tryEvaluateDictionaryPredicateMask(reference, mask, selectTrue);
+        if (dictionaryPredicateMask != null) {
+            return dictionaryPredicateMask;
         }
 
         CompiledPreboundMask compiled = compiledPreboundMask(reference);
@@ -1464,7 +1557,7 @@ public final class PlanEvaluator
             }
             return true;
         }
-        if (tryEvaluateSubstringInSetMaskInPlace(reference, mask, selectTrue)) {
+        if (tryEvaluateDictionaryPredicateMaskInPlace(reference, mask, selectTrue)) {
             return true;
         }
 
@@ -1595,18 +1688,18 @@ public final class PlanEvaluator
         mask.retainIf(position -> !values.value(position));
     }
 
-    private Mask tryEvaluateSubstringInSetMask(Reference reference, Mask mask, boolean selectMatches)
+    private Mask tryEvaluateDictionaryPredicateMask(Reference reference, Mask mask, boolean selectMatches)
     {
-        SubstringInSetInputs inputs = resolveSubstringInSetInputs(reference, mask);
+        DictionaryPredicateInputs inputs = resolveDictionaryPredicateInputs(reference, mask);
         if (inputs == null) {
             return null;
         }
-        return evaluateSubstringInSetMask(inputs, mask, selectMatches);
+        return evaluateDictionaryPredicateMask(inputs, mask, selectMatches);
     }
 
-    private boolean tryEvaluateSubstringInSetMaskInPlace(Reference reference, Mask mask, boolean selectMatches)
+    private boolean tryEvaluateDictionaryPredicateMaskInPlace(Reference reference, Mask mask, boolean selectMatches)
     {
-        SubstringInSetInputs inputs = resolveSubstringInSetInputs(reference, mask);
+        DictionaryPredicateInputs inputs = resolveDictionaryPredicateInputs(reference, mask);
         if (inputs == null) {
             return false;
         }
@@ -1615,8 +1708,8 @@ public final class PlanEvaluator
             int[] ids = inputs.dictionary().ids();
             int[] nestedIds = nestedDictionary.ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (shouldEvaluateFullSubstringDictionary(nestedValues, mask)) {
-                boolean[] nestedMatches = evaluateSubstringMembership(nestedValues, inputs);
+            if (shouldEvaluateFullDictionary(nestedValues, mask)) {
+                boolean[] nestedMatches = evaluateDictionaryPredicate(nestedValues, inputs);
                 if (nulls == null) {
                     mask.retainIf(position -> nestedMatches[nestedIds[ids[position]]] == selectMatches);
                 }
@@ -1625,12 +1718,12 @@ public final class PlanEvaluator
                 }
             }
             else {
-                Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+                Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
                 if (nulls == null) {
-                    mask.retainIf(position -> substringMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == matchStatus(selectMatches));
                 }
                 else {
-                    mask.retainIf(position -> !nulls.value(position) && substringMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> !nulls.value(position) && dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == matchStatus(selectMatches));
                 }
             }
             return true;
@@ -1642,8 +1735,8 @@ public final class PlanEvaluator
             int[] nestedIds = nestedDictionary.ids();
             int[] innerIds = innerDictionary.ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (shouldEvaluateFullSubstringDictionary(innerValues, mask)) {
-                boolean[] innerMatches = evaluateSubstringMembership(innerValues, inputs);
+            if (shouldEvaluateFullDictionary(innerValues, mask)) {
+                boolean[] innerMatches = evaluateDictionaryPredicate(innerValues, inputs);
                 if (nulls == null) {
                     mask.retainIf(position -> innerMatches[innerIds[nestedIds[ids[position]]]] == selectMatches);
                 }
@@ -1652,12 +1745,12 @@ public final class PlanEvaluator
                 }
             }
             else {
-                Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+                Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
                 if (nulls == null) {
-                    mask.retainIf(position -> substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> dictionaryMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == matchStatus(selectMatches));
                 }
                 else {
-                    mask.retainIf(position -> !nulls.value(position) && substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> !nulls.value(position) && dictionaryMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == matchStatus(selectMatches));
                 }
             }
             return true;
@@ -1666,8 +1759,8 @@ public final class PlanEvaluator
         if (inputs.dictionary().values() instanceof BinaryVector values) {
             int[] ids = inputs.dictionary().ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (shouldEvaluateFullSubstringDictionary(values, mask)) {
-                boolean[] dictionaryMatches = evaluateSubstringMembership(values, inputs);
+            if (shouldEvaluateFullDictionary(values, mask)) {
+                boolean[] dictionaryMatches = evaluateDictionaryPredicate(values, inputs);
                 if (nulls == null) {
                     mask.retainIf(position -> dictionaryMatches[ids[position]] == selectMatches);
                 }
@@ -1676,20 +1769,20 @@ public final class PlanEvaluator
                 }
             }
             else {
-                Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+                Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
                 if (nulls == null) {
-                    mask.retainIf(position -> substringMatchStatus(matchByValueId, values, ids[position], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == matchStatus(selectMatches));
                 }
                 else {
-                    mask.retainIf(position -> !nulls.value(position) && substringMatchStatus(matchByValueId, values, ids[position], inputs) == matchStatus(selectMatches));
+                    mask.retainIf(position -> !nulls.value(position) && dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == matchStatus(selectMatches));
                 }
             }
             return true;
         }
-        return tryEvaluateGenericSubstringInSetMaskInPlace(inputs, mask, selectMatches);
+        return tryEvaluateGenericDictionaryPredicateMaskInPlace(inputs, mask, selectMatches);
     }
 
-    private boolean tryEvaluateGenericSubstringInSetMaskInPlace(SubstringInSetInputs inputs, Mask mask, boolean selectMatches)
+    private boolean tryEvaluateGenericDictionaryPredicateMaskInPlace(DictionaryPredicateInputs inputs, Mask mask, boolean selectMatches)
     {
         Vector values = inputs.dictionary().values();
         VectorAccess.BinaryValues binaryValues = tryBinaryValues(values);
@@ -1699,8 +1792,8 @@ public final class PlanEvaluator
 
         int[] ids = inputs.dictionary().ids();
         VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-        if (shouldEvaluateFullSubstringDictionary(values.length(), mask)) {
-            boolean[] dictionaryMatches = evaluateSubstringMembership(binaryValues, values.length(), inputs);
+        if (shouldEvaluateFullDictionary(values.length(), mask)) {
+            boolean[] dictionaryMatches = evaluateDictionaryPredicate(binaryValues, values.length(), inputs);
             if (nulls == null) {
                 mask.retainIf(position -> dictionaryMatches[ids[position]] == selectMatches);
             }
@@ -1710,28 +1803,28 @@ public final class PlanEvaluator
         }
         else {
             byte selectedStatus = matchStatus(selectMatches);
-            Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+            Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
             if (nulls == null) {
-                mask.retainIf(position -> substringMatchStatus(matchByValueId, binaryValues, ids[position], inputs) == selectedStatus);
+                mask.retainIf(position -> dictionaryMatchStatus(matchByValueId, binaryValues, ids[position], inputs) == selectedStatus);
             }
             else {
-                mask.retainIf(position -> !nulls.value(position) && substringMatchStatus(matchByValueId, binaryValues, ids[position], inputs) == selectedStatus);
+                mask.retainIf(position -> !nulls.value(position) && dictionaryMatchStatus(matchByValueId, binaryValues, ids[position], inputs) == selectedStatus);
             }
         }
         return true;
     }
 
-    private Mask evaluateSubstringInSetMask(SubstringInSetInputs inputs, Mask mask, boolean selectMatches)
+    private Mask evaluateDictionaryPredicateMask(DictionaryPredicateInputs inputs, Mask mask, boolean selectMatches)
     {
         if (inputs.dictionary().values() instanceof DictionaryVector nestedDictionary && nestedDictionary.values() instanceof BinaryVector nestedValues) {
             int[] ids = inputs.dictionary().ids();
             int[] nestedIds = nestedDictionary.ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (!shouldEvaluateFullSubstringDictionary(nestedValues, mask)) {
-                return evaluateSparseNestedSubstringInSetMask(inputs, mask, selectMatches, nestedValues, ids, nestedIds, nulls);
+            if (!shouldEvaluateFullDictionary(nestedValues, mask)) {
+                return evaluateSparseNestedDictionaryPredicateMask(inputs, mask, selectMatches, nestedValues, ids, nestedIds, nulls);
             }
 
-            boolean[] nestedMatches = evaluateSubstringMembership(nestedValues, inputs);
+            boolean[] nestedMatches = evaluateDictionaryPredicate(nestedValues, inputs);
 
             int selectedCount = 0;
             if (nulls == null) {
@@ -1775,11 +1868,11 @@ public final class PlanEvaluator
             int[] nestedIds = nestedDictionary.ids();
             int[] innerIds = innerDictionary.ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (!shouldEvaluateFullSubstringDictionary(innerValues, mask)) {
-                return evaluateSparseDoubleNestedSubstringInSetMask(inputs, mask, selectMatches, innerValues, ids, nestedIds, innerIds, nulls);
+            if (!shouldEvaluateFullDictionary(innerValues, mask)) {
+                return evaluateSparseDoubleNestedDictionaryPredicateMask(inputs, mask, selectMatches, innerValues, ids, nestedIds, innerIds, nulls);
             }
 
-            boolean[] innerMatches = evaluateSubstringMembership(innerValues, inputs);
+            boolean[] innerMatches = evaluateDictionaryPredicate(innerValues, inputs);
 
             int selectedCount = 0;
             if (nulls == null) {
@@ -1819,11 +1912,11 @@ public final class PlanEvaluator
         if (inputs.dictionary().values() instanceof BinaryVector values) {
             int[] ids = inputs.dictionary().ids();
             VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-            if (!shouldEvaluateFullSubstringDictionary(values, mask)) {
-                return evaluateSparseSubstringInSetMask(inputs, mask, selectMatches, values, ids, nulls);
+            if (!shouldEvaluateFullDictionary(values, mask)) {
+                return evaluateSparseDictionaryPredicateMask(inputs, mask, selectMatches, values, ids, nulls);
             }
 
-            boolean[] dictionaryMatches = evaluateSubstringMembership(values, inputs);
+            boolean[] dictionaryMatches = evaluateDictionaryPredicate(values, inputs);
 
             int selectedCount = 0;
             if (nulls == null) {
@@ -1859,10 +1952,10 @@ public final class PlanEvaluator
             }
             return allocator.allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
         }
-        return evaluateGenericSubstringInSetMask(inputs, mask, selectMatches);
+        return evaluateGenericDictionaryPredicateMask(inputs, mask, selectMatches);
     }
 
-    private Mask evaluateGenericSubstringInSetMask(SubstringInSetInputs inputs, Mask mask, boolean selectMatches)
+    private Mask evaluateGenericDictionaryPredicateMask(DictionaryPredicateInputs inputs, Mask mask, boolean selectMatches)
     {
         Vector values = inputs.dictionary().values();
         VectorAccess.BinaryValues binaryValues = tryBinaryValues(values);
@@ -1872,11 +1965,11 @@ public final class PlanEvaluator
 
         int[] ids = inputs.dictionary().ids();
         VectorAccess.BooleanValues nulls = nullFreeValues(inputs.nulls());
-        if (!shouldEvaluateFullSubstringDictionary(values.length(), mask)) {
-            return evaluateSparseSubstringInSetMask(inputs, mask, selectMatches, binaryValues, ids, nulls);
+        if (!shouldEvaluateFullDictionary(values.length(), mask)) {
+            return evaluateSparseDictionaryPredicateMask(inputs, mask, selectMatches, binaryValues, ids, nulls);
         }
 
-        boolean[] dictionaryMatches = evaluateSubstringMembership(binaryValues, values.length(), inputs);
+        boolean[] dictionaryMatches = evaluateDictionaryPredicate(binaryValues, values.length(), inputs);
 
         int selectedCount = 0;
         if (nulls == null) {
@@ -1913,8 +2006,8 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
-    private Mask evaluateSparseNestedSubstringInSetMask(
-            SubstringInSetInputs inputs,
+    private Mask evaluateSparseNestedDictionaryPredicateMask(
+            DictionaryPredicateInputs inputs,
             Mask mask,
             boolean selectMatches,
             BinaryVector nestedValues,
@@ -1923,13 +2016,13 @@ public final class PlanEvaluator
             VectorAccess.BooleanValues nulls)
     {
         byte selectedStatus = matchStatus(selectMatches);
-        Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+        Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
         boolean allSelected = true;
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
             for (int position : mask) {
-                if (substringMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
+                if (dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -1946,7 +2039,7 @@ public final class PlanEvaluator
         }
         else {
             for (int position : mask) {
-                if (!nulls.value(position) && substringMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
+                if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, nestedValues, nestedIds[ids[position]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -1967,8 +2060,8 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
-    private Mask evaluateSparseDoubleNestedSubstringInSetMask(
-            SubstringInSetInputs inputs,
+    private Mask evaluateSparseDoubleNestedDictionaryPredicateMask(
+            DictionaryPredicateInputs inputs,
             Mask mask,
             boolean selectMatches,
             BinaryVector innerValues,
@@ -1978,7 +2071,7 @@ public final class PlanEvaluator
             VectorAccess.BooleanValues nulls)
     {
         byte selectedStatus = matchStatus(selectMatches);
-        Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+        Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
         boolean allSelected = true;
         int[] positions = null;
         int selectedCount = 0;
@@ -1986,7 +2079,7 @@ public final class PlanEvaluator
         if (nulls == null) {
             for (int inputIndex = 0; inputIndex < inputCount; inputIndex++) {
                 int position = mask.position(inputIndex);
-                if (substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
+                if (dictionaryMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, inputCount);
                         positions[selectedCount] = position;
@@ -2004,7 +2097,7 @@ public final class PlanEvaluator
         else {
             for (int inputIndex = 0; inputIndex < inputCount; inputIndex++) {
                 int position = mask.position(inputIndex);
-                if (!nulls.value(position) && substringMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
+                if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, innerValues, innerIds[nestedIds[ids[position]]], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, inputCount);
                         positions[selectedCount] = position;
@@ -2025,8 +2118,8 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
-    private Mask evaluateSparseSubstringInSetMask(
-            SubstringInSetInputs inputs,
+    private Mask evaluateSparseDictionaryPredicateMask(
+            DictionaryPredicateInputs inputs,
             Mask mask,
             boolean selectMatches,
             BinaryVector values,
@@ -2034,13 +2127,13 @@ public final class PlanEvaluator
             VectorAccess.BooleanValues nulls)
     {
         byte selectedStatus = matchStatus(selectMatches);
-        Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+        Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
         boolean allSelected = true;
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
             for (int position : mask) {
-                if (substringMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
+                if (dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -2057,7 +2150,7 @@ public final class PlanEvaluator
         }
         else {
             for (int position : mask) {
-                if (!nulls.value(position) && substringMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
+                if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -2078,8 +2171,8 @@ public final class PlanEvaluator
         return allocator.allocateSparseMask(allocationContext, positions, selectedCount, mask.size());
     }
 
-    private Mask evaluateSparseSubstringInSetMask(
-            SubstringInSetInputs inputs,
+    private Mask evaluateSparseDictionaryPredicateMask(
+            DictionaryPredicateInputs inputs,
             Mask mask,
             boolean selectMatches,
             VectorAccess.BinaryValues values,
@@ -2087,13 +2180,13 @@ public final class PlanEvaluator
             VectorAccess.BooleanValues nulls)
     {
         byte selectedStatus = matchStatus(selectMatches);
-        Int2ByteOpenHashMap matchByValueId = substringMatchCache(mask);
+        Int2ByteOpenHashMap matchByValueId = dictionaryMatchCache(mask);
         boolean allSelected = true;
         int[] positions = null;
         int selectedCount = 0;
         if (nulls == null) {
             for (int position : mask) {
-                if (substringMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
+                if (dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -2110,7 +2203,7 @@ public final class PlanEvaluator
         }
         else {
             for (int position : mask) {
-                if (!nulls.value(position) && substringMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
+                if (!nulls.value(position) && dictionaryMatchStatus(matchByValueId, values, ids[position], inputs) == selectedStatus) {
                     if (!allSelected) {
                         positions = ensurePositionCapacity(positions, selectedCount, mask.count());
                         positions[selectedCount] = position;
@@ -2161,117 +2254,65 @@ public final class PlanEvaluator
         return Arrays.copyOf(positions, Math.min(maxCount, positions.length * 2));
     }
 
-    private SubstringInSetInputs resolveSubstringInSetInputs(Reference reference, Mask mask)
+    private DictionaryPredicateInputs resolveDictionaryPredicateInputs(Reference reference, Mask mask)
     {
         if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
             return null;
         }
 
-        Assignment assignment = assignments.get(variable);
-        if (assignment == null || !(assignment.operation() instanceof Call inSetCall) || !inSetCall.name().equals("in_utf8") || inSetCall.arguments().size() < 2) {
+        BoundDictionaryMaskOptimization optimization = dictionaryMaskOptimizations.get(variable);
+        if (optimization == null) {
             return null;
         }
 
-        Reference substringReference = inSetCall.arguments().getFirst();
-        if (substringReference.stream() != Stream.VALUES || !(substringReference.producer() instanceof Variable substringVariable)) {
-            return null;
-        }
-
-        Assignment substringAssignment = assignments.get(substringVariable);
-        if (substringAssignment == null || !(substringAssignment.operation() instanceof Call substringCall) || !substringCall.name().equals("substring_utf8") || substringCall.arguments().size() != 3) {
-            return null;
-        }
-
-        OptionalLong start = literalLong(substringCall.arguments().get(1));
-        OptionalLong length = literalLong(substringCall.arguments().get(2));
-        if (start.isEmpty() || length.isEmpty()) {
-            return null;
-        }
-
-        byte[][] literals = literalUtf8Values(inSetCall.arguments().subList(1, inSetCall.arguments().size()));
-        if (literals == null) {
-            return null;
-        }
-
-        Streams source = evaluateArgument(substringCall.arguments().getFirst(), mask, PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS, true);
+        Streams source = evaluateArgument(optimization.source(), mask, PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS, true);
         if (!source.has(Stream.VALUES) || !(source.values() instanceof DictionaryVector dictionary)) {
             return null;
         }
 
-        return new SubstringInSetInputs(
-                dictionary,
-                source.getOrNull(Stream.NULLS),
-                literals,
-                start.getAsLong(),
-                length.getAsLong(),
-                PackedAsciiSubstringSet.create(literals, start.getAsLong(), length.getAsLong()));
-    }
-
-    private OptionalLong literalLong(Reference reference)
-    {
-        Object value = literalValue(reference);
-        return value instanceof Long longValue ? OptionalLong.of(longValue) : OptionalLong.empty();
-    }
-
-    private byte[][] literalUtf8Values(List<Reference> references)
-    {
-        byte[][] values = new byte[references.size()][];
-        for (int index = 0; index < references.size(); index++) {
-            Object value = literalValue(references.get(index));
-            if (!(value instanceof String stringValue)) {
-                return null;
-            }
-            values[index] = stringValue.getBytes(UTF_8);
+        Vector dictionaryValues = dictionary.values();
+        while (dictionaryValues instanceof DictionaryVector nested) {
+            dictionaryValues = nested.values();
         }
-        return values;
+        DictionaryMaskOptimization.PositionPredicate predicate =
+                optimization.predicate().bind(dictionaryValues).orElse(null);
+        return predicate == null
+                ? null
+                : new DictionaryPredicateInputs(dictionary, source.getOrNull(Stream.NULLS), predicate);
     }
 
-    private Object literalValue(Reference reference)
-    {
-        if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
-            return null;
-        }
-        Assignment assignment = assignments.get(variable);
-        if (assignment == null || !(assignment.operation() instanceof Literal literal)) {
-            return null;
-        }
-        return literal.value();
-    }
-
-    private static boolean[] evaluateSubstringMembership(BinaryVector values, SubstringInSetInputs inputs)
+    private static boolean[] evaluateDictionaryPredicate(BinaryVector values, DictionaryPredicateInputs inputs)
     {
         boolean[] matches = new boolean[values.length()];
-        byte[] data = values.data();
         for (int position = 0; position < matches.length; position++) {
-            matches[position] = substringMatchesAny(data, values.startOffset(position), values.length(position), inputs);
+            matches[position] = inputs.predicate().test(position);
         }
         return matches;
     }
 
-    private static boolean[] evaluateSubstringMembership(VectorAccess.BinaryValues values, int length, SubstringInSetInputs inputs)
+    private static boolean[] evaluateDictionaryPredicate(VectorAccess.BinaryValues values, int length, DictionaryPredicateInputs inputs)
     {
         boolean[] matches = new boolean[length];
         for (int position = 0; position < matches.length; position++) {
-            VectorAccess.BinarySlice value = values.value(position);
-            matches[position] = substringMatchesAny(value.data(), value.offset(), value.length(), inputs);
+            matches[position] = inputs.predicate().test(position);
         }
         return matches;
     }
 
-    private static boolean shouldEvaluateFullSubstringDictionary(BinaryVector values, Mask mask)
+    private static boolean shouldEvaluateFullDictionary(BinaryVector values, Mask mask)
     {
-        return shouldEvaluateFullSubstringDictionary(values.length(), mask);
+        return shouldEvaluateFullDictionary(values.length(), mask);
     }
 
-    private static boolean shouldEvaluateFullSubstringDictionary(int valueCount, Mask mask)
+    private static boolean shouldEvaluateFullDictionary(int valueCount, Mask mask)
     {
         return valueCount <= (long) mask.selectedCount() * DICTIONARY_PEEL_SPARSE_RATIO;
     }
 
-    private static Int2ByteOpenHashMap substringMatchCache(Mask mask)
+    private static Int2ByteOpenHashMap dictionaryMatchCache(Mask mask)
     {
         Int2ByteOpenHashMap matchByValueId = new Int2ByteOpenHashMap(Math.min(mask.selectedCount(), 1024));
-        matchByValueId.defaultReturnValue(UNKNOWN_SUBSTRING_MATCH);
+        matchByValueId.defaultReturnValue(UNKNOWN_DICTIONARY_MATCH);
         return matchByValueId;
     }
 
@@ -2280,29 +2321,28 @@ public final class PlanEvaluator
         return VectorAccess.isAllFalseNulls(nulls) ? null : VectorAccess.booleanValues(nulls);
     }
 
-    private static byte substringMatchStatus(Int2ByteOpenHashMap matchByValueId, BinaryVector values, int valueId, SubstringInSetInputs inputs)
+    private static byte dictionaryMatchStatus(Int2ByteOpenHashMap matchByValueId, BinaryVector values, int valueId, DictionaryPredicateInputs inputs)
     {
         byte status = matchByValueId.get(valueId);
-        if (status != UNKNOWN_SUBSTRING_MATCH) {
+        if (status != UNKNOWN_DICTIONARY_MATCH) {
             return status;
         }
-        status = substringMatchesAny(values.data(), values.startOffset(valueId), values.length(valueId), inputs)
-                ? SUBSTRING_MATCH
-                : SUBSTRING_MISMATCH;
+        status = inputs.predicate().test(valueId)
+                ? DICTIONARY_MATCH
+                : DICTIONARY_MISMATCH;
         matchByValueId.put(valueId, status);
         return status;
     }
 
-    private static byte substringMatchStatus(Int2ByteOpenHashMap matchByValueId, VectorAccess.BinaryValues values, int valueId, SubstringInSetInputs inputs)
+    private static byte dictionaryMatchStatus(Int2ByteOpenHashMap matchByValueId, VectorAccess.BinaryValues values, int valueId, DictionaryPredicateInputs inputs)
     {
         byte status = matchByValueId.get(valueId);
-        if (status != UNKNOWN_SUBSTRING_MATCH) {
+        if (status != UNKNOWN_DICTIONARY_MATCH) {
             return status;
         }
-        VectorAccess.BinarySlice value = values.value(valueId);
-        status = substringMatchesAny(value.data(), value.offset(), value.length(), inputs)
-                ? SUBSTRING_MATCH
-                : SUBSTRING_MISMATCH;
+        status = inputs.predicate().test(valueId)
+                ? DICTIONARY_MATCH
+                : DICTIONARY_MISMATCH;
         matchByValueId.put(valueId, status);
         return status;
     }
@@ -2317,21 +2357,9 @@ public final class PlanEvaluator
         }
     }
 
-    private static boolean substringMatchesAny(byte[] data, int offset, int length, SubstringInSetInputs inputs)
-    {
-        PackedAsciiSubstringSet packedAscii = inputs.packedAscii();
-        if (packedAscii != null) {
-            return packedAscii.matches(data, offset, length, inputs.literals(), inputs.start(), inputs.length());
-        }
-        if (ASCII_SUBSTRING_IN_SET_MASK) {
-            return Utf8Support.substringMatchesAnyAsciiFast(data, offset, length, inputs.start(), inputs.length(), inputs.literals());
-        }
-        return Utf8Support.substringMatchesAny(data, offset, length, inputs.start(), inputs.length(), inputs.literals());
-    }
-
     private static byte matchStatus(boolean matches)
     {
-        return matches ? SUBSTRING_MATCH : SUBSTRING_MISMATCH;
+        return matches ? DICTIONARY_MATCH : DICTIONARY_MISMATCH;
     }
 
     private PrimitiveMaskInvocation resolveMaskPrimitiveInvocation(Reference reference, Mask mask)
@@ -2370,63 +2398,14 @@ public final class PlanEvaluator
         return maskInvocation;
     }
 
-    private record SubstringInSetInputs(DictionaryVector dictionary, Vector nulls, byte[][] literals, long start, long length, PackedAsciiSubstringSet packedAscii) {}
+    private record BoundDictionaryMaskOptimization(
+            Reference source,
+            DictionaryMaskOptimization.DictionaryValuePredicate predicate) {}
 
-    private record PackedAsciiSubstringSet(long[] values, int length)
-    {
-        private static PackedAsciiSubstringSet create(byte[][] literals, long start, long length)
-        {
-            if (!PACKED_ASCII_PREFIX_SUBSTRING_IN_SET_MASK || !ASCII_SUBSTRING_IN_SET_MASK || start != 1 || length <= 0 || length > Long.BYTES) {
-                return null;
-            }
-            int byteLength = (int) length;
-            long[] packed = new long[literals.length];
-            for (int index = 0; index < literals.length; index++) {
-                byte[] literal = literals[index];
-                if (literal.length != byteLength || !isAscii(literal, 0, byteLength)) {
-                    return null;
-                }
-                packed[index] = pack(literal, 0, byteLength);
-            }
-            return new PackedAsciiSubstringSet(packed, byteLength);
-        }
-
-        private boolean matches(byte[] data, int offset, int dataLength, byte[][] literals, long start, long count)
-        {
-            if (dataLength < length) {
-                return false;
-            }
-            if (!isAscii(data, offset, length)) {
-                return Utf8Support.substringMatchesAny(data, offset, dataLength, start, count, literals);
-            }
-            long candidate = pack(data, offset, length);
-            for (long value : values) {
-                if (candidate == value) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private static boolean isAscii(byte[] data, int offset, int length)
-        {
-            for (int index = 0; index < length; index++) {
-                if (data[offset + index] < 0) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        private static long pack(byte[] data, int offset, int length)
-        {
-            long result = 0;
-            for (int index = 0; index < length; index++) {
-                result |= (long) (data[offset + index] & 0xFF) << (index * Byte.SIZE);
-            }
-            return result;
-        }
-    }
+    private record DictionaryPredicateInputs(
+            DictionaryVector dictionary,
+            Vector nulls,
+            DictionaryMaskOptimization.PositionPredicate predicate) {}
 
     private static long readLong(Vector vector, int position)
     {

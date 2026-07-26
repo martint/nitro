@@ -35,7 +35,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "substring_utf8")
+@ScalarFunction(name = "substring_utf8", capabilities = SubstringUtf8BinarySliceProjection.class)
 public final class SubstringUtf8
         implements PrimitiveFunction
 {

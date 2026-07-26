@@ -27,7 +27,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "in_utf8", capabilities = InUtf8ProjectionOptimization.class)
+@ScalarFunction(name = "in_utf8", capabilities = {InUtf8ProjectionOptimization.class, InUtf8DictionaryMaskOptimization.class})
 public final class InUtf8
         implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
