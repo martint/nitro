@@ -17,15 +17,34 @@ import org.weakref.nitro.core.type.TypeBinding;
 
 import static java.util.Objects.requireNonNull;
 
-/// Default source-local handle for a field addressed by output ordinal.
-public record OrdinalSourceColumnHandle(int ordinal, TypeBinding type)
+/// Source-local identity for a field addressed by output ordinal.
+///
+/// This is deliberately an identity object rather than a value record. A source must create and retain one
+/// instance per output field; handles created independently, even with the same ordinal and type, belong to
+/// different source identities.
+public final class OrdinalSourceColumnHandle
         implements SourceColumnHandle
 {
-    public OrdinalSourceColumnHandle
+    private final int ordinal;
+    private final TypeBinding type;
+
+    public OrdinalSourceColumnHandle(int ordinal, TypeBinding type)
     {
         if (ordinal < 0) {
             throw new IllegalArgumentException("ordinal is negative");
         }
-        type = requireNonNull(type, "type is null");
+        this.ordinal = ordinal;
+        this.type = requireNonNull(type, "type is null");
+    }
+
+    public int ordinal()
+    {
+        return ordinal;
+    }
+
+    @Override
+    public TypeBinding type()
+    {
+        return type;
     }
 }
