@@ -7060,9 +7060,6 @@ public class HashJoinOperator
         private final SingleLongList singleMatch = new SingleLongList();
         private final ChainLongList scalarChain = new ChainLongList();
         private ChainLongList[] chainMatches;
-        // Reusable per-batch key gather buffers for the native (Rust) prefetching probe (see NativeProbe).
-        private long[] nativeFirst;
-        private long[] nativeSecond;
 
         private LongPairJoinIndex(
                 HashJoinIndexPolicy policy,
@@ -7354,23 +7351,6 @@ public class HashJoinOperator
             VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
             VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
             if (!hasNulls) {
-                if (NativeProbe.ENABLED && !compactKeys && !keyOnlyBuild) {
-                    if (nativeFirst == null || nativeFirst.length < positionCount) {
-                        long[] previousFirst = nativeFirst;
-                        long[] previousSecond = nativeSecond;
-                        nativeFirst = arrayPool.borrowLongs(positionCount);
-                        nativeSecond = arrayPool.borrowLongs(positionCount);
-                        arrayPool.release(previousFirst);
-                        arrayPool.release(previousSecond);
-                    }
-                    for (int index = 0; index < positionCount; index++) {
-                        int position = positions[index];
-                        nativeFirst[index] = firstValues.value(position);
-                        nativeSecond[index] = secondValues.value(position);
-                    }
-                    NativeProbe.probePairs(tags, entries, nativeFirst, nativeSecond, positionCount, refs, NativeProbe.DISTANCE);
-                    return;
-                }
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
                     refs[index] = singleRef(firstValues.value(position), secondValues.value(position));
@@ -7917,10 +7897,6 @@ public class HashJoinOperator
             duplicateRows = null;
             arrayPool.release(keyOnlyCounts);
             keyOnlyCounts = null;
-            arrayPool.release(nativeFirst);
-            nativeFirst = null;
-            arrayPool.release(nativeSecond);
-            nativeSecond = null;
         }
 
         private void appendDuplicateRow(int slot, long existingRowReference, long rowReference)
@@ -8175,10 +8151,6 @@ public class HashJoinOperator
         private int size;
         private boolean tripleHasDuplicates;
         private final SingleLongList singleMatch = new SingleLongList();
-        // Reusable per-batch key gather buffers for the native (Rust) prefetching probe (see NativeProbe).
-        private long[] nativeFirst;
-        private long[] nativeSecond;
-        private long[] nativeThird;
 
         private LongTripleJoinIndex(HashJoinExecutionPolicy executionPolicy, PrimitiveArrayPool arrayPool, int expectedSize)
         {
@@ -8325,27 +8297,6 @@ public class HashJoinOperator
             VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
             VectorAccess.LongValues thirdValues = VectorAccess.longValues(valuesArray[2]);
             if (!hasNulls) {
-                if (NativeProbe.ENABLED) {
-                    if (nativeFirst == null || nativeFirst.length < positionCount) {
-                        long[] previousFirst = nativeFirst;
-                        long[] previousSecond = nativeSecond;
-                        long[] previousThird = nativeThird;
-                        nativeFirst = arrayPool.borrowLongs(positionCount);
-                        nativeSecond = arrayPool.borrowLongs(positionCount);
-                        nativeThird = arrayPool.borrowLongs(positionCount);
-                        arrayPool.release(previousFirst);
-                        arrayPool.release(previousSecond);
-                        arrayPool.release(previousThird);
-                    }
-                    for (int index = 0; index < positionCount; index++) {
-                        int position = positions[index];
-                        nativeFirst[index] = firstValues.value(position);
-                        nativeSecond[index] = secondValues.value(position);
-                        nativeThird[index] = thirdValues.value(position);
-                    }
-                    NativeProbe.probeTriples(tags, entries, nativeFirst, nativeSecond, nativeThird, positionCount, refs, NativeProbe.DISTANCE);
-                    return;
-                }
                 for (int index = 0; index < positionCount; index++) {
                     int position = positions[index];
                     refs[index] = singleRef(firstValues.value(position), secondValues.value(position), thirdValues.value(position));
@@ -8435,12 +8386,6 @@ public class HashJoinOperator
             entries = null;
             releaseRowsBySlot(rowsBySlot);
             rowsBySlot = null;
-            arrayPool.release(nativeFirst);
-            nativeFirst = null;
-            arrayPool.release(nativeSecond);
-            nativeSecond = null;
-            arrayPool.release(nativeThird);
-            nativeThird = null;
         }
 
         private void releaseRowsBySlot(LongArrayList[] rows)
