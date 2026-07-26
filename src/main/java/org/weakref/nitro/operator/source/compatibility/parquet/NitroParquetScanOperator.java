@@ -33,6 +33,7 @@ import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetFile;
+import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -332,7 +333,8 @@ public final class NitroParquetScanOperator
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
-                resources.decompressedPageCachePolicy());
+                resources.decompressedPageCachePolicy(),
+                resources.rleReaderPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -342,7 +344,8 @@ public final class NitroParquetScanOperator
             Object batchBufferPoolKey,
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
-            DecompressedPageCachePolicy decompressedPageCachePolicy)
+            DecompressedPageCachePolicy decompressedPageCachePolicy,
+            RleReaderPolicy rleReaderPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -377,7 +380,14 @@ public final class NitroParquetScanOperator
 
         for (int c = 0; c < columnCount; c++) {
             ParquetFile.Column first = files[0].column(columns.get(c));
-            readers[c] = new ColumnReader(first.type(), first.optional(), first.typeLength(), first.decimal(), decompressedPages, arrayPool);
+            readers[c] = new ColumnReader(
+                    first.type(),
+                    first.optional(),
+                    first.typeLength(),
+                    first.decimal(),
+                    decompressedPages,
+                    arrayPool,
+                    rleReaderPolicy);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];

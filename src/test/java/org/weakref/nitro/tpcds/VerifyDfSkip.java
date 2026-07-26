@@ -17,6 +17,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
+import org.weakref.nitro.parquet.RleReaderPolicy;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -159,7 +160,14 @@ public final class VerifyDfSkip
             ParquetFile file = ParquetFile.open(p);
             ParquetFile.Column col = file.column(column);
             if (reader == null) {
-                reader = new ColumnReader(col.type(), col.optional(), col.typeLength(), col.decimal(), null, arrayPool);
+                reader = new ColumnReader(
+                        col.type(),
+                        col.optional(),
+                        col.typeLength(),
+                        col.decimal(),
+                        null,
+                        arrayPool,
+                        RleReaderPolicy.defaults());
             }
             for (var rowGroup : file.rowGroups()) {
                 reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);

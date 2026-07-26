@@ -21,6 +21,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestRleReader
 {
+    private static final RleReaderPolicy DEFAULT_POLICY = RleReaderPolicy.defaults();
+
     @Test
     void testRleHeadersAcrossEveryUlebWidth()
     {
@@ -29,7 +31,7 @@ class TestRleReader
             int offset = writeUleb128(encoded, header);
             encoded[offset] = 73;
 
-            RleReader reader = new RleReader();
+            RleReader reader = new RleReader(DEFAULT_POLICY);
             reader.init(MemorySegment.ofArray(encoded), 0, 16);
             assertThat(reader.nextRun(1)).isEqualTo(1);
             assertThat(reader.currentRleValue()).isEqualTo(73);
@@ -45,7 +47,7 @@ class TestRleReader
         encoded[offset++] = 3; // one eight-value bit-packed group
         encoded[offset] = (byte) 0xFF;
 
-        RleReader reader = new RleReader();
+        RleReader reader = new RleReader(DEFAULT_POLICY);
         reader.init(MemorySegment.ofArray(encoded), 0, 1);
 
         assertThat(reader.consumeIfAllOnes(12)).isTrue();
@@ -58,7 +60,7 @@ class TestRleReader
         int offset = writeUleb128(encoded, 3);
         encoded[offset] = 0x1F; // five live ones followed by three zero padding bits
 
-        RleReader reader = new RleReader();
+        RleReader reader = new RleReader(DEFAULT_POLICY);
         reader.init(MemorySegment.ofArray(encoded), 0, 1);
 
         assertThat(reader.consumeIfAllOnes(5)).isTrue();
@@ -71,7 +73,7 @@ class TestRleReader
         int offset = writeUleb128(encoded, 3);
         encoded[offset] = (byte) 0xEF;
 
-        RleReader reader = new RleReader();
+        RleReader reader = new RleReader(DEFAULT_POLICY);
         reader.init(MemorySegment.ofArray(encoded), 0, 1);
 
         assertThat(reader.consumeIfAllOnes(8)).isFalse();
@@ -83,9 +85,9 @@ class TestRleReader
         int[] definitionLevels = {1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1};
         int[] dictionaryIds = {0, 1, 2, 3, 4, 5, 6, 7, 1, 4, 6, 2};
 
-        RleReader definitions = new RleReader();
+        RleReader definitions = new RleReader(DEFAULT_POLICY);
         definitions.init(MemorySegment.ofArray(bitPackedRun(1, definitionLevels)), 0, 1);
-        RleReader ids = new RleReader();
+        RleReader ids = new RleReader(DEFAULT_POLICY);
         ids.init(MemorySegment.ofArray(bitPackedRun(3, dictionaryIds)), 0, 3);
 
         boolean[] accepted = new boolean[8];
@@ -104,6 +106,46 @@ class TestRleReader
         assertThat(output).isEqualTo(6);
         assertThat(survivors).startsWith(1, 6, 8, 11, 13, 14);
         assertThat(values).startsWith(101, 104, 106, 101, 104, 106);
+    }
+
+    @Test
+    void testDisabledPolicyUsesGenericDecodingPaths()
+    {
+        RleReaderPolicy policy = new RleReaderPolicy(false, false, false, false);
+
+        byte[] header = new byte[16];
+        int offset = writeUleb128(header, 16_384);
+        header[offset] = 73;
+        RleReader headerReader = new RleReader(policy);
+        headerReader.init(MemorySegment.ofArray(header), 0, 16);
+        assertThat(headerReader.nextRun(1)).isEqualTo(1);
+        assertThat(headerReader.currentRleValue()).isEqualTo(73);
+
+        byte[] definitionsData = new byte[24];
+        offset = writeUleb128(definitionsData, 8);
+        definitionsData[offset++] = 1;
+        definitionsData[offset++] = 3;
+        definitionsData[offset] = (byte) 0xFF;
+        RleReader singleRunDefinitions = new RleReader(policy);
+        singleRunDefinitions.init(MemorySegment.ofArray(definitionsData), 0, 1);
+        assertThat(singleRunDefinitions.consumeIfAllOnes(12)).isFalse();
+
+        int[] definitionLevels = {1, 1, 0, 1, 1, 0, 1, 1};
+        int[] dictionaryIds = {0, 1, 2, 3, 1, 2};
+        RleReader definitions = new RleReader(policy);
+        definitions.init(MemorySegment.ofArray(bitPackedRun(1, definitionLevels)), 0, 1);
+        RleReader ids = new RleReader(policy);
+        ids.init(MemorySegment.ofArray(bitPackedRun(2, dictionaryIds)), 0, 2);
+
+        boolean[] accepted = {false, true, true, false};
+        int[] survivors = new int[8];
+        long[] values = new long[8];
+        int output = definitions.filterNullableDictionaryLongs(
+                ids, accepted, new long[] {100, 101, 102, 103}, 8, 0, survivors, values, 0);
+
+        assertThat(output).isEqualTo(4);
+        assertThat(survivors).startsWith(1, 3, 6, 7);
+        assertThat(values).startsWith(101, 102, 101, 102);
     }
 
     private static byte[] bitPackedRun(int bitWidth, int[] values)

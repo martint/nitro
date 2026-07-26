@@ -188,12 +188,13 @@ public final class ColumnReader
     private int cachedDictionarySize = Integer.MIN_VALUE;
     private long zeroAcceptedDictionaryRowsObserved;
 
-    private final RleReader rle = new RleReader();
+    private final RleReaderPolicy rleReaderPolicy;
+    private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
     // exactly that many ids, and readRunCountingOnes decodes only a survivor run's levels (O(1) when the run lies
     // within one RLE run). Mirrors Trino's SkipFlatColumnReader.readSelectedNullable; no pageIdIndex prefix is built.
-    private final RleReader defRle = new RleReader();
+    private final RleReader defRle;
     private boolean pageDefStreaming;
     private int defPageCursor;
     private int[] runDef = EMPTY_INTS;
@@ -358,9 +359,13 @@ public final class ColumnReader
             int typeLength,
             boolean decimal,
             DecompressedPageCache decompressedPages,
-            PrimitiveArrayPool arrayPool)
+            PrimitiveArrayPool arrayPool,
+            RleReaderPolicy rleReaderPolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
+        this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
+        this.rle = new RleReader(rleReaderPolicy);
+        this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
         this.optional = optional;
         this.typeLength = typeLength;
@@ -403,7 +408,7 @@ public final class ColumnReader
      */
     public ColumnReader newSibling()
     {
-        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal, decompressedPages, arrayPool);
+        ColumnReader sibling = new ColumnReader(physicalType, optional, typeLength, flbaDecimal, decompressedPages, arrayPool, rleReaderPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }

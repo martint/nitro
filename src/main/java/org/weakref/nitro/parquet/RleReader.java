@@ -16,6 +16,7 @@ package org.weakref.nitro.parquet;
 import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.util.Objects.requireNonNull;
 import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 
 /**
@@ -32,14 +33,7 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
  */
 final class RleReader
 {
-    private static final boolean UNROLLED_ULEB128 =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.unrolledUleb128", "true"));
-    private static final boolean SWAR_ULEB128 =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.swarUleb128", "true"));
-    private static final boolean SCAN_ALL_ONE_DEFINITION_RUNS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.scanAllOneDefinitionRuns", "true"));
-    private static final boolean DIRECT_NULLABLE_DICTIONARY_UNROLL_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "true"));
+    private final RleReaderPolicy policy;
     private MemorySegment segment;
     private long segmentLimit;
     private long position;
@@ -51,6 +45,11 @@ final class RleReader
     private int rleRemaining;
     private int bitPackedRemaining;
     private long bitCursor; // absolute bit offset into the segment, within the active bit-packed run
+
+    RleReader(RleReaderPolicy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
 
     /**
      * Co-advance a nullable definition-level cursor and a dictionary-ID cursor while applying an exact
@@ -207,7 +206,7 @@ final class RleReader
 
                 int idsInRun = Math.min(idPackedRemaining, definitionSpan - processed);
                 int end = processed + idsInRun;
-                if (DIRECT_NULLABLE_DICTIONARY_UNROLL_IDS) {
+                if (policy.directNullableDictionaryUnrollIds()) {
                     while (end - processed >= 4) {
                         int id0 = (int) ((readWord(idData, idBitCursor >>> 3, idLimit) >>> ((int) idBitCursor & 7)) & idMask);
                         idBitCursor += idWidth;
@@ -433,7 +432,7 @@ final class RleReader
         if (rleRemaining == 0 && bitPackedRemaining == 0) {
             loadNextRun();
         }
-        if (!SCAN_ALL_ONE_DEFINITION_RUNS) {
+        if (!policy.scanAllOneDefinitionRuns()) {
             if (rleRemaining < count || rleValue != 1) {
                 return false;
             }
@@ -687,7 +686,7 @@ final class RleReader
             long word = segment.get(LE_LONG, position);
             // Wide dictionary IDs produce varied multi-byte run headers where branch removal wins.
             // Narrow level/ID streams have highly predictable headers and retain the unrolled path.
-            if (SWAR_ULEB128 && bitWidth >= 16) {
+            if (policy.swarUleb128() && bitWidth >= 16) {
                 // Locate the first byte whose continuation bit is clear, then remove the one-bit gap
                 // between each seven-bit payload. Parquet integer run headers are limited to five bytes.
                 long stops = ~word & 0x0000_0080_8080_8080L;
@@ -701,7 +700,7 @@ final class RleReader
                 int payloadBits = Math.min(bytes * 7, Integer.SIZE);
                 return (int) (packed & (-1L >>> (Long.SIZE - payloadBits)));
             }
-            if (UNROLLED_ULEB128) {
+            if (policy.unrolledUleb128()) {
                 int first = (int) word & 0xFF;
                 if ((first & 0x80) == 0) {
                     position++;
