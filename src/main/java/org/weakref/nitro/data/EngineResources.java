@@ -24,6 +24,7 @@ import org.weakref.nitro.operator.GroupIdOperatorPolicy;
 import org.weakref.nitro.operator.GroupingStateResources;
 import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.JoinBufferPolicy;
+import org.weakref.nitro.operator.NestedLoopJoinPolicy;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
@@ -69,6 +70,7 @@ public final class EngineResources
                         aggregationOperator,
                         BufferedJoinInputPolicy.fromSystemProperties(),
                         JoinBufferPolicy.fromSystemProperties(),
+                        NestedLoopJoinPolicy.fromSystemProperties(),
                         SemiJoinOperatorPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
@@ -97,6 +99,7 @@ public final class EngineResources
                         aggregationOperator,
                         BufferedJoinInputPolicy.fromSystemProperties(),
                         JoinBufferPolicy.fromSystemProperties(),
+                        NestedLoopJoinPolicy.fromSystemProperties(),
                         SemiJoinOperatorPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,

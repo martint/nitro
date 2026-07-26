@@ -22,12 +22,14 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 public class NestedLoopJoinOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("NestedLoopJoinOperator", NestedLoopJoinOperator.class);
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.nestedloop.maxBatchRows", 10_000);
 
+    private final NestedLoopJoinPolicy policy;
     private final Allocator allocator;
     private final Operator outer;
     private final Operator inner;
@@ -35,11 +37,11 @@ public class NestedLoopJoinOperator
     private final JoinBufferSupport buffers;
     private final BufferedJoinInput bufferedInner;
     private final JoinOutputBuffer outputBuffer;
-    private final int[] outputOuterPositions = new int[BATCH_SIZE];
-    private final long[] outputInnerRows = new long[BATCH_SIZE];
-    private final int[] innerPositionsScratch = new int[BATCH_SIZE];
-    private final int[] retainedInnerPositionsScratch = new int[BATCH_SIZE];
-    private final int[] retainedInnerMaskPositionsScratch = new int[BATCH_SIZE];
+    private final int[] outputOuterPositions;
+    private final long[] outputInnerRows;
+    private final int[] innerPositionsScratch;
+    private final int[] retainedInnerPositionsScratch;
+    private final int[] retainedInnerMaskPositionsScratch;
     private final Streams[] currentOutputs;
 
     private int currentInnerBatch;
@@ -75,6 +77,7 @@ public class NestedLoopJoinOperator
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
         this(
+                allocator.engineResources().operatorResources().nestedLoopJoinPolicy(),
                 allocator.engineResources().operatorResources().bufferedJoinInputPolicy(),
                 allocator.engineResources().operatorResources().joinBufferPolicy(),
                 allocator,
@@ -84,6 +87,7 @@ public class NestedLoopJoinOperator
     }
 
     private NestedLoopJoinOperator(
+            NestedLoopJoinPolicy policy,
             BufferedJoinInputPolicy bufferedJoinInputPolicy,
             JoinBufferPolicy joinBufferPolicy,
             Allocator allocator,
@@ -91,13 +95,20 @@ public class NestedLoopJoinOperator
             Operator inner,
             JoinMatcher matcher)
     {
-        this.allocator = allocator;
-        this.outer = outer;
-        this.inner = inner;
-        this.matcher = matcher;
+        this.policy = requireNonNull(policy, "policy is null");
+        this.allocator = requireNonNull(allocator, "allocator is null");
+        this.outer = requireNonNull(outer, "outer is null");
+        this.inner = requireNonNull(inner, "inner is null");
+        this.matcher = requireNonNull(matcher, "matcher is null");
+        int maxBatchRows = policy.maxBatchRows();
+        this.outputOuterPositions = new int[maxBatchRows];
+        this.outputInnerRows = new long[maxBatchRows];
+        this.innerPositionsScratch = new int[maxBatchRows];
+        this.retainedInnerPositionsScratch = new int[maxBatchRows];
+        this.retainedInnerMaskPositionsScratch = new int[maxBatchRows];
         this.buffers = new JoinBufferSupport(joinBufferPolicy, allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(bufferedJoinInputPolicy, buffers, inner.outputCount());
-        this.outputBuffer = new JoinOutputBuffer(buffers, BATCH_SIZE, outer.outputCount(), inner.outputCount());
+        this.outputBuffer = new JoinOutputBuffer(buffers, maxBatchRows, outer.outputCount(), inner.outputCount());
         this.currentOutputs = new Streams[outputCount()];
     }
 
@@ -193,7 +204,7 @@ public class NestedLoopJoinOperator
         }
 
         int outputPosition = 0;
-        while (outputPosition < BATCH_SIZE) {
+        while (outputPosition < policy.maxBatchRows()) {
             if (outerRemaining == 0 && !loadNextOuterBatch()) {
                 done = true;
                 break;
@@ -210,9 +221,9 @@ public class NestedLoopJoinOperator
                 currentInnerPosition = 0;
             }
 
-            while (currentInnerBatch < bufferedInner.batches().size() && outputPosition < BATCH_SIZE) {
+            while (currentInnerBatch < bufferedInner.batches().size() && outputPosition < policy.maxBatchRows()) {
                 BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(currentInnerBatch);
-                while (currentInnerPosition < innerBatch.length() && outputPosition < BATCH_SIZE) {
+                while (currentInnerPosition < innerBatch.length() && outputPosition < policy.maxBatchRows()) {
                     if (matcher.matches(currentOuterBatch, currentOuterPosition, innerBatch, currentInnerPosition)) {
                         outputOuterPositions[outputPosition] = currentOuterPosition;
                         outputInnerRows[outputPosition] = packRowReference(currentInnerBatch, currentInnerPosition);
@@ -288,7 +299,7 @@ public class NestedLoopJoinOperator
 
     private void loadInnerIfNecessary()
     {
-        bufferedInner.loadAll(inner, BATCH_SIZE, new int[0], matcher.supportsPerPositionEmission() && inner.supportsRetainedBatches(), matcher.supportsPerPositionEmission() && inner.supportsConstrainedReborrow());
+        bufferedInner.loadAll(inner, policy.maxBatchRows(), new int[0], matcher.supportsPerPositionEmission() && inner.supportsRetainedBatches(), matcher.supportsPerPositionEmission() && inner.supportsConstrainedReborrow());
         outputBuffer.captureInnerSchema(bufferedInner.schema());
     }
 

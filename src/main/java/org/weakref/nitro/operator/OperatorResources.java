@@ -35,6 +35,7 @@ public final class OperatorResources
     private final AggregationOperatorResources aggregation;
     private final BufferedJoinInputPolicy bufferedJoinInputPolicy;
     private final JoinBufferPolicy joinBufferPolicy;
+    private final NestedLoopJoinPolicy nestedLoopJoinPolicy;
     private final SemiJoinOperatorPolicy semiJoinPolicy;
     private final HashJoinOperatorResources hashJoin;
     private final GroupingStateResources grouping;
@@ -53,6 +54,7 @@ public final class OperatorResources
             AggregationOperatorResources aggregation,
             BufferedJoinInputPolicy bufferedJoinInputPolicy,
             JoinBufferPolicy joinBufferPolicy,
+            NestedLoopJoinPolicy nestedLoopJoinPolicy,
             SemiJoinOperatorPolicy semiJoinPolicy,
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
@@ -72,6 +74,7 @@ public final class OperatorResources
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
         this.bufferedJoinInputPolicy = requireNonNull(bufferedJoinInputPolicy, "bufferedJoinInputPolicy is null");
         this.joinBufferPolicy = requireNonNull(joinBufferPolicy, "joinBufferPolicy is null");
+        this.nestedLoopJoinPolicy = requireNonNull(nestedLoopJoinPolicy, "nestedLoopJoinPolicy is null");
         this.semiJoinPolicy = requireNonNull(semiJoinPolicy, "semiJoinPolicy is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.grouping = requireNonNull(grouping, "grouping is null");
@@ -105,6 +108,7 @@ public final class OperatorResources
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
                 BufferedJoinInputPolicy.fromSystemProperties(),
                 JoinBufferPolicy.fromSystemProperties(),
+                NestedLoopJoinPolicy.fromSystemProperties(),
                 SemiJoinOperatorPolicy.fromSystemProperties(),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
@@ -199,6 +203,12 @@ public final class OperatorResources
     {
         checkOpen();
         return joinBufferPolicy;
+    }
+
+    public NestedLoopJoinPolicy nestedLoopJoinPolicy()
+    {
+        checkOpen();
+        return nestedLoopJoinPolicy;
     }
 
     public SemiJoinOperatorPolicy semiJoinPolicy()
