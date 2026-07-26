@@ -16,6 +16,7 @@ package org.weakref.nitro.data;
 import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
+import org.weakref.nitro.operator.FlatKeyTablePolicy;
 import org.weakref.nitro.operator.FullJoinOperatorPolicy;
 import org.weakref.nitro.operator.GroupIdOperatorPolicy;
 import org.weakref.nitro.operator.GroupingStateResources;
@@ -54,6 +55,7 @@ public final class EngineResources
                 new AllocationResources(primitiveArrays, nativeBuffers),
                 new OperatorResources(
                         operatorCodeGeneration,
+                        FlatKeyTablePolicy.fromSystemProperties(),
                         DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),
                         FullJoinOperatorPolicy.fromSystemProperties(),
@@ -77,6 +79,7 @@ public final class EngineResources
                 allocationResources,
                 new OperatorResources(
                         operatorCodeGeneration,
+                        FlatKeyTablePolicy.fromSystemProperties(),
                         DistinctKeySetPolicy.fromSystemProperties(),
                         FilterOperatorPolicy.fromSystemProperties(),
                         FullJoinOperatorPolicy.fromSystemProperties(),

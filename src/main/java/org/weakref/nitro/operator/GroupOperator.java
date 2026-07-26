@@ -63,7 +63,8 @@ public class GroupOperator
         this.groupingState = new GroupingState(
                 allocator.primitiveArrays(),
                 operatorResources.codeGeneration(),
-                operatorResources.grouping());
+                operatorResources.grouping(),
+                operatorResources.flatKeyTablePolicy());
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.groupValues = new Vector[groupByColumns.length];

@@ -2000,7 +2000,8 @@ public class HashJoinOperator
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(
                 joinValues,
                 arrayPool,
-                operatorResources.codeGeneration());
+                operatorResources.codeGeneration(),
+                operatorResources.flatKeyTablePolicy());
         if (layout != null) {
             return new FlatJoinIndex(layout, expectedSize);
         }

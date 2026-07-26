@@ -54,6 +54,7 @@ final class BigintPairFlatKeyLayout
     private BigintPairFlatKeyLayout(
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy,
             Field[] fields,
             int[] inputChannels,
             FlatTypeHandler[] handlers,
@@ -62,7 +63,7 @@ final class BigintPairFlatKeyLayout
             int nullByteCount,
             int fixedRecordSize)
     {
-        super(arrayPool, codeGeneration, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
+        super(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
         this.firstKeyOffset = fixedOffsets[0];
         this.secondKeyOffset = fixedOffsets[1];
         this.nullable = nullByteCount > 0;
@@ -72,7 +73,8 @@ final class BigintPairFlatKeyLayout
             Vector[] values,
             boolean nullable,
             PrimitiveArrayPool arrayPool,
-            OperatorCodeGenerationResources codeGeneration)
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy)
     {
         if (values.length != 2) {
             throw new IllegalArgumentException("BigintPairFlatKeyLayout requires exactly two columns");
@@ -97,7 +99,7 @@ final class BigintPairFlatKeyLayout
         FlatTypeHandler[] handlers = new FlatTypeHandler[] {handler, handler};
         int[] fixedOffsets = new int[] {firstOffset, secondOffset};
         int[] comparisonOrder = new int[] {0, 1};
-        return new BigintPairFlatKeyLayout(arrayPool, codeGeneration, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + keySize);
+        return new BigintPairFlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + keySize);
     }
 
     @Override

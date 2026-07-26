@@ -44,6 +44,7 @@ final class GroupingState
     private final PrimitiveArrayPool arrayPool;
     private final OperatorCodeGenerationResources codeGeneration;
     private final GroupingStateResources resources;
+    private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final LongGroupingPolicy longPolicy;
     private final CompositeGroupingPolicy compositePolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
@@ -121,11 +122,13 @@ final class GroupingState
     GroupingState(
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            GroupingStateResources resources)
+            GroupingStateResources resources,
+            FlatKeyTablePolicy flatKeyTablePolicy)
     {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
         this.resources = resources;
+        this.flatKeyTablePolicy = flatKeyTablePolicy;
         this.longPolicy = resources.longGroupingPolicy();
         this.compositePolicy = resources.compositeGroupingPolicy();
         this.longDirectNextCheck = longPolicy.directMinGroups();
@@ -621,7 +624,12 @@ final class GroupingState
             useMultiLongGrouping = false;
             useFlatGrouping = true;
             useFullWidthPairPackedIdentity = true;
-            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool, codeGeneration);
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(
+                    values,
+                    hasNullableKeys(nulls),
+                    arrayPool,
+                    codeGeneration,
+                    flatKeyTablePolicy);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -907,7 +915,12 @@ final class GroupingState
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
         if (useFullWidthPairPackedIdentity) {
             useFlatGrouping = true;
-            flatGroupingLayout = BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool, codeGeneration);
+            flatGroupingLayout = BigintPairFlatKeyLayout.create(
+                    values,
+                    nullableCompositeKeys,
+                    arrayPool,
+                    codeGeneration,
+                    flatKeyTablePolicy);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -948,7 +961,12 @@ final class GroupingState
             return;
         }
 
-        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(values, nullableCompositeKeys, arrayPool, codeGeneration);
+        FlatKeyLayout flatKeyLayout = FlatKeyLayout.tryCreate(
+                values,
+                nullableCompositeKeys,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
         if (compositePolicy.sharedDictionaryComposite() &&
                 values.length > 1 &&
                 values.length <= compositePolicy.sharedDictionaryMaxFields() &&
@@ -1000,7 +1018,12 @@ final class GroupingState
             return false;
         }
         int sampled = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
-        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(values, hasNullableKeys(nulls), arrayPool, codeGeneration);
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(
+                values,
+                hasNullableKeys(nulls),
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
         int distinct = sampledDistinctFlatKeys(layout, values, nulls, mask);
         return (long) distinct * 100 >= (long) sampled * compositePolicy.packedFlatIdentityMinDistinctPercent();
     }
@@ -1175,7 +1198,9 @@ final class GroupingState
         // A later NULL becomes an ordinary record and cannot introduce a logical-id hole or a steady-state mode
         // branch.
         boolean largeBatch = mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
-        FlatKeyLayout identityLayout = largeBatch ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration) : null;
+        FlatKeyLayout identityLayout = largeBatch
+                ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy)
+                : null;
         int sampledDistinct = largeBatch
                 ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
                 : 0;

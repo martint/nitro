@@ -192,7 +192,8 @@ final class MembershipSet
             this.grouping = new GroupingState(
                     allocator.primitiveArrays(),
                     operatorResources.codeGeneration(),
-                    operatorResources.grouping());
+                    operatorResources.grouping(),
+                    operatorResources.flatKeyTablePolicy());
         }
 
         @Override

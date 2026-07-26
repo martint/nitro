@@ -100,7 +100,7 @@ public final class HashTableBench
         for (Vector[] values : batches) {
             int count = values[0].length();
             if (table == null) {
-                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration);
+                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration, FlatKeyTablePolicy.defaults());
                 table = new FlatGroupingTable(layout, Math.max(16, expectedDistinct));
             }
             Mask mask = Mask.all(count);
@@ -171,7 +171,7 @@ public final class HashTableBench
         for (Vector[] values : batches) {
             int count = values[0].length();
             if (table == null) {
-                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration);
+                FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration, FlatKeyTablePolicy.defaults());
                 table = new FlatGroupingTable(layout, Math.max(16, expectedDistinct));
             }
             table.beginBatch(values, nulls);

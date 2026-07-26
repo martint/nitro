@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
+import org.weakref.nitro.operator.FlatKeyTablePolicy;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 
 import static java.util.Objects.requireNonNull;
@@ -26,7 +27,8 @@ public record AggregationExecutionContext(
         Allocator allocator,
         Allocator.Context allocationContext,
         OperatorCodeGenerationResources codeGeneration,
-        DistinctKeySetPolicy distinctKeySetPolicy)
+        DistinctKeySetPolicy distinctKeySetPolicy,
+        FlatKeyTablePolicy flatKeyTablePolicy)
 {
     public AggregationExecutionContext
     {
@@ -34,5 +36,6 @@ public record AggregationExecutionContext(
         requireNonNull(allocationContext, "allocationContext is null");
         requireNonNull(codeGeneration, "codeGeneration is null");
         requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
+        requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
     }
 }

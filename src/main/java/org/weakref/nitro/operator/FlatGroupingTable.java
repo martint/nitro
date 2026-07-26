@@ -33,34 +33,20 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 final class FlatGroupingTable
 {
-    private static final boolean DEBUG_NORMALIZED_INT_KEY = Boolean.getBoolean("nitro.debug.normalizedIntKey");
-    private static final boolean DEBUG_SPARSE_COMPOSITE_GROUP_CACHE =
-            Boolean.getBoolean("nitro.debug.sparseCompositeGroupCache");
     private static final int VECTOR_LENGTH = Long.BYTES;
     private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
     private static final int MIN_RECORDS_PER_CHUNK_SHIFT = 10;
     private static final int MAX_RECORDS_PER_CHUNK_SHIFT = 16;
     private static final int MIN_NORMALIZED_SCRATCH_POSITIONS = 128;
     private static final int MAX_NORMALIZED_SCRATCH_AMPLIFICATION = 4;
-    private static final boolean POOL_SIZED_RECORD_CHUNKS =
-            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.poolSizedRecordChunks", "true"));
-    private static final boolean SINGLE_DICTIONARY_GROUP_CACHE =
-            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.singleDictionaryGroupCache", "true"));
-    private static final boolean SPARSE_COMPOSITE_GROUP_CACHE =
-            Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.sparseCompositeGroupCache", "true"));
-    private static final boolean GENERATED_DICTIONARY_HASH_PROBE_BATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.group.generatedDictionaryHashProbeBatch", "true"));
     private static final int SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE = 128;
     private static final int SPARSE_COMPOSITE_ADMISSION_MAX_DISTINCT = 124;
     private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS = 6;
     private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT = 64;
-    private static final int SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY_AMPLIFICATION =
-            Integer.getInteger("nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinalityAmplification", 2);
-    private static final int SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY =
-            Integer.getInteger("nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality", 1 << 16);
     private static final double DEFAULT_LOAD_FACTOR = 15.0 / 16;
 
     private final FlatKeyLayout layout;
+    private final FlatKeyTablePolicy.Table policy;
     private final FlatVariableWidthArena variableWidthArena;
     private final int fixedRecordSize;
     private final int recordsPerChunkShift;
@@ -133,8 +119,9 @@ final class FlatGroupingTable
     {
         this.arrayPool = layout.primitiveArrays();
         this.layout = layout;
+        this.policy = layout.tablePolicy();
         this.identityGroupIds = identityGroupIds &&
-                Boolean.parseBoolean(System.getProperty("nitro.flatGrouping.identityGroupIds", "true"));
+                policy.identityGroupIds();
         // Packing removes the record-index-to-record-hash dependent load, but widens each hash slot. Record-identity
         // tables already prove that physical record order is the logical group id, so they avoid paying for a second
         // group-id map and are the structurally compact cohort where the wider self-contained slot can win.
@@ -142,7 +129,7 @@ final class FlatGroupingTable
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;
         this.fixedRecordSize = (packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
-        if (POOL_SIZED_RECORD_CHUNKS) {
+        if (policy.poolSizedRecordChunks()) {
             long minimumBytes = arrayPool.minRetainedBytes();
             while (chunkShift < MAX_RECORDS_PER_CHUNK_SHIFT &&
                     ((long) (1 << chunkShift) * fixedRecordSize) < minimumBytes &&
@@ -205,7 +192,10 @@ final class FlatGroupingTable
     {
         singleDictionaryGroupCacheActive = false;
         singleDictionaryIds = null;
-        if (!SINGLE_DICTIONARY_GROUP_CACHE || !identityGroupIds || !completePhysicalBatch || selectedRows == 0) {
+        if (!policy.singleDictionaryGroupCache() ||
+                !identityGroupIds ||
+                !completePhysicalBatch ||
+                selectedRows == 0) {
             return;
         }
         boolean eligible = layout.batchSupportsSingleDictionaryGroupCache();
@@ -213,8 +203,9 @@ final class FlatGroupingTable
                 ? layout.batchSingleDictionaryGroupCardinality()
                 : 0;
         singleDictionaryGroupCacheActive = eligible &&
-                cardinality <= SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY &&
-                cardinality <= (long) selectedRows * SINGLE_DICTIONARY_GROUP_CACHE_MAX_CARDINALITY_AMPLIFICATION;
+                cardinality <= policy.singleDictionaryGroupCacheMaxCardinality() &&
+                cardinality <=
+                        (long) selectedRows * policy.singleDictionaryGroupCacheMaxCardinalityAmplification();
         if (!singleDictionaryGroupCacheActive) {
             return;
         }
@@ -296,7 +287,7 @@ final class FlatGroupingTable
     {
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
-        if (!GENERATED_DICTIONARY_HASH_PROBE_BATCH ||
+        if (!policy.generatedDictionaryHashProbeBatch() ||
                 !mask.all() ||
                 mask.none() ||
                 skipBatchHashPrecompute() ||
@@ -346,7 +337,7 @@ final class FlatGroupingTable
     private long prepareBatchHash(Vector[] values, Vector[] nulls, int position, boolean normalize)
     {
         if (layout.tryPrepareNormalizedIntKey(values, nulls, position)) {
-            if (DEBUG_NORMALIZED_INT_KEY) {
+            if (policy.debugNormalizedIntKey()) {
                 normalizedInputCount++;
             }
             long first = layout.preparedNormalizedFirst();
@@ -378,7 +369,7 @@ final class FlatGroupingTable
             return;
         }
         if (batchNormalizedFirst == null || batchNormalizedFirst.length < size) {
-            if (DEBUG_NORMALIZED_INT_KEY) {
+            if (policy.debugNormalizedIntKey()) {
                 System.err.printf("[normalized-int-key-scratch] fields=%d positions=%d selected-capacity-bytes=%d%n",
                         layout.fieldCount(), size, (long) size * (Long.BYTES * 2L + Byte.BYTES));
             }
@@ -399,7 +390,7 @@ final class FlatGroupingTable
         long composite = layout.compositeValueId(position);
         if (composite >= 0) {
             if (!layout.batchDirectCompositeEligible()) {
-                if (SPARSE_COMPOSITE_GROUP_CACHE && sparseCompositeAdmitted) {
+                if (policy.sparseCompositeGroupCache() && sparseCompositeAdmitted) {
                     int cached = sparseCompositeGroup(composite);
                     if (cached >= 0) {
                         return cached;
@@ -441,7 +432,7 @@ final class FlatGroupingTable
 
     private void cacheSparseComposite(long composite, int group)
     {
-        if (DEBUG_SPARSE_COMPOSITE_GROUP_CACHE && !debugSparseCompositePrinted) {
+        if (policy.debugSparseCompositeGroupCache() && !debugSparseCompositePrinted) {
             debugSparseCompositePrinted = true;
             System.err.printf("[sparse-composite-group-cache] fields=%d%n", layout.fieldCount());
         }
@@ -505,13 +496,13 @@ final class FlatGroupingTable
         // this makes the opt-out a causal cache control instead of silently selecting an inferior inline-hash
         // driver.
         return layout.batchDirectCompositeEligible() ||
-                (SPARSE_COMPOSITE_GROUP_CACHE && sparseCompositeAdmitted && layout.batchArrayModeEligible());
+                (policy.sparseCompositeGroupCache() && sparseCompositeAdmitted && layout.batchArrayModeEligible());
     }
 
     private boolean skipBatchHashPrecompute()
     {
         return layout.batchDirectCompositeEligible() ||
-                (SPARSE_COMPOSITE_GROUP_CACHE &&
+                (policy.sparseCompositeGroupCache() &&
                         sparseCompositeAdmitted &&
                         sparseCompositeGroups != null &&
                         layout.batchArrayModeEligible());
@@ -549,7 +540,7 @@ final class FlatGroupingTable
 
     private boolean sparseCompositeAdmissionCandidate(int positionCount)
     {
-        if (!SPARSE_COMPOSITE_GROUP_CACHE ||
+        if (!policy.sparseCompositeGroupCache() ||
                 sparseCompositeAdmissionDecided ||
                 positionCount < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE ||
                 layout.batchDirectCompositeEligible() ||
@@ -592,7 +583,7 @@ final class FlatGroupingTable
                 (layout.fieldCount() < SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS ||
                         distinct >= SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT);
         sparseCompositeAdmissionDecided = true;
-        if (DEBUG_SPARSE_COMPOSITE_GROUP_CACHE) {
+        if (policy.debugSparseCompositeGroupCache()) {
             System.err.printf("[sparse-composite-admission] fields=%d samples=%d distinct=%d admitted=%s%n",
                     layout.fieldCount(), SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE, distinct, sparseCompositeAdmitted);
         }
@@ -663,7 +654,7 @@ final class FlatGroupingTable
         else {
             normalized = layout.tryPrepareNormalizedIntKey(values, nulls, position);
             if (normalized) {
-                if (DEBUG_NORMALIZED_INT_KEY) {
+                if (policy.debugNormalizedIntKey()) {
                     normalizedInputCount++;
                 }
                 normalizedFirst = layout.preparedNormalizedFirst();
@@ -918,7 +909,7 @@ final class FlatGroupingTable
             normalizedFirstByRecord[recordIndex] = normalizedFirst;
             normalizedSecondByRecord[recordIndex] = normalizedSecond;
             normalizedValidByRecord[recordIndex >>> 6] |= 1L << recordIndex;
-            if (DEBUG_NORMALIZED_INT_KEY) {
+            if (policy.debugNormalizedIntKey()) {
                 normalizedRecordCount++;
             }
         }
@@ -1148,7 +1139,7 @@ final class FlatGroupingTable
 
     void releaseBuffers()
     {
-        if (DEBUG_NORMALIZED_INT_KEY && normalizedInputCount > 0) {
+        if (policy.debugNormalizedIntKey() && normalizedInputCount > 0) {
             System.err.printf("[normalized-int-key] fields=%d inputs=%d records=%d%n", layout.fieldCount(), normalizedInputCount, normalizedRecordCount);
         }
         layout.releaseBuffers();

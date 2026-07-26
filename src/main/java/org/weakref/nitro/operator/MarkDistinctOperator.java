@@ -32,6 +32,7 @@ public class MarkDistinctOperator
     private final Operator source;
     private final OperatorCodeGenerationResources codeGeneration;
     private final DistinctKeySetPolicy distinctKeySetPolicy;
+    private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final int[] distinctColumns;
     private final boolean retainNulls;
     private final Vector[] values;
@@ -67,6 +68,7 @@ public class MarkDistinctOperator
         this.arrayPool = allocator.primitiveArrays();
         this.codeGeneration = operatorResources.codeGeneration();
         this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
+        this.flatKeyTablePolicy = operatorResources.flatKeyTablePolicy();
         this.source = source;
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
@@ -172,7 +174,8 @@ public class MarkDistinctOperator
                         retainNulls,
                         arrayPool,
                         codeGeneration,
-                        distinctKeySetPolicy);
+                        distinctKeySetPolicy,
+                        flatKeyTablePolicy);
             }
             distinctKeySet.reserveAdditional(sourceMask.selectedCount());
             selectedCount = distinctKeySet.addBatch(values, nulls, sourceMask, distinctPositions);

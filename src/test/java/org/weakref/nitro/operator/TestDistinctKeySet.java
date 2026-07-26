@@ -32,12 +32,13 @@ class TestDistinctKeySet
     private final EngineResources engineResources = EngineResources.createDefault();
     private final PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
+    private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
     void testAdaptiveLongPairMigratesAndPromotesExactly()
     {
         Vector[] initialValues = longPair(new long[] {1, 2, 1, 99}, new long[] {10, 20, 10, 990});
-        DistinctKeySet keys = DistinctKeySet.create(initialValues, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(initialValues, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             assertDistinctPositions(keys, initialValues, new boolean[] {false, false, false, true}, 0, 1);
             assertDistinctPositions(keys, longPair(new long[] {2, 3, 3}, new long[] {20, 30, 30}), null, 1);
@@ -66,7 +67,7 @@ class TestDistinctKeySet
                 nestedLongDictionary(outerIds, innerIds, new long[] {10, 20, 30}),
                 nestedLongDictionary(outerIds, innerIds, new long[] {100, 200, 300}),
                 nestedLongDictionary(outerIds, innerIds, new long[] {1_000, 2_000, 3_000})};
-        DistinctKeySet keys = DistinctKeySet.create(shared, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(shared, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             assertDistinctPositions(keys, shared, null, 0, 1, 2);
 
@@ -101,7 +102,7 @@ class TestDistinctKeySet
                 nestedLongDictionary(identity, identity, new long[] {10, 20, 30, 40}),
                 nestedLongDictionary(identity, identity, new long[] {100, 200, 300, 400})};
 
-        DistinctKeySet nullFreeKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet nullFreeKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             Vector[] nulls = {
                     nestedBooleanDictionary(identity, identity, new boolean[identity.length]),
@@ -115,7 +116,7 @@ class TestDistinctKeySet
             nullFreeKeys.releaseBuffers();
         }
 
-        DistinctKeySet nullableKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet nullableKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             Vector[] nulls = {
                     nestedBooleanDictionary(identity, identity, new boolean[identity.length]),
@@ -129,7 +130,7 @@ class TestDistinctKeySet
             nullableKeys.releaseBuffers();
         }
 
-        DistinctKeySet sparseKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet sparseKeys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             Vector[] nulls = {
                     nestedBooleanDictionary(identity, identity, new boolean[identity.length]),
@@ -155,7 +156,7 @@ class TestDistinctKeySet
                 new BooleanVector(new boolean[] {false, false, false, true, true, false}),
                 new BooleanVector(new boolean[] {false, true, true, false, false, false}),
                 new BooleanVector(new boolean[6])};
-        DistinctKeySet keys = DistinctKeySet.create(firstValues, true, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(firstValues, true, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[6];
             int distinct = keys.addBatch(firstValues, firstNulls, Mask.all(6), positions);
@@ -195,7 +196,7 @@ class TestDistinctKeySet
 
         Vector[] firstValues = nestedLongDictionaries(new int[] {0, 1, 0}, innerIds, valueBases);
         Vector[] firstNulls = nestedBooleanDictionaries(new int[] {0, 1, 0}, innerIds, nullBases);
-        DistinctKeySet keys = DistinctKeySet.create(firstValues, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(firstValues, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[3];
             int distinct = keys.addBatch(firstValues, firstNulls, Mask.all(3), positions);
@@ -238,7 +239,7 @@ class TestDistinctKeySet
         Vector[] values = nestedLongDictionaries(identity, identity, valueBases);
         Vector[] nulls = nestedBooleanDictionaries(identity, identity, nullBases);
 
-        DistinctKeySet keys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(values, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[1];
             assertThat(keys.addBatch(values, nulls, Mask.all(1), positions)).isZero();
@@ -270,7 +271,7 @@ class TestDistinctKeySet
         DictionaryVector dictionary = dictionary(new String[] {"", "value"}, ids);
         Vector[] values = {dictionary};
         Vector[] nulls = {new BooleanVector(new boolean[ids.length])};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration, flatKeyTablePolicy);
         assertThat(layout).isNotNull();
 
         layout.beginBatch(values, nulls);
@@ -284,7 +285,7 @@ class TestDistinctKeySet
 
         layout.releaseBuffers();
 
-        layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration);
+        layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration, flatKeyTablePolicy);
         assertThat(layout).isNotNull();
         layout.beginBatch(values, nulls);
         try {
@@ -304,7 +305,7 @@ class TestDistinctKeySet
         DictionaryVector first = dictionary(
                 new String[] {"", "alpha", "beta", "gamma"},
                 new int[] {0, 1, 1, 2, 0, 3});
-        DistinctKeySet keys = DistinctKeySet.create(new Vector[] {first}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(new Vector[] {first}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[first.length()];
             int distinct = keys.addBatch(
@@ -410,7 +411,7 @@ class TestDistinctKeySet
             denseKeys[index] = index;
         }
 
-        DistinctKeySet keys = DistinctKeySet.create(new Vector[] {new I64Vector(denseKeys)}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+        DistinctKeySet keys = DistinctKeySet.create(new Vector[] {new I64Vector(denseKeys)}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[denseKeys.length];
             assertThat(keys.addBatch(
@@ -450,7 +451,7 @@ class TestDistinctKeySet
         boolean[] valueNulls = {false, false, false, false, false, false, false, true};
         DistinctKeySet keys = DistinctKeySet.createGroupedLong(new Vector[] {
                 new I64Vector(groups),
-                new I64Vector(values)}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults());
+                new I64Vector(values)}, arrayPool, codeGeneration, DistinctKeySetPolicy.defaults(), flatKeyTablePolicy);
         try {
             int[] positions = new int[groups.length];
             int distinct = keys.addGroupedBatch(

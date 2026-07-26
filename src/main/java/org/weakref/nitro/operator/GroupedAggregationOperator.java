@@ -206,7 +206,8 @@ public class GroupedAggregationOperator
                 new GroupingState(
                         allocator.primitiveArrays(),
                         operatorResources.codeGeneration(),
-                        operatorResources.grouping()),
+                        operatorResources.grouping(),
+                        operatorResources.flatKeyTablePolicy()),
                 requireNonNull(operatorResources, "operatorResources is null"));
     }
 
@@ -245,7 +246,8 @@ public class GroupedAggregationOperator
                 allocator,
                 allocationContext,
                 operatorResources.codeGeneration(),
-                operatorResources.distinctKeySetPolicy());
+                operatorResources.distinctKeySetPolicy(),
+                operatorResources.flatKeyTablePolicy());
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
@@ -817,7 +819,8 @@ public class GroupedAggregationOperator
                     allocator,
                     allocationContext,
                     operatorResources.codeGeneration(),
-                    operatorResources.distinctKeySetPolicy());
+                    operatorResources.distinctKeySetPolicy(),
+                    operatorResources.flatKeyTablePolicy());
             try {
                 for (int aggregationIndex : distinctAggregationGroup.aggregationIndexes()) {
                     int filterColumn = aggregations[aggregationIndex].filterInputColumn();
@@ -1192,7 +1195,8 @@ public class GroupedAggregationOperator
                 Allocator allocator,
                 Allocator.Context allocationContext,
                 OperatorCodeGenerationResources codeGeneration,
-                DistinctKeySetPolicy distinctKeySetPolicy)
+                DistinctKeySetPolicy distinctKeySetPolicy,
+                FlatKeyTablePolicy flatKeyTablePolicy)
         {
             arrayPool = allocator.primitiveArrays();
             if (mask.none()) {
@@ -1213,8 +1217,8 @@ public class GroupedAggregationOperator
                 }
                 if (distinctKeySet == null) {
                     distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration, distinctKeySetPolicy)
-                            : DistinctKeySet.create(values, arrayPool, codeGeneration, distinctKeySetPolicy);
+                            ? DistinctKeySet.createGroupedLong(values, arrayPool, codeGeneration, distinctKeySetPolicy, flatKeyTablePolicy)
+                            : DistinctKeySet.create(values, arrayPool, codeGeneration, distinctKeySetPolicy, flatKeyTablePolicy);
                 }
                 int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
                 return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());

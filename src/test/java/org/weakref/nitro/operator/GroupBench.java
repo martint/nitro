@@ -135,7 +135,7 @@ public final class GroupBench
             OperatorCodeGenerationResources codeGeneration)
     {
         Vector[] nulls = new Vector[] {null, null, null, null, null};
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(batches[0], false, arrayPool, codeGeneration);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(batches[0], false, arrayPool, codeGeneration, FlatKeyTablePolicy.defaults());
         FlatGroupingTable table = new FlatGroupingTable(layout, expectedDistinct);
         long nextGroupId = 0;
         for (Vector[] values : batches) {

@@ -42,6 +42,7 @@ public final class MarkDistinctMarkerOperator
     private final Operator source;
     private final OperatorCodeGenerationResources codeGeneration;
     private final DistinctKeySetPolicy distinctKeySetPolicy;
+    private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final Vector[] values;
     private final Vector[] nulls;
 
@@ -62,6 +63,7 @@ public final class MarkDistinctMarkerOperator
         this.arrayPool = allocator.primitiveArrays();
         this.codeGeneration = operatorResources.codeGeneration();
         this.distinctKeySetPolicy = operatorResources.distinctKeySetPolicy();
+        this.flatKeyTablePolicy = operatorResources.flatKeyTablePolicy();
         this.distinctColumns = distinctColumns.clone();
         this.retainNulls = retainNulls;
         this.source = source;
@@ -220,7 +222,8 @@ public final class MarkDistinctMarkerOperator
                         retainNulls,
                         arrayPool,
                         codeGeneration,
-                        distinctKeySetPolicy);
+                        distinctKeySetPolicy,
+                        flatKeyTablePolicy);
             }
             distinctKeySet.reserveAdditional(mask.selectedCount());
             batchState.distinctCount = distinctKeySet.addBatch(values, nulls, mask, distinctPositions);

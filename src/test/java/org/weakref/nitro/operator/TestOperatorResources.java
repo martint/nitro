@@ -38,6 +38,7 @@ class TestOperatorResources
         OperatorResources second = OperatorResources.createDefault();
 
         assertThat(first.codeGeneration()).isNotSameAs(second.codeGeneration());
+        assertThat(first.flatKeyTablePolicy()).isNotSameAs(second.flatKeyTablePolicy());
         assertThat(first.filter()).isNotSameAs(second.filter());
         assertThat(first.fullJoinPolicy()).isNotSameAs(second.fullJoinPolicy());
         assertThat(first.groupIdPolicy()).isNotSameAs(second.groupIdPolicy());
@@ -50,6 +51,9 @@ class TestOperatorResources
         first.close();
         assertThatIllegalStateException()
                 .isThrownBy(first::codeGeneration)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::flatKeyTablePolicy)
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::filter)
@@ -142,7 +146,8 @@ class TestOperatorResources
                             allocator,
                             accumulatorContext,
                             operatorResources.codeGeneration(),
-                            operatorResources.distinctKeySetPolicy()),
+                            operatorResources.distinctKeySetPolicy(),
+                            operatorResources.flatKeyTablePolicy()),
                     1);
             assertThat(state.values()).isNotNull();
             allocator.release(accumulatorContext);

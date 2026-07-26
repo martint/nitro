@@ -45,9 +45,10 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            DistinctKeySetPolicy policy)
+            DistinctKeySetPolicy policy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, false, arrayPool, codeGeneration, policy);
+        return create(samples, false, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
     }
 
     /**
@@ -59,10 +60,11 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            DistinctKeySetPolicy policy)
+            DistinctKeySetPolicy policy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
     {
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
-            return create(samples, arrayPool, codeGeneration, policy);
+            return create(samples, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
         }
         return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy));
     }
@@ -80,9 +82,10 @@ final class DistinctKeySet
             boolean retainNulls,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            DistinctKeySetPolicy policy)
+            DistinctKeySetPolicy policy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, policy);
+        DistinctIndex index = createIndex(samples, arrayPool, codeGeneration, policy, flatKeyTablePolicy);
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
@@ -93,7 +96,8 @@ final class DistinctKeySet
             Vector[] samples,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            DistinctKeySetPolicy policy)
+            DistinctKeySetPolicy policy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
     {
         if (samples.length == 1 && isIntegerVector(samples[0])) {
             return new LongDistinctIndex(Math.max(16, samples[0].length()), arrayPool, policy);
@@ -121,7 +125,7 @@ final class DistinctKeySet
         if (samples.length >= 5 && samples.length <= AbstractMultiLongGroupingTable.MAX_ARITY && allIntegerVectors(samples)) {
             return new MultiLongDistinctIndex(samples.length, Math.max(16, samples[0].length()), arrayPool, codeGeneration);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration, flatKeyTablePolicy);
         if (layout != null) {
             return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool, policy);
         }

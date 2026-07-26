@@ -25,6 +25,7 @@ public final class OperatorResources
         implements AutoCloseable
 {
     private final OperatorCodeGenerationResources codeGeneration;
+    private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final DistinctKeySetPolicy distinctKeySetPolicy;
     private final FilterOperatorResources filter;
     private final FullJoinOperatorPolicy fullJoinPolicy;
@@ -38,6 +39,7 @@ public final class OperatorResources
 
     public OperatorResources(
             OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy flatKeyTablePolicy,
             DistinctKeySetPolicy distinctKeySetPolicy,
             FilterOperatorPolicy filterPolicy,
             FullJoinOperatorPolicy fullJoinPolicy,
@@ -49,6 +51,7 @@ public final class OperatorResources
             TopNRankingOperatorPolicy topNRankingPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
+        this.flatKeyTablePolicy = requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
         this.distinctKeySetPolicy = requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
         this.project = requireNonNull(project, "project is null");
         this.filter = new FilterOperatorResources(
@@ -77,8 +80,10 @@ public final class OperatorResources
     public static OperatorResources createDefault(HashJoinMaterializationListener hashJoinMaterializationListener)
     {
         EvaluationOperatorPolicy evaluationPolicy = EvaluationOperatorPolicy.fromSystemProperties();
+        FlatKeyTablePolicy flatKeyTablePolicy = FlatKeyTablePolicy.fromSystemProperties();
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
+                flatKeyTablePolicy,
                 DistinctKeySetPolicy.fromSystemProperties(),
                 FilterOperatorPolicy.fromSystemProperties(),
                 FullJoinOperatorPolicy.fromSystemProperties(),
@@ -106,6 +111,12 @@ public final class OperatorResources
     {
         checkOpen();
         return codeGeneration;
+    }
+
+    public FlatKeyTablePolicy flatKeyTablePolicy()
+    {
+        checkOpen();
+        return flatKeyTablePolicy;
     }
 
     public DistinctKeySetPolicy distinctKeySetPolicy()

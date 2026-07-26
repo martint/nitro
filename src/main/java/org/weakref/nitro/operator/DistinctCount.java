@@ -38,6 +38,7 @@ public class DistinctCount
     private PrimitiveArrayPool arrayPool;
     private OperatorCodeGenerationResources codeGeneration;
     private DistinctKeySetPolicy distinctKeySetPolicy;
+    private FlatKeyTablePolicy flatKeyTablePolicy;
 
     public DistinctCount(int inputColumn)
     {
@@ -56,6 +57,7 @@ public class DistinctCount
         arrayPool = context.allocator().primitiveArrays();
         codeGeneration = context.codeGeneration();
         distinctKeySetPolicy = context.distinctKeySetPolicy();
+        flatKeyTablePolicy = context.flatKeyTablePolicy();
         return allocateState(context.allocator(), context.allocationContext(), size);
     }
 
@@ -177,7 +179,8 @@ public class DistinctCount
                 keyValues,
                 arrayPool,
                 codeGeneration,
-                distinctKeySetPolicy));
+                distinctKeySetPolicy,
+                flatKeyTablePolicy));
         stateVector.setImplementation(index);
         return index;
     }
