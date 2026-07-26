@@ -1602,7 +1602,8 @@ final class TpcdsParquetSupport
         Operator salesItems = context.profiled("q82.distinct.sales_items", new MarkDistinctOperator(
                 allocator,
                 0,
-                context.profiled("q82.scan.sales_items", scannedTable(allocator, tables, "store_sales", "ss_item_sk"))));
+                context.profiled("q82.scan.sales_items", scannedTable(allocator, tables, "store_sales", "ss_item_sk")),
+                allocator.engineResources().operatorResources()));
 
         Operator joined = context.profiled("q82.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
         joined = context.profiled("q82.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
@@ -1658,7 +1659,8 @@ final class TpcdsParquetSupport
         Operator salesItems = context.profiled("q37.distinct.sales_items", new MarkDistinctOperator(
                 allocator,
                 0,
-                context.profiled("q37.scan.sales_items", scannedTable(allocator, tables, "catalog_sales", "cs_item_sk"))));
+                context.profiled("q37.scan.sales_items", scannedTable(allocator, tables, "catalog_sales", "cs_item_sk")),
+                allocator.engineResources().operatorResources()));
 
         Operator joined = context.profiled("q37.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
         joined = context.profiled("q37.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
@@ -2499,7 +2501,7 @@ final class TpcdsParquetSupport
                         lessThan(1, 779)));
         Operator matched = new SemiJoinOperator(allocator, probe, 2, eligibleManufacturers, 0);
         Operator productNames = projectInputs(allocator, primitiveRegistry, matched, 0);
-        Operator distinct = new MarkDistinctOperator(allocator, 0, productNames);
+        Operator distinct = new MarkDistinctOperator(allocator, 0, productNames, allocator.engineResources().operatorResources());
         return new TopNOperator(allocator, 100, 0, false, distinct);
     }
 
@@ -4248,7 +4250,7 @@ final class TpcdsParquetSupport
                 and(equal(1, 2001), equal(2, 1)),
                 new String[] {"d_month_seq", "d_year", "d_moy"},
                 0);
-        monthSequence = new MarkDistinctOperator(allocator, 0, monthSequence);
+        monthSequence = new MarkDistinctOperator(allocator, 0, monthSequence, allocator.engineResources().operatorResources());
         return new EnforceSingleRowOperator(allocator, monthSequence);
     }
 
@@ -4977,7 +4979,7 @@ final class TpcdsParquetSupport
         Operator joined = new HashJoinOperator(allocator, left, 1, right, 1);
         joined = filter(allocator, primitiveRegistry, joined, notEqualColumns(0, 2));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
-        return new MarkDistinctOperator(allocator, 0, joined);
+        return new MarkDistinctOperator(allocator, 0, joined, allocator.engineResources().operatorResources());
     }
 
     private static Operator query16ReturnedEligibleOrders(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -4985,7 +4987,7 @@ final class TpcdsParquetSupport
         Operator returns = scannedTable(allocator, tables, "catalog_returns", "cr_order_number");
         returns = new HashJoinOperator(allocator, returns, 0, query16MultiWarehouseOrders(allocator, primitiveRegistry, tables), 0);
         returns = projectInputs(allocator, primitiveRegistry, returns, 0);
-        return new MarkDistinctOperator(allocator, 0, returns);
+        return new MarkDistinctOperator(allocator, 0, returns, allocator.engineResources().operatorResources());
     }
 
     private static Operator query05ChannelBranch(
@@ -5129,7 +5131,7 @@ final class TpcdsParquetSupport
                 1,
                 HashJoinOperator.JoinFilter.longNotEqual(0, 0));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
-        return new MarkDistinctOperator(allocator, 0, joined);
+        return new MarkDistinctOperator(allocator, 0, joined, allocator.engineResources().operatorResources());
     }
 
     private static Operator query95ReturnedEligibleOrders(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5139,7 +5141,7 @@ final class TpcdsParquetSupport
         // the result to multi-warehouse orders. Joining returns to the multi-warehouse set here would
         // be redundant, so this is a plain distinct of returned order numbers (matching Trino).
         Operator returns = scannedTable(allocator, tables, "web_returns", "wr_order_number");
-        return new MarkDistinctOperator(allocator, 0, returns);
+        return new MarkDistinctOperator(allocator, 0, returns, allocator.engineResources().operatorResources());
     }
 
     private static Operator query95IllinoisAddressKeys(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5303,7 +5305,7 @@ final class TpcdsParquetSupport
                 query14ChannelTriples(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk"),
                 new int[] {0, 1, 2}));
         sharedTriples = profiled("q14.cross.project.web", projectInputs(allocator, primitiveRegistry, sharedTriples, 0, 1, 2));
-        sharedTriples = profiled("q14.cross.distinct.triples", new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, sharedTriples));
+        sharedTriples = profiled("q14.cross.distinct.triples", new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, sharedTriples, allocator.engineResources().operatorResources()));
 
         Operator crossItems = profiled("q14.cross.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand_id", "i_class_id", "i_category_id"));
         crossItems = profiled("q14.cross.join.item", new HashJoinOperator(
@@ -5313,7 +5315,7 @@ final class TpcdsParquetSupport
                 sharedTriples,
                 new int[] {0, 1, 2}));
         crossItems = profiled("q14.cross.project.item", projectInputs(allocator, primitiveRegistry, crossItems, 0));
-        return profiled("q14.cross.distinct.item", new MarkDistinctOperator(allocator, 0, crossItems));
+        return profiled("q14.cross.distinct.item", new MarkDistinctOperator(allocator, 0, crossItems, allocator.engineResources().operatorResources()));
     }
 
     private static Operator query14ChannelTriples(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn)
@@ -5339,7 +5341,7 @@ final class TpcdsParquetSupport
                         0),
                 0));
         triples = profiled("q14.triples.project." + salesTable, projectInputs(allocator, primitiveRegistry, triples, 3, 4, 5));
-        return profiled("q14.triples.distinct." + salesTable, new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, triples));
+        return profiled("q14.triples.distinct." + salesTable, new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, triples, allocator.engineResources().operatorResources()));
     }
 
     private static Operator query14AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5385,7 +5387,7 @@ final class TpcdsParquetSupport
                 qualifiedZipValues);
         qualifiedZipValues = filter(allocator, primitiveRegistry, qualifiedZipValues, greaterThan(1, 10));
         qualifiedZipValues = projectUtf8Prefix(allocator, primitiveRegistry, qualifiedZipValues, 0, 2);
-        qualifiedZipValues = new MarkDistinctOperator(allocator, 0, qualifiedZipValues);
+        qualifiedZipValues = new MarkDistinctOperator(allocator, 0, qualifiedZipValues, allocator.engineResources().operatorResources());
         return qualifiedZipValues;
     }
 
@@ -5785,7 +5787,7 @@ final class TpcdsParquetSupport
                 frequentItems));
         frequentItems = context.profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4)));
         frequentItems = context.profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
-        return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems));
+        return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems, allocator.engineResources().operatorResources()));
     }
 
     private static Operator query23CustomerSales(TpcdsQueryContext context, boolean filterYears)
@@ -7139,7 +7141,7 @@ final class TpcdsParquetSupport
                 profiled("q54.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk")),
                 0));
         customerSales = projectInputs(allocator, primitiveRegistry, customerSales, 1, 6);
-        return profiled("q54.distinct.customer_address", new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales));
+        return profiled("q54.distinct.customer_address", new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales, allocator.engineResources().operatorResources()));
     }
 
     private static Operator query54ScalarMonthBoundary(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int offset)
@@ -7153,7 +7155,7 @@ final class TpcdsParquetSupport
                 new String[] {"d_month_seq", "d_year", "d_moy"},
                 0);
         boundary = projectQuery54ScalarMonthBoundary(allocator, primitiveRegistry, boundary, offset);
-        boundary = new MarkDistinctOperator(allocator, 0, boundary);
+        boundary = new MarkDistinctOperator(allocator, 0, boundary, allocator.engineResources().operatorResources());
         return new EnforceSingleRowOperator(allocator, boundary);
     }
 
@@ -7524,7 +7526,7 @@ final class TpcdsParquetSupport
         allowedDates = new NestedLoopJoinOperator(allocator, allowedDates, query58ScalarWeekSequence(allocator, primitiveRegistry, tables));
         allowedDates = filter(allocator, primitiveRegistry, allowedDates, equalColumns(1, 2));
         allowedDates = projectInputs(allocator, primitiveRegistry, allowedDates, 0);
-        return new MarkDistinctOperator(allocator, 0, allowedDates);
+        return new MarkDistinctOperator(allocator, 0, allowedDates, allocator.engineResources().operatorResources());
     }
 
     private static Operator query83AllowedDates(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -7541,11 +7543,11 @@ final class TpcdsParquetSupport
                         LocalDate.of(2000, 11, 17).toEpochDay()),
                 new String[] {"d_date", "d_week_seq"},
                 1);
-        targetWeekSequences = new MarkDistinctOperator(allocator, 0, targetWeekSequences);
+        targetWeekSequences = new MarkDistinctOperator(allocator, 0, targetWeekSequences, allocator.engineResources().operatorResources());
         Operator allowedDates = scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_week_seq");
         allowedDates = new HashJoinOperator(allocator, allowedDates, 1, targetWeekSequences, 0);
         allowedDates = projectInputs(allocator, primitiveRegistry, allowedDates, 0);
-        return new MarkDistinctOperator(allocator, 0, allowedDates);
+        return new MarkDistinctOperator(allocator, 0, allowedDates, allocator.engineResources().operatorResources());
     }
 
     private static Operator query58ScalarWeekSequence(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -7558,7 +7560,7 @@ final class TpcdsParquetSupport
                 equal(1, 10_959L),
                 new String[] {"d_week_seq", "d_date"},
                 0);
-        weekSequence = new MarkDistinctOperator(allocator, 0, weekSequence);
+        weekSequence = new MarkDistinctOperator(allocator, 0, weekSequence, allocator.engineResources().operatorResources());
         return new EnforceSingleRowOperator(allocator, weekSequence);
     }
 
@@ -10384,7 +10386,9 @@ final class TpcdsParquetSupport
                 profiled(profilePrefix + ".distinct.all_sales", new MarkDistinctOperator(allocator, new int[] {0, 1, 2, 3, 4, 5, 6}, new UnionAllOperator(7, List.of(
                         query75Channel(allocator, primitiveRegistry, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_order_number", "cs_quantity", "cs_ext_sales_price", "catalog_returns", "cr_item_sk", "cr_order_number", "cr_return_quantity", "cr_return_amount", profilePrefix + ".catalog"),
                         query75Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_ext_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt", profilePrefix + ".store"),
-                        query75Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt", profilePrefix + ".web"))), true))));
+                        query75Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt", profilePrefix + ".web"))),
+                        true,
+                        allocator.engineResources().operatorResources()))));
     }
 
     private static Operator query78Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String profilePrefix)
@@ -10774,7 +10778,7 @@ final class TpcdsParquetSupport
         // Trino plan. This keeps both harnesses pushing the same row count through the distinct.
         facts = profiled(profilePrefix + ".filter.non_null_customer", filter(allocator, primitiveRegistry, facts, isNotNullI64(0)));
         facts = profiled(profilePrefix + ".project.keys", projectInputs(allocator, primitiveRegistry, facts, 0, 1));
-        return profiled(profilePrefix + ".distinct.mark_distinct", new MarkDistinctOperator(allocator, new int[] {0, 1}, facts));
+        return profiled(profilePrefix + ".distinct.mark_distinct", new MarkDistinctOperator(allocator, new int[] {0, 1}, facts, allocator.engineResources().operatorResources()));
     }
 
     private static Operator query97PresenceChannel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix, String salesTable, String customerColumn, String itemColumn, String soldDateColumn, boolean storeChannel)

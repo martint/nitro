@@ -40,14 +40,14 @@ public class MarkDistinctOperator
     private int[] distinctPositions = EMPTY_POSITIONS;
     private BatchState currentBatchState;
 
-    public MarkDistinctOperator(Allocator allocator, int distinctColumn, Operator source)
+    public MarkDistinctOperator(Allocator allocator, int distinctColumn, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, new int[] {distinctColumn}, source);
+        this(allocator, new int[] {distinctColumn}, source, false, operatorResources);
     }
 
-    public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source)
+    public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, distinctColumns, source, false);
+        this(allocator, distinctColumns, source, false, operatorResources);
     }
 
     /**
@@ -57,11 +57,6 @@ public class MarkDistinctOperator
      * {@code DISTINCT}/{@code UNION} semantics (equal nulls collapse, nulls stay distinct from concrete values);
      * when {@code false}, any row with a NULL key column is dropped, matching {@code count(distinct ...)}.
      */
-    public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls)
-    {
-        this(allocator, distinctColumns, source, retainNulls, allocator.engineResources().operatorResources());
-    }
-
     public MarkDistinctOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls, OperatorResources operatorResources)
     {
         this.allocator = allocator;

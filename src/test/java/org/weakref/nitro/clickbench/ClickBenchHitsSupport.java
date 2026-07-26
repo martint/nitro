@@ -287,7 +287,7 @@ public final class ClickBenchHitsSupport
     static Operator query05(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
         Operator scan = profiled(profile, "q05.scan", clickBenchScan(allocator, file, "UserID"));
-        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan));
+        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan, allocator.engineResources().operatorResources()));
         return profiled(profile, "q05.aggregate", new AggregationOperator(allocator, List.of(new CountAll()), distinct));
     }
 
@@ -896,7 +896,7 @@ public final class ClickBenchHitsSupport
 
     private static Operator countDistinct(Allocator allocator, Operator source)
     {
-        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source));
+        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source, allocator.engineResources().operatorResources()));
     }
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)

@@ -2908,7 +2908,8 @@ public class TestOperators
                                         row(1L, "beta"),
                                         row(2L, "alpha"),
                                         row((Object) null, "alpha"),
-                                        row(2L, (Object) null))))))
+                                        row(2L, (Object) null))),
+                        allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, "alpha"),
                         row(1L, "beta"),
@@ -2931,7 +2932,8 @@ public class TestOperators
                                         row((Object) "beta"),
                                         row((Object) ""),
                                         row((Object) null),
-                                        row((Object) "alpha"))))))
+                                        row((Object) "alpha"))),
+                        allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(
                         row((Object) "alpha"),
                         row((Object) ""),
@@ -2960,7 +2962,8 @@ public class TestOperators
                                         row(2L, (Object) null),
                                         row(2L, (Object) null),
                                         row((Object) null, (Object) null))),
-                        true)))
+                        true,
+                        allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, "alpha"),
                         row(1L, "beta"),
@@ -3026,7 +3029,8 @@ public class TestOperators
                 allocator,
                 new int[] {0, 1, 2, 3, 4, 5, 6},
                 source,
-                true)))
+                true,
+                allocator.engineResources().operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, 2L, 3L, 4L, 5L, 6L, 7L),
                         row(1L, 2L, 3L, 4L, 5L, 6L, 8L),
@@ -3072,7 +3076,7 @@ public class TestOperators
             public void close() {}
         };
 
-        try (MarkDistinctOperator operator = new MarkDistinctOperator(allocator, 0, source);
+        try (MarkDistinctOperator operator = new MarkDistinctOperator(allocator, 0, source, allocator.engineResources().operatorResources());
                 Batch batch = operator.next()) {
             assertThat(batch.borrowMask().all()).isTrue();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(dictionary);
