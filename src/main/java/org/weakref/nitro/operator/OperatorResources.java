@@ -26,6 +26,7 @@ public final class OperatorResources
 {
     private final OperatorCodeGenerationResources codeGeneration;
     private final FilterOperatorResources filter;
+    private final FullJoinOperatorPolicy fullJoinPolicy;
     private final GroupIdOperatorPolicy groupIdPolicy;
     private final ProjectOperatorResources project;
     private final AggregationOperatorResources aggregation;
@@ -36,6 +37,7 @@ public final class OperatorResources
     public OperatorResources(
             OperatorCodeGenerationResources codeGeneration,
             FilterOperatorPolicy filterPolicy,
+            FullJoinOperatorPolicy fullJoinPolicy,
             GroupIdOperatorPolicy groupIdPolicy,
             ProjectOperatorResources project,
             AggregationOperatorResources aggregation,
@@ -44,6 +46,7 @@ public final class OperatorResources
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.filter = new FilterOperatorResources(codeGeneration.projectionMask(), requireNonNull(filterPolicy, "filterPolicy is null"));
+        this.fullJoinPolicy = requireNonNull(fullJoinPolicy, "fullJoinPolicy is null");
         this.groupIdPolicy = requireNonNull(groupIdPolicy, "groupIdPolicy is null");
         this.project = requireNonNull(project, "project is null");
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
@@ -67,6 +70,7 @@ public final class OperatorResources
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
                 FilterOperatorPolicy.fromSystemProperties(),
+                FullJoinOperatorPolicy.fromSystemProperties(),
                 GroupIdOperatorPolicy.fromSystemProperties(),
                 new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties()),
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
@@ -99,6 +103,12 @@ public final class OperatorResources
     {
         checkOpen();
         return groupIdPolicy;
+    }
+
+    public FullJoinOperatorPolicy fullJoinPolicy()
+    {
+        checkOpen();
+        return fullJoinPolicy;
     }
 
     public AggregationOperatorResources aggregation()

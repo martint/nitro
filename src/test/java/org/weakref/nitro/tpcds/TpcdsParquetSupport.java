@@ -2592,7 +2592,8 @@ final class TpcdsParquetSupport
                 query51Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_sales_price"),
                 new int[] {0, 1},
                 query51Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price"),
-                new int[] {0, 1}));
+                new int[] {0, 1},
+                allocator.engineResources().operatorResources().fullJoinPolicy()));
 
         Variable item = new Variable(0);
         Variable date = new Variable(1);

@@ -32,6 +32,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static java.util.Objects.requireNonNull;
+
 public final class FullJoinOperator
         implements Operator
 {
@@ -39,9 +41,6 @@ public final class FullJoinOperator
     private static final int JOINED_ROW_CHUNK_SHIFT = 16;
     private static final int JOINED_ROW_CHUNK_SIZE = 1 << JOINED_ROW_CHUNK_SHIFT;
     private static final int JOINED_ROW_CHUNK_MASK = JOINED_ROW_CHUNK_SIZE - 1;
-    private static final boolean RETAIN_INPUT_BATCHES =
-            Boolean.parseBoolean(System.getProperty("nitro.fullJoin.retainInputBatches", "true"));
-
     private final Allocator allocator;
     private final PrimitiveArrayPool arrayPool;
     private final Allocator.Context allocationContext = new Allocator.Context("FullJoinOperator");
@@ -50,15 +49,22 @@ public final class FullJoinOperator
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final boolean sortedInputs;
+    private final FullJoinOperatorPolicy policy;
 
     private Streams[] materialized;
     private Mask outputMask;
     private boolean loaded;
     private boolean done;
 
-    public FullJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
+    public FullJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            FullJoinOperatorPolicy policy)
     {
-        this(allocator, outer, outerJoinColumns, inner, innerJoinColumns, false);
+        this(allocator, outer, outerJoinColumns, inner, innerJoinColumns, false, policy);
     }
 
     /**
@@ -66,12 +72,25 @@ public final class FullJoinOperator
      * The explicit contract lets blocking/window pipelines preserve and exploit physical order without
      * embedding query- or type-specific logic in the join.
      */
-    public static FullJoinOperator sorted(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
+    public static FullJoinOperator sorted(
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            FullJoinOperatorPolicy policy)
     {
-        return new FullJoinOperator(allocator, outer, outerJoinColumns, inner, innerJoinColumns, true);
+        return new FullJoinOperator(allocator, outer, outerJoinColumns, inner, innerJoinColumns, true, policy);
     }
 
-    private FullJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns, boolean sortedInputs)
+    private FullJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            boolean sortedInputs,
+            FullJoinOperatorPolicy policy)
     {
         if (outerJoinColumns.length == 0) {
             throw new IllegalArgumentException("FullJoinOperator requires at least one join key");
@@ -86,6 +105,7 @@ public final class FullJoinOperator
         this.outerJoinColumns = outerJoinColumns.clone();
         this.innerJoinColumns = innerJoinColumns.clone();
         this.sortedInputs = sortedInputs;
+        this.policy = requireNonNull(policy, "policy is null");
     }
 
     @Override
@@ -438,7 +458,7 @@ public final class FullJoinOperator
                     continue;
                 }
                 Streams[] columns = new Streams[source.outputCount()];
-                if (RETAIN_INPUT_BATCHES && mask.all() && source.supportsRetainedBatches()) {
+                if (policy.retainInputBatches() && mask.all() && source.supportsRetainedBatches()) {
                     for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
                         columns[outputIndex] = takeStreams(batch.output(outputIndex));
                     }

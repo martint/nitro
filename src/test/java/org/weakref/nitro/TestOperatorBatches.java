@@ -550,7 +550,8 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 10), row(2L, 20))),
                 new int[] {0, 1},
                 new ConstantTableOperator(allocator, 2, List.of(row(2L, 20), row(3L, 30))),
-                new int[] {0, 1})) {
+                new int[] {0, 1},
+                allocator.engineResources().operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10, null, null),
@@ -573,7 +574,8 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 2, outerRows),
                 new int[] {0},
                 new ConstantTableOperator(allocator, 2, List.of(row(65_536L, 7L), row(70_000L, 8L))),
-                new int[] {0})) {
+                new int[] {0},
+                allocator.engineResources().operatorResources().fullJoinPolicy())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
             assertThat(rows).hasSize(65_538);
             assertThat(rows.get(65_535)).isEqualTo(row(65_535L, 65_536L, null, null));
@@ -600,7 +602,8 @@ public class TestOperatorBatches
                         row(1L, 31L),
                         row(3L, 40L),
                         row(null, 91L))),
-                new int[] {0})) {
+                new int[] {0},
+                allocator.engineResources().operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10L, 1L, 30L),
@@ -625,7 +628,13 @@ public class TestOperatorBatches
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 30L))),
                 new ConstantTableOperator(allocator, 2, List.of(row(1L, 31L), row(3L, 40L)))));
 
-        try (Operator operator = FullJoinOperator.sorted(allocator, outer, new int[] {0}, inner, new int[] {0})) {
+        try (Operator operator = FullJoinOperator.sorted(
+                allocator,
+                outer,
+                new int[] {0},
+                inner,
+                new int[] {0},
+                allocator.engineResources().operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10L, 1L, 30L),

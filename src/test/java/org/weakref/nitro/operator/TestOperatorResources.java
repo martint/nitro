@@ -39,6 +39,7 @@ class TestOperatorResources
 
         assertThat(first.codeGeneration()).isNotSameAs(second.codeGeneration());
         assertThat(first.filter()).isNotSameAs(second.filter());
+        assertThat(first.fullJoinPolicy()).isNotSameAs(second.fullJoinPolicy());
         assertThat(first.groupIdPolicy()).isNotSameAs(second.groupIdPolicy());
         assertThat(first.project()).isNotSameAs(second.project());
         assertThat(first.aggregation()).isNotSameAs(second.aggregation());
@@ -51,6 +52,9 @@ class TestOperatorResources
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::filter)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::fullJoinPolicy)
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::groupIdPolicy)
