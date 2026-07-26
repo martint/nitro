@@ -27,6 +27,7 @@ public final class HashJoinOperatorResources
     private final HashJoinMaterializationListener materializationListener;
     private final HashJoinIndexPolicy indexPolicy;
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
+    private final HashJoinBuildPolicy buildPolicy;
     private final Object sharedBufferPoolGroup = new Object();
 
     public HashJoinOperatorResources(boolean shareBufferPoolAcrossOperators)
@@ -35,7 +36,8 @@ public final class HashJoinOperatorResources
                 shareBufferPoolAcrossOperators,
                 null,
                 HashJoinIndexPolicy.defaults(),
-                HashJoinDynamicFilterPolicy.defaults());
+                HashJoinDynamicFilterPolicy.defaults(),
+                HashJoinBuildPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -46,7 +48,8 @@ public final class HashJoinOperatorResources
                 shareBufferPoolAcrossOperators,
                 materializationListener,
                 HashJoinIndexPolicy.defaults(),
-                HashJoinDynamicFilterPolicy.defaults());
+                HashJoinDynamicFilterPolicy.defaults(),
+                HashJoinBuildPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -58,7 +61,8 @@ public final class HashJoinOperatorResources
                 shareBufferPoolAcrossOperators,
                 materializationListener,
                 indexPolicy,
-                HashJoinDynamicFilterPolicy.defaults());
+                HashJoinDynamicFilterPolicy.defaults(),
+                HashJoinBuildPolicy.defaults());
     }
 
     public HashJoinOperatorResources(
@@ -67,10 +71,26 @@ public final class HashJoinOperatorResources
             HashJoinIndexPolicy indexPolicy,
             HashJoinDynamicFilterPolicy dynamicFilterPolicy)
     {
+        this(
+                shareBufferPoolAcrossOperators,
+                materializationListener,
+                indexPolicy,
+                dynamicFilterPolicy,
+                HashJoinBuildPolicy.defaults());
+    }
+
+    public HashJoinOperatorResources(
+            boolean shareBufferPoolAcrossOperators,
+            HashJoinMaterializationListener materializationListener,
+            HashJoinIndexPolicy indexPolicy,
+            HashJoinDynamicFilterPolicy dynamicFilterPolicy,
+            HashJoinBuildPolicy buildPolicy)
+    {
         this.shareBufferPoolAcrossOperators = shareBufferPoolAcrossOperators;
         this.materializationListener = materializationListener;
         this.indexPolicy = requireNonNull(indexPolicy, "indexPolicy is null");
         this.dynamicFilterPolicy = requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
+        this.buildPolicy = requireNonNull(buildPolicy, "buildPolicy is null");
     }
 
     Object bufferPoolCompatibilityGroup(Object localPoolGroup)
@@ -91,5 +111,10 @@ public final class HashJoinOperatorResources
     HashJoinDynamicFilterPolicy dynamicFilterPolicy()
     {
         return dynamicFilterPolicy;
+    }
+
+    HashJoinBuildPolicy buildPolicy()
+    {
+        return buildPolicy;
     }
 }

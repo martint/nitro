@@ -24,12 +24,14 @@ class TestHashJoinOperatorResources
     {
         HashJoinIndexPolicy indexPolicy = HashJoinIndexPolicy.defaults();
         HashJoinDynamicFilterPolicy dynamicFilterPolicy = HashJoinDynamicFilterPolicy.defaults();
+        HashJoinBuildPolicy buildPolicy = HashJoinBuildPolicy.defaults();
         HashJoinOperatorResources first = new HashJoinOperatorResources(true);
         HashJoinOperatorResources second = new HashJoinOperatorResources(
                 true,
                 null,
                 indexPolicy,
-                dynamicFilterPolicy);
+                dynamicFilterPolicy,
+                buildPolicy);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
@@ -37,6 +39,10 @@ class TestHashJoinOperatorResources
         assertThat(second.indexPolicy()).isSameAs(indexPolicy);
         assertThat(first.dynamicFilterPolicy()).isEqualTo(HashJoinDynamicFilterPolicy.defaults());
         assertThat(second.dynamicFilterPolicy()).isSameAs(dynamicFilterPolicy);
+        assertThat(first.buildPolicy()).isEqualTo(HashJoinBuildPolicy.defaults());
+        assertThat(second.buildPolicy()).isSameAs(buildPolicy);
+        assertThat(buildPolicy.maxBuildBatchRows()).isEqualTo(1 << 16);
+        assertThat(buildPolicy.maxInitialPairHashBytes()).isEqualTo(512L << 20);
         assertThat(indexPolicy.flatDictionaryProbeCacheMaxCardinality()).isEqualTo(1 << 16);
         assertThat(indexPolicy.flatDictionaryProbeCacheMinRowsPerEntry()).isEqualTo(2);
         assertThat(indexPolicy.denseCompactPairMinCapacity()).isEqualTo(1 << 25);

@@ -102,7 +102,8 @@ public final class OperatorResources
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
                         hashJoinMaterializationListener,
                         HashJoinIndexPolicy.fromSystemProperties(),
-                        HashJoinDynamicFilterPolicy.fromSystemProperties()),
+                        HashJoinDynamicFilterPolicy.fromSystemProperties(),
+                        HashJoinBuildPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 TopNRankingOperatorPolicy.fromSystemProperties());
     }

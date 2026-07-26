@@ -48,8 +48,6 @@ import static java.util.Objects.requireNonNull;
 public class HashJoinOperator
         implements Operator
 {
-    private static final boolean EXACT_STREAMING_BUILD_CARDINALITY =
-            Boolean.parseBoolean(System.getProperty("nitro.join.exactStreamingBuildCardinality", "true"));
     private static final boolean DIRECT_BINARY_JOIN_FILTER_DISPATCH =
             Boolean.parseBoolean(System.getProperty("nitro.join.directBinaryFilterDispatch", "true"));
     // An exact equality residual is also an equi-key. Include it in the internal index so duplicate primary keys do
@@ -69,12 +67,8 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.join.rleAllUnmatchedOuterJoinOutput", "true"));
     private static final boolean DEBUG_RLE_ALL_UNMATCHED_OUTER_JOIN_OUTPUT =
             Boolean.getBoolean("nitro.join.debugRleAllUnmatchedOuterJoinOutput");
-    private static final boolean CAP_DUPLICATE_PAIR_HASH =
-            Boolean.parseBoolean(System.getProperty("nitro.join.capDuplicatePairHash", "true"));
     private static final boolean DIRECT_COMPACTED_RANGE_OUTPUT =
             Boolean.parseBoolean(System.getProperty("nitro.join.directCompactedRangeOutput", "true"));
-    private static final long MAX_INITIAL_PAIR_HASH_BYTES =
-            Long.getLong("nitro.join.maxInitialPairHashBytes", 512L << 20);
 
     @FunctionalInterface
     public interface JoinFilterFunction
@@ -142,10 +136,6 @@ public class HashJoinOperator
     private static final int BATCH_SIZE = Integer.getInteger("nitro.hash.join.maxBatchRows", 10_000);
     private static final boolean POOL_JOIN_SCRATCH =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolScratch", "true"));
-    // Build rows are addressed by a packed 16-bit position. Buffering up to that natural boundary reduces the
-    // number of separately allocated retained-column arrays without changing probe/output batch sizing.
-    private static final int BUILD_BATCH_SIZE = Math.min(1 << 16,
-            Integer.getInteger("nitro.hash.join.maxBuildBatchRows", 1 << 16));
     private static final int BUILD_DICTIONARY_SPARSE_RATIO = Integer.getInteger("nitro.hash.join.buildDictionarySparseRatio", 8);
     private static final int DUPLICATE_LIST_INITIAL_CAPACITY =
             Integer.getInteger("nitro.hash.join.duplicateListInitialCapacity", 2);
@@ -184,23 +174,6 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.orderedLongFilterPayload", "true"));
     private static final boolean CACHE_CURRENT_OUTER_JOIN_FILTER =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheCurrentOuterFilter", "true"));
-    // A zero (or null) build operand can never satisfy a bitwise-overlap residual. Prune such rows before buffering
-    // and hash-table insertion, while retaining the exact residual for non-zero operands whose bits may be disjoint.
-    // This is predicate algebra owned by the generic join-filter implementation, not a query or type-shape path.
-    private static final boolean PRUNE_ZERO_BITWISE_OVERLAP_BUILD_ROWS =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.pruneZeroBitwiseOverlapBuildRows", "true"));
-    // Hoist fixed-width vector dispatch out of the row loop while building the ubiquitous single-long-key index.
-    // This remains exact for retained/selected batches: the logical row reference uses the compact batch position,
-    // while key/null reads use the corresponding source position.
-    private static final boolean BATCH_SINGLE_LONG_BUILD =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.batchSingleLongBuild", "true"));
-    private static final boolean BATCH_LONG_PAIR_BUILD =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.batchLongPairBuild", "true"));
-    // If no build column survives the join and no residual predicate reads build payload, index each source batch
-    // directly and release it. Buffering the complete build cannot affect the result in this shape: row references
-    // are used only to preserve duplicate multiplicity, never to materialize a build value.
-    private static final boolean STREAM_UNUSED_BUILD_PAYLOAD =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.streamUnusedBuildPayload", "true"));
     private static final boolean COMPACT_COMPLETED_DIRECT_RANGE_BUILD =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.compactCompletedDirectRangeBuild", "true"));
     private static final boolean DENSE_UNUSED_BUILD_MEMBERSHIP =
@@ -232,6 +205,7 @@ public class HashJoinOperator
     private final OperatorResources operatorResources;
     private final HashJoinIndexPolicy joinIndexPolicy;
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
+    private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinMaterializationListener materializationListener;
     // Build buffers outlive every individual result batch. Keep their ownership separate from result wrappers:
     // a dictionary result may borrow a build vector, and closing that result must release only the wrapper rather
@@ -478,6 +452,7 @@ public class HashJoinOperator
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.joinIndexPolicy = operatorResources.hashJoin().indexPolicy();
         this.dynamicFilterPolicy = operatorResources.hashJoin().dynamicFilterPolicy();
+        this.buildPolicy = operatorResources.hashJoin().buildPolicy();
         this.materializationListener = operatorResources.hashJoin().materializationListener();
         this.allocationCompatibilityGroup = operatorResources.hashJoin()
                 .bufferPoolCompatibilityGroup(allocationPoolGroup);
@@ -1228,12 +1203,12 @@ public class HashJoinOperator
             return;
         }
         int batchCountBefore = bufferedInner.batches().size();
-        BufferedJoinInput.BatchMaskPruner maskPruner = PRUNE_ZERO_BITWISE_OVERLAP_BUILD_ROWS && singleLongBitwiseOverlapJoinFilter
+        BufferedJoinInput.BatchMaskPruner maskPruner = buildPolicy.pruneZeroBitwiseOverlapRows() && singleLongBitwiseOverlapJoinFilter
                 ? this::pruneZeroBitwiseOverlapBuildMask
                 : null;
         bufferedInner.loadAll(
                 inner,
-                BUILD_BATCH_SIZE,
+                buildPolicy.maxBuildBatchRows(),
                 innerJoinColumns,
                 inner.supportsRetainedBatches(),
                 !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow(),
@@ -1241,7 +1216,7 @@ public class HashJoinOperator
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         copySchema(bufferedInner.schema(), innerSchema);
         cacheInnerFilterInputs();
-        if (PRUNE_ZERO_BITWISE_OVERLAP_BUILD_ROWS && singleLongBitwiseOverlapJoinFilter) {
+        if (buildPolicy.pruneZeroBitwiseOverlapRows() && singleLongBitwiseOverlapJoinFilter) {
             expectedIndexedInnerRows = (int) Math.min(Integer.MAX_VALUE, bufferedInner.rowCount());
         }
         // A dynamic filter caps its distinct build values. If the build side alone has more
@@ -1292,7 +1267,7 @@ public class HashJoinOperator
 
     private boolean canStreamUnusedBuildPayload()
     {
-        if (!STREAM_UNUSED_BUILD_PAYLOAD || joinFilters.length != 0) {
+        if (!buildPolicy.streamUnusedPayload() || joinFilters.length != 0) {
             return false;
         }
         for (int outputChannel : outputChannels) {
@@ -1357,11 +1332,11 @@ public class HashJoinOperator
                         }
                     }
                 }
-                if (BATCH_SINGLE_LONG_BUILD && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
+                if (buildPolicy.batchSingleLongBuild() && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
                     longJoinIndex.addRows(joinValues[0], joinNulls[0], hasNulls, mask, batchIndex++);
                     continue;
                 }
-                if (BATCH_LONG_PAIR_BUILD && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
+                if (buildPolicy.batchLongPairBuild() && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
                     longPairJoinIndex.addRows(joinValues, joinNulls, hasNulls, mask, batchIndex++);
                     continue;
                 }
@@ -1721,11 +1696,11 @@ public class HashJoinOperator
             }
             collectKeys = !buildKeysAbandoned;
         }
-        if (BATCH_SINGLE_LONG_BUILD && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
+        if (buildPolicy.batchSingleLongBuild() && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
             longJoinIndex.addRows(joinValues[0], joinNulls[0], hasNulls, batch, startPosition, length, batchIndex);
             return;
         }
-        if (BATCH_LONG_PAIR_BUILD && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
+        if (buildPolicy.batchLongPairBuild() && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
             longPairJoinIndex.addRows(joinValues, joinNulls, hasNulls, batch, startPosition, length, batchIndex);
             return;
         }
@@ -1746,7 +1721,7 @@ public class HashJoinOperator
 
     private boolean shouldCapInitialLongHash(BufferedJoinInput.InnerBatch batch, Vector[] joinValues)
     {
-        if (CAP_DUPLICATE_PAIR_HASH &&
+        if (buildPolicy.capDuplicatePairHash() &&
                 joinValues.length == 2 &&
                 isSingleLongJoinCandidate(joinValues[0]) &&
                 isSingleLongJoinCandidate(joinValues[1]) &&
@@ -1755,7 +1730,7 @@ public class HashJoinOperator
             while (capacity < expectedInnerRowCount() / 0.75) {
                 capacity <<= 1;
             }
-            if (capacity * (2L * Long.BYTES + Byte.BYTES) <= MAX_INITIAL_PAIR_HASH_BYTES) {
+            if (capacity * (2L * Long.BYTES + Byte.BYTES) <= buildPolicy.maxInitialPairHashBytes()) {
                 return false;
             }
             int sampleSize = Math.min(batch.length(), 4096);
@@ -3425,7 +3400,7 @@ public class HashJoinOperator
             return Math.max(16, expectedIndexedInnerRows);
         }
         long rowCount = bufferedInner.rowCount();
-        if (rowCount <= 0 && EXACT_STREAMING_BUILD_CARDINALITY) {
+        if (rowCount <= 0 && buildPolicy.exactStreamingCardinality()) {
             rowCount = inner.exactOutputRows();
         }
         if (rowCount <= 0) {
