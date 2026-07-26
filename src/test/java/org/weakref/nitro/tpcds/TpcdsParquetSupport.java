@@ -379,10 +379,18 @@ final class TpcdsParquetSupport
 
     public static Operator query20(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
+        return query20(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
+    }
+
+    static Operator query20(TpcdsQueryContext context)
+    {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
         // Same revenue-ratio-by-class shape as Q12 over catalog_sales: item(category) ⋈ date_dim(30-day window);
         // GROUP BY item attrs sum(ext_sales_price); PARTITION SUM over i_class; revenue ratio; top 100.
-        Operator facts = profiled("q20.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price"));
-        facts = profiled("q20.join.item", new HashJoinOperator(
+        Operator facts = context.profiled("q20.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_item_sk", "cs_ext_sales_price"));
+        facts = context.profiled("q20.join.item", new HashJoinOperator(
                 allocator,
                 facts,
                 1,
@@ -394,7 +402,7 @@ final class TpcdsParquetSupport
                         query12CategoryPredicate(),
                         new String[] {"i_item_sk", "i_item_id", "i_item_desc", "i_category", "i_class", "i_current_price"}),
                 0));
-        facts = profiled("q20.join.date", new HashJoinOperator(
+        facts = context.profiled("q20.join.date", new HashJoinOperator(
                 allocator,
                 facts,
                 0,
@@ -407,12 +415,12 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_date"},
                         0),
                 0));
-        facts = profiled("q20.project.join", projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2));
-        facts = profiled("q20.group", new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts));
-        facts = profiled("q20.window", new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
+        facts = context.profiled("q20.project.join", projectInputs(allocator, primitiveRegistry, facts, 4, 5, 6, 7, 8, 2));
+        facts = context.profiled("q20.group", new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4), List.of(new Sum(5)), facts));
+        facts = context.profiled("q20.window", new WindowOperator(allocator, facts, new int[] {3}, new int[0], new boolean[0],
                 List.of(new PartitionSumI64WindowFunction(5))));
-        facts = profiled("q20.project.ratio", projectQuery12RevenueRatio(allocator, primitiveRegistry, facts));
-        return profiled("q20.top", new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts));
+        facts = context.profiled("q20.project.ratio", projectQuery12RevenueRatio(allocator, primitiveRegistry, facts));
+        return context.profiled("q20.top", new TopNOperator(allocator, 100, new int[] {2, 3, 0, 1, 6}, new boolean[] {false, false, false, false, false}, facts));
     }
 
     public static Operator query39(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
