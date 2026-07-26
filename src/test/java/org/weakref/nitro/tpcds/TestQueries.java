@@ -985,9 +985,9 @@ public class TestQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        try (Operator joinedFacts = TpcdsParquetSupport.query57JoinedFacts(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
-                Operator groupedSales = TpcdsParquetSupport.query57MonthlyGroupedSales(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
-                Operator rankedSales = TpcdsParquetSupport.query57MonthlyRankedSales(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables);
+        try (Operator joinedFacts = TpcdsParquetSupport.query57JoinedFacts(TpcdsQueryContext.unprofiled(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
+                Operator groupedSales = TpcdsParquetSupport.query57MonthlyGroupedSales(TpcdsQueryContext.unprofiled(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
+                Operator rankedSales = TpcdsParquetSupport.query57MonthlyRankedSales(TpcdsQueryContext.unprofiled(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables));
                 TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(joinedFacts)).hasSize(support.query57JoinedFacts(tables).getMaterializedRows().size());
             assertThat(OperatorAssertions.OperatorAssert.toRows(groupedSales)).hasSize(support.query57MonthlyGroupedSales(tables).getMaterializedRows().size());
@@ -1009,9 +1009,11 @@ public class TestQueries
 
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         OperatorCpuProfile profile = new OperatorCpuProfile();
-        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
-                profile,
-                () -> TpcdsParquetSupport.query57(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables))) {
+        try (Operator query = TpcdsParquetSupport.query57(new TpcdsQueryContext(
+                new Allocator(EngineResources.createDefault()),
+                primitiveRegistry,
+                tables,
+                profile))) {
             consumeOperator(query);
         }
 

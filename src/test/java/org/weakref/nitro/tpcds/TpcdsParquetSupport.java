@@ -2703,18 +2703,25 @@ final class TpcdsParquetSupport
 
     public static Operator query57(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator rankedMonthlySales = query57MonthlyRankedSales(allocator, primitiveRegistry, tables);
-        Operator currentRows = projectQuery57CurrentRows(allocator, primitiveRegistry, rankedMonthlySales);
-        Operator previousRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), true);
-        Operator nextRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), false);
+        return query57(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
+    }
 
-        Operator monthlySales = profiled("q57.join.previous", new HashJoinOperator(allocator, currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4}));
-        monthlySales = profiled("q57.join.next", new HashJoinOperator(allocator, monthlySales, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4}));
-        monthlySales = profiled("q57.filter.deviation", filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(6, 5)));
-        monthlySales = projectQuery57Output(allocator, primitiveRegistry, monthlySales);
-        monthlySales = projectQuery57SortKey(allocator, primitiveRegistry, monthlySales);
-        monthlySales = profiled("q57.topn", new TopNOperator(allocator, 100, new int[] {9, 2}, new boolean[] {false, false}, monthlySales));
-        return profiled("q57.project.final", projectInputs(allocator, primitiveRegistry, monthlySales, 0, 1, 2, 3, 4, 5, 6, 7, 8));
+    static Operator query57(TpcdsQueryContext context)
+    {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        Operator rankedMonthlySales = query57MonthlyRankedSales(context);
+        Operator currentRows = projectQuery57CurrentRows(context, rankedMonthlySales);
+        Operator previousRows = projectQuery57AdjacentRows(context, query57MonthlyRankedSales(context), true);
+        Operator nextRows = projectQuery57AdjacentRows(context, query57MonthlyRankedSales(context), false);
+
+        Operator monthlySales = context.profiled("q57.join.previous", new HashJoinOperator(allocator, currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4}));
+        monthlySales = context.profiled("q57.join.next", new HashJoinOperator(allocator, monthlySales, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4}));
+        monthlySales = context.profiled("q57.filter.deviation", filter(allocator, primitiveRegistry, monthlySales, query53QuarterlyDeviationPredicate(6, 5)));
+        monthlySales = projectQuery57Output(context, monthlySales);
+        monthlySales = projectQuery57SortKey(context, monthlySales);
+        monthlySales = context.profiled("q57.topn", new TopNOperator(allocator, 100, new int[] {9, 2}, new boolean[] {false, false}, monthlySales));
+        return context.profiled("q57.project.final", projectInputs(allocator, primitiveRegistry, monthlySales, 0, 1, 2, 3, 4, 5, 6, 7, 8));
     }
 
     public static Operator query62(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -8730,17 +8737,20 @@ final class TpcdsParquetSupport
                 source);
     }
 
-    static Operator query57JoinedFacts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    static Operator query57JoinedFacts(TpcdsQueryContext context)
     {
-        Operator facts = profiled("q57.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
-        Operator itemKeys = profiled("q57.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"));
-        facts = profiled("q57.join.item", new HashJoinOperator(
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator facts = context.profiled("q57.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
+        Operator itemKeys = context.profiled("q57.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"));
+        facts = context.profiled("q57.join.item", new HashJoinOperator(
                 allocator,
                 facts,
                 2,
                 itemKeys,
                 0));
-        Operator allowedDates = profiled("q57.scan.date_dim", filteredProjectedTable(
+        Operator allowedDates = context.profiled("q57.scan.date_dim", filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
                 tables,
@@ -8748,70 +8758,70 @@ final class TpcdsParquetSupport
                 query57DatePredicate(),
                 new String[] {"d_date_sk", "d_year", "d_moy"},
                 0, 1, 2));
-        facts = profiled("q57.join.date_dim", new HashJoinOperator(
+        facts = context.profiled("q57.join.date_dim", new HashJoinOperator(
                 allocator,
                 facts,
                 0,
                 allowedDates,
                 0));
-        Operator callCenters = profiled("q57.scan.call_center", scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"));
-        facts = profiled("q57.join.call_center", new HashJoinOperator(
+        Operator callCenters = context.profiled("q57.scan.call_center", scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"));
+        facts = context.profiled("q57.join.call_center", new HashJoinOperator(
                 allocator,
                 facts,
                 1,
                 callCenters,
                 0));
-        return profiled("q57.project.joined_facts", projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3));
+        return context.profiled("q57.project.joined_facts", projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3));
     }
 
-    static Operator query57MonthlyGroupedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    static Operator query57MonthlyGroupedSales(TpcdsQueryContext context)
     {
-        Operator facts = query57JoinedFacts(allocator, primitiveRegistry, tables);
-        facts = profiled("q57.group.monthly_sales", new GroupedAggregationOperator(
-                allocator,
+        Operator facts = query57JoinedFacts(context);
+        facts = context.profiled("q57.group.monthly_sales", new GroupedAggregationOperator(
+                context.allocator(),
                 List.of(0, 1, 2, 3, 4),
                 List.of(new Sum(5)),
                 facts));
         return facts;
     }
 
-    static Operator query57MonthlyRankedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    static Operator query57MonthlyRankedSales(TpcdsQueryContext context)
     {
-        Operator facts = query57MonthlyGroupedSales(allocator, primitiveRegistry, tables);
-        facts = profiled("q57.rank.monthly_sales", new TopNRankingOperator(
-                allocator,
+        Operator facts = query57MonthlyGroupedSales(context);
+        facts = context.profiled("q57.rank.monthly_sales", new TopNRankingOperator(
+                context.allocator(),
                 32,
                 new int[] {0, 1, 2},
                 new int[] {3, 4},
                 new boolean[] {false, false},
                 facts));
-        return profiled("q57.project.ranked_sales", projectInputs(allocator, primitiveRegistry, facts, 0, 1, 2, 3, 4, 5, 6));
+        return context.profiled("q57.project.ranked_sales", projectInputs(context.allocator(), context.primitiveRegistry(), facts, 0, 1, 2, 3, 4, 5, 6));
     }
 
-    private static Operator query57MonthlyWindowedSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query57MonthlyWindowedSales(TpcdsQueryContext context)
     {
-        Operator currentRows = projectQuery57CurrentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables));
-        Operator previousRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), true);
-        Operator nextRows = projectQuery57AdjacentRows(allocator, primitiveRegistry, query57MonthlyRankedSales(allocator, primitiveRegistry, tables), false);
-        Operator facts = new HashJoinOperator(allocator, currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4});
-        facts = new HashJoinOperator(allocator, facts, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4});
-        return projectQuery57Output(allocator, primitiveRegistry, facts);
+        Operator currentRows = projectQuery57CurrentRows(context, query57MonthlyRankedSales(context));
+        Operator previousRows = projectQuery57AdjacentRows(context, query57MonthlyRankedSales(context), true);
+        Operator nextRows = projectQuery57AdjacentRows(context, query57MonthlyRankedSales(context), false);
+        Operator facts = new HashJoinOperator(context.allocator(), currentRows, new int[] {0, 1, 2, 7}, previousRows, new int[] {0, 1, 2, 4});
+        facts = new HashJoinOperator(context.allocator(), facts, new int[] {0, 1, 2, 7}, nextRows, new int[] {0, 1, 2, 4});
+        return projectQuery57Output(context, facts);
     }
 
-    private static Operator projectQuery57CurrentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    private static Operator projectQuery57CurrentRows(TpcdsQueryContext context, Operator source)
     {
-        source = profiled("q57.filter.current_year", filter(allocator, primitiveRegistry, source, equal(3, 1999)));
-        source = profiled("q57.window.current_avg", new WindowOperator(
-                allocator,
+        source = context.profiled("q57.filter.current_year", filter(context.allocator(), context.primitiveRegistry(), source, equal(3, 1999)));
+        source = context.profiled("q57.window.current_avg", new WindowOperator(
+                context.allocator(),
                 source,
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
                 List.of(new PartitionAverageI64WindowFunction(5))));
-        return profiled("q57.project.current", projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 7, 5, 6));
+        return context.profiled("q57.project.current", projectInputs(context.allocator(), context.primitiveRegistry(), source, 0, 1, 2, 3, 4, 7, 5, 6));
     }
 
-    private static Operator projectQuery57AdjacentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, boolean previous)
+    private static Operator projectQuery57AdjacentRows(TpcdsQueryContext context, Operator source, boolean previous)
     {
         Variable one = new Variable(0);
         Variable adjustedRank = new Variable(1);
@@ -8826,12 +8836,12 @@ final class TpcdsParquetSupport
                 new Reference(new Input(2), Stream.VALUES),
                 new Reference(new Input(5), Stream.VALUES),
                 new Reference(adjustedRank, Stream.VALUES));
-        return profiled(previous ? "q57.project.previous" : "q57.project.next", new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source));
+        return context.profiled(previous ? "q57.project.previous" : "q57.project.next", new ProjectOperator(context.allocator(), new EvaluationPlan(assignments, outputs), context.primitiveRegistry(), source));
     }
 
-    private static Operator projectQuery57Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    private static Operator projectQuery57Output(TpcdsQueryContext context, Operator source)
     {
-        return profiled("q57.project.output", projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 11, 16));
+        return context.profiled("q57.project.output", projectInputs(context.allocator(), context.primitiveRegistry(), source, 0, 1, 2, 3, 4, 5, 6, 11, 16));
     }
 
     private static Operator projectQuery47Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
@@ -8839,7 +8849,7 @@ final class TpcdsParquetSupport
         return projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 7, 13, 19);
     }
 
-    private static Operator projectQuery57SortKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    private static Operator projectQuery57SortKey(TpcdsQueryContext context, Operator source)
     {
         Variable difference = new Variable(0);
         List<Assignment> assignments = List.of(
@@ -8857,7 +8867,7 @@ final class TpcdsParquetSupport
                 new Reference(new Input(7), Stream.VALUES),
                 new Reference(new Input(8), Stream.VALUES),
                 new Reference(difference, Stream.VALUES));
-        return profiled("q57.project.sort_key", new ProjectOperator(allocator, new EvaluationPlan(assignments, outputs), primitiveRegistry, source));
+        return context.profiled("q57.project.sort_key", new ProjectOperator(context.allocator(), new EvaluationPlan(assignments, outputs), context.primitiveRegistry(), source));
     }
 
     private static Operator projectQuery47SortKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
