@@ -1033,9 +1033,11 @@ public class TestQueries
             }
         }
         OperatorCpuProfile profile = new OperatorCpuProfile();
-        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
-                profile,
-                () -> TpcdsParquetSupport.query24(new Allocator(EngineResources.createDefault()), primitiveRegistry, tables))) {
+        try (Operator query = TpcdsParquetSupport.query24(new TpcdsQueryContext(
+                new Allocator(EngineResources.createDefault()),
+                primitiveRegistry,
+                tables,
+                profile))) {
             consumeOperator(query);
         }
         System.out.println(profile.formatReport());

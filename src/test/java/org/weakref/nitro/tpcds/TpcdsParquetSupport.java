@@ -3436,23 +3436,30 @@ final class TpcdsParquetSupport
 
     public static Operator query24(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator groupedSales = profiled("q24.pale.sales", query24Sales(allocator, primitiveRegistry, tables, "pale"));
-        groupedSales = profiled("q24.pale.outer_group", new GroupedAggregationOperator(
-                allocator,
+        return query24(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
+    }
+
+    static Operator query24(TpcdsQueryContext context)
+    {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        Operator groupedSales = context.profiled("q24.pale.sales", query24Sales(context, "pale"));
+        groupedSales = context.profiled("q24.pale.outer_group", new GroupedAggregationOperator(
+                context.allocator(),
                 List.of(0, 1, 2),
                 List.of(new Sum(10)),
                 groupedSales));
 
-        Operator averageSales = profiled("q24.average.sales", query24AverageSales(allocator, primitiveRegistry, tables));
-        averageSales = profiled("q24.average.final", new AggregationOperator(
+        Operator averageSales = context.profiled("q24.average.sales", query24AverageSales(context));
+        averageSales = context.profiled("q24.average.final", new AggregationOperator(
                 allocator,
                 List.of(new Sum(5), new CountColumn(5)),
                 averageSales));
 
-        Operator joined = profiled("q24.join.threshold", new NestedLoopJoinOperator(allocator, groupedSales, averageSales));
-        joined = profiled("q24.filter.threshold", filter(allocator, primitiveRegistry, joined, query24ThresholdPredicate(3, 4, 5)));
-        joined = profiled("q24.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3));
-        return profiled("q24.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
+        Operator joined = context.profiled("q24.join.threshold", new NestedLoopJoinOperator(allocator, groupedSales, averageSales));
+        joined = context.profiled("q24.filter.threshold", filter(allocator, primitiveRegistry, joined, query24ThresholdPredicate(3, 4, 5)));
+        joined = context.profiled("q24.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2, 3));
+        return context.profiled("q24.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
     public static Operator query25(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5427,9 +5434,12 @@ final class TpcdsParquetSupport
         return projectQuery14ChannelOutput(allocator, primitiveRegistry, branch, channelName);
     }
 
-    private static Operator query24Sales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String colorFilter)
+    private static Operator query24Sales(TpcdsQueryContext context, String colorFilter)
     {
-        Operator sales = profiled("q24.pale.base", query24CustomerStoreItemSales(allocator, primitiveRegistry, tables));
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator sales = context.profiled("q24.pale.base", query24CustomerStoreItemSales(context));
         HashJoinOperator storeJoin = new HashJoinOperator(
                 allocator,
                 sales,
@@ -5447,7 +5457,7 @@ final class TpcdsParquetSupport
                                 0, 2, 3, 4)),
                         0);
         storeJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 8, 9, 10);
-        sales = profiled("q24.pale.join.store", storeJoin);
+        sales = context.profiled("q24.pale.join.store", storeJoin);
         HashJoinOperator itemJoin = new HashJoinOperator(
                 allocator,
                 sales,
@@ -5463,28 +5473,31 @@ final class TpcdsParquetSupport
                                 new String[] {"i_item_sk", "i_current_price", "i_size", "i_color", "i_units", "i_manager_id"}),
                 0);
         itemJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15);
-        sales = profiled("q24.pale.join.item", itemJoin);
+        sales = context.profiled("q24.pale.join.item", itemJoin);
         HashJoinOperator addressJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {3, 9},
                 query24AddressLookup(allocator, primitiveRegistry, tables),
                 new int[] {0, 1});
-        sales = profiled("q24.pale.join.address", addressJoin);
+        sales = context.profiled("q24.pale.join.address", addressJoin);
         // SQL requires c_birth_country <> upper(ca_country). Keeping this as a post-join predicate gives
         // all three engines the same composite (address, zip) equi-join shape and exact SQL NULL semantics.
-        sales = profiled("q24.pale.filter.country", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(2, 17)));
-        sales = profiled("q24.pale.project", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 7, 18, 8, 12, 10, 14, 13, 11, 6));
-        return profiled("q24.pale.group", new GroupedAggregationOperator(
+        sales = context.profiled("q24.pale.filter.country", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(2, 17)));
+        sales = context.profiled("q24.pale.project", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 7, 18, 8, 12, 10, 14, 13, 11, 6));
+        return context.profiled("q24.pale.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
                 List.of(new Sum(10)),
                 sales));
     }
 
-    private static Operator query24AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query24AverageSales(TpcdsQueryContext context)
     {
-        Operator sales = profiled("q24.average.base", query24CustomerStoreItemSales(allocator, primitiveRegistry, tables));
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator sales = context.profiled("q24.average.base", query24CustomerStoreItemSales(context));
         HashJoinOperator storeJoin = new HashJoinOperator(
                 allocator,
                 sales,
@@ -5502,43 +5515,45 @@ final class TpcdsParquetSupport
                                 0, 4)),
                         0);
         storeJoin.withOutputs(0, 1, 2, 3, 4, 5, 6, 8);
-        sales = profiled("q24.average.join.store", storeJoin);
+        sales = context.profiled("q24.average.join.store", storeJoin);
         HashJoinOperator addressJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {3, 7},
                 query24AddressLookup(allocator, primitiveRegistry, tables),
                 new int[] {0, 1});
-        sales = profiled("q24.average.join.address", addressJoin);
-        sales = profiled("q24.average.filter.country", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(2, 10)));
-        sales = profiled("q24.average.project", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 11, 4, 5, 6));
-        return profiled("q24.average.group", new GroupedAggregationOperator(
+        sales = context.profiled("q24.average.join.address", addressJoin);
+        sales = context.profiled("q24.average.filter.country", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(2, 10)));
+        sales = context.profiled("q24.average.project", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 11, 4, 5, 6));
+        return context.profiled("q24.average.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4),
                 List.of(new Sum(5)),
                 sales));
     }
 
-    private static Operator query24CustomerStoreItemSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query24CustomerStoreItemSales(TpcdsQueryContext context)
     {
-        Operator sales = profiled("q24.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"));
+        Allocator allocator = context.allocator();
+        TpcdsParquetTables tables = context.tables();
+        Operator sales = context.profiled("q24.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_ticket_number", "ss_item_sk", "ss_customer_sk", "ss_store_sk", "ss_net_paid"));
         HashJoinOperator returnsJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 new int[] {0, 1},
-                profiled("q24.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk")),
+                context.profiled("q24.scan.store_returns", scannedTable(allocator, tables, "store_returns", "sr_ticket_number", "sr_item_sk")),
                 new int[] {0, 1});
         returnsJoin.withOutputs(1, 2, 3, 4);
-        sales = profiled("q24.join.store_returns", returnsJoin);
+        sales = context.profiled("q24.join.store_returns", returnsJoin);
         HashJoinOperator customerJoin = new HashJoinOperator(
                 allocator,
                 sales,
                 1,
-                profiled("q24.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk")),
+                context.profiled("q24.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_last_name", "c_first_name", "c_birth_country", "c_current_addr_sk")),
                 0);
         customerJoin.withOutputs(5, 6, 7, 8, 2, 0, 3);
-        sales = profiled("q24.join.customer", customerJoin);
-        return profiled("q24.group", new GroupedAggregationOperator(
+        sales = context.profiled("q24.join.customer", customerJoin);
+        return context.profiled("q24.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5),
                 List.of(new Sum(6)),
