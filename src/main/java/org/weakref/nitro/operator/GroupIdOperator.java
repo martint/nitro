@@ -24,23 +24,16 @@ import org.weakref.nitro.data.Vector;
 
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 public final class GroupIdOperator
         implements Operator
 {
-    private static final boolean SHARE_DENSE_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.groupId.shareDenseDictionaryIds", "true"));
-    private static final boolean PROPAGATE_DENSE_DICTIONARY_MAPPING_IDENTITY =
-            Boolean.parseBoolean(System.getProperty("nitro.groupId.propagateDenseDictionaryMappingIdentity", "true"));
-    private static final int DENSE_DICTIONARY_MAPPING_MIN_GROUPING_SETS =
-            Integer.getInteger("nitro.groupId.denseDictionaryMappingMinGroupingSets", 8);
-    private static final boolean USE_KNOWN_FALSE_METADATA =
-            Boolean.parseBoolean(System.getProperty("nitro.groupId.useKnownFalseMetadata", "true"));
-    private static final boolean COMPACT_ALL_FALSE_STREAMS =
-            Boolean.parseBoolean(System.getProperty("nitro.groupId.compactAllFalseStreams", "true"));
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("GroupIdOperator");
     private final Operator source;
     private final int[][] groupingSetInputs;
+    private final GroupIdOperatorPolicy policy;
     private final boolean[] outputCanBeNullExtended;
     private final DictionaryVector[] currentDenseDictionaryMappings;
     private int[] currentSourcePositions;
@@ -52,11 +45,12 @@ public final class GroupIdOperator
     private Batch stagedBatch;
     private boolean done;
 
-    public GroupIdOperator(Allocator allocator, Operator source, int[][] groupingSetInputs)
+    public GroupIdOperator(Allocator allocator, Operator source, int[][] groupingSetInputs, GroupIdOperatorPolicy policy)
     {
         this.allocator = allocator;
         this.source = source;
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
+        this.policy = requireNonNull(policy, "policy is null");
         this.outputCanBeNullExtended = computeOutputNullExtension(groupingSetInputs);
         this.currentDenseDictionaryMappings = new DictionaryVector[outputCanBeNullExtended.length];
     }
@@ -175,7 +169,7 @@ public final class GroupIdOperator
 
         if (sourceIndex >= 0) {
             if (sourceOutput.streams().contains(Stream.NULLS)) {
-                if (USE_KNOWN_FALSE_METADATA && sourceOutput.isKnownAllFalse(Stream.NULLS)) {
+                if (policy.useKnownFalseMetadata() && sourceOutput.isKnownAllFalse(Stream.NULLS)) {
                     if (outputCanBeNullExtended[outputIndex]) {
                         streams.put(Stream.NULLS, allFalseVector(rowCount));
                     }
@@ -190,7 +184,7 @@ public final class GroupIdOperator
 
             if (sourceOutput.streams().contains(Stream.ERRORS)) {
                 streams.put(Stream.ERRORS,
-                        USE_KNOWN_FALSE_METADATA && sourceOutput.isKnownAllFalse(Stream.ERRORS)
+                        policy.useKnownFalseMetadata() && sourceOutput.isKnownAllFalse(Stream.ERRORS)
                                 ? allFalseVector(rowCount)
                                 : copySelectedVector(sourceOutput.borrow(Stream.ERRORS)));
             }
@@ -215,7 +209,7 @@ public final class GroupIdOperator
     private Vector selectValues(Vector source, int[] positions, int outputIndex)
     {
         if (source instanceof DictionaryVector dictionary) {
-            if (SHARE_DENSE_DICTIONARY_IDS && currentSourceDense) {
+            if (policy.shareDenseDictionaryIds() && currentSourceDense) {
                 // The source batch stays open until every grouping-set output derived from it has been consumed,
                 // so a dense expansion can safely share its immutable dictionary mapping.  This is the same
                 // BufferPtr-style lifetime used for the dictionary values and avoids allocating/copying the ids
@@ -253,8 +247,8 @@ public final class GroupIdOperator
 
     private boolean shouldPropagateMappingIdentity()
     {
-        return PROPAGATE_DENSE_DICTIONARY_MAPPING_IDENTITY &&
-                groupingSetInputs.length >= DENSE_DICTIONARY_MAPPING_MIN_GROUPING_SETS;
+        return policy.propagateDenseDictionaryMappingIdentity() &&
+                groupingSetInputs.length >= policy.denseDictionaryMappingMinGroupingSets();
     }
 
     private Vector copySelectedVector(Vector source)
@@ -298,7 +292,7 @@ public final class GroupIdOperator
 
     private Vector allFalseVector(int size)
     {
-        if (!COMPACT_ALL_FALSE_STREAMS) {
+        if (!policy.compactAllFalseStreams()) {
             return booleanVector(size, false);
         }
         BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);

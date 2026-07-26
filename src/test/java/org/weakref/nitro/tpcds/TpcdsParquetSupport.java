@@ -638,7 +638,8 @@ final class TpcdsParquetSupport
                         {0, -1, -1, -1, 4, 5, 6, 7, 8, 9, 10},
                         {0, 1, -1, -1, 4, 5, 6, 7, 8, 9, 10},
                         {0, 1, 2, -1, 4, 5, 6, 7, 8, 9, 10},
-                        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}});
+                        {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 11),
@@ -682,7 +683,8 @@ final class TpcdsParquetSupport
                         {0, -1, -1, -1, 4, 5},
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
-                        {0, 1, 2, 3, 4, 5}}));
+                        {0, 1, 2, 3, 4, 5}},
+                context.allocator().engineResources().operatorResources().groupIdPolicy()));
         return context.profiled("q22.group.rollup", new GroupedAggregationOperator(
                 context.allocator(),
                 List.of(0, 1, 2, 3, 6),
@@ -909,7 +911,8 @@ final class TpcdsParquetSupport
                 sales,
                 new int[][] {
                         {0, -1, 2, 3, 4, 5},
-                        {0, 1, 2, 3, 4, 5}});
+                        {0, 1, 2, 3, 4, 5}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 6),
@@ -2326,7 +2329,8 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, -1, 2},
                         {0, -1, 2},
-                        {0, 1, 2}});
+                        {0, 1, 2}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 3),
@@ -2346,7 +2350,8 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, -1, 2, 3},
                         {0, -1, 2, 3},
-                        {0, 1, 2, 3}});
+                        {0, 1, 2, 3}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 4),
@@ -2428,7 +2433,8 @@ final class TpcdsParquetSupport
                         {0, -1, -1, -1, 4, 5},
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
-                        {0, 1, 2, 3, 4, 5}}));
+                        {0, 1, 2, 3, 4, 5}},
+                allocator.engineResources().operatorResources().groupIdPolicy()));
         grouped = profiled("q14.group.rollup", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 6),
@@ -2958,7 +2964,8 @@ final class TpcdsParquetSupport
                         {0, 1, 2, 3, 4, -1, -1, -1, 8},
                         {0, 1, 2, 3, 4, 5, -1, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, -1, 8},
-                        {0, 1, 2, 3, 4, 5, 6, 7, 8}});
+                        {0, 1, 2, 3, 4, 5, 6, 7, 8}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
@@ -2982,7 +2989,8 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, -1, 2},
                         {0, -1, 2},
-                        {0, 1, 2}});
+                        {0, 1, 2}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 3),
@@ -3038,7 +3046,8 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, -1, 2, 3, 4},
                         {0, -1, 2, 3, 4},
-                        {0, 1, 2, 3, 4}}));
+                        {0, 1, 2, 3, 4}},
+                allocator.engineResources().operatorResources().groupIdPolicy()));
         grouped = profiled("q80.group.final", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 5),
@@ -3110,7 +3119,8 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, -1, 2, 3, 4},
                         {0, -1, 2, 3, 4},
-                        {0, 1, 2, 3, 4}}));
+                        {0, 1, 2, 3, 4}},
+                allocator.engineResources().operatorResources().groupIdPolicy()));
         grouped = profiled("q77.group.final", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 5),
@@ -3197,7 +3207,8 @@ final class TpcdsParquetSupport
                 qualifiedRows,
                 new int[][] {
                         {-1, 1, 2},
-                        {0, -1, -1}});
+                        {0, -1, -1}},
+                allocator.engineResources().operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 3),

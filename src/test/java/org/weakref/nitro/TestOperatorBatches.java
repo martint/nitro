@@ -2093,7 +2093,8 @@ public class TestOperatorBatches
                 new int[][] {
                         {-1, -1, 2},
                         {0, -1, 2},
-                        {0, 1, 2}})) {
+                        {0, 1, 2}},
+                allocator.engineResources().operatorResources().groupIdPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(null, null, 10L, 0L),

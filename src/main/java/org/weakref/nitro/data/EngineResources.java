@@ -15,6 +15,7 @@ package org.weakref.nitro.data;
 
 import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
+import org.weakref.nitro.operator.GroupIdOperatorPolicy;
 import org.weakref.nitro.operator.GroupingStateResources;
 import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
@@ -51,6 +52,7 @@ public final class EngineResources
                 new OperatorResources(
                         operatorCodeGeneration,
                         FilterOperatorPolicy.fromSystemProperties(),
+                        GroupIdOperatorPolicy.fromSystemProperties(),
                         projectOperator,
                         aggregationOperator,
                         hashJoinOperator,
@@ -70,6 +72,7 @@ public final class EngineResources
                 new OperatorResources(
                         operatorCodeGeneration,
                         FilterOperatorPolicy.fromSystemProperties(),
+                        GroupIdOperatorPolicy.fromSystemProperties(),
                         projectOperator,
                         aggregationOperator,
                         hashJoinOperator,
