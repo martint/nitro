@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.jit.FusedProjectionCompiler;
+import org.weakref.nitro.jit.ProjectionCodeGenerationPolicy;
 import org.weakref.nitro.jit.ProjectionMaskCompiler;
 
 /**
@@ -25,8 +26,8 @@ import org.weakref.nitro.jit.ProjectionMaskCompiler;
 public final class OperatorCodeGenerationResources
         implements AutoCloseable
 {
-    private final FusedProjectionCompiler fusedProjection = new FusedProjectionCompiler();
-    private final ProjectionMaskCompiler projectionMask = new ProjectionMaskCompiler();
+    private final FusedProjectionCompiler fusedProjection;
+    private final ProjectionMaskCompiler projectionMask;
     private final FusedGroupingAggregationKernelGenerator fusedGrouping = new FusedGroupingAggregationKernelGenerator();
     private final MultiLongGroupingTableGenerator multiLongGrouping = new MultiLongGroupingTableGenerator();
     private final AdaptiveLongGroupingTableGenerator adaptiveLongGrouping = new AdaptiveLongGroupingTableGenerator();
@@ -34,6 +35,17 @@ public final class OperatorCodeGenerationResources
     private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
     private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
     private boolean closed;
+
+    public OperatorCodeGenerationResources()
+    {
+        this(ProjectionCodeGenerationPolicy.defaults());
+    }
+
+    public OperatorCodeGenerationResources(ProjectionCodeGenerationPolicy projectionPolicy)
+    {
+        fusedProjection = new FusedProjectionCompiler(projectionPolicy);
+        projectionMask = new ProjectionMaskCompiler(projectionPolicy);
+    }
 
     FusedProjectionCompiler fusedProjection()
     {

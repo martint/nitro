@@ -45,16 +45,29 @@ import static java.util.Objects.requireNonNull;
 public final class ProjectionMaskCompiler
 {
     private final DynamicKernelFactory dynamicKernelFactory;
+    private final boolean returnedConstantComparisonMasks;
     private volatile Utf8DynamicMaskKernel utf8DynamicKernel;
 
     public ProjectionMaskCompiler()
     {
-        this(Utf8DynamicMaskKernelGenerator::generate);
+        this(ProjectionCodeGenerationPolicy.defaults());
+    }
+
+    public ProjectionMaskCompiler(ProjectionCodeGenerationPolicy policy)
+    {
+        this(Utf8DynamicMaskKernelGenerator::generate, policy);
     }
 
     ProjectionMaskCompiler(DynamicKernelFactory dynamicKernelFactory)
     {
+        this(dynamicKernelFactory, ProjectionCodeGenerationPolicy.defaults());
+    }
+
+    ProjectionMaskCompiler(DynamicKernelFactory dynamicKernelFactory, ProjectionCodeGenerationPolicy policy)
+    {
         this.dynamicKernelFactory = requireNonNull(dynamicKernelFactory, "dynamicKernelFactory is null");
+        this.returnedConstantComparisonMasks =
+                requireNonNull(policy, "policy is null").returnedConstantComparisonMasks();
     }
 
     public Optional<CompiledMask> tryCompile(
@@ -159,7 +172,7 @@ public final class ProjectionMaskCompiler
         };
     }
 
-    private static Optional<CompiledMask> compileLongComparison(BinaryOperation operation)
+    private Optional<CompiledMask> compileLongComparison(BinaryOperation operation)
     {
         return switch (operation) {
             case EQUAL -> Optional.of(longComparison((first, second) -> first == second, Mask.ComparisonOperator.EQUAL));
@@ -184,7 +197,7 @@ public final class ProjectionMaskCompiler
                 operator);
     }
 
-    private static CompiledMask longComparison(
+    private CompiledMask longComparison(
             LongComparisonMaskSupport.ComparisonKernel kernel,
             Mask.ComparisonOperator operator)
     {
@@ -196,7 +209,8 @@ public final class ProjectionMaskCompiler
                         new ArgumentComponent(0, Stream.ERRORS),
                         new ArgumentComponent(1, Stream.ERRORS)),
                 kernel,
-                operator);
+                operator,
+                returnedConstantComparisonMasks);
     }
 
     private static boolean isArgumentNull(ProjectionProgramBuilder.Expression expression, int index)
@@ -319,17 +333,20 @@ public final class ProjectionMaskCompiler
     {
         private final LongComparisonMaskSupport.ComparisonKernel kernel;
         private final Mask.ComparisonOperator operator;
+        private final boolean returnedConstantComparisonMasks;
 
         private LongComparisonMask(
                 int argumentCount,
                 List<Set<Stream>> requiredInputStreams,
                 List<ArgumentComponent> excludedComponents,
                 LongComparisonMaskSupport.ComparisonKernel kernel,
-                Mask.ComparisonOperator operator)
+                Mask.ComparisonOperator operator,
+                boolean returnedConstantComparisonMasks)
         {
             super(argumentCount, requiredInputStreams, excludedComponents);
             this.kernel = kernel;
             this.operator = operator;
+            this.returnedConstantComparisonMasks = returnedConstantComparisonMasks;
         }
 
         @Override
@@ -349,8 +366,8 @@ public final class ProjectionMaskCompiler
                 Allocator.Context allocationContext)
         {
             return selectTrue
-                    ? LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, allocationContext, kernel, operator)
-                    : LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, allocationContext, kernel, operator);
+                    ? LongComparisonMaskSupport.tryEvaluateTrueMask(inputs, mask, context, allocationContext, kernel, operator, returnedConstantComparisonMasks)
+                    : LongComparisonMaskSupport.tryEvaluateFalseMask(inputs, mask, context, allocationContext, kernel, operator, returnedConstantComparisonMasks);
         }
 
         @Override

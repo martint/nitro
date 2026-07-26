@@ -30,9 +30,6 @@ import java.util.List;
 
 final class LongComparisonMaskSupport
 {
-    private static final boolean RETURNED_CONSTANT_COMPARISON_MASKS =
-            Boolean.parseBoolean(System.getProperty("nitro.longComparison.returnedConstantMasks", "true"));
-
     private LongComparisonMaskSupport() {}
 
     @FunctionalInterface
@@ -259,13 +256,13 @@ final class LongComparisonMaskSupport
                 context.allocator().allocateSparseMask(allocationContext, errorPositions, errorPositions.length, mask.size()));
     }
 
-    public static Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    public static Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator, boolean returnedConstantComparisonMasks)
     {
         if (!supportsLongComparison(inputs)) {
             return null;
         }
 
-        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, true);
+        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, true, returnedConstantComparisonMasks);
         if (constantMask != null) {
             return constantMask;
         }
@@ -293,13 +290,13 @@ final class LongComparisonMaskSupport
         return context.allocator().allocateSparseMask(allocationContext, truePositions, trueIndex[0], mask.size());
     }
 
-    public static Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator)
+    public static Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel, Mask.ComparisonOperator operator, boolean returnedConstantComparisonMasks)
     {
         if (!supportsLongComparison(inputs)) {
             return null;
         }
 
-        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, false);
+        Mask constantMask = tryConstantComparisonMask(inputs, mask, context, allocationContext, operator, false, returnedConstantComparisonMasks);
         if (constantMask != null) {
             return constantMask;
         }
@@ -464,9 +461,9 @@ final class LongComparisonMaskSupport
         return true;
     }
 
-    private static Mask tryConstantComparisonMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, Mask.ComparisonOperator baseOperator, boolean wantTrue)
+    private static Mask tryConstantComparisonMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, Mask.ComparisonOperator baseOperator, boolean wantTrue, boolean returnedConstantComparisonMasks)
     {
-        if (!RETURNED_CONSTANT_COMPARISON_MASKS || baseOperator == null) {
+        if (!returnedConstantComparisonMasks || baseOperator == null) {
             return null;
         }
 

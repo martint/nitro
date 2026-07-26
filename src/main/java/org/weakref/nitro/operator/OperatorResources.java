@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.jit.ProjectionCodeGenerationPolicy;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -103,7 +105,7 @@ public final class OperatorResources
         EvaluationOperatorPolicy evaluationPolicy = EvaluationOperatorPolicy.fromSystemProperties();
         FlatKeyTablePolicy flatKeyTablePolicy = FlatKeyTablePolicy.fromSystemProperties();
         return new OperatorResources(
-                new OperatorCodeGenerationResources(),
+                new OperatorCodeGenerationResources(ProjectionCodeGenerationPolicy.fromSystemProperties()),
                 AdaptiveLongGroupingPolicy.fromSystemProperties(),
                 flatKeyTablePolicy,
                 DistinctKeySetPolicy.fromSystemProperties(),

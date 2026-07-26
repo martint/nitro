@@ -20,6 +20,7 @@ import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
+import org.weakref.nitro.jit.ProjectionCodeGenerationPolicy;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
@@ -43,6 +44,8 @@ class TestOperatorCodeGenerationResources
     {
         OperatorCodeGenerationResources first = new OperatorCodeGenerationResources();
         OperatorCodeGenerationResources second = new OperatorCodeGenerationResources();
+        OperatorCodeGenerationResources configured = new OperatorCodeGenerationResources(
+                new ProjectionCodeGenerationPolicy(false, false, false));
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         Variable one = new Variable(0);
         Variable incremented = new Variable(1);
@@ -63,9 +66,11 @@ class TestOperatorCodeGenerationResources
         Class<?> firstKernel = firstCompiler.tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
         Class<?> reusedKernel = firstCompiler.tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
         Class<?> isolatedKernel = second.fusedProjection().tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
+        Class<?> configuredKernel = configured.fusedProjection().tryCompile(plan, registry, List.of(output)).orElseThrow().kernel().getClass();
 
         assertThat(reusedKernel).isSameAs(firstKernel);
         assertThat(isolatedKernel).isNotSameAs(firstKernel);
+        assertThat(configuredKernel).isNotSameAs(firstKernel);
 
         first.close();
         assertThatThrownBy(first::fusedProjection)
@@ -78,6 +83,7 @@ class TestOperatorCodeGenerationResources
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Fused projection compiler is closed");
         second.close();
+        configured.close();
     }
 
     @Test
