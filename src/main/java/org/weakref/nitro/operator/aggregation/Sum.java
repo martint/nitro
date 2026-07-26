@@ -428,7 +428,7 @@ public class Sum
                 output == null ? null : output.getOrNull(Stream.NULLS),
                 visibleCount);
         stateVector.copyNullsTo(nulls, visibleCount);
-        return Streams.reuseValuesAndNulls(output, values, nulls);
+        return allocator.reuseValuesAndNulls(output, values, nulls);
     }
 
     @Override
@@ -448,6 +448,6 @@ public class Sum
                 size);
         values.values()[outputPosition] = stateVector.sum(group);
         nulls.values()[outputPosition] = stateVector.isNull(group);
-        return Streams.reuseValuesAndNulls(output, values, nulls);
+        return allocator.reuseValuesAndNulls(output, values, nulls);
     }
 }

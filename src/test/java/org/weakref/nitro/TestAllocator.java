@@ -22,6 +22,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -302,6 +303,7 @@ class TestAllocator
     {
         AllocatorPolicy policy = new AllocatorPolicy(
                 true,
+                false,
                 4,
                 false,
                 true,
@@ -328,6 +330,11 @@ class TestAllocator
             Vector second = allocator.borrowAllFalseBoolean(context, 5);
 
             assertThat(first).isNotSameAs(second);
+
+            I64Vector values = new I64Vector(5);
+            BooleanVector nulls = new BooleanVector(5);
+            Streams existing = Streams.ofValuesAndNulls(values, nulls);
+            assertThat(allocator.reuseValuesAndNulls(existing, values, nulls)).isNotSameAs(existing);
         }
     }
 

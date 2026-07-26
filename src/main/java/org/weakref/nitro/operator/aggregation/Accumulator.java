@@ -165,9 +165,8 @@ public interface Accumulator
      * vectors for every group when they only need a handful of rows. Returning {@code null}
      * indicates that the accumulator does not provide a specialized path and callers should fall
      * back to normal stream materialization. Implementations should pass {@code output} to
-     * {@link Streams#reuseOrCreate(Streams, Vector, Vector, Vector)} (or a convenience overload)
-     * after copying so the caller's immutable transport tuple is retained whenever its backing
-     * vectors did not grow.
+     * {@link Allocator#reuseOrCreateStreams(Streams, Vector, Vector, Vector)} after copying so the
+     * caller's immutable transport tuple is retained whenever its backing vectors did not grow.
      */
     default Streams copyResultPosition(int group, int maxGroup, Streams state, Streams output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
     {

@@ -4752,7 +4752,7 @@ public class TestOperators
                     existing == null ? null : existing.getOrNull(Stream.NULLS),
                     maxGroup + 1);
             java.util.Arrays.fill(nulls.values(), 0, maxGroup + 1, false);
-            return Streams.reuseValuesAndNulls(existing, values, nulls);
+            return allocator.reuseValuesAndNulls(existing, values, nulls);
         }
 
         private record State(long[] sums, long[] counts) {}

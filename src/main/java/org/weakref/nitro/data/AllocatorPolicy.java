@@ -18,6 +18,7 @@ package org.weakref.nitro.data;
  */
 public record AllocatorPolicy(
         boolean directSingleRunRle,
+        boolean reuseTransportTuples,
         int maxPooledMasksPerBucket,
         boolean complementDifferenceMasks,
         boolean singleCopySparseMasks,
@@ -37,6 +38,7 @@ public record AllocatorPolicy(
     public static AllocatorPolicy defaults()
     {
         return new AllocatorPolicy(
+                true,
                 true,
                 4,
                 false,
@@ -64,6 +66,7 @@ public record AllocatorPolicy(
                 Integer.getInteger("nitro.allocator.compatiblePoolLocalReserve", defaults.compatiblePoolLocalReserve());
         return new AllocatorPolicy(
                 booleanProperty("nitro.directSingleRunRle", defaults.directSingleRunRle()),
+                !Boolean.getBoolean("nitro.streams.disableTransportTupleReuse"),
                 defaults.maxPooledMasksPerBucket(),
                 booleanProperty("nitro.mask.complementDifferenceMasks", defaults.complementDifferenceMasks()),
                 booleanProperty("nitro.mask.singleCopySparseMasks", defaults.singleCopySparseMasks()),

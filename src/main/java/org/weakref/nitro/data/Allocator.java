@@ -171,6 +171,16 @@ public class Allocator
         return vector;
     }
 
+    public Streams reuseOrCreateStreams(Streams existing, Vector values, Vector nulls, Vector errors)
+    {
+        return Streams.reuseOrCreate(policy.reuseTransportTuples(), existing, values, nulls, errors);
+    }
+
+    public Streams reuseValuesAndNulls(Streams existing, Vector values, BooleanVector nulls)
+    {
+        return reuseOrCreateStreams(existing, values, nulls, null);
+    }
+
     /**
      * Returns a read-only Boolean vector of {@code length} false values.
      *
