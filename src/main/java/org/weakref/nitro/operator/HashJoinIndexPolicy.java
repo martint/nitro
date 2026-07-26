@@ -64,7 +64,12 @@ public record HashJoinIndexPolicy(
         int denseCompactSparsePairMinCapacity,
         boolean compactDensePairSingleBatchRowReferences,
         boolean preSizeDensePairDuplicateRows,
-        boolean guardPairTagMaskConversion)
+        boolean guardPairTagMaskConversion,
+        boolean compactCompletedDirectRangeBuild,
+        int compactCompletedDirectRangeMinSize,
+        boolean denseUnusedBuildMembership,
+        int denseUnusedBuildMembershipMinKeys,
+        boolean debugJoinIndex)
 {
     public static HashJoinIndexPolicy defaults()
     {
@@ -115,6 +120,11 @@ public record HashJoinIndexPolicy(
                 1 << 23,
                 true,
                 true,
+                true,
+                true,
+                256,
+                true,
+                1 << 12,
                 true);
     }
 
@@ -208,7 +218,20 @@ public record HashJoinIndexPolicy(
                 booleanProperty(
                         "nitro.join.preSizeDensePairDuplicateRows",
                         defaults.preSizeDensePairDuplicateRows()),
-                booleanProperty("nitro.join.guardPairTagMaskConversion", defaults.guardPairTagMaskConversion()));
+                booleanProperty("nitro.join.guardPairTagMaskConversion", defaults.guardPairTagMaskConversion()),
+                booleanProperty(
+                        "nitro.hash.join.compactCompletedDirectRangeBuild",
+                        defaults.compactCompletedDirectRangeBuild()),
+                Integer.getInteger(
+                        "nitro.hash.join.compactCompletedDirectRangeMinSize",
+                        defaults.compactCompletedDirectRangeMinSize()),
+                booleanProperty(
+                        "nitro.hash.join.denseUnusedBuildMembership",
+                        defaults.denseUnusedBuildMembership()),
+                Integer.getInteger(
+                        "nitro.hash.join.denseUnusedBuildMembershipMinKeys",
+                        defaults.denseUnusedBuildMembershipMinKeys()),
+                Boolean.getBoolean("nitro.debug.joinIndex"));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

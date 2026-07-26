@@ -174,14 +174,6 @@ public class HashJoinOperator
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.orderedLongFilterPayload", "true"));
     private static final boolean CACHE_CURRENT_OUTER_JOIN_FILTER =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.cacheCurrentOuterFilter", "true"));
-    private static final boolean COMPACT_COMPLETED_DIRECT_RANGE_BUILD =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.compactCompletedDirectRangeBuild", "true"));
-    private static final boolean DENSE_UNUSED_BUILD_MEMBERSHIP =
-            Boolean.parseBoolean(System.getProperty("nitro.hash.join.denseUnusedBuildMembership", "true"));
-    private static final int DENSE_UNUSED_BUILD_MEMBERSHIP_MIN_KEYS =
-            Integer.getInteger("nitro.hash.join.denseUnusedBuildMembershipMinKeys", 1 << 12);
-    private static final int COMPACT_COMPLETED_DIRECT_RANGE_MIN_SIZE =
-            Integer.getInteger("nitro.hash.join.compactCompletedDirectRangeMinSize", 256);
     // A one-to-one identity join mapping needs neither a constrained re-borrow nor a copy: the upstream column is
     // already the exact result vector. Keep it borrowed under the still-open outer batch and forward it directly.
     // The rule depends only on the physical row mapping and works for every re-borrow-capable operator and vector.
@@ -195,7 +187,6 @@ public class HashJoinOperator
     private static final boolean POOL_BUILD_DICTIONARY_IDS =
             Boolean.parseBoolean(System.getProperty("nitro.hash.join.poolBuildDictionaryIds", "true"));
     private static final long NO_MATCH_ROW_REFERENCE = -1L;
-    private static final boolean DEBUG_JOIN_INDEX = Boolean.getBoolean("nitro.debug.joinIndex");
     private static final int NO_MATCH_COMPACT_ROW_REFERENCE = -1;
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
@@ -1902,7 +1893,7 @@ public class HashJoinOperator
             boolean keyOnlyDirectRangeBuild)
     {
         int expectedSize = expectedInnerRowCount();
-        if (DEBUG_JOIN_INDEX) {
+        if (joinIndexPolicy.debugJoinIndex()) {
             System.err.printf("[join-index] expected=%d fields=%d shape=%s%n",
                     expectedSize,
                     joinValues.length,
@@ -3920,7 +3911,7 @@ public class HashJoinOperator
             if (!lazyDuplicateSlotState || !policy.lazyUniqueChainState()) {
                 chainNext = arrayPool.borrowInts(initialRows);
             }
-            if (DEBUG_JOIN_INDEX && keyOnlyDirectRangeBuild) {
+            if (policy.debugJoinIndex() && keyOnlyDirectRangeBuild) {
                 System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
             }
             if (capInitialHash || keyOnlyDirectRangeBuild) {
@@ -6141,7 +6132,7 @@ public class HashJoinOperator
         private void finalizeForProbe(int initialProbeRows)
         {
             finalized = true;
-            if (DEBUG_JOIN_INDEX) {
+            if (policy.debugJoinIndex()) {
                 System.err.printf(
                         "[long-join-build] expected=%d rows=%d keys=%d min=%d max=%d dense=%s direct=%s duplicates=%s implicitReferences=%s compressedDuplicates=%s%n",
                         expectedBuildRows,
@@ -6159,7 +6150,7 @@ public class HashJoinOperator
                 return;
             }
             if (directRangeBuild) {
-                if (COMPACT_COMPLETED_DIRECT_RANGE_BUILD) {
+                if (policy.compactCompletedDirectRangeBuild()) {
                     compactCompletedDirectRangeBuild();
                 }
                 if (policy.debugDirectDuplicateState() && hasDuplicates) {
@@ -6245,7 +6236,7 @@ public class HashJoinOperator
          */
         private void compactCompletedDirectRangeBuild()
         {
-            if (hasDuplicates || size < COMPACT_COMPLETED_DIRECT_RANGE_MIN_SIZE) {
+            if (hasDuplicates || size < policy.compactCompletedDirectRangeMinSize()) {
                 return;
             }
             long range = maxKey - minKey + 1;
@@ -6257,9 +6248,9 @@ public class HashJoinOperator
             // completed build proves a unique, gap-free key range, membership is exactly a bounds check and the
             // physical build position is unobservable. Reuse the existing dense-position probe machinery with
             // synthetic positions; no query, table, column, or logical-type identity participates in admission.
-            if (DENSE_UNUSED_BUILD_MEMBERSHIP &&
+            if (policy.denseUnusedBuildMembership() &&
                     buildRowReferencesUnused &&
-                    size >= DENSE_UNUSED_BUILD_MEMBERSHIP_MIN_KEYS &&
+                    size >= policy.denseUnusedBuildMembershipMinKeys() &&
                     range == size) {
                 directRangeBuild = false;
                 arrayMode = true;
@@ -6270,7 +6261,7 @@ public class HashJoinOperator
                 releaseDirectBuildArrays();
                 releaseHashTable();
                 releaseRowArrays();
-                if (DEBUG_JOIN_INDEX) {
+                if (policy.debugJoinIndex()) {
                     System.err.printf("[dense-unused-build-membership] keys=%d min=%d max=%d%n", size, minKey, maxKey);
                 }
                 return;
@@ -6913,7 +6904,7 @@ public class HashJoinOperator
         @Override
         public void matchSingleRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, long[] refs)
         {
-            if (DEBUG_JOIN_INDEX && !debugProbeShapePrinted) {
+            if (policy.debugJoinIndex() && !debugProbeShapePrinted) {
                 debugProbeShapePrinted = true;
                 System.err.printf("[flat-join-probe] groups=%d rows=%d fields=%d shape=%s%n",
                         nextGroupId,
@@ -6986,7 +6977,7 @@ public class HashJoinOperator
                 dictionaryProbeIdentity = base;
                 dictionaryProbeGeneration = generation;
             }
-            if (DEBUG_JOIN_INDEX && !debugDictionaryProbeCachePrinted) {
+            if (policy.debugJoinIndex() && !debugDictionaryProbeCachePrinted) {
                 debugDictionaryProbeCachePrinted = true;
                 System.err.printf("[flat-join-dictionary-cache] groups=%d rows=%d cardinality=%d depth=%d%n",
                         nextGroupId,
