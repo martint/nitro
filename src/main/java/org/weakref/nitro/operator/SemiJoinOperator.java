@@ -36,12 +36,6 @@ import java.util.function.Function;
 public class SemiJoinOperator
         implements Operator
 {
-    private static final boolean DYNAMIC_FILTER_ENABLED = Boolean.parseBoolean(System.getProperty("nitro.dynamicFilter", "true"));
-    private static final int DYNAMIC_FILTER_MAX_VALUES = Integer.getInteger("nitro.dynamicFilter.maxValues", 1 << 13);
-    private static final int SMALL_BINARY_SET_MAX_VALUES = Integer.getInteger("nitro.semiJoin.smallBinarySetMaxValues", 64);
-    private static final boolean CACHE_DICTIONARY_MATCHES =
-            Boolean.parseBoolean(System.getProperty("nitro.semiJoin.cacheDictionaryMatches", "true"));
-
     private final Operator outer;
     private final Operator inner;
     private final int outerJoinColumn;
@@ -52,6 +46,7 @@ public class SemiJoinOperator
     private final boolean outputMatches;
     private final MembershipSet membership;
     private final PositionScratch selectionScratch;
+    private final SemiJoinOperatorPolicy policy;
 
     private boolean loaded;
     private BatchState currentBatchState;
@@ -102,6 +97,7 @@ public class SemiJoinOperator
                 "SemiJoinOperator",
                 operatorResources.grouping().semiJoinBufferPool());
         this.selectionScratch = new PositionScratch(allocator.primitiveArrays());
+        this.policy = operatorResources.semiJoinPolicy();
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
         this.membership = new MembershipSet(allocator, allocationContext, operatorResources);
@@ -280,7 +276,7 @@ public class SemiJoinOperator
 
     private void collectDynamicFilterValues(Vector values, Vector nulls, Mask mask)
     {
-        if (!DYNAMIC_FILTER_ENABLED || !includeMatches || outputMatches || dynamicFilterAbandoned) {
+        if (!policy.dynamicFilterEnabled() || !includeMatches || outputMatches || dynamicFilterAbandoned) {
             return;
         }
         if (nulls != null && !VectorAccess.isAllFalseNulls(nulls)) {
@@ -317,7 +313,7 @@ public class SemiJoinOperator
 
     private void collectSmallBinaryMembership(Vector values, Vector nulls, Mask mask)
     {
-        if (SMALL_BINARY_SET_MAX_VALUES <= 0 || smallBinaryMembershipAbandoned || mask.none()) {
+        if (policy.smallBinarySetMaxValues() <= 0 || smallBinaryMembershipAbandoned || mask.none()) {
             return;
         }
         if (!SmallBinarySet.supports(values)) {
@@ -329,7 +325,10 @@ public class SemiJoinOperator
             return;
         }
         if (smallBinaryMembership == null) {
-            smallBinaryMembership = new SmallBinarySet(SMALL_BINARY_SET_MAX_VALUES, allocator.primitiveArrays());
+            smallBinaryMembership = new SmallBinarySet(
+                    policy.smallBinarySetMaxValues(),
+                    policy.cacheDictionaryMatches(),
+                    allocator.primitiveArrays());
         }
         if (!smallBinaryMembership.addValues(values, nulls, mask)) {
             smallBinaryMembershipAbandoned = true;
@@ -341,7 +340,7 @@ public class SemiJoinOperator
     private void addDynamicFilterValue(long value)
     {
         dynamicFilterValues.add(value);
-        if (dynamicFilterValues.size() > DYNAMIC_FILTER_MAX_VALUES) {
+        if (dynamicFilterValues.size() > policy.dynamicFilterMaxValues()) {
             dynamicFilterAbandoned = true;
             dynamicFilterValues = null;
         }
@@ -457,6 +456,7 @@ public class SemiJoinOperator
         private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
         private final int maxValues;
+        private final boolean cacheDictionaryMatches;
         private final PrimitiveArrayPool arrayPool;
         private byte[][] values = new byte[8][];
         private int[] lengths = new int[8];
@@ -471,9 +471,10 @@ public class SemiJoinOperator
         private Vector cachedDictionaryValues;
         private byte[] cachedDictionaryMatchStates = new byte[0];
 
-        private SmallBinarySet(int maxValues, PrimitiveArrayPool arrayPool)
+        private SmallBinarySet(int maxValues, boolean cacheDictionaryMatches, PrimitiveArrayPool arrayPool)
         {
             this.maxValues = maxValues;
+            this.cacheDictionaryMatches = cacheDictionaryMatches;
             this.arrayPool = arrayPool;
         }
 
@@ -819,7 +820,7 @@ public class SemiJoinOperator
 
         private boolean dictionaryMatch(Vector dictionaryValues, int dictionaryId, int generation)
         {
-            if (CACHE_DICTIONARY_MATCHES) {
+            if (cacheDictionaryMatches) {
                 return cachedDictionaryMatch(dictionaryValues, dictionaryId);
             }
             if (dictionaryGenerations[dictionaryId] != generation) {

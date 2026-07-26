@@ -143,6 +143,7 @@ class TestOperatorResources
             assertThat(marker.outputCount()).isEqualTo(1);
             assertThat(semiJoin.outputCount()).isZero();
             assertThat(hashJoin.outputCount()).isZero();
+            assertThat(operatorResources.semiJoinPolicy()).isEqualTo(SemiJoinOperatorPolicy.defaults());
 
             Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");
             Streams state = new DistinctCount(0).allocate(

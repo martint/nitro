@@ -26,6 +26,7 @@ import org.weakref.nitro.operator.HashJoinOperatorResources;
 import org.weakref.nitro.operator.OperatorCodeGenerationResources;
 import org.weakref.nitro.operator.OperatorResources;
 import org.weakref.nitro.operator.ProjectOperatorResources;
+import org.weakref.nitro.operator.SemiJoinOperatorPolicy;
 import org.weakref.nitro.operator.TopNRankingOperatorPolicy;
 
 import static java.util.Objects.requireNonNull;
@@ -66,6 +67,7 @@ public final class EngineResources
                         projectOperator,
                         aggregationOperator,
                         BufferedJoinInputPolicy.fromSystemProperties(),
+                        SemiJoinOperatorPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         TopNRankingOperatorPolicy.fromSystemProperties()));
@@ -92,6 +94,7 @@ public final class EngineResources
                         projectOperator,
                         aggregationOperator,
                         BufferedJoinInputPolicy.fromSystemProperties(),
+                        SemiJoinOperatorPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         TopNRankingOperatorPolicy.fromSystemProperties()));
