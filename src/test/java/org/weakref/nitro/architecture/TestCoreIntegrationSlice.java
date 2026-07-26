@@ -24,6 +24,12 @@ import org.weakref.nitro.core.function.FunctionRegistry;
 import org.weakref.nitro.core.function.FunctionSemantics;
 import org.weakref.nitro.core.function.InvocationConvention;
 import org.weakref.nitro.core.function.ResolvedCall;
+import org.weakref.nitro.core.function.aggregation.AggregationArgument;
+import org.weakref.nitro.core.function.aggregation.AggregationArgumentBinding;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateProvider;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateResolver;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTemplate;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
@@ -270,6 +276,34 @@ class TestCoreIntegrationSlice
         assertThat(isolatedCapability.inputComponent()).isEqualTo(DirectMaskInputProvider.InputComponent.NULLS);
     }
 
+    @Test
+    void testGroupedAggregationCapabilityLowersAcrossIsolatedClassLoader()
+            throws ReflectiveOperationException, IOException
+    {
+        GroupedAggregationUpdateProvider provider = isolatedGroupedAggregationUpdateProvider();
+        assertThat(provider.getClass().getClassLoader()).isNotSameAs(getClass().getClassLoader());
+
+        PrimitiveFunction implementation = new IsNullI64();
+        ResolvedCall resolvedCall = new ResolvedCall(
+                new FunctionIdentity("isolated:grouped-update"),
+                new BoundSignature(BIGINT, List.of(BIGINT)),
+                new FunctionSemantics(
+                        implementation.deterministic(),
+                        List.of(FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL),
+                        false,
+                        FunctionSemantics.FailureConvention.NEVER_FAILS),
+                List.of(),
+                new PrimitiveInvocationBinding(implementation, List.of(provider)));
+
+        GroupedAggregationUpdate update = new GroupedAggregationUpdateResolver()
+                .resolve(resolvedCall, List.of(AggregationArgumentBinding.input(7)))
+                .orElseThrow();
+        assertThat(update).isEqualTo(GroupedAggregationUpdate.inputValue(7));
+        assertThat(new GroupedAggregationUpdateResolver()
+                .resolve(resolvedCall, List.of(AggregationArgumentBinding.computed())))
+                .isEmpty();
+    }
+
     private static ResolvedCall resolvedCall(
             FunctionIdentity identity,
             TypeBinding result,
@@ -361,6 +395,42 @@ class TestCoreIntegrationSlice
         return (DirectMaskInputProvider) loader.loadClass(name).getConstructor().newInstance();
     }
 
+    private static GroupedAggregationUpdateProvider isolatedGroupedAggregationUpdateProvider()
+            throws IOException, ReflectiveOperationException
+    {
+        String name = IsolatedGroupedAggregationUpdateProvider.class.getName();
+        String resource = "/" + name.replace('.', '/') + ".class";
+        byte[] bytes;
+        try (var input = TestCoreIntegrationSlice.class.getResourceAsStream(resource)) {
+            if (input == null) {
+                throw new IllegalStateException("Missing class bytes: " + resource);
+            }
+            bytes = input.readAllBytes();
+        }
+        ClassLoader loader = new ClassLoader(TestCoreIntegrationSlice.class.getClassLoader())
+        {
+            @Override
+            protected Class<?> loadClass(String requestedName, boolean resolve)
+                    throws ClassNotFoundException
+            {
+                synchronized (getClassLoadingLock(requestedName)) {
+                    if (!requestedName.equals(name)) {
+                        return super.loadClass(requestedName, resolve);
+                    }
+                    Class<?> loaded = findLoadedClass(requestedName);
+                    if (loaded == null) {
+                        loaded = defineClass(requestedName, bytes, 0, bytes.length);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+        };
+        return (GroupedAggregationUpdateProvider) loader.loadClass(name).getConstructor().newInstance();
+    }
+
     public static final class IsolatedAdd
             implements PrimitiveFunction
     {
@@ -409,6 +479,19 @@ class TestCoreIntegrationSlice
         public InputComponent inputComponent()
         {
             return InputComponent.NULLS;
+        }
+    }
+
+    public static final class IsolatedGroupedAggregationUpdateProvider
+            implements GroupedAggregationUpdateProvider
+    {
+        @Override
+        public java.util.Optional<GroupedAggregationUpdateTemplate> update(List<AggregationArgument> arguments)
+        {
+            if (arguments.size() != 1 || arguments.getFirst().kind() != AggregationArgument.Kind.INPUT) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
         }
     }
 

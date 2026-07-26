@@ -14,6 +14,7 @@
 package org.weakref.nitro.core.function;
 
 import java.util.List;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -35,5 +36,14 @@ public record ResolvedCall(
         if (signature.argumentTypes().size() != semantics.argumentNullConventions().size()) {
             throw new IllegalArgumentException("signature and null conventions have different arities");
         }
+    }
+
+    public <T extends FunctionCapability> Optional<T> capability(Class<T> capabilityType)
+    {
+        requireNonNull(capabilityType, "capabilityType is null");
+        return invocation.capabilities().stream()
+                .filter(capabilityType::isInstance)
+                .map(capabilityType::cast)
+                .findFirst();
     }
 }

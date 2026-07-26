@@ -82,16 +82,12 @@ public final class PrimitiveRegistry
     public <T extends FunctionCapability> T capabilityOrNull(Call call, Class<T> capabilityType)
     {
         requireNonNull(capabilityType, "capabilityType is null");
-        List<FunctionCapability> callCapabilities;
-        if (call.resolvedCall() != null &&
-                call.resolvedCall().invocation() instanceof PrimitiveInvocationBinding binding) {
-            callCapabilities = binding.capabilities();
+        if (call.resolvedCall() != null) {
+            return call.resolvedCall().capability(capabilityType).orElse(null);
         }
-        else {
-            callCapabilities = capabilities.get(call.name());
-            if (callCapabilities == null) {
-                return null;
-            }
+        List<FunctionCapability> callCapabilities = capabilities.get(call.name());
+        if (callCapabilities == null) {
+            return null;
         }
         for (FunctionCapability capability : callCapabilities) {
             if (capabilityType.isInstance(capability)) {
@@ -114,12 +110,12 @@ public final class PrimitiveRegistry
     public Optional<ProjectionCodeProvider> projectionCodeProvider(ResolvedCall call)
     {
         requireNonNull(call, "call is null");
-        if (!(call.invocation() instanceof PrimitiveInvocationBinding binding)) {
-            return Optional.empty();
-        }
-        Optional<ProjectionCodeProvider> capability = capability(binding.capabilities(), ProjectionCodeProvider.class);
+        Optional<ProjectionCodeProvider> capability = call.capability(ProjectionCodeProvider.class);
         if (capability.isPresent()) {
             return capability;
+        }
+        if (!(call.invocation() instanceof PrimitiveInvocationBinding binding)) {
+            return Optional.empty();
         }
         return binding.function() instanceof ProjectionCodeProvider provider ? Optional.of(provider) : Optional.empty();
     }

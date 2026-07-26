@@ -11,19 +11,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.core.function;
+package org.weakref.nitro.core.function.aggregation;
+
+import org.weakref.nitro.core.function.FunctionCapability;
 
 import java.util.List;
+import java.util.Optional;
 
-/// Classloader-neutral base for a registry-supplied invocation protocol.
-///
-/// The core plan never reflects on or names a provider implementation class. Optional behavior is
-/// exposed through SPI capability interfaces, so physical lowering can query a resolved call
-/// without downcasting to a concrete invocation protocol.
-public interface InvocationBinding
+/**
+ * Optional grouped-update lowering supplied by a dynamically loaded aggregate provider.
+ */
+public interface GroupedAggregationUpdateProvider
+        extends FunctionCapability
 {
-    default List<FunctionCapability> capabilities()
-    {
-        return List.of();
-    }
+    Optional<GroupedAggregationUpdateTemplate> update(List<AggregationArgument> arguments);
 }
