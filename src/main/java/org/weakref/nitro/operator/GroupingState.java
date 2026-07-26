@@ -1018,14 +1018,6 @@ final class GroupingState
                 initPackedIntPairTable(Math.max(16, values[0].length()));
                 return;
             }
-            if (values.length == 2 && Boolean.getBoolean("nitro.experiment.useFlatBigintPairStrategy")) {
-                useFlatGrouping = true;
-                flatGroupingTable = new FlatGroupingTable(
-                        BigintPairFlatKeyLayout.create(values, nullableCompositeKeys, arrayPool, codeGeneration),
-                        Math.max(16, values[0].length()),
-                        true);
-                return;
-            }
             // Generate (once per arity) a grouping table specialized to this many long keys — the row loop
             // is emitted as bytecode so the keys live in registers exactly like the former 2/3/4-key tables.
             useMultiLongGrouping = true;
