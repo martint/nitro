@@ -1794,7 +1794,13 @@ final class TpchParquetSupport
 
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, FilterSpec filterSpec)
     {
-        return new FilterOperator(source, filterSpec.plan(), primitiveRegistry, filterSpec.predicate(), allocator);
+        return new FilterOperator(
+                source,
+                filterSpec.plan(),
+                primitiveRegistry,
+                filterSpec.predicate(),
+                allocator,
+                allocator.engineResources().operatorResources().filter());
     }
 
     record FilterSpec(EvaluationPlan plan, MaskExpression predicate, Reference materializedValue)

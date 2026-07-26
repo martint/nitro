@@ -171,7 +171,8 @@ public class TestOperatorBatches
                 evaluationPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
 
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
@@ -206,7 +207,8 @@ public class TestOperatorBatches
                 evaluationPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
 
         Batch batch = operator.next();
         Mask mask = batch.borrowMask();
@@ -359,7 +361,8 @@ public class TestOperatorBatches
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
         Operator projected = new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(), List.of(new Reference(new Input(0), Stream.VALUES))),

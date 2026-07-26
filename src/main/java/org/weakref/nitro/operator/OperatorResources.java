@@ -25,6 +25,7 @@ public final class OperatorResources
         implements AutoCloseable
 {
     private final OperatorCodeGenerationResources codeGeneration;
+    private final FilterOperatorResources filter;
     private final ProjectOperatorResources project;
     private final AggregationOperatorResources aggregation;
     private final HashJoinOperatorResources hashJoin;
@@ -33,12 +34,14 @@ public final class OperatorResources
 
     public OperatorResources(
             OperatorCodeGenerationResources codeGeneration,
+            FilterOperatorPolicy filterPolicy,
             ProjectOperatorResources project,
             AggregationOperatorResources aggregation,
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
+        this.filter = new FilterOperatorResources(codeGeneration.projectionMask(), requireNonNull(filterPolicy, "filterPolicy is null"));
         this.project = requireNonNull(project, "project is null");
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
@@ -60,6 +63,7 @@ public final class OperatorResources
     {
         return new OperatorResources(
                 new OperatorCodeGenerationResources(),
+                FilterOperatorPolicy.fromSystemProperties(),
                 new ProjectOperatorResources(ProjectOperatorPolicy.fromSystemProperties()),
                 new AggregationOperatorResources(AggregationOperatorPolicy.fromSystemProperties()),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
@@ -79,6 +83,12 @@ public final class OperatorResources
     {
         checkOpen();
         return project;
+    }
+
+    public FilterOperatorResources filter()
+    {
+        checkOpen();
+        return filter;
     }
 
     public AggregationOperatorResources aggregation()

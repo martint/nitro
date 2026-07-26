@@ -18,7 +18,6 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.jit.ProjectionMaskCompiler;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.StaticLongEqualityProvider;
@@ -41,23 +40,15 @@ import java.util.OptionalLong;
 public class FilterOperator
         implements Operator
 {
-    private static final boolean PUSH_STATIC_LONG_EQUALITY =
-            Boolean.parseBoolean(System.getProperty("nitro.filter.pushStaticLongEquality", "true"));
-    private static final boolean RECYCLE_OUTPUT_MASKS =
-            Boolean.parseBoolean(System.getProperty("nitro.filter.recycleOutputMasks", "true"));
     private final Allocator.Context allocationContext = new Allocator.Context("FilterOperator");
 
     private final Operator source;
     private final Allocator allocator;
     private final PlanEvaluator planEvaluator;
     private final MaskExpression predicateMask;
+    private final FilterOperatorPolicy policy;
 
     private BatchState currentBatchState;
-
-    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Reference predicateReference, Allocator allocator)
-    {
-        this(source, evaluationPlan, primitiveRegistry, MaskExpressionResolver.resolve(evaluationPlan, predicateReference), allocator);
-    }
 
     public FilterOperator(
             Operator source,
@@ -65,7 +56,7 @@ public class FilterOperator
             PrimitiveRegistry primitiveRegistry,
             Reference predicateReference,
             Allocator allocator,
-            ProjectionMaskCompiler projectionMaskCompiler)
+            FilterOperatorResources resources)
     {
         this(
                 source,
@@ -73,18 +64,7 @@ public class FilterOperator
                 primitiveRegistry,
                 MaskExpressionResolver.resolve(evaluationPlan, predicateReference),
                 allocator,
-                projectionMaskCompiler);
-    }
-
-    public FilterOperator(Operator source, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, MaskExpression predicateMask, Allocator allocator)
-    {
-        this(
-                source,
-                evaluationPlan,
-                primitiveRegistry,
-                predicateMask,
-                allocator,
-                allocator.engineResources().operatorCodeGeneration().projectionMask());
+                resources);
     }
 
     public FilterOperator(
@@ -93,10 +73,11 @@ public class FilterOperator
             PrimitiveRegistry primitiveRegistry,
             MaskExpression predicateMask,
             Allocator allocator,
-            ProjectionMaskCompiler projectionMaskCompiler)
+            FilterOperatorResources resources)
     {
         this.source = source;
         this.allocator = allocator;
+        this.policy = resources.policy();
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, new PlanEvaluator.InputResolver()
         {
             @Override
@@ -116,9 +97,9 @@ public class FilterOperator
                     default -> null;
                 };
             }
-        }, allocator, projectionMaskCompiler);
+        }, allocator, resources.projectionMaskCompiler());
         this.predicateMask = RangeConstraintLowerer.lower(evaluationPlan, primitiveRegistry, predicateMask);
-        if (PUSH_STATIC_LONG_EQUALITY) {
+        if (policy.pushStaticLongEquality()) {
             staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
         }
     }
@@ -290,7 +271,7 @@ public class FilterOperator
         @Override
         public Mask takeMask(Mask mask)
         {
-            if (RECYCLE_OUTPUT_MASKS && mask == ownedMask) {
+            if (policy.recycleOutputMasks() && mask == ownedMask) {
                 allocator.transfer(allocationContext, mask);
             }
             return mask;
@@ -299,7 +280,7 @@ public class FilterOperator
         @Override
         public void releaseMask(Mask mask)
         {
-            if (RECYCLE_OUTPUT_MASKS && mask == ownedMask) {
+            if (policy.recycleOutputMasks() && mask == ownedMask) {
                 allocator.release(allocationContext, mask);
             }
         }

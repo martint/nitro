@@ -179,7 +179,8 @@ public class TestOperators
                                                 filterPlan,
                                                 primitiveRegistry,
                                                 values(predicate),
-                                                allocator))))))
+                                                allocator,
+                                                allocator.engineResources().operatorResources().filter()))))))
                 .matchesExactly(List.of(row(200L, 208L, 1020L, 5L)));
     }
 
@@ -2291,7 +2292,8 @@ public class TestOperators
                         evaluationPlan,
                         primitiveRegistry,
                         new Reference(predicate, Stream.VALUES),
-                        allocator)))
+                        allocator,
+                        allocator.engineResources().operatorResources().filter())))
                 .matchesExactly(List.of(
                         row(1L, 10L),
                         row(2L, 20L)));
@@ -2328,9 +2330,10 @@ public class TestOperators
                                         row(3L, 30L),
                                         row(4L, 40L))),
                         evaluationPlan,
-                primitiveRegistry,
+                        primitiveRegistry,
                         predicateValues,
-                        allocator)))
+                        allocator,
+                        allocator.engineResources().operatorResources().filter())))
                 .matchesExactly(List.of(
                         row(3L, 30L),
                         row(4L, 40L)));
@@ -2397,7 +2400,8 @@ public class TestOperators
                 new OrMask(List.of(
                         new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
                         new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
-                allocator)) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             try (Batch batch = filter.next()) {
                 assertThat(batch.borrowMask()).containsExactly(0, 1, 2, 3);
             }
@@ -4138,7 +4142,8 @@ public class TestOperators
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
-                        allocator));
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()));
 
         try (Operator join = new HashJoinOperator(
                 allocator,
@@ -4306,7 +4311,8 @@ public class TestOperators
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
-                        allocator));
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()));
 
         try (Operator join = new HashJoinOperator(
                 allocator,
@@ -4408,7 +4414,8 @@ public class TestOperators
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
-                        allocator));
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()));
 
         try (Operator join = new NestedLoopJoinOperator(
                 allocator,
@@ -4530,7 +4537,13 @@ public class TestOperators
                         call(predicate, "lt", values(remainder), values(one))),
                 values(predicate));
 
-        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
+        return new FilterOperator(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                values(predicate),
+                allocator,
+                allocator.engineResources().operatorResources().filter());
     }
 
     private FilterOperator filterLessThanOrGreaterThan(Operator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
@@ -4549,7 +4562,13 @@ public class TestOperators
                         call(predicate, "or", values(lessThanLower), values(greaterThanUpper))),
                 values(predicate));
 
-        return new FilterOperator(source, evaluationPlan, primitiveRegistry, values(predicate), allocator);
+        return new FilterOperator(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                values(predicate),
+                allocator,
+                allocator.engineResources().operatorResources().filter());
     }
 
     private static EvaluationPlan plan(List<Assignment> assignments, Reference... outputs)

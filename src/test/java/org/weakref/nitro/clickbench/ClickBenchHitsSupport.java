@@ -305,7 +305,8 @@ public final class ClickBenchHitsSupport
                 predicate.plan(),
                 primitiveRegistry,
                 predicate.predicate(),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -785,7 +786,8 @@ public final class ClickBenchHitsSupport
                 filterSpec.plan(),
                 primitiveRegistry,
                 filterSpec.predicate(),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
     }
 
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
@@ -904,7 +906,8 @@ public final class ClickBenchHitsSupport
                     notEqualUtf8(0, "").plan(),
                     primitiveRegistry,
                     notEqualUtf8(0, "").predicate(),
-                    allocator));
+                    allocator,
+                    allocator.engineResources().operatorResources().filter()));
         }
         Operator grouped = new GroupOperator(allocator, 0, source);
         Operator aggregated = profiled(profile, "topUtf8.aggregate", new GroupedAggregationOperator(

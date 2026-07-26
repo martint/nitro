@@ -170,7 +170,8 @@ public class TestParquetOperator
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         AllMask.ALL,
-                        allocator),
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()),
                 outputSchema)) {
             assertThat(operator.outputSchema()).isEqualTo(outputSchema);
             assertThat(operator(operator))
@@ -403,6 +404,7 @@ public class TestParquetOperator
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
         }
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable doubled = new Variable(0);
         EvaluationPlan projectionPlan = new EvaluationPlan(
@@ -417,15 +419,16 @@ public class TestParquetOperator
                         new Reference(new Input(2), Stream.NULLS)));
 
         try (ProjectOperator operator = new ProjectOperator(
-                new Allocator(EngineResources.createDefault()),
+                allocator,
                 projectionPlan,
                 primitiveRegistry,
                 new FilterOperator(
-                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe")),
+                        new ParquetScanOperator(allocator, file, List.of("x", "flag", "maybe")),
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
-                        new Allocator(EngineResources.createDefault())))) {
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 2, 3);
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
@@ -1127,6 +1130,7 @@ public class TestParquetOperator
                 new BinaryParquetRow("alphabet", bytes(3)),
                 new BinaryParquetRow("gamma", bytes(4))));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable literal = new Variable(0);
         Variable contains = new Variable(1);
@@ -1137,11 +1141,12 @@ public class TestParquetOperator
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")),
+                new ParquetScanOperator(allocator, file, List.of("name")),
                 plan,
                 primitiveRegistry,
                 new ReferenceMask(new Reference(contains, Stream.VALUES)),
-                new Allocator(EngineResources.createDefault()))) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row("alpha"),
@@ -1342,6 +1347,7 @@ public class TestParquetOperator
                 new Utf8PairRow("banana", null),
                 new Utf8PairRow("alpha", "beta")));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable predicate = new Variable(0);
         EvaluationPlan filterPlan = new EvaluationPlan(
@@ -1354,11 +1360,12 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")),
+                new ParquetScanOperator(allocator, file, List.of("left_name", "right_name")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator(EngineResources.createDefault()))) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
             var leftValues = batch.output(0).borrow(Stream.VALUES);
@@ -1731,6 +1738,7 @@ public class TestParquetOperator
                 new NullableArrayContainsParquetRow(List.of(30L, 5L), null),
                 new NullableArrayContainsParquetRow(List.of(50L, 60L), 60L)));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable predicate = new Variable(0);
         EvaluationPlan filterPlan = new EvaluationPlan(
@@ -1743,11 +1751,12 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")),
+                new ParquetScanOperator(allocator, file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator(EngineResources.createDefault()))) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 
@@ -1957,6 +1966,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(new StructParquetRow(43, "gamma", true)),
                 new OptionalStructParquetRow(new StructParquetRow(44, "delta", null))));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable active = new Variable(0);
         EvaluationPlan filterPlan = new EvaluationPlan(
@@ -1967,11 +1977,12 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")),
+                new ParquetScanOperator(allocator, file, List.of("person")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(active, Stream.VALUES),
-                new Allocator(EngineResources.createDefault()))) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
 
@@ -1993,6 +2004,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(null),
                 new OptionalStructParquetRow(new StructParquetRow(52, "d", false))));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable id = new Variable(0);
         EvaluationPlan projectionPlan = new EvaluationPlan(
@@ -2006,24 +2018,25 @@ public class TestParquetOperator
 
         assertThat(operator(
                 new GroupedAggregationOperator(
-                        new Allocator(EngineResources.createDefault()),
+                        allocator,
                         0,
                         List.of(
                                 new First(1),
                                 new CountAll()),
                         new GroupOperator(
-                                new Allocator(EngineResources.createDefault()),
+                                allocator,
                                 0,
                                 new ProjectOperator(
-                                        new Allocator(EngineResources.createDefault()),
+                                        allocator,
                                         projectionPlan,
                                         primitiveRegistry,
                                         new FilterOperator(
-                                                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")),
+                                                new ParquetScanOperator(allocator, file, List.of("person")),
                                                 new EvaluationPlan(List.of(), List.of()),
                                                 primitiveRegistry,
                                                 new NotMask(new ReferenceMask(new Reference(new Input(0), Stream.NULLS))),
-                                                new Allocator(EngineResources.createDefault())))))))
+                                                allocator,
+                                                allocator.engineResources().operatorResources().filter()))))))
                 .matchesExactly(List.of(
                         Row.row(51L, 2L),
                         Row.row(52L, 2L)));
@@ -2408,6 +2421,7 @@ public class TestParquetOperator
                 new MapLookupParquetRow(orderedMap("gamma", 30L), null),
                 new MapLookupParquetRow(orderedMap("delta", 40L), "delta")));
 
+        Allocator allocator = new Allocator(EngineResources.createDefault());
         PrimitiveRegistry primitiveRegistry = TestPrimitiveFunctions.primitiveRegistry();
         Variable predicate = new Variable(0);
         EvaluationPlan filterPlan = new EvaluationPlan(
@@ -2420,11 +2434,12 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")),
+                new ParquetScanOperator(allocator, file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
-                new Allocator(EngineResources.createDefault()))) {
+                allocator,
+                allocator.engineResources().operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 

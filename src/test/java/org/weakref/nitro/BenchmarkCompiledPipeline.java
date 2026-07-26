@@ -162,7 +162,8 @@ public class BenchmarkCompiledPipeline
                 filterPlan,
                 primitiveRegistry,
                 new ReferenceMask(new Reference(predicate, Stream.VALUES)),
-                allocator);
+                allocator,
+                allocator.engineResources().operatorResources().filter());
 
         Variable product = new Variable(0);
         EvaluationPlan projectPlan = new EvaluationPlan(

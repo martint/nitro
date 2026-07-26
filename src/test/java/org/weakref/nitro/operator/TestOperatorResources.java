@@ -38,6 +38,7 @@ class TestOperatorResources
         OperatorResources second = OperatorResources.createDefault();
 
         assertThat(first.codeGeneration()).isNotSameAs(second.codeGeneration());
+        assertThat(first.filter()).isNotSameAs(second.filter());
         assertThat(first.project()).isNotSameAs(second.project());
         assertThat(first.aggregation()).isNotSameAs(second.aggregation());
         assertThat(first.hashJoin()).isNotSameAs(second.hashJoin());
@@ -46,6 +47,9 @@ class TestOperatorResources
         first.close();
         assertThatIllegalStateException()
                 .isThrownBy(first::codeGeneration)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::filter)
                 .withMessage("Operator resources are closed");
         assertThat(second.codeGeneration()).isNotNull();
         second.close();
@@ -91,7 +95,7 @@ class TestOperatorResources
                         new PrimitiveRegistry(),
                         AllMask.ALL,
                         allocator,
-                        operatorResources.codeGeneration().projectionMask());
+                        operatorResources.filter());
                 Operator aggregation = new AggregationOperator(allocator, List.of(), aggregationSource, operatorResources);
                 Operator groupedAggregation = new GroupedAggregationOperator(
                         allocator,

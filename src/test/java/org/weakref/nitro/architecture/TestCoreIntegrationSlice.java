@@ -155,7 +155,8 @@ class TestCoreIntegrationSlice
                         filterPlan,
                         new PrimitiveRegistry(),
                         new Reference(predicate, Stream.VALUES),
-                        allocator),
+                        allocator,
+                        allocator.engineResources().operatorResources().filter()),
                 outputSchema);
 
         assertThat(ingress.outputSchema()).isEqualTo(inputSchema);

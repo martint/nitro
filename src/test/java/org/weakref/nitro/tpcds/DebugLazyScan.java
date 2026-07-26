@@ -45,10 +45,12 @@ public final class DebugLazyScan
 
     public static void main(String[] args)
     {
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
         PrimitiveRegistry registry = TestPrimitiveFunctions.primitiveRegistry();
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         // Large multi-page constrained FACT scan: filter on ss_quantity, masked-read nullable ss_customer_sk.
-        Operator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
+        Operator scan = new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, tables.tableFiles("store_sales"), List.of("ss_quantity", "ss_customer_sk"));
 
         Variable literal = new Variable(0);
         Variable greater = new Variable(1);
@@ -57,10 +59,16 @@ public final class DebugLazyScan
                 new Assignment(greater, new Call("lt", List.of(
                         new Reference(literal, Stream.VALUES),
                         new Reference(new Input(0), Stream.VALUES))), AllMask.ALL)), List.of());
-        Operator filter = new FilterOperator(scan, plan, registry, new ReferenceMask(new Reference(greater, Stream.VALUES)), new Allocator(EngineResources.createDefault()));
+        Operator filter = new FilterOperator(
+                scan,
+                plan,
+                registry,
+                new ReferenceMask(new Reference(greater, Stream.VALUES)),
+                allocator,
+                engineResources.operatorResources().filter());
         // GROUP BY masked nullable ss_customer_sk (index 1), SUM(ss_quantity index 0).
         Operator grouped = new org.weakref.nitro.operator.GroupedAggregationOperator(
-                new Allocator(EngineResources.createDefault()),
+                allocator,
                 List.of(Integer.valueOf(1)),
                 List.of(new org.weakref.nitro.operator.aggregation.Sum(0)),
                 filter);

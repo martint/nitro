@@ -4441,7 +4441,13 @@ final class TpcdsParquetSupport
 
     private static Operator filter(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, FilterSpec filterSpec)
     {
-        return new FilterOperator(source, filterSpec.plan(), primitiveRegistry, filterSpec.predicate(), allocator);
+        return new FilterOperator(
+                source,
+                filterSpec.plan(),
+                primitiveRegistry,
+                filterSpec.predicate(),
+                allocator,
+                allocator.engineResources().operatorResources().filter());
     }
 
     private static Operator filteredProjectedScan(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String tableName, FilterSpec filterSpec, String[] columns, int... inputIndexes)
