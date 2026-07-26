@@ -3408,30 +3408,31 @@ final class TpcdsParquetSupport
 
     public static Operator query23(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator catalog = profiled("q23.catalog.channel", query23Channel(
-                allocator,
-                primitiveRegistry,
-                tables,
+        return query23(TpcdsQueryContext.unprofiled(allocator, primitiveRegistry, tables));
+    }
+
+    static Operator query23(TpcdsQueryContext context)
+    {
+        Operator catalog = context.profiled("q23.catalog.channel", query23Channel(
+                context,
                 "catalog_sales",
                 "cs_sold_date_sk",
                 "cs_bill_customer_sk",
                 "cs_item_sk",
                 "cs_quantity",
                 "cs_list_price"));
-        Operator web = profiled("q23.web.channel", query23Channel(
-                allocator,
-                primitiveRegistry,
-                tables,
+        Operator web = context.profiled("q23.web.channel", query23Channel(
+                context,
                 "web_sales",
                 "ws_sold_date_sk",
                 "ws_bill_customer_sk",
                 "ws_item_sk",
                 "ws_quantity",
                 "ws_list_price"));
-        return profiled("q23.final.sum", new AggregationOperator(
-                allocator,
+        return context.profiled("q23.final.sum", new AggregationOperator(
+                context.allocator(),
                 List.of(new Sum(0)),
-                profiled("q23.union", new UnionAllOperator(1, List.of(catalog, web)))));
+                context.profiled("q23.union", new UnionAllOperator(1, List.of(catalog, web)))));
     }
 
     public static Operator query24(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5733,14 +5734,17 @@ final class TpcdsParquetSupport
         return projectQuery09BucketValue(allocator, primitiveRegistry, bucket, threshold);
     }
 
-    private static Operator query23FrequentItems(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query23FrequentItems(TpcdsQueryContext context)
     {
-        Operator frequentItems = profiled("q23.frequent.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk"));
-        frequentItems = profiled("q23.frequent.join.date", new HashJoinOperator(
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
+        Operator frequentItems = context.profiled("q23.frequent.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk"));
+        frequentItems = context.profiled("q23.frequent.join.date", new HashJoinOperator(
                 allocator,
                 frequentItems,
                 0,
-                profiled("q23.frequent.scan.date", filteredProjectedTable(
+                context.profiled("q23.frequent.scan.date", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
@@ -5749,35 +5753,38 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_year", "d_date"},
                         0, 2)),
                 0));
-        frequentItems = profiled("q23.frequent.join.item", new HashJoinOperator(
+        frequentItems = context.profiled("q23.frequent.join.item", new HashJoinOperator(
                 allocator,
                 frequentItems,
                 1,
-                profiled("q23.frequent.scan.item", scannedTable(allocator, tables, "item", "i_item_sk")),
+                context.profiled("q23.frequent.scan.item", scannedTable(allocator, tables, "item", "i_item_sk")),
                 0));
-        frequentItems = profiled("q23.frequent.project", projectInputs(allocator, primitiveRegistry, frequentItems, 1, 3));
-        frequentItems = profiled("q23.frequent.group", new GroupedAggregationOperator(
+        frequentItems = context.profiled("q23.frequent.project", projectInputs(allocator, primitiveRegistry, frequentItems, 1, 3));
+        frequentItems = context.profiled("q23.frequent.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
                 List.of(new CountAll()),
                 frequentItems));
-        frequentItems = profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4)));
-        frequentItems = profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
-        return profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems));
+        frequentItems = context.profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4)));
+        frequentItems = context.profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
+        return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems));
     }
 
-    private static Operator query23CustomerSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, boolean filterYears)
+    private static Operator query23CustomerSales(TpcdsQueryContext context, boolean filterYears)
     {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
         String profile = filterYears ? "q23.customer_window" : "q23.customer_all";
         Operator sales = filterYears
-                ? profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_quantity", "ss_sales_price"))
-                : profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_quantity", "ss_sales_price"));
+                ? context.profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_quantity", "ss_sales_price"))
+                : context.profiled(profile + ".scan.store_sales", factScan(allocator, tables, "store_sales", "ss_customer_sk", "ss_quantity", "ss_sales_price"));
         if (filterYears) {
-            sales = profiled(profile + ".join.date", new HashJoinOperator(
+            sales = context.profiled(profile + ".join.date", new HashJoinOperator(
                     allocator,
                     sales,
                     1,
-                    profiled(profile + ".scan.date", filteredProjectedTable(
+                    context.profiled(profile + ".scan.date", filteredProjectedTable(
                             allocator,
                             primitiveRegistry,
                             tables,
@@ -5791,38 +5798,38 @@ final class TpcdsParquetSupport
                 allocator,
                 sales,
                 0,
-                profiled(profile + ".scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk")),
+                context.profiled(profile + ".scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk")),
                 0);
         // The customer join is an eligibility join; its key is equal to ss_customer_sk and no inner payload is
         // consumed. Retain the SQL-derived store_sales columns in their original order and discard only the inner
         // duplicate key. The former ordinals came from the pre-compaction wide scan and are now out of bounds.
-        sales = profiled(profile + ".join.customer", filterYears
+        sales = context.profiled(profile + ".join.customer", filterYears
                 ? customerJoin.withOutputs(0, 1, 2, 3)
                 : customerJoin.withOutputs(0, 1, 2));
-        sales = profiled(profile + ".project_value", projectQuery23SalesValue(allocator, primitiveRegistry, sales, 0, filterYears ? 2 : 1, filterYears ? 3 : 2));
-        return profiled(profile + ".group", new GroupedAggregationOperator(
+        sales = context.profiled(profile + ".project_value", projectQuery23SalesValue(allocator, primitiveRegistry, sales, 0, filterYears ? 2 : 1, filterYears ? 3 : 2));
+        return context.profiled(profile + ".group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
                 List.of(new Sum(1)),
                 sales));
     }
 
-    private static Operator query23BestCustomers(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
+    private static Operator query23BestCustomers(TpcdsQueryContext context)
     {
-        Operator customerSales = profiled("q23.best.customer_sales", query23CustomerSales(allocator, primitiveRegistry, tables, false));
-        Operator maxStoreSales = profiled("q23.best.max", new AggregationOperator(
-                allocator,
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        Operator customerSales = context.profiled("q23.best.customer_sales", query23CustomerSales(context, false));
+        Operator maxStoreSales = context.profiled("q23.best.max", new AggregationOperator(
+                context.allocator(),
                 List.of(new Max(0)),
-                profiled("q23.best.project_window", projectInputs(allocator, primitiveRegistry, query23CustomerSales(allocator, primitiveRegistry, tables, true), 1))));
-        customerSales = profiled("q23.best.join_max", new NestedLoopJoinOperator(allocator, customerSales, maxStoreSales));
-        customerSales = profiled("q23.best.filter", filter(allocator, primitiveRegistry, customerSales, query23BestCustomerPredicate(1, 2)));
-        return profiled("q23.best.project_customer", projectInputs(allocator, primitiveRegistry, customerSales, 0));
+                context.profiled("q23.best.project_window", projectInputs(allocator, primitiveRegistry, query23CustomerSales(context, true), 1))));
+        customerSales = context.profiled("q23.best.join_max", new NestedLoopJoinOperator(allocator, customerSales, maxStoreSales));
+        customerSales = context.profiled("q23.best.filter", filter(allocator, primitiveRegistry, customerSales, query23BestCustomerPredicate(1, 2)));
+        return context.profiled("q23.best.project_customer", projectInputs(allocator, primitiveRegistry, customerSales, 0));
     }
 
     private static Operator query23Channel(
-            Allocator allocator,
-            PrimitiveRegistry primitiveRegistry,
-            TpcdsParquetTables tables,
+            TpcdsQueryContext context,
             String salesTable,
             String soldDateColumn,
             String customerColumn,
@@ -5830,13 +5837,16 @@ final class TpcdsParquetSupport
             String quantityColumn,
             String listPriceColumn)
     {
+        Allocator allocator = context.allocator();
+        PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
+        TpcdsParquetTables tables = context.tables();
         String profile = salesTable.equals("catalog_sales") ? "q23.catalog" : "q23.web";
-        Operator channel = profiled(profile + ".scan", factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, itemColumn, quantityColumn, listPriceColumn));
-        channel = profiled(profile + ".join.date", new HashJoinOperator(
+        Operator channel = context.profiled(profile + ".scan", factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, itemColumn, quantityColumn, listPriceColumn));
+        channel = context.profiled(profile + ".join.date", new HashJoinOperator(
                 allocator,
                 channel,
                 0,
-                profiled(profile + ".scan.date", filteredProjectedTable(
+                context.profiled(profile + ".scan.date", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
                         tables,
@@ -5845,9 +5855,9 @@ final class TpcdsParquetSupport
                         new String[] {"d_date_sk", "d_year", "d_moy"},
                         0)),
                 0));
-        channel = profiled(profile + ".semi.frequent", new SemiJoinOperator(allocator, channel, 2, query23FrequentItems(allocator, primitiveRegistry, tables), 0));
-        channel = profiled(profile + ".semi.best", new SemiJoinOperator(allocator, channel, 1, query23BestCustomers(allocator, primitiveRegistry, tables), 0));
-        return profiled(profile + ".project_sales", projectQuery23SalesOnly(allocator, primitiveRegistry, channel, 3, 4));
+        channel = context.profiled(profile + ".semi.frequent", new SemiJoinOperator(allocator, channel, 2, query23FrequentItems(context), 0));
+        channel = context.profiled(profile + ".semi.best", new SemiJoinOperator(allocator, channel, 1, query23BestCustomers(context), 0));
+        return context.profiled(profile + ".project_sales", projectQuery23SalesOnly(allocator, primitiveRegistry, channel, 3, 4));
     }
 
     private static Operator query92ItemAverageDiscounts(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)

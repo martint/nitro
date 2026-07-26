@@ -1721,9 +1721,11 @@ public class TestQueries
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
         OperatorCpuProfile profile = new OperatorCpuProfile();
-        try (Operator query = TpcdsParquetSupport.withOperatorCpuProfile(
-                profile,
-                () -> TpcdsParquetSupport.query23(new Allocator(EngineResources.createDefault()), TestPrimitiveFunctions.primitiveRegistry(), tables))) {
+        try (Operator query = TpcdsParquetSupport.query23(new TpcdsQueryContext(
+                new Allocator(EngineResources.createDefault()),
+                TestPrimitiveFunctions.primitiveRegistry(),
+                tables,
+                profile))) {
             consumeOperator(query);
         }
 
