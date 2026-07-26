@@ -41,6 +41,7 @@ public final class OperatorResources
     private final GroupingStateResources grouping;
     private final SortOperatorPolicy sortPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
+    private final WindowOperatorPolicy windowPolicy;
     private boolean closed;
 
     public OperatorResources(
@@ -60,7 +61,8 @@ public final class OperatorResources
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             SortOperatorPolicy sortPolicy,
-            TopNRankingOperatorPolicy topNRankingPolicy)
+            TopNRankingOperatorPolicy topNRankingPolicy,
+            WindowOperatorPolicy windowPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.adaptiveLongGroupingPolicy = requireNonNull(adaptiveLongGroupingPolicy, "adaptiveLongGroupingPolicy is null");
@@ -82,6 +84,7 @@ public final class OperatorResources
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
+        this.windowPolicy = requireNonNull(windowPolicy, "windowPolicy is null");
     }
 
     /**
@@ -124,7 +127,8 @@ public final class OperatorResources
                         HashJoinExecutionPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 SortOperatorPolicy.fromSystemProperties(),
-                TopNRankingOperatorPolicy.fromSystemProperties());
+                TopNRankingOperatorPolicy.fromSystemProperties(),
+                WindowOperatorPolicy.fromSystemProperties());
     }
 
     private static GroupingStateResources createDefaultGroupingResources()
@@ -237,6 +241,12 @@ public final class OperatorResources
     {
         checkOpen();
         return topNRankingPolicy;
+    }
+
+    public WindowOperatorPolicy windowPolicy()
+    {
+        checkOpen();
+        return windowPolicy;
     }
 
     @Override

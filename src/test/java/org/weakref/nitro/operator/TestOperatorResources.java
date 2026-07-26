@@ -51,6 +51,7 @@ class TestOperatorResources
         assertThat(first.grouping()).isNotSameAs(second.grouping());
         assertThat(first.sortPolicy()).isNotSameAs(second.sortPolicy());
         assertThat(first.topNRankingPolicy()).isNotSameAs(second.topNRankingPolicy());
+        assertThat(first.windowPolicy()).isNotSameAs(second.windowPolicy());
 
         first.close();
         assertThatIllegalStateException()
@@ -82,6 +83,9 @@ class TestOperatorResources
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::topNRankingPolicy)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::windowPolicy)
                 .withMessage("Operator resources are closed");
         assertThat(second.codeGeneration()).isNotNull();
         second.close();

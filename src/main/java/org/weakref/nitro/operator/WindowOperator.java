@@ -33,23 +33,7 @@ import java.util.List;
 public final class WindowOperator
         implements Operator
 {
-    private static final int BATCH_SIZE = Integer.getInteger("nitro.window.maxBatchRows", 4_096);
-    private static final boolean RADIX_SORT = Boolean.parseBoolean(System.getProperty("nitro.window.radixSort", "true"));
-    private static final boolean FUSED_WINDOW_FUNCTIONS =
-            Boolean.parseBoolean(System.getProperty("nitro.window.fusedFunctions", "true"));
-    private static final boolean BINARY_HASH_PARTITION_SORT =
-            Boolean.parseBoolean(System.getProperty("nitro.window.binaryHashPartitionSort", "true"));
-    private static final boolean LAZY_OUTPUTS =
-            Boolean.parseBoolean(System.getProperty("nitro.window.lazyOutputs", "true"));
-    private static final boolean REUSE_ORDERED_INPUT =
-            Boolean.parseBoolean(System.getProperty("nitro.window.reuseOrderedInput", "true"));
-    private static final int REUSE_ORDERED_INPUT_MIN_ROWS =
-            Integer.getInteger("nitro.window.reuseOrderedInputMinRows", 1_000_000);
-    private static final int REUSE_ORDERED_INPUT_SAMPLES =
-            Integer.getInteger("nitro.window.reuseOrderedInputSamples", 64);
-    private static final boolean DEBUG_REUSE_ORDERED_INPUT =
-            Boolean.getBoolean("nitro.debug.windowReuseOrderedInput");
-
+    private final WindowOperatorPolicy policy;
     private final Allocator allocator;
     private final PrimitiveArrayPool arrayPool;
     private final Allocator.Context allocationContext = new Allocator.Context("WindowOperator");
@@ -85,6 +69,7 @@ public final class WindowOperator
         if (windowFunctions.isEmpty()) {
             throw new IllegalArgumentException("windowFunctions is empty");
         }
+        this.policy = allocator.engineResources().operatorResources().windowPolicy();
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
@@ -95,7 +80,7 @@ public final class WindowOperator
         // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
         // nothing for lazy output to eliminate. Multiple cooperating functions create the wider filter/project
         // boundary where downstream operators can consume function results without gathering every source lane.
-        this.lazyOutputs = LAZY_OUTPUTS && windowFunctions.size() > 1;
+        this.lazyOutputs = policy.lazyOutputs() && windowFunctions.size() > 1;
     }
 
     @Override
@@ -119,7 +104,7 @@ public final class WindowOperator
         if (!loaded) {
             load();
         }
-        int batchSize = Math.min(BATCH_SIZE, rowCount() - currentOutputPosition);
+        int batchSize = Math.min(policy.maxBatchRows(), rowCount() - currentOutputPosition);
         if (lazyOutputs) {
             return lazyBatch(currentOutputPosition, batchSize);
         }
@@ -272,7 +257,7 @@ public final class WindowOperator
                 singlePageOrder = selectedPositions(pages.getFirst());
                 stableSortSinglePagePositions(singlePageOrder);
             }
-            if (FUSED_WINDOW_FUNCTIONS && windowFunctions.size() > 1) {
+            if (policy.fusedFunctions() && windowFunctions.size() > 1) {
                 materializeSinglePageWindows();
             }
             else {
@@ -378,7 +363,7 @@ public final class WindowOperator
         if (length < 2) {
             return;
         }
-        if (RADIX_SORT && tryStableRadixSortSinglePagePositions(positions)) {
+        if (policy.radixSort() && tryStableRadixSortSinglePagePositions(positions)) {
             return;
         }
         int[] scratch = arrayPool.borrowInts(length);
@@ -429,7 +414,7 @@ public final class WindowOperator
     private boolean canReuseIdentityOrder(TableOperator.Page page)
     {
         int length = page.mask().count();
-        if (!REUSE_ORDERED_INPUT || !page.mask().all() || length < REUSE_ORDERED_INPUT_MIN_ROWS) {
+        if (!policy.reuseOrderedInput() || !page.mask().all() || length < policy.reuseOrderedInputMinRows()) {
             return false;
         }
         FlatIntegerOrderKey[] keys = flatIntegerOrderKeys(page.columns());
@@ -438,7 +423,7 @@ public final class WindowOperator
         }
 
         boolean ordered = isIdentityOrderMonotonic(length, keys);
-        if (DEBUG_REUSE_ORDERED_INPUT) {
+        if (policy.debugReuseOrderedInput()) {
             System.err.printf("WindowOperator reuseOrderedInput=%s rows=%d partitions=%d ordering=%d%n",
                     ordered, length, partitionColumns.length, orderingColumns.length);
         }
@@ -447,7 +432,7 @@ public final class WindowOperator
 
     private boolean isIdentityOrderMonotonic(int length, FlatIntegerOrderKey[] keys)
     {
-        int intervals = Math.min(REUSE_ORDERED_INPUT_SAMPLES, length - 1);
+        int intervals = Math.min(policy.reuseOrderedInputSamples(), length - 1);
         for (int sample = 1; sample <= intervals; sample++) {
             int right = (int) ((long) sample * (length - 1) / intervals);
             if (compareFlatIntegerOrder(keys, right - 1, right) > 0) {
@@ -532,7 +517,7 @@ public final class WindowOperator
     private boolean tryStableRadixSortSinglePagePositions(int[] positions)
     {
         Streams[] columns = pages.getFirst().columns();
-        if (BINARY_HASH_PARTITION_SORT && orderingColumns.length == 0 && partitionColumns.length == 1 &&
+        if (policy.binaryHashPartitionSort() && orderingColumns.length == 0 && partitionColumns.length == 1 &&
                 isBinarySortKey(columns[partitionColumns[0]].values())) {
             stableHashRadixSortBinaryPartition(positions, columns[partitionColumns[0]]);
             return true;
@@ -1108,7 +1093,7 @@ public final class WindowOperator
         if (positions == null) {
             return;
         }
-        if (recycledLazyBatchPositions == null && positions.length == BATCH_SIZE) {
+        if (recycledLazyBatchPositions == null && positions.length == policy.maxBatchRows()) {
             recycledLazyBatchPositions = positions;
             return;
         }
