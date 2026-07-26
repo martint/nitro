@@ -33,6 +33,7 @@ import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetFile;
+import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
 import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
@@ -338,7 +339,8 @@ public final class NitroParquetScanOperator
                 resources.decompressedPageCachePolicy(),
                 resources.rleReaderPolicy(),
                 resources.pageNavigationPolicy(),
-                resources.readerDiagnostics());
+                resources.readerDiagnostics(),
+                resources.materializationPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -351,7 +353,8 @@ public final class NitroParquetScanOperator
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             RleReaderPolicy rleReaderPolicy,
             ParquetPageNavigationPolicy pageNavigationPolicy,
-            ParquetReaderDiagnostics readerDiagnostics)
+            ParquetReaderDiagnostics readerDiagnostics,
+            ParquetMaterializationPolicy materializationPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -395,7 +398,8 @@ public final class NitroParquetScanOperator
                     arrayPool,
                     rleReaderPolicy,
                     pageNavigationPolicy,
-                    readerDiagnostics);
+                    readerDiagnostics,
+                    materializationPolicy);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];

@@ -56,12 +56,6 @@ import static org.weakref.nitro.parquet.ParquetFile.LE_LONG;
 public final class ColumnReader
         implements AutoCloseable
 {
-    private static final boolean OWNED_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.ownedDictionaryIds", "true"));
-    private static final boolean REUSE_NUMERIC_DICTIONARY_SCRATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseNumericDictionaryScratch", "true"));
-    private static final boolean RECYCLE_BINARY_DICTIONARY_SCRATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.recycleBinaryDictionaryScratch", "true"));
     private final PrimitiveArrayPool arrayPool;
 
     public enum Kind
@@ -83,24 +77,16 @@ public final class ColumnReader
     // Velox's vpgatherdd processRun). On this JVM/hardware the Vector API gather/compress path loses to the scalar
     // branchless loop for q20/q45, so keep it opt-in for future JDK/hardware experiments.
     private static final boolean VECTOR_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.vectorDictFilter", "false")) && VectorDictFilter.supported();
-    private static final boolean DIRECT_SELECTED_BINARY = Boolean.parseBoolean(System.getProperty("nitro.parquet.directSelectedBinary", "true"));
-    private static final boolean DIRECT_FLAT_BINARY_OUTPUT = Boolean.parseBoolean(System.getProperty("nitro.parquet.directFlatBinaryOutput", "true"));
     // The direct binary reader already needs an allocator-owned ID vector when a batch remains dictionary encoded.
     // Stage page IDs in that vector immediately instead of copying them through reader scratch and then copying the
     // completed batch a second time. A batch that encounters a plain page returns the speculative ID vector to the
     // pool when it switches to flat output. Opt-out retains the old two-copy path for focused counter controls.
-    private static final boolean DIRECT_OWNED_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directOwnedDictionaryIds", "true"));
     // A short dictionary stream cannot amortize changing the allocator/pool lifetime of its mapping buffer, and
     // small dimension scans are especially vulnerable to unrelated heap-placement movement in a much larger query.
     // Admit the one-copy representation only after this reader has established a durable dictionary-only horizon.
-    private static final long DIRECT_OWNED_DICTIONARY_IDS_MIN_OBSERVED_ROWS =
-            Long.getLong("nitro.parquet.directOwnedDictionaryIdsMinObservedRows", 1L << 20);
-    private static final boolean PRESIZE_PLAIN_BINARY_PAGE = Boolean.parseBoolean(System.getProperty("nitro.parquet.presizePlainBinaryPage", "true"));
     // Selective decoding often produces tiny adjacent runs. Foreign-memory bulk copy bottoms out in libc memcpy;
     // for those runs its setup costs more than JIT-inlined scalar loads. This is a reader-wide policy, with an A/B
     // property, rather than a query or physical-column-shape specialization.
-    private static final int PLAIN_COPY_LOOP_MAX_VALUES = Integer.getInteger("nitro.parquet.plainCopyLoopMaxValues", 16);
     private static final int FILTER_TILE = 2048;
     private static final int[] EMPTY_INTS = new int[0];
     private static final long[] EMPTY_LONGS = new long[0];
@@ -183,6 +169,7 @@ public final class ColumnReader
     private final RleReaderPolicy rleReaderPolicy;
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final ParquetReaderDiagnostics diagnostics;
+    private final ParquetMaterializationPolicy materializationPolicy;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -281,10 +268,6 @@ public final class ColumnReader
     private boolean pageDict;
     private boolean pageFullyDecoded;
     private boolean pageNumericDictionaryIdsDecoded;
-    private static final boolean BULK_SELECTED_NUMERIC_DICTIONARY_IDS =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.bulkSelectedNumericDictionaryIds", "true"));
-    private static final boolean BULK_SELECTED_NUMERIC_DICTIONARY_IDS_REQUIRE_PAGE_REUSE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.bulkSelectedNumericDictionaryIdsRequirePageReuse", "true"));
     // pageIdIndex[p] = non-nulls before page position p. Built only on the predicate-over-dictionary lead-filter path
     // (decodeDataPageV1), which tests every position; the skip path streams definition levels instead (see defRle).
     private int[] pageIdIndex = EMPTY_INTS;
@@ -343,12 +326,14 @@ public final class ColumnReader
             PrimitiveArrayPool arrayPool,
             RleReaderPolicy rleReaderPolicy,
             ParquetPageNavigationPolicy pageNavigationPolicy,
-            ParquetReaderDiagnostics diagnostics)
+            ParquetReaderDiagnostics diagnostics,
+            ParquetMaterializationPolicy materializationPolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
         this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
+        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -402,7 +387,8 @@ public final class ColumnReader
                 arrayPool,
                 rleReaderPolicy,
                 pageNavigationPolicy,
-                diagnostics);
+                diagnostics,
+                materializationPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -481,7 +467,7 @@ public final class ColumnReader
         pageIdIndex = EMPTY_INTS;
         arrayPool.release(acceptById);
         acceptById = EMPTY_BOOLEANS;
-        if (RECYCLE_BINARY_DICTIONARY_SCRATCH) {
+        if (materializationPolicy.recycleBinaryDictionaryScratch()) {
             for (org.weakref.nitro.data.BinaryVector dictionary : dictionaryVectorCache.values()) {
                 if (!escapedBinaryDictionaries.containsKey(dictionary)) {
                     arrayPool.release(dictionary.offsets());
@@ -506,7 +492,7 @@ public final class ColumnReader
      */
     public void finishBatch()
     {
-        if (!RECYCLE_BINARY_DICTIONARY_SCRATCH || kind != Kind.BINARY || dictionaryVectorCache.size() <= 1) {
+        if (!materializationPolicy.recycleBinaryDictionaryScratch() || kind != Kind.BINARY || dictionaryVectorCache.size() <= 1) {
             return;
         }
         java.util.Iterator<java.util.Map.Entry<Integer, org.weakref.nitro.data.BinaryVector>> iterator =
@@ -529,7 +515,7 @@ public final class ColumnReader
     /** Marks reader-owned dictionary values that crossed the batch ownership boundary as non-recyclable. */
     public void markDictionaryValuesEscaped(org.weakref.nitro.data.Vector vector)
     {
-        if (!RECYCLE_BINARY_DICTIONARY_SCRATCH || kind != Kind.BINARY) {
+        if (!materializationPolicy.recycleBinaryDictionaryScratch() || kind != Kind.BINARY) {
             return;
         }
         org.weakref.nitro.data.Vector current = vector;
@@ -867,7 +853,7 @@ public final class ColumnReader
             pagePosition = chunkEnd;
             pageValueCount = 0;
             pageCursor = 0;
-            if (!REUSE_NUMERIC_DICTIONARY_SCRATCH) {
+            if (!materializationPolicy.reuseNumericDictionaryScratch()) {
                 dictionaryInts = null;
                 dictionaryLongs = null;
             }
@@ -1567,7 +1553,7 @@ public final class ColumnReader
         if (allocator == null || allocationContext == null) {
             throw new IllegalArgumentException("allocator and allocationContext are required");
         }
-        if (DIRECT_FLAT_BINARY_OUTPUT) {
+        if (materializationPolicy.directFlatBinaryOutput()) {
             return readBinaryDirect(allocator, allocationContext, nullsOut, count);
         }
         return readBinaryInternal(allocator, allocationContext, nullsOut, count);
@@ -1580,9 +1566,12 @@ public final class ColumnReader
      */
     private org.weakref.nitro.data.Vector readBinaryDirect(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
     {
-        boolean dictionaryEligible = !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary");
-        boolean directOwnedCandidate = OWNED_DICTIONARY_IDS && DIRECT_OWNED_DICTIONARY_IDS && dictionaryEligible && count > 0 &&
-                directOwnedDictionaryRowsObserved >= DIRECT_OWNED_DICTIONARY_IDS_MIN_OBSERVED_ROWS;
+        boolean dictionaryEligible = materializationPolicy.binaryDictionary();
+        boolean directOwnedCandidate = materializationPolicy.ownedDictionaryIds() &&
+                materializationPolicy.directOwnedDictionaryIds() &&
+                dictionaryEligible &&
+                count > 0 &&
+                directOwnedDictionaryRowsObserved >= materializationPolicy.directOwnedDictionaryIdsMinObservedRows();
         if (directOwnedCandidate && pageCursor >= pageValueCount && !decodeNextDataPage()) {
             throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got 0");
         }
@@ -1701,7 +1690,7 @@ public final class ColumnReader
             if (stagedOwnedIds != null) {
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, dictionaryVectorCache.get(batchGeneration));
             }
-            if (OWNED_DICTIONARY_IDS) {
+            if (materializationPolicy.ownedDictionaryIds()) {
                 org.weakref.nitro.data.I32Vector ids = allocator.allocate(
                         allocationContext,
                         org.weakref.nitro.data.I32Vector.class,
@@ -1726,7 +1715,7 @@ public final class ColumnReader
         if (binaryBatchIds.length < count) {
             binaryBatchIds = replaceInts(binaryBatchIds, count);
         }
-        boolean dictionaryEligible = !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary");
+        boolean dictionaryEligible = materializationPolicy.binaryDictionary();
         int batchGeneration = -1;
         int produced = 0;
         int dataLength = 0;
@@ -1759,7 +1748,7 @@ public final class ColumnReader
             produced += n;
         }
         if (!flat) {
-            if (OWNED_DICTIONARY_IDS && allocator != null) {
+            if (materializationPolicy.ownedDictionaryIds() && allocator != null) {
                 org.weakref.nitro.data.I32Vector ids = allocator.allocate(
                         allocationContext,
                         org.weakref.nitro.data.I32Vector.class,
@@ -2300,7 +2289,7 @@ public final class ColumnReader
 
     private void copyPlainInts(int valueIndex, int[] out, int produced, int count)
     {
-        if (count <= PLAIN_COPY_LOOP_MAX_VALUES) {
+        if (count <= materializationPolicy.plainCopyLoopMaxValues()) {
             long offset = pagePlainOffset + (long) valueIndex * Integer.BYTES;
             for (int i = 0; i < count; i++) {
                 out[produced + i] = pagePlainBody.get(LE_INT, offset + (long) i * Integer.BYTES);
@@ -2312,7 +2301,7 @@ public final class ColumnReader
 
     private void copyPlainLongs(int valueIndex, long[] out, int produced, int count)
     {
-        if (count <= PLAIN_COPY_LOOP_MAX_VALUES) {
+        if (count <= materializationPolicy.plainCopyLoopMaxValues()) {
             long offset = pagePlainOffset + (long) valueIndex * Long.BYTES;
             for (int i = 0; i < count; i++) {
                 out[produced + i] = pagePlainBody.get(LE_LONG, offset + (long) i * Long.BYTES);
@@ -2404,7 +2393,7 @@ public final class ColumnReader
 
     public BinaryVector readSelectedBinary(Allocator allocator, Allocator.Context allocationContext, int[] survivors, int count, int batchRows, boolean[] nullsOut)
     {
-        if (!DIRECT_SELECTED_BINARY) {
+        if (!materializationPolicy.directSelectedBinary()) {
             return (BinaryVector) allocator.adopt(allocationContext, readSelectedBinary(survivors, count, batchRows, nullsOut));
         }
         BinaryVector result = BinaryVector.allocate(allocator, allocationContext, batchRows, initialSelectedBinaryCapacity(count));
@@ -2726,8 +2715,8 @@ public final class ColumnReader
         // Decode page-wide IDs only when this selected call consumes a strict slice of the page. The retained IDs can
         // then amortize their one sequential decode across later calls over the same page. A filter window that spans
         // the whole page has no future reuse; its run-aware streaming cursor does less work by touching survivors only.
-        if (BULK_SELECTED_NUMERIC_DICTIONARY_IDS &&
-                (!BULK_SELECTED_NUMERIC_DICTIONARY_IDS_REQUIRE_PAGE_REUSE || selectedBatchRows < valueCount) &&
+        if (materializationPolicy.bulkSelectedNumericDictionaryIds() &&
+                (!materializationPolicy.bulkSelectedNumericDictionaryIdsRequirePageReuse() || selectedBatchRows < valueCount) &&
                 pageDict && !pageFullyDecoded && kind != Kind.BINARY) {
             materializeNumericDictionaryIds(streaming);
         }
@@ -2789,7 +2778,7 @@ public final class ColumnReader
         long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
         pagePosition = start;
         chunkEnd = start + metadata.total_compressed_size;
-        if (!REUSE_NUMERIC_DICTIONARY_SCRATCH) {
+        if (!materializationPolicy.reuseNumericDictionaryScratch()) {
             dictionaryInts = null;
             dictionaryLongs = null;
         }
@@ -3078,7 +3067,7 @@ public final class ColumnReader
             // larger than a batch), so emission needs the current dictionary and a flat fallback needs at most the one
             // the batch started under. Without this the cache would retain every chunk's dictionary for the life of the
             // scan -- unbounded for a many-column scan over many row groups.
-            if (!RECYCLE_BINARY_DICTIONARY_SCRATCH) {
+            if (!materializationPolicy.recycleBinaryDictionaryScratch()) {
                 dictionaryVectorCache.keySet().removeIf(generation -> generation < dictionaryGeneration - 3);
             }
         }
@@ -3478,7 +3467,7 @@ public final class ColumnReader
 
     private void decodePlainBinary(MemorySegment body, long offset, int nonNullCount)
     {
-        if (PRESIZE_PLAIN_BINARY_PAGE) {
+        if (materializationPolicy.presizePlainBinaryPage()) {
             decodePlainBinaryPresized(body, offset, nonNullCount);
             return;
         }
