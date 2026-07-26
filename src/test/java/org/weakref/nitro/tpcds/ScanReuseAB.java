@@ -72,7 +72,7 @@ public final class ScanReuseAB
         long sum = 0;
         try (Operator operator = switch (mode) {
             case "hardwood" -> new HardwoodParquetScanOperator(allocator, files, COLUMNS);
-            case "nitro" -> new NitroParquetScanOperator(new NitroParquetScanResources(), allocator, files, COLUMNS);
+            case "nitro" -> new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, files, COLUMNS);
             default -> new TrinoParquetScanOperator(allocator, files, COLUMNS);
         }) {
             int columnCount = operator.outputCount();

@@ -32,11 +32,12 @@ public final class AllocationResources
     private final PrimitiveArrayPool primitiveArrays;
     private final PrimitiveArrayPool nativeBuffers;
     private final AllocatorPolicy allocatorPolicy;
+    private final NativeBufferAdvice nativeBufferAdvice;
     private boolean closed;
 
     public AllocationResources(PrimitiveArrayPool primitiveArrays, PrimitiveArrayPool nativeBuffers)
     {
-        this(primitiveArrays, nativeBuffers, AllocatorPolicy.defaults());
+        this(primitiveArrays, nativeBuffers, AllocatorPolicy.defaults(), NativeBufferAdvice.defaults());
     }
 
     public AllocationResources(
@@ -44,9 +45,19 @@ public final class AllocationResources
             PrimitiveArrayPool nativeBuffers,
             AllocatorPolicy allocatorPolicy)
     {
+        this(primitiveArrays, nativeBuffers, allocatorPolicy, NativeBufferAdvice.defaults());
+    }
+
+    public AllocationResources(
+            PrimitiveArrayPool primitiveArrays,
+            PrimitiveArrayPool nativeBuffers,
+            AllocatorPolicy allocatorPolicy,
+            NativeBufferAdvice nativeBufferAdvice)
+    {
         this.primitiveArrays = requireNonNull(primitiveArrays, "primitiveArrays is null");
         this.nativeBuffers = requireNonNull(nativeBuffers, "nativeBuffers is null");
         this.allocatorPolicy = requireNonNull(allocatorPolicy, "allocatorPolicy is null");
+        this.nativeBufferAdvice = requireNonNull(nativeBufferAdvice, "nativeBufferAdvice is null");
     }
 
     /**
@@ -63,7 +74,8 @@ public final class AllocationResources
                 new PrimitiveArrayPool(
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),
                         Long.getLong("nitro.nativeBufferPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
-                AllocatorPolicy.fromSystemProperties());
+                AllocatorPolicy.fromSystemProperties(),
+                NativeBufferAdvice.fromSystemProperties());
     }
 
     public PrimitiveArrayPool primitiveArrays()
@@ -82,6 +94,12 @@ public final class AllocationResources
     {
         checkOpen();
         return allocatorPolicy;
+    }
+
+    public NativeBufferAdvice nativeBufferAdvice()
+    {
+        checkOpen();
+        return nativeBufferAdvice;
     }
 
     @Override

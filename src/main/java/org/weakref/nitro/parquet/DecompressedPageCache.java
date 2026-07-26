@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.parquet;
 
+import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.MemorySegment;
@@ -23,8 +24,6 @@ import java.util.Map;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
-import static org.weakref.nitro.data.NativeBufferAdvice.collapseHugePages;
-import static org.weakref.nitro.data.NativeBufferAdvice.preferHugePages;
 
 /**
  * Query-local immutable page reuse for physical columns consumed by more than one reader.
@@ -38,15 +37,12 @@ import static org.weakref.nitro.data.NativeBufferAdvice.preferHugePages;
 public final class DecompressedPageCache
         implements AutoCloseable
 {
-    private static final int DEFAULT_CAPACITY = 256 << 20;
-    private static final int DEFAULT_MIN_SOURCE_PAGES = 16;
-    private static final int DEFAULT_MIN_BYTES_PER_SOURCE = 20 << 20;
-    private static final boolean DEBUG = Boolean.getBoolean("nitro.debug.sharedDecompressedPages");
-
     private final PrimitiveArrayPool pool;
+    private final NativeBufferAdvice nativeBufferAdvice;
     private final int capacity;
     private final int minSourcePages;
     private final int maxReusableSources;
+    private final boolean debug;
     private final Map<Source, Integer> consumers = new HashMap<>();
     private final Map<Source, Set<PageKey>> candidatePages = new HashMap<>();
     private final Set<Source> admittedSources = new HashSet<>();
@@ -60,40 +56,18 @@ public final class DecompressedPageCache
     private int reusableSourceCount;
     private boolean closed;
 
-    public DecompressedPageCache(PrimitiveArrayPool pool)
-    {
-        this(
-                pool,
-                Integer.getInteger("nitro.parquet.sharedDecompressedPageBytes", DEFAULT_CAPACITY),
-                Integer.getInteger("nitro.parquet.sharedDecompressedPageMinSourcePages", DEFAULT_MIN_SOURCE_PAGES),
-                Integer.getInteger("nitro.parquet.sharedDecompressedPageMinBytesPerSource", DEFAULT_MIN_BYTES_PER_SOURCE));
-    }
-
-    DecompressedPageCache(PrimitiveArrayPool pool, int capacity)
-    {
-        this(pool, capacity, DEFAULT_MIN_SOURCE_PAGES, DEFAULT_MIN_BYTES_PER_SOURCE);
-    }
-
-    DecompressedPageCache(PrimitiveArrayPool pool, int capacity, int minSourcePages)
-    {
-        this(pool, capacity, minSourcePages, DEFAULT_MIN_BYTES_PER_SOURCE);
-    }
-
-    DecompressedPageCache(PrimitiveArrayPool pool, int capacity, int minSourcePages, int minBytesPerSource)
+    public DecompressedPageCache(
+            PrimitiveArrayPool pool,
+            DecompressedPageCachePolicy policy,
+            NativeBufferAdvice nativeBufferAdvice)
     {
         this.pool = requireNonNull(pool, "pool is null");
-        if (capacity <= 0) {
-            throw new IllegalArgumentException("capacity must be positive");
-        }
-        if (minSourcePages <= 0) {
-            throw new IllegalArgumentException("minSourcePages must be positive");
-        }
-        if (minBytesPerSource <= 0) {
-            throw new IllegalArgumentException("minBytesPerSource must be positive");
-        }
-        this.capacity = capacity;
-        this.minSourcePages = minSourcePages;
-        this.maxReusableSources = Math.max(1, capacity / minBytesPerSource);
+        requireNonNull(policy, "policy is null");
+        this.nativeBufferAdvice = requireNonNull(nativeBufferAdvice, "nativeBufferAdvice is null");
+        this.capacity = policy.capacity();
+        this.minSourcePages = policy.minSourcePages();
+        this.maxReusableSources = Math.max(1, capacity / policy.minBytesPerSource());
+        this.debug = policy.debug();
     }
 
     public void register(Source source)
@@ -208,7 +182,7 @@ public final class DecompressedPageCache
             return;
         }
         Slab borrowed = pool.borrow(Slab.class, capacity, Slab.class);
-        slabStorage = borrowed == null ? new Slab(capacity) : borrowed;
+        slabStorage = borrowed == null ? new Slab(capacity, nativeBufferAdvice) : borrowed;
         slab = slabStorage.segment;
     }
 
@@ -226,7 +200,7 @@ public final class DecompressedPageCache
             return;
         }
         closed = true;
-        if (DEBUG) {
+        if (debug) {
             System.err.printf("[shared-decompressed-pages] sources=%d pages=%d hits=%d misses=%d capacityBypasses=%d used=%d capacity=%d%n",
                     reusableSourceCount, pages.size(), hits, misses, capacityBypasses, nextOffset, capacity);
         }
@@ -235,7 +209,7 @@ public final class DecompressedPageCache
         candidatePages.clear();
         admittedSources.clear();
         if (slabStorage != null) {
-            slabStorage.finishUse(nextOffset);
+            slabStorage.finishUse(nextOffset, nativeBufferAdvice);
             pool.retain(Slab.class, capacity, capacity, slabStorage);
         }
     }
@@ -276,21 +250,21 @@ public final class DecompressedPageCache
         private final MemorySegment segment;
         private int preparedBytes;
 
-        private Slab(int capacity)
+        private Slab(int capacity, NativeBufferAdvice nativeBufferAdvice)
         {
             buffer = java.nio.ByteBuffer.allocateDirect(capacity);
             buffer.clear();
             segment = MemorySegment.ofBuffer(buffer);
-            preferHugePages(segment);
+            nativeBufferAdvice.preferHugePages(segment);
         }
 
-        private void finishUse(int usedBytes)
+        private void finishUse(int usedBytes, NativeBufferAdvice nativeBufferAdvice)
         {
             int prepareThrough = usedBytes & -HUGE_PAGE_BYTES;
             if (prepareThrough <= preparedBytes) {
                 return;
             }
-            collapseHugePages(segment.asSlice(preparedBytes, prepareThrough - preparedBytes));
+            nativeBufferAdvice.collapseHugePages(segment.asSlice(preparedBytes, prepareThrough - preparedBytes));
             // A failed or unsupported advisory must not become a steady-state tax.
             preparedBytes = prepareThrough;
         }

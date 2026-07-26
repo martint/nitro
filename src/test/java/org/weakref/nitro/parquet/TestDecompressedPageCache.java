@@ -14,6 +14,7 @@
 package org.weakref.nitro.parquet;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.lang.foreign.ValueLayout;
@@ -30,7 +31,7 @@ class TestDecompressedPageCache
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
         DecompressedPageCache.Source source = new DecompressedPageCache.Source(Path.of("table.parquet"), "column");
 
-        try (DecompressedPageCache cache = new DecompressedPageCache(pool, 128, 1)) {
+        try (DecompressedPageCache cache = newCache(pool, 128, 1, 20 << 20)) {
             cache.register(source);
             assertThat(cache.consumerCount(source)).isEqualTo(1);
             assertThat(cache.hasMultipleConsumers(source)).isFalse();
@@ -56,7 +57,7 @@ class TestDecompressedPageCache
 
         assertThat(pool.retainedBytes()).isEqualTo(128);
         long reusedBefore = pool.reusedBytes();
-        DecompressedPageCache recycled = new DecompressedPageCache(pool, 128, 1);
+        DecompressedPageCache recycled = newCache(pool, 128, 1, 20 << 20);
         recycled.register(source);
         recycled.register(source);
         assertThat(recycled.lookup(source, 12, 7, 16)).isNull();
@@ -72,7 +73,7 @@ class TestDecompressedPageCache
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
         DecompressedPageCache.Source source = new DecompressedPageCache.Source(Path.of("table.parquet"), "column");
 
-        try (DecompressedPageCache cache = new DecompressedPageCache(pool, 128, 2)) {
+        try (DecompressedPageCache cache = newCache(pool, 128, 2, 20 << 20)) {
             cache.register(source);
             cache.register(source);
             assertThat(cache.lookup(source, 11, 7, 16)).isNull();
@@ -88,7 +89,7 @@ class TestDecompressedPageCache
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
         DecompressedPageCache.Source first = new DecompressedPageCache.Source(Path.of("table.parquet"), "first");
 
-        try (DecompressedPageCache cache = new DecompressedPageCache(pool, 128, 1, 64)) {
+        try (DecompressedPageCache cache = newCache(pool, 128, 1, 64)) {
             for (String column : new String[] {"first", "second", "third"}) {
                 DecompressedPageCache.Source source = new DecompressedPageCache.Source(Path.of("table.parquet"), column);
                 cache.register(source);
@@ -99,5 +100,17 @@ class TestDecompressedPageCache
         }
 
         assertThat(pool.retainedBytes()).isZero();
+    }
+
+    private static DecompressedPageCache newCache(
+            PrimitiveArrayPool pool,
+            int capacity,
+            int minSourcePages,
+            int minBytesPerSource)
+    {
+        return new DecompressedPageCache(
+                pool,
+                new DecompressedPageCachePolicy(true, capacity, minSourcePages, minBytesPerSource, false),
+                NativeBufferAdvice.disabled());
     }
 }

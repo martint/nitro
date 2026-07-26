@@ -49,7 +49,7 @@ public final class VerifyDecoder
         TpcdsParquetTables tables = TpcdsParquetTables.requiredActual("sf10");
         List<Path> files = tables.tableFiles(table);
 
-        long[][] nitro = digest(new NitroParquetScanOperator(new NitroParquetScanResources(), new Allocator(EngineResources.createDefault()), files, columns), columns.size());
+        long[][] nitro = digest(new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), files, columns), columns.size());
         long[][] trino = digest(new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
 
         if (nitro[0][0] != trino[0][0]) {

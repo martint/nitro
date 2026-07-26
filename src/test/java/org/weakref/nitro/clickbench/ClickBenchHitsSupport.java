@@ -827,7 +827,7 @@ public final class ClickBenchHitsSupport
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<String> columnNames = List.of(columns);
             Operator decoder = new NitroParquetScanOperator(
-                    new NitroParquetScanResources(),
+                    NitroParquetScanResources.createDefault(),
                     allocator,
                     paths,
                     columnNames);

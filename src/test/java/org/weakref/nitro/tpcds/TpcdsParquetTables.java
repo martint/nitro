@@ -41,7 +41,7 @@ public final class TpcdsParquetTables
 
     private final Path rootDirectory;
     private final String schema;
-    private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
+    private final NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault();
     private final BenchmarkSchemaRegistry schemas = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
     private final Map<String, List<Path>> tableFiles = new HashMap<>();
     private final AtomicInteger scanCount = new AtomicInteger();

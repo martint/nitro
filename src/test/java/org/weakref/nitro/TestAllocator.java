@@ -24,6 +24,7 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -325,12 +326,16 @@ class TestAllocator
                 false,
                 true,
                 true);
+        NativeBufferAdvice nativeBufferAdvice = NativeBufferAdvice.disabled();
         try (AllocationResources resources = new AllocationResources(
                 new PrimitiveArrayPool(1 << 20, 0),
                 new PrimitiveArrayPool(1 << 20, 0),
-                policy);
+                policy,
+                nativeBufferAdvice);
                 Allocator allocator = new Allocator(resources)) {
             Allocator.Context context = new Allocator.Context("test");
+
+            assertThat(allocator.nativeBufferAdvice()).isSameAs(nativeBufferAdvice);
 
             Vector first = allocator.borrowAllFalseBoolean(context, 5);
             Vector second = allocator.borrowAllFalseBoolean(context, 5);

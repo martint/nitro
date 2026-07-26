@@ -31,6 +31,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;
+import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetFile;
 
 import java.nio.file.Path;
@@ -53,8 +54,6 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetScanOperator
         implements Operator
 {
-    private static final boolean SHARED_DECOMPRESSED_PAGES =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.sharedDecompressedPages", "true"));
     // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
     // vector alloc/release) is amortized over the same number of batches in an apples-to-apples comparison.
     private static final int MAX_BATCH_ROWS = Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000);
@@ -332,7 +331,8 @@ public final class NitroParquetScanOperator
                 columns,
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources.decompressedPageCache(),
-                resources.directNumericBatchDecodeAdmission());
+                resources.directNumericBatchDecodeAdmission(),
+                resources.decompressedPageCachePolicy());
     }
 
     private NitroParquetScanOperator(
@@ -341,16 +341,20 @@ public final class NitroParquetScanOperator
             List<String> columns,
             Object batchBufferPoolKey,
             Object decompressedPageCacheKey,
-            Object directNumericBatchDecodeAdmissionKey)
+            Object directNumericBatchDecodeAdmissionKey,
+            DecompressedPageCachePolicy decompressedPageCachePolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
         this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
-        this.decompressedPageCacheLease = SHARED_DECOMPRESSED_PAGES
+        this.decompressedPageCacheLease = decompressedPageCachePolicy.enabled()
                 ? allocator.acquireSharedResource(
                         decompressedPageCacheKey,
-                        () -> new DecompressedPageCache(allocator.nativeBuffers()))
+                        () -> new DecompressedPageCache(
+                                allocator.nativeBuffers(),
+                                decompressedPageCachePolicy,
+                                allocator.nativeBufferAdvice()))
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(

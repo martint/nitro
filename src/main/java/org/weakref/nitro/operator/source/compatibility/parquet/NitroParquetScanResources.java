@@ -13,6 +13,10 @@
  */
 package org.weakref.nitro.operator.source.compatibility.parquet;
 
+import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
+
+import static java.util.Objects.requireNonNull;
+
 /**
  * Connector-owned sharing domains for native Parquet scan instances.
  *
@@ -26,6 +30,17 @@ public final class NitroParquetScanResources
     private final Object batchBufferPool = new Object();
     private final Object decompressedPageCache = new Object();
     private final Object directNumericBatchDecodeAdmission = new Object();
+    private final DecompressedPageCachePolicy decompressedPageCachePolicy;
+
+    public NitroParquetScanResources(DecompressedPageCachePolicy decompressedPageCachePolicy)
+    {
+        this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
+    }
+
+    public static NitroParquetScanResources createDefault()
+    {
+        return new NitroParquetScanResources(DecompressedPageCachePolicy.fromSystemProperties());
+    }
 
     Object batchBufferPool()
     {
@@ -40,5 +55,10 @@ public final class NitroParquetScanResources
     Object directNumericBatchDecodeAdmission()
     {
         return directNumericBatchDecodeAdmission;
+    }
+
+    DecompressedPageCachePolicy decompressedPageCachePolicy()
+    {
+        return decompressedPageCachePolicy;
     }
 }

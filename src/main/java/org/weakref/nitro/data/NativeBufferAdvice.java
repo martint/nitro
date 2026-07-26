@@ -28,10 +28,29 @@ public final class NativeBufferAdvice
     private static final int PAGE_BYTES = 4096;
     private static final int MADV_HUGEPAGE = 14;
     private static final int MADV_COLLAPSE = 25;
-    private static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("nitro.nativeBufferPool.hugePages", "true"));
-    private static final MethodHandle MADVISE = findMadvise();
 
-    private NativeBufferAdvice() {}
+    private final MethodHandle madvise;
+
+    private NativeBufferAdvice(boolean enabled)
+    {
+        madvise = findMadvise(enabled);
+    }
+
+    public static NativeBufferAdvice defaults()
+    {
+        return new NativeBufferAdvice(isLinux());
+    }
+
+    public static NativeBufferAdvice disabled()
+    {
+        return new NativeBufferAdvice(false);
+    }
+
+    public static NativeBufferAdvice fromSystemProperties()
+    {
+        return new NativeBufferAdvice(
+                Boolean.parseBoolean(System.getProperty("nitro.nativeBufferPool.hugePages", "true")) && isLinux());
+    }
 
     /**
      * Asks Linux to back the page-aligned interior of a native workspace with transparent huge pages.
@@ -39,20 +58,20 @@ public final class NativeBufferAdvice
      * <p>This is advisory and deliberately fails closed: unsupported platforms, disabled native access, a missing
      * symbol, or kernel rejection leave the ordinary mapping unchanged.
      */
-    public static boolean preferHugePages(MemorySegment segment)
+    public boolean preferHugePages(MemorySegment segment)
     {
         return advisePageAlignedInterior(segment, MADV_HUGEPAGE);
     }
 
     /** Attempts an immediate collapse after a reusable native workspace has been populated. */
-    public static boolean collapseHugePages(MemorySegment segment)
+    public boolean collapseHugePages(MemorySegment segment)
     {
         return advisePageAlignedInterior(segment, MADV_COLLAPSE);
     }
 
-    private static boolean advisePageAlignedInterior(MemorySegment segment, int advice)
+    private boolean advisePageAlignedInterior(MemorySegment segment, int advice)
     {
-        if (MADVISE == null || segment.byteSize() < PAGE_BYTES) {
+        if (madvise == null || segment.byteSize() < PAGE_BYTES) {
             return false;
         }
         long address = segment.address();
@@ -63,7 +82,7 @@ public final class NativeBufferAdvice
         }
         try {
             MemorySegment aligned = segment.asSlice(start - address, end - start);
-            int result = (int) MADVISE.invokeExact(aligned, end - start, advice);
+            int result = (int) madvise.invokeExact(aligned, end - start, advice);
             return result == 0;
         }
         catch (Throwable ignored) {
@@ -71,9 +90,9 @@ public final class NativeBufferAdvice
         }
     }
 
-    private static MethodHandle findMadvise()
+    private static MethodHandle findMadvise(boolean enabled)
     {
-        if (!ENABLED || !System.getProperty("os.name", "").equalsIgnoreCase("Linux")) {
+        if (!enabled) {
             return null;
         }
         try {
@@ -85,5 +104,10 @@ public final class NativeBufferAdvice
         catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static boolean isLinux()
+    {
+        return System.getProperty("os.name", "").equalsIgnoreCase("Linux");
     }
 }

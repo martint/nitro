@@ -36,7 +36,7 @@ public final class TpchParquetTables
 
     private final Path rootDirectory;
     private final String schema;
-    private final NitroParquetScanResources scanResources = new NitroParquetScanResources();
+    private final NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault();
 
     private TpchParquetTables(Path rootDirectory, String schema)
     {

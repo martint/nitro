@@ -98,6 +98,11 @@ public class Allocator
         return allocationResources.nativeBuffers();
     }
 
+    public NativeBufferAdvice nativeBufferAdvice()
+    {
+        return allocationResources.nativeBufferAdvice();
+    }
+
     public VectorAllocator vectorAllocator(Context context)
     {
         return new ScopedVectorAllocator(this, requireNonNull(context, "context is null"));
