@@ -234,14 +234,11 @@ public final class ColumnReader
     private int[] idBuffer = EMPTY_INTS;
     // Fused per-page skip-decode of a dict LONG column: the whole survivor gather (def-null walk + value read) runs as
     // one pass with both RLE cursors in locals, no per-run idBuffer/runDef materialization. These capture the page's
-    // value-run + def-run offsets so {@link JavaSkipDecode} (the default) — or the reference Rust port behind
-    // {@code -Dnitro.nativeSkipDecode} — can gather straight from the page body.
+    // value-run + def-run offsets so {@link JavaSkipDecode} can gather straight from the page body.
     private MemorySegment skipBody;
     private long skipValueOffset;
     private long skipDefOffset;   // -1 => null-free page
     private int skipBitWidth;
-    // Scratch for the native reference path only (it takes page-relative survivors and byte nulls).
-    private int[] nativeSurvivorScratch = EMPTY_INTS;
     // int[] mirror of the per-chunk boolean acceptById[] (the Vector API gathers from int[]/long[], not boolean[]).
     private int[] filterAcceptInts = EMPTY_INTS;
     private int filterAcceptIntsChunk = -1;
@@ -249,7 +246,6 @@ public final class ColumnReader
     // a conditional, while touching one quarter of the acceptance-table footprint of the SIMD int[] mirror.
     private byte[] filterAcceptBytes = EMPTY_BYTES;
     private int filterAcceptBytesChunk = -1;
-    private byte[] nativeNullScratch = EMPTY_BYTES;
     private int[] defBuffer = EMPTY_INTS;
     // reusable accumulators for assembling a batch's BinaryVector across pages
     private int[] binaryOutOffsets = EMPTY_INTS;
@@ -454,14 +450,10 @@ public final class ColumnReader
         runDef = EMPTY_INTS;
         arrayPool.release(idBuffer);
         idBuffer = EMPTY_INTS;
-        arrayPool.release(nativeSurvivorScratch);
-        nativeSurvivorScratch = EMPTY_INTS;
         arrayPool.release(filterAcceptInts);
         filterAcceptInts = EMPTY_INTS;
         arrayPool.release(filterAcceptBytes);
         filterAcceptBytes = EMPTY_BYTES;
-        arrayPool.release(nativeNullScratch);
-        nativeNullScratch = EMPTY_BYTES;
         arrayPool.release(defBuffer);
         defBuffer = EMPTY_INTS;
         arrayPool.release(binaryOutOffsets);
@@ -1892,43 +1884,15 @@ public final class ColumnReader
                 continue;
             }
             if (skipBody != null) {
-                // Fused per-page skip-decode of a dict LONG page. Default: the fully-inlined pure-Java kernel (both RLE
-                // cursors in locals/registers, no per-value method call, no idBuffer/runDef materialization). The Rust
-                // port behind -Dnitro.nativeSkipDecode is kept as a reference for the residual bounds-check-free edge.
+                // Fused per-page skip-decode of a dict LONG page: the fully-inlined pure-Java kernel keeps both RLE
+                // cursors in locals/registers with no per-value method call or idBuffer/runDef materialization.
                 int selEnd = sel;
                 while (selEnd < count && survivors[selEnd] < pageEnd) {
                     selEnd++;
                 }
                 if (selEnd > sel) {
-                    if (NativeSkipDecode.ENABLED) {
-                        int pageSurvivors = selEnd - sel;
-                        if (nativeSurvivorScratch.length < pageSurvivors) {
-                            nativeSurvivorScratch = replaceInts(nativeSurvivorScratch, pageSurvivors);
-                        }
-                        int base = pageCursor - batchCursor;
-                        for (int k = 0; k < pageSurvivors; k++) {
-                            nativeSurvivorScratch[k] = base + survivors[sel + k];
-                        }
-                        byte[] nullScratch = null;
-                        if (nullsOut != null) {
-                            if (nativeNullScratch.length < pageSurvivors) {
-                                nativeNullScratch = replaceBytes(nativeNullScratch, pageSurvivors);
-                            }
-                            nullScratch = nativeNullScratch;
-                        }
-                        NativeSkipDecode.skipDecodeDictLongs(skipBody, skipValueOffset, skipBitWidth,
-                                skipDefOffset, nativeSurvivorScratch, pageSurvivors, dictionaryLongs, out, produced, nullScratch);
-                        if (nullsOut != null) {
-                            for (int k = 0; k < pageSurvivors; k++) {
-                                nullsOut[produced + k] = nullScratch[k] != 0;
-                            }
-                        }
-                        produced += pageSurvivors;
-                    }
-                    else {
-                        produced = JavaSkipDecode.skipDecodeDictLongs(skipBody, skipValueOffset, skipBitWidth,
-                                skipDefOffset, survivors, sel, selEnd, pageCursor - batchCursor, dictionaryLongs, out, produced, nullsOut);
-                    }
+                    produced = JavaSkipDecode.skipDecodeDictLongs(skipBody, skipValueOffset, skipBitWidth,
+                            skipDefOffset, survivors, sel, selEnd, pageCursor - batchCursor, dictionaryLongs, out, produced, nullsOut);
                     sel = selEnd;
                 }
                 pageValueCursor = pageCursor + pageRows;
