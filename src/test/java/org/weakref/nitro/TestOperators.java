@@ -4082,7 +4082,8 @@ public class TestOperators
     void testHashJoinProjectsPlanTimeSchema()
     {
         TypeBinding i32Only = i32OnlyType();
-        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Field field = new Field("key", i32Only, false);
+        Schema schema = new Schema(List.of(field));
         try (HashJoinOperator join = new HashJoinOperator(
                 allocator,
                 typedTable(schema, TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1))),
@@ -4092,8 +4093,36 @@ public class TestOperators
                 .withOutputs(1)) {
             assertThat(join.outputSchema().fields())
                     .singleElement()
-                    .extracting(Field::type)
-                    .isSameAs(i32Only);
+                    .isSameAs(field);
+        }
+    }
+
+    @Test
+    void testHashLeftJoinWidensAndProjectsPlanTimeSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field outerKey = new Field("outer_key", i32Only, false);
+        Field outerValue = new Field("outer_value", i32Only, true);
+        Field innerValue = new Field("inner_value", i32Only, false);
+        Schema outerSchema = new Schema(List.of(outerKey, outerValue));
+        Schema innerSchema = new Schema(List.of(innerValue));
+
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                typedTable(outerSchema),
+                0,
+                typedTable(innerSchema),
+                0,
+                true)
+                .withOutputs(2, 0, 1)) {
+            assertThat(join.outputSchema().fields()).extracting(Field::name)
+                    .containsExactly(innerValue.name(), outerKey.name(), outerValue.name());
+            assertThat(join.outputSchema().fields()).extracting(Field::type)
+                    .containsExactly(i32Only, i32Only, i32Only);
+            assertThat(join.outputSchema().fields()).extracting(Field::nullable)
+                    .containsExactly(true, false, true);
+            assertThat(join.outputSchema().field(1)).isSameAs(outerKey);
+            assertThat(join.outputSchema().field(2)).isSameAs(outerValue);
         }
     }
 

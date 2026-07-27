@@ -151,9 +151,11 @@ public class HashJoinOperator
     private final int outerOutputCount;
     private final int innerOutputCount;
     private final int totalOutputCount;
+    private final Schema fullOutputSchema;
     // Public output ordinal -> physical concatenated [outer..., inner...] column. Keeping projection inside the join
     // preserves lazy materialization: columns omitted by the plan never get an Output wrapper or a payload borrow.
     private int[] outputChannels;
+    private Schema outputSchema;
     private int composeEncodedOuterDictionaryDepth;
     private boolean lazyDuplicateSlotState;
     private boolean implicitSequentialBuildRowReferences;
@@ -373,11 +375,25 @@ public class HashJoinOperator
         if (probeOuterJoin && joinFilters.length != 0) {
             throw new IllegalArgumentException("Join filters are not yet supported for probe outer joins");
         }
+        Schema outerSchema = outer.outputSchema();
+        Schema innerSchema = inner.outputSchema();
         List<Optional<TypeBinding>> equiJoinKeyTypes = joinKeyTypes(
-                outer.outputSchema(),
+                outerSchema,
                 outerJoinColumns,
-                inner.outputSchema(),
+                innerSchema,
                 innerJoinColumns);
+        this.outerOutputCount = outer.outputCount();
+        this.innerOutputCount = inner.outputCount();
+        this.totalOutputCount = outerOutputCount + innerOutputCount;
+        this.fullOutputSchema = outputSchema(
+                outerSchema,
+                outerOutputCount,
+                innerSchema,
+                innerOutputCount,
+                probeOuterJoin);
+        this.outputSchema = fullOutputSchema;
+        this.outputChannels = new int[totalOutputCount];
+        java.util.Arrays.setAll(outputChannels, index -> index);
 
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
@@ -407,11 +423,6 @@ public class HashJoinOperator
         this.outer = outer;
         this.probeSource = outer;
         this.inner = inner;
-        this.outerOutputCount = outer.outputCount();
-        this.innerOutputCount = inner.outputCount();
-        this.totalOutputCount = outerOutputCount + innerOutputCount;
-        this.outputChannels = new int[totalOutputCount];
-        java.util.Arrays.setAll(outputChannels, index -> index);
         this.composedOuterMappingSources = new Vector[totalOutputCount * 3];
         this.composedOuterMappingIds = new int[totalOutputCount * 3][];
         this.probeOuterJoin = probeOuterJoin;
@@ -428,9 +439,9 @@ public class HashJoinOperator
         if (promotedBinaryEqualityFilter) {
             java.util.ArrayList<Optional<TypeBinding>> effectiveJoinKeyTypes = new java.util.ArrayList<>(equiJoinKeyTypes);
             effectiveJoinKeyTypes.addAll(joinKeyTypes(
-                    outer.outputSchema(),
+                    outerSchema,
                     new int[] {joinFilters[0].outerColumn()},
-                    inner.outputSchema(),
+                    innerSchema,
                     new int[] {joinFilters[0].innerColumn()}));
             this.joinKeyTypes = List.copyOf(effectiveJoinKeyTypes);
         }
@@ -535,24 +546,42 @@ public class HashJoinOperator
     @Override
     public Schema outputSchema()
     {
-        Schema outerSchema = outer.outputSchema();
-        Schema innerSchema = inner.outputSchema();
-        java.util.ArrayList<Field> fields = new java.util.ArrayList<>(outputChannels.length);
-        for (int outputChannel : outputChannels) {
-            if (outputChannel < outerOutputCount) {
-                if (outputChannel >= outerSchema.size()) {
-                    return Schema.unspecified(outputChannels.length);
-                }
-                fields.add(outerSchema.field(outputChannel));
-                continue;
-            }
-            int innerChannel = outputChannel - outerOutputCount;
-            if (innerChannel >= innerSchema.size()) {
-                return Schema.unspecified(outputChannels.length);
-            }
-            fields.add(innerSchema.field(innerChannel));
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(
+            Schema outerSchema,
+            int outerOutputCount,
+            Schema innerSchema,
+            int innerOutputCount,
+            boolean probeOuterJoin)
+    {
+        if (outerSchema.size() != outerOutputCount) {
+            throw new IllegalArgumentException("outer schema size does not match output count");
+        }
+        if (innerSchema.size() != innerOutputCount) {
+            throw new IllegalArgumentException("inner schema size does not match output count");
+        }
+        java.util.ArrayList<Field> fields = new java.util.ArrayList<>(outerOutputCount + innerOutputCount);
+        fields.addAll(outerSchema.fields());
+        for (Field field : innerSchema.fields()) {
+            fields.add(probeOuterJoin ? nullable(field) : field);
         }
         return new Schema(fields);
+    }
+
+    private static Schema selectOutputs(Schema fullOutputSchema, int[] outputChannels)
+    {
+        java.util.ArrayList<Field> fields = new java.util.ArrayList<>(outputChannels.length);
+        for (int outputChannel : outputChannels) {
+            fields.add(fullOutputSchema.field(outputChannel));
+        }
+        return new Schema(fields);
+    }
+
+    private static Field nullable(Field field)
+    {
+        return field.nullable() ? field : new Field(field.name(), field.type(), true);
     }
 
     @Override
@@ -2042,6 +2071,7 @@ public class HashJoinOperator
             }
         }
         this.outputChannels = selected;
+        this.outputSchema = selectOutputs(fullOutputSchema, selected);
         return this;
     }
 
