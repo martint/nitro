@@ -48,6 +48,7 @@ class TestOperatorResources
         assertThat(first.joinBufferPolicy()).isNotSameAs(second.joinBufferPolicy());
         assertThat(first.nestedLoopJoinPolicy()).isNotSameAs(second.nestedLoopJoinPolicy());
         assertThat(first.hashJoin()).isNotSameAs(second.hashJoin());
+        assertThat(first.genericJoinIndexes()).isNotSameAs(second.genericJoinIndexes());
         assertThat(first.grouping()).isNotSameAs(second.grouping());
         assertThat(first.sortPolicy()).isNotSameAs(second.sortPolicy());
         assertThat(first.topNRankingPolicy()).isNotSameAs(second.topNRankingPolicy());
@@ -77,6 +78,9 @@ class TestOperatorResources
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::nestedLoopJoinPolicy)
+                .withMessage("Operator resources are closed");
+        assertThatIllegalStateException()
+                .isThrownBy(first::genericJoinIndexes)
                 .withMessage("Operator resources are closed");
         assertThatIllegalStateException()
                 .isThrownBy(first::sortPolicy)

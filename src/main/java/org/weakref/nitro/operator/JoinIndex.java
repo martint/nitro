@@ -166,6 +166,16 @@ abstract class JoinIndex
         throw new UnsupportedOperationException();
     }
 
+    static boolean hasNull(Vector[] nulls, int position)
+    {
+        for (Vector nullsVector : nulls) {
+            if (OperatorVectorSupport.isNull(nullsVector, position)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     long unpackCompactSingleMatchRef(int ref)
     {
         throw new UnsupportedOperationException();

@@ -40,6 +40,7 @@ public final class OperatorResources
     private final NestedLoopJoinPolicy nestedLoopJoinPolicy;
     private final SemiJoinOperatorPolicy semiJoinPolicy;
     private final HashJoinOperatorResources hashJoin;
+    private final GenericJoinIndexFactory genericJoinIndexes;
     private final GroupingStateResources grouping;
     private final SortOperatorPolicy sortPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
@@ -83,6 +84,10 @@ public final class OperatorResources
         this.nestedLoopJoinPolicy = requireNonNull(nestedLoopJoinPolicy, "nestedLoopJoinPolicy is null");
         this.semiJoinPolicy = requireNonNull(semiJoinPolicy, "semiJoinPolicy is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
+        this.genericJoinIndexes = new GenericJoinIndexFactory(
+                codeGeneration,
+                flatKeyTablePolicy,
+                hashJoin.indexPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
@@ -201,6 +206,12 @@ public final class OperatorResources
     {
         checkOpen();
         return hashJoin;
+    }
+
+    GenericJoinIndexFactory genericJoinIndexes()
+    {
+        checkOpen();
+        return genericJoinIndexes;
     }
 
     public BufferedJoinInputPolicy bufferedJoinInputPolicy()
