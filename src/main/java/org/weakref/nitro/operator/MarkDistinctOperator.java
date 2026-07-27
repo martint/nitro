@@ -186,6 +186,8 @@ public class MarkDistinctOperator
                         values,
                         retainNulls,
                         distinctTypes,
+                        allocator,
+                        allocationContext,
                         arrayPool,
                         codeGeneration,
                         distinctKeySetPolicy,

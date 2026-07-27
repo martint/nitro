@@ -1278,6 +1278,8 @@ public class GroupedAggregationOperator
                             ? DistinctKeySet.createGroupedLong(
                                     values,
                                     inputTypes,
+                                    allocator,
+                                    allocationContext,
                                     arrayPool,
                                     codeGeneration,
                                     distinctKeySetPolicy,
@@ -1288,6 +1290,8 @@ public class GroupedAggregationOperator
                                     false,
                                     1,
                                     inputTypes,
+                                    allocator,
+                                    allocationContext,
                                     arrayPool,
                                     codeGeneration,
                                     distinctKeySetPolicy,

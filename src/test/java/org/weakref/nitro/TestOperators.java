@@ -1849,6 +1849,89 @@ public class TestOperators
                             row(1L),
                             row(2L)));
         }
+
+        Operator distinctSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, 2})},
+                        Mask.all(2)),
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {new I64Vector(new long[] {-1, -2, 3})},
+                        Mask.all(3)));
+        try (Operator distinct = new MarkDistinctOperator(
+                allocator,
+                0,
+                distinctSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(distinct))
+                    .matchesExactly(List.of(
+                            row(1L),
+                            row(2L),
+                            row(3L)));
+        }
+
+        Schema nullableAbsoluteSchema = new Schema(List.of(new Field("value", absoluteLong, true)));
+        Operator nullableDistinctSource = typedTable(
+                nullableAbsoluteSchema,
+                new TableOperator.Page(
+                        4,
+                        new Streams[] {Streams.ofValuesAndNulls(
+                                new I64Vector(new long[] {0, 0, 1, -1}),
+                                new BooleanVector(new boolean[] {true, true, false, false}))},
+                        Mask.all(4)));
+        try (Operator distinct = new MarkDistinctOperator(
+                allocator,
+                new int[] {0},
+                nullableDistinctSource,
+                true,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(distinct))
+                    .matchesExactly(List.of(
+                            row((Object) null),
+                            row(1L)));
+        }
+
+        Operator distinctCountSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, -1})},
+                        Mask.all(2)),
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {new I64Vector(new long[] {2, -2, 3})},
+                        Mask.all(3)));
+        try (Operator aggregation = new AggregationOperator(
+                allocator,
+                List.of(new DistinctCount(0)),
+                distinctCountSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(aggregation))
+                    .matchesExactly(List.of(row(3L)));
+        }
+
+        Schema groupedDistinctSchema = new Schema(List.of(
+                new Field(Schema.unspecified(1).field(0).type(), false),
+                new Field("value", absoluteLong, false)));
+        Operator groupedDistinctSource = typedTable(
+                groupedDistinctSchema,
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {
+                                new I64Vector(new long[] {7, 7, 7}),
+                                new I64Vector(new long[] {1, -1, 2})},
+                        Mask.all(3)));
+        try (Operator aggregation = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new DistinctCount(1)),
+                groupedDistinctSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(aggregation))
+                    .matchesExactly(List.of(row(7L, 2L)));
+        }
     }
 
     private static Operator rejectDynamicFilters(Operator delegate)

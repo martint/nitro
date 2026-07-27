@@ -264,6 +264,8 @@ public final class MarkDistinctMarkerOperator
                         values,
                         retainNulls,
                         distinctTypes,
+                        allocator,
+                        allocationContext,
                         arrayPool,
                         codeGeneration,
                         distinctKeySetPolicy,

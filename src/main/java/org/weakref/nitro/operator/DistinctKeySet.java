@@ -16,7 +16,9 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -29,6 +31,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static java.lang.Math.toIntExact;
+import static java.util.Objects.requireNonNull;
 
 final class DistinctKeySet
 {
@@ -55,19 +58,43 @@ final class DistinctKeySet
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, false, List.of(), arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        return createWithUnboundPrefix(
+                samples,
+                false,
+                0,
+                List.of(),
+                null,
+                null,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
     }
 
     public static DistinctKeySet create(
             Vector[] samples,
             List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, false, keyTypes, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        return createWithUnboundPrefix(
+                samples,
+                false,
+                0,
+                keyTypes,
+                allocator,
+                allocationContext,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
     }
 
     /**
@@ -92,6 +119,8 @@ final class DistinctKeySet
     public static DistinctKeySet createGroupedLong(
             Vector[] samples,
             List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
@@ -104,6 +133,8 @@ final class DistinctKeySet
                     false,
                     1,
                     keyTypes,
+                    allocator,
+                    allocationContext,
                     arrayPool,
                     codeGeneration,
                     policy,
@@ -111,6 +142,17 @@ final class DistinctKeySet
                     flatKeyTablePolicy);
         }
         validateKeyVectors(keyTypes, 1, samples);
+        StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, 1, keyTypes, codeGeneration);
+        if (!allowsLegacyPhysicalShortcuts(kernels)) {
+            return new DistinctKeySet(
+                    new StructuralDistinctIndex(
+                            requireNonNull(allocator, "allocator is null"),
+                            requireNonNull(allocationContext, "allocationContext is null"),
+                            kernels,
+                            false),
+                    keyTypes,
+                    1);
+        }
         return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy), keyTypes, 1);
     }
 
@@ -131,13 +173,26 @@ final class DistinctKeySet
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, retainNulls, List.of(), arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        return createWithUnboundPrefix(
+                samples,
+                retainNulls,
+                0,
+                List.of(),
+                null,
+                null,
+                arrayPool,
+                codeGeneration,
+                policy,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy);
     }
 
     public static DistinctKeySet create(
             Vector[] samples,
             boolean retainNulls,
             List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
@@ -149,6 +204,8 @@ final class DistinctKeySet
                 retainNulls,
                 0,
                 keyTypes,
+                allocator,
+                allocationContext,
                 arrayPool,
                 codeGeneration,
                 policy,
@@ -161,6 +218,8 @@ final class DistinctKeySet
             boolean retainNulls,
             int unboundKeyPrefix,
             List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
@@ -168,6 +227,17 @@ final class DistinctKeySet
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
         validateKeyVectors(keyTypes, unboundKeyPrefix, samples);
+        StructuralKeyKernel[] kernels = structuralKeyKernels(samples.length, unboundKeyPrefix, keyTypes, codeGeneration);
+        if (!allowsLegacyPhysicalShortcuts(kernels)) {
+            return new DistinctKeySet(
+                    new StructuralDistinctIndex(
+                            requireNonNull(allocator, "allocator is null"),
+                            requireNonNull(allocationContext, "allocationContext is null"),
+                            kernels,
+                            retainNulls),
+                    keyTypes,
+                    unboundKeyPrefix);
+        }
         DistinctIndex index = createIndex(
                 samples,
                 arrayPool,
@@ -179,6 +249,33 @@ final class DistinctKeySet
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
         return new DistinctKeySet(index, keyTypes, unboundKeyPrefix);
+    }
+
+    private static StructuralKeyKernel[] structuralKeyKernels(
+            int keyCount,
+            int unboundKeyPrefix,
+            List<TypeBinding> keyTypes,
+            OperatorCodeGenerationResources codeGeneration)
+    {
+        StructuralKeyKernel[] kernels = new StructuralKeyKernel[keyCount];
+        StructuralTypeKernelFactory structuralTypes = codeGeneration.structuralTypes();
+        for (int keyIndex = 0; keyIndex < keyCount; keyIndex++) {
+            TypeBinding keyType = keyTypes.isEmpty() || keyIndex < unboundKeyPrefix
+                    ? Schema.unspecified(keyCount).field(keyIndex).type()
+                    : keyTypes.get(keyIndex - unboundKeyPrefix);
+            kernels[keyIndex] = structuralTypes.key(keyType);
+        }
+        return kernels;
+    }
+
+    private static boolean allowsLegacyPhysicalShortcuts(StructuralKeyKernel[] kernels)
+    {
+        for (StructuralKeyKernel kernel : kernels) {
+            if (!kernel.allowsLegacyPhysicalShortcuts()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static DistinctIndex createIndex(
@@ -2410,6 +2507,167 @@ final class DistinctKeySet
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
             return (int) hash;
+        }
+    }
+
+    private static final class StructuralDistinctIndex
+            implements DistinctIndex
+    {
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private final StructuralKeyKernel[] kernels;
+        private final boolean retainNulls;
+        private final ObjectOpenHashSet<StructuralDistinctKey> keys = new ObjectOpenHashSet<>();
+
+        private StructuralDistinctIndex(
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                StructuralKeyKernel[] kernels,
+                boolean retainNulls)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            this.kernels = kernels.clone();
+            this.retainNulls = retainNulls;
+        }
+
+        @Override
+        public void reserveAdditional(int additionalEntries)
+        {
+            keys.ensureCapacity(keys.size() + Math.max(0, additionalEntries));
+        }
+
+        @Override
+        public boolean add(Vector[] values, Vector[] nulls, int position)
+        {
+            if (!retainNulls && hasNull(nulls, position)) {
+                return false;
+            }
+            StructuralDistinctKey probe = new StructuralDistinctKey(kernels, values, nulls, position);
+            if (keys.contains(probe)) {
+                return false;
+            }
+            int[] selectedPosition = {position};
+            Vector[] ownedValues = copyVectors(values, selectedPosition);
+            Vector[] ownedNulls = copyNullableVectors(nulls, selectedPosition);
+            keys.add(new StructuralDistinctKey(kernels, ownedValues, ownedNulls, 0));
+            return true;
+        }
+
+        @Override
+        public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
+        {
+            ObjectOpenHashSet<StructuralDistinctKey> newKeys = new ObjectOpenHashSet<>();
+            int distinctCount = 0;
+            for (int position : mask) {
+                if (!retainNulls && hasNull(nulls, position)) {
+                    continue;
+                }
+                StructuralDistinctKey probe = new StructuralDistinctKey(kernels, values, nulls, position);
+                if (!keys.contains(probe) && newKeys.add(probe)) {
+                    distinctPositions[distinctCount++] = position;
+                }
+            }
+            if (distinctCount == 0) {
+                return 0;
+            }
+
+            int[] selectedPositions = Arrays.copyOf(distinctPositions, distinctCount);
+            Vector[] ownedValues = copyVectors(values, selectedPositions);
+            Vector[] ownedNulls = copyNullableVectors(nulls, selectedPositions);
+            for (int position = 0; position < distinctCount; position++) {
+                keys.add(new StructuralDistinctKey(kernels, ownedValues, ownedNulls, position));
+            }
+            return distinctCount;
+        }
+
+        private Vector[] copyVectors(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
+            }
+            return copies;
+        }
+
+        private Vector[] copyNullableVectors(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                if (vectors[index] != null) {
+                    copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
+                }
+            }
+            return copies;
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            keys.clear();
+        }
+    }
+
+    private static final class StructuralDistinctKey
+    {
+        private static final int NULL_HASH = 0x9E3779B9;
+
+        private final StructuralKeyKernel[] kernels;
+        private final Vector[] values;
+        private final Vector[] nulls;
+        private final int position;
+
+        private StructuralDistinctKey(
+                StructuralKeyKernel[] kernels,
+                Vector[] values,
+                Vector[] nulls,
+                int position)
+        {
+            this.kernels = kernels;
+            this.values = values;
+            this.nulls = nulls;
+            this.position = position;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            int hash = 1;
+            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
+                int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], position)
+                        ? NULL_HASH
+                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], position));
+                hash = 31 * hash + keyHash;
+            }
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (!(object instanceof StructuralDistinctKey other) || kernels != other.kernels) {
+                return false;
+            }
+            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
+                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], position);
+                boolean rightNull = OperatorVectorSupport.isNull(other.nulls[keyIndex], other.position);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!kernels[keyIndex].identical(
+                        values[keyIndex],
+                        nulls[keyIndex],
+                        position,
+                        other.values[keyIndex],
+                        other.nulls[keyIndex],
+                        other.position)) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 

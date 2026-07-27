@@ -38,6 +38,8 @@ public class DistinctCount
         implements Accumulator
 {
     private final int inputColumn;
+    private Allocator allocator;
+    private Allocator.Context allocationContext;
     private PrimitiveArrayPool arrayPool;
     private OperatorCodeGenerationResources codeGeneration;
     private DistinctKeySetPolicy distinctKeySetPolicy;
@@ -59,7 +61,9 @@ public class DistinctCount
     @Override
     public Streams allocate(AggregationExecutionContext context, int size)
     {
-        arrayPool = context.allocator().primitiveArrays();
+        allocator = context.allocator();
+        allocationContext = context.allocationContext();
+        arrayPool = allocator.primitiveArrays();
         codeGeneration = context.codeGeneration();
         distinctKeySetPolicy = context.distinctKeySetPolicy();
         adaptiveLongGroupingPolicy = context.adaptiveLongGroupingPolicy();
@@ -189,6 +193,8 @@ public class DistinctCount
                 false,
                 keyValues.length - inputTypes.size(),
                 inputTypes,
+                allocator,
+                allocationContext,
                 arrayPool,
                 codeGeneration,
                 distinctKeySetPolicy,
