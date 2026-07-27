@@ -26,6 +26,9 @@ class TestDirectLongBuildIndex
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
         DirectLongBuildIndex index = new DirectLongBuildIndex(arrayPool, true, 4, 2, 1, -1);
         index.initialize(8);
+        index.recordRow();
+        index.recordRow();
+        assertThat(index.rowCount()).isEqualTo(2);
 
         index.initializeKey(3, 11);
         assertThat(index.entry(3)).isEqualTo(11);
@@ -47,6 +50,7 @@ class TestDirectLongBuildIndex
 
         index.release();
         assertThat(index.isActive()).isFalse();
+        assertThat(index.rowCount()).isZero();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
 }

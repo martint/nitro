@@ -3566,7 +3566,6 @@ public class HashJoinOperator
         private final boolean compactChains;
         private final boolean compressDuplicateReferences;
         private final int expectedBuildRows;
-        private int directBuildRows;
         private final DirectLongBuildIndex directBuild;
         private final CompactedJoinRows compactedRows;
         // A completed duplicate build may have invariant bits inside an otherwise sparse physical key domain.
@@ -3828,7 +3827,7 @@ public class HashJoinOperator
             }
             minKey = Math.min(minKey, key);
             maxKey = Math.max(maxKey, key);
-            directBuildRows++;
+            directBuild.recordRow();
             int intKey = (int) key;
             ensureDirectBuildCapacity(intKey + 1);
             int head = directBuild.entry(intKey);
@@ -5315,7 +5314,7 @@ public class HashJoinOperator
 
         private void addDirectRangeRow(int key, long rowReference)
         {
-            directBuildRows++;
+            directBuild.recordRow();
             ensureDirectBuildCapacity(key + 1);
             int entry = directBuild.entry(key);
             if (entry != EMPTY) {
@@ -5502,7 +5501,7 @@ public class HashJoinOperator
                     System.err.printf(
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
                             directBuild.sparseDuplicateGroupCount() > 0 ? "sparse" : "dense",
-                            directBuildRows,
+                            directBuild.rowCount(),
                             size,
                             directBuild.capacity(),
                             directBuild.sparseDuplicateGroupCount(),

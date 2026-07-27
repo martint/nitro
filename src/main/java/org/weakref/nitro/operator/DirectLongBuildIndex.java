@@ -30,6 +30,7 @@ final class DirectLongBuildIndex
     private final SparseDirectLongDuplicateState sparseDuplicates;
 
     private int[] heads;
+    private int rowCount;
 
     DirectLongBuildIndex(
             PrimitiveArrayPool arrayPool,
@@ -65,6 +66,16 @@ final class DirectLongBuildIndex
     int capacity()
     {
         return heads.length;
+    }
+
+    void recordRow()
+    {
+        rowCount++;
+    }
+
+    int rowCount()
+    {
+        return rowCount;
     }
 
     int entry(int key)
@@ -163,6 +174,7 @@ final class DirectLongBuildIndex
     {
         arrayPool.release(heads);
         heads = null;
+        rowCount = 0;
         denseDuplicates.release();
         sparseDuplicates.release();
     }
