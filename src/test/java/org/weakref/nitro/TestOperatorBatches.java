@@ -386,7 +386,8 @@ public class TestOperatorBatches
                         allocator.engineResources().operatorCodeGeneration(),
                         allocator.engineResources().operatorResources().distinctKeySetPolicy(),
                         allocator.engineResources().operatorResources().adaptiveLongGroupingPolicy(),
-                        allocator.engineResources().operatorResources().flatKeyTablePolicy()),
+                        allocator.engineResources().operatorResources().flatKeyTablePolicy(),
+                        org.weakref.nitro.core.type.Schema.unspecified(1)),
                 1);
         accumulator.initialize(state, 0, 1);
 

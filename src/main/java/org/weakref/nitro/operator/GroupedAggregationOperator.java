@@ -262,7 +262,8 @@ public class GroupedAggregationOperator
                 operatorResources.codeGeneration(),
                 operatorResources.distinctKeySetPolicy(),
                 operatorResources.adaptiveLongGroupingPolicy(),
-                operatorResources.flatKeyTablePolicy());
+                operatorResources.flatKeyTablePolicy(),
+                source.outputSchema());
         this.groupColumn = groupColumn;
         this.groupedColumns = groupedColumns.stream()
                 .mapToInt(Integer::intValue)
@@ -271,7 +272,10 @@ public class GroupedAggregationOperator
         this.groupedKeyIndexes = groupedKeyIndexes;
         this.program = requireNonNull(program, "program is null");
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
-        DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(this.aggregations, groupPartitionedLongDistinct);
+        DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(
+                this.aggregations,
+                groupPartitionedLongDistinct,
+                source.outputSchema());
         this.plainAggregationIndexes = distinctAggregationPlan.plainAggregationIndexes();
         this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
         this.distinctAggregationGroups = distinctAggregationPlan.distinctAggregationGroups();
@@ -1119,7 +1123,8 @@ public class GroupedAggregationOperator
 
     private static DistinctAggregationPlan planDistinctAggregations(
             PhysicalAggregationUnit[] aggregations,
-            boolean groupPartitionedLongDistinct)
+            boolean groupPartitionedLongDistinct,
+            Schema sourceSchema)
     {
         List<Integer> plainAggregationIndexes = new ArrayList<>();
         List<Integer> filteredAggregationIndexes = new ArrayList<>();
@@ -1143,7 +1148,8 @@ public class GroupedAggregationOperator
                 .map(entry -> new DistinctAggregationGroup(
                         entry.getKey().inputColumns(),
                         entry.getValue().stream().mapToInt(Integer::intValue).toArray(),
-                        groupPartitionedLongDistinct))
+                        groupPartitionedLongDistinct,
+                        distinctTypes(sourceSchema, entry.getKey().inputColumns())))
                 .toArray(DistinctAggregationGroup[]::new);
 
         return new DistinctAggregationPlan(
@@ -1153,6 +1159,18 @@ public class GroupedAggregationOperator
     }
 
     private record DistinctAggregationPlan(int[] plainAggregationIndexes, int[] filteredAggregationIndexes, DistinctAggregationGroup[] distinctAggregationGroups) {}
+
+    private static List<TypeBinding> distinctTypes(Schema schema, int[] inputColumns)
+    {
+        for (int column : inputColumns) {
+            if (column < 0 || column >= schema.size()) {
+                return List.of();
+            }
+        }
+        return Arrays.stream(inputColumns)
+                .mapToObj(column -> schema.field(column).type())
+                .toList();
+    }
 
     private record DistinctSignature(int[] inputColumns)
     {
@@ -1180,6 +1198,7 @@ public class GroupedAggregationOperator
         private final int[] inputColumns;
         private final int[] aggregationIndexes;
         private final boolean groupPartitionedLongDistinct;
+        private final List<TypeBinding> inputTypes;
         private final Vector[] values;
         private final Vector[] nulls;
         private DistinctKeySet distinctKeySet;
@@ -1189,11 +1208,13 @@ public class GroupedAggregationOperator
         private DistinctAggregationGroup(
                 int[] inputColumns,
                 int[] aggregationIndexes,
-                boolean groupPartitionedLongDistinct)
+                boolean groupPartitionedLongDistinct,
+                List<TypeBinding> inputTypes)
         {
             this.inputColumns = inputColumns.clone();
             this.aggregationIndexes = aggregationIndexes;
             this.groupPartitionedLongDistinct = groupPartitionedLongDistinct;
+            this.inputTypes = List.copyOf(inputTypes);
             this.values = new Vector[inputColumns.length + 1];
             this.nulls = new Vector[inputColumns.length + 1];
         }
@@ -1236,13 +1257,17 @@ public class GroupedAggregationOperator
                     distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
                             ? DistinctKeySet.createGroupedLong(
                                     values,
+                                    inputTypes,
                                     arrayPool,
                                     codeGeneration,
                                     distinctKeySetPolicy,
                                     adaptiveLongGroupingPolicy,
                                     flatKeyTablePolicy)
-                            : DistinctKeySet.create(
+                            : DistinctKeySet.createWithUnboundPrefix(
                                     values,
+                                    false,
+                                    1,
+                                    inputTypes,
                                     arrayPool,
                                     codeGeneration,
                                     distinctKeySetPolicy,

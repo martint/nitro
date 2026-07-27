@@ -2948,6 +2948,61 @@ public class TestOperators
     }
 
     @Test
+    void testDistinctCountRejectsLaterVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Operator source = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+
+        assertThatThrownBy(() -> {
+            try (Operator aggregation = new AggregationOperator(allocator, List.of(new DistinctCount(0)), source);
+                    Batch result = aggregation.next()) {
+                result.output(0).borrow(Stream.VALUES);
+            }
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Distinct key vector at index 0")
+                .hasMessageContaining("testing:i32-only");
+    }
+
+    @Test
+    void testGroupedDistinctRejectsLaterVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(
+                new Field(i32Only, false),
+                new Field(i32Only, false)));
+        Operator source = typedTable(
+                schema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I32Vector(new int[] {1}), new I32Vector(new int[] {10})},
+                        Mask.all(1)),
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I32Vector(new int[] {1}), new I64Vector(new long[] {20})},
+                        Mask.all(1)));
+
+        assertThatThrownBy(() -> {
+            try (Operator aggregation = new GroupedAggregationOperator(
+                    allocator,
+                    List.of(0),
+                    List.of(0),
+                    List.of(new DistinctCount(1)),
+                    source);
+                    Batch result = aggregation.next()) {
+                result.output(1).borrow(Stream.VALUES);
+            }
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Distinct key vector at index 1")
+                .hasMessageContaining("testing:i32-only");
+    }
+
+    @Test
     void testMarkDistinctOperatorKeepsFirstOccurrenceRows()
     {
         assertThat(operator(

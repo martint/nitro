@@ -78,7 +78,8 @@ public class AggregationOperator
                 operatorResources.codeGeneration(),
                 operatorResources.distinctKeySetPolicy(),
                 operatorResources.adaptiveLongGroupingPolicy(),
-                operatorResources.flatKeyTablePolicy());
+                operatorResources.flatKeyTablePolicy(),
+                source.outputSchema());
         this.deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         this.source = source;
         this.program = requireNonNull(program, "program is null");

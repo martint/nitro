@@ -169,7 +169,8 @@ class TestOperatorResources
                             operatorResources.codeGeneration(),
                             operatorResources.distinctKeySetPolicy(),
                             operatorResources.adaptiveLongGroupingPolicy(),
-                            operatorResources.flatKeyTablePolicy()),
+                            operatorResources.flatKeyTablePolicy(),
+                            org.weakref.nitro.core.type.Schema.unspecified(1)),
                     1);
             assertThat(state.values()).isNotNull();
             allocator.release(accumulatorContext);

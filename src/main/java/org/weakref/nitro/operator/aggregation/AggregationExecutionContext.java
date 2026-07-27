@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.AdaptiveLongGroupingPolicy;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
@@ -30,7 +31,8 @@ public record AggregationExecutionContext(
         OperatorCodeGenerationResources codeGeneration,
         DistinctKeySetPolicy distinctKeySetPolicy,
         AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
-        FlatKeyTablePolicy flatKeyTablePolicy)
+        FlatKeyTablePolicy flatKeyTablePolicy,
+        Schema inputSchema)
 {
     public AggregationExecutionContext
     {
@@ -40,5 +42,6 @@ public record AggregationExecutionContext(
         requireNonNull(distinctKeySetPolicy, "distinctKeySetPolicy is null");
         requireNonNull(adaptiveLongGroupingPolicy, "adaptiveLongGroupingPolicy is null");
         requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
+        requireNonNull(inputSchema, "inputSchema is null");
     }
 }

@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
@@ -28,6 +30,7 @@ import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 
 import java.util.Arrays;
+import java.util.List;
 
 import static java.lang.Math.toIntExact;
 
@@ -40,6 +43,7 @@ public class DistinctCount
     private DistinctKeySetPolicy distinctKeySetPolicy;
     private AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
     private FlatKeyTablePolicy flatKeyTablePolicy;
+    private List<TypeBinding> inputTypes;
 
     public DistinctCount(int inputColumn)
     {
@@ -60,6 +64,7 @@ public class DistinctCount
         distinctKeySetPolicy = context.distinctKeySetPolicy();
         adaptiveLongGroupingPolicy = context.adaptiveLongGroupingPolicy();
         flatKeyTablePolicy = context.flatKeyTablePolicy();
+        inputTypes = inputTypes(context.inputSchema(), inputColumn);
         return allocateState(context.allocator(), context.allocationContext(), size);
     }
 
@@ -175,10 +180,15 @@ public class DistinctCount
     {
         Object implementation = stateVector.implementation();
         if (implementation != null) {
-            return (DistinctIndex) implementation;
+            DistinctIndex index = (DistinctIndex) implementation;
+            index.validate(keyValues);
+            return index;
         }
-        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.create(
+        DistinctIndex index = new DelegatingDistinctIndex(DistinctKeySet.createWithUnboundPrefix(
                 keyValues,
+                false,
+                keyValues.length - inputTypes.size(),
+                inputTypes,
                 arrayPool,
                 codeGeneration,
                 distinctKeySetPolicy,
@@ -188,9 +198,19 @@ public class DistinctCount
         return index;
     }
 
+    private static List<TypeBinding> inputTypes(Schema schema, int inputColumn)
+    {
+        if (inputColumn < 0 || inputColumn >= schema.size()) {
+            return List.of();
+        }
+        return List.of(schema.field(inputColumn).type());
+    }
+
     private interface DistinctIndex
     {
         boolean add(Vector[] values, Vector[] nulls, int position, int group);
+
+        void validate(Vector[] values);
     }
 
     private static final class DelegatingDistinctIndex
@@ -207,6 +227,12 @@ public class DistinctCount
         public boolean add(Vector[] values, Vector[] nulls, int position, int group)
         {
             return keys.add(values, nulls, position);
+        }
+
+        @Override
+        public void validate(Vector[] values)
+        {
+            keys.validateKeyVectors(values);
         }
     }
 }
