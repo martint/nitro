@@ -3544,10 +3544,9 @@ public class HashJoinOperator
         // Build rows are indexed by a dense ordinal. The row store owns both their adaptive reference
         // representation and the flat insertion-ordered duplicate chain.
         private final JoinRowStore rows;
-        private int rowCount;
+        private final LongJoinBuildCardinality buildCardinality = new LongJoinBuildCardinality();
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
-        private int size;
         // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
         // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
         // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
@@ -3666,7 +3665,7 @@ public class HashJoinOperator
         @Override
         public boolean isEmpty()
         {
-            return size == 0;
+            return buildCardinality.isEmpty();
         }
 
         @Override
@@ -3832,10 +3831,11 @@ public class HashJoinOperator
                 directBuild.incrementDenseDuplicate(intKey);
                 return;
             }
-            int ordinal = rowCount++;
+            int ordinal = buildCardinality.storedRowCount();
             rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
             directBuild.initializeKey(intKey, ordinal);
-            size++;
+            buildCardinality.recordDistinctKey();
         }
 
         @Override
@@ -5269,7 +5269,7 @@ public class HashJoinOperator
                 materializeDirectRangeBuildAsHash();
             }
             if (denseSequence.keyCandidate()) {
-                if (denseSequence.acceptsKey(key, rowCount)) {
+                if (denseSequence.acceptsKey(key, buildCardinality.storedRowCount())) {
                     appendDenseRow(key, rowReference);
                     return;
                 }
@@ -5284,15 +5284,16 @@ public class HashJoinOperator
                     hashTable.incrementCount(slot);
                     return;
                 }
-                rows.ensureChainState(rowCount);
+                rows.ensureChainState(buildCardinality.storedRowCount());
             }
-            int ordinal = rowCount++;
+            int ordinal = buildCardinality.storedRowCount();
             rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
             if (newKey) {
                 hashTable.initialize(slot, key, ordinal);
-                size++;
+                buildCardinality.recordDistinctKey();
                 // Rehash after the slot is populated so it carries a non-empty head into the new table.
-                hashTable.growIfNeeded(size);
+                hashTable.growIfNeeded(buildCardinality.distinctKeyCount());
                 return;
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
@@ -5308,10 +5309,11 @@ public class HashJoinOperator
                 addDirectRangeDuplicate(key, entry, rowReference);
                 return;
             }
-            int ordinal = rowCount++;
+            int ordinal = buildCardinality.storedRowCount();
             rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
             directBuild.initializeKey(key, ordinal);
-            size++;
+            buildCardinality.recordDistinctKey();
         }
 
         private void addDirectRangeDuplicate(int key, int entry, long rowReference)
@@ -5324,9 +5326,10 @@ public class HashJoinOperator
                 directBuild.incrementDenseDuplicate(key);
                 return;
             }
-            rows.ensureChainState(rowCount);
-            int ordinal = rowCount++;
+            rows.ensureChainState(buildCardinality.storedRowCount());
+            int ordinal = buildCardinality.storedRowCount();
             rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
             rows.link(directBuild.appendDenseDuplicate(key, entry, ordinal), ordinal);
         }
 
@@ -5342,9 +5345,10 @@ public class HashJoinOperator
                 directBuild.incrementSparseDuplicate(groupEntry);
                 return;
             }
-            rows.ensureChainState(rowCount);
-            int ordinal = rowCount++;
+            rows.ensureChainState(buildCardinality.storedRowCount());
+            int ordinal = buildCardinality.storedRowCount();
             rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
             rows.link(directBuild.appendSparseDuplicate(groupEntry, ordinal), ordinal);
         }
 
@@ -5373,7 +5377,7 @@ public class HashJoinOperator
             if (hasDuplicates()) {
                 hashTable.ensureDuplicateState();
             }
-            size = 0;
+            buildCardinality.resetDistinctKeyCount();
             for (int key = 0; key < directBuild.capacity(); key++) {
                 int entry = directBuild.entry(key);
                 if (entry == EMPTY) {
@@ -5388,30 +5392,31 @@ public class HashJoinOperator
                         head,
                         compressDuplicateReferences ? head : directEntryTail(key, entry),
                         count);
-                size++;
-                hashTable.growIfNeeded(size);
+                buildCardinality.recordDistinctKey();
+                hashTable.growIfNeeded(buildCardinality.distinctKeyCount());
             }
             releaseDirectBuildArrays();
         }
 
         private void appendDenseRow(long key, long rowReference)
         {
-            denseSequence.observeDenseRow(key, rowReference, rowCount);
-            rows.append(rowCount, rowReference);
-            rowCount++;
-            size++;
+            int ordinal = buildCardinality.storedRowCount();
+            denseSequence.observeDenseRow(key, rowReference, ordinal);
+            rows.append(ordinal, rowReference);
+            buildCardinality.recordStoredRow();
+            buildCardinality.recordDistinctKey();
         }
 
         private void materializeDenseBuildAsHash()
         {
-            int previousRows = rowCount;
+            int previousRows = buildCardinality.storedRowCount();
             long key = denseSequence.firstKey();
-            size = 0;
+            buildCardinality.resetDistinctKeyCount();
             for (int ordinal = 0; ordinal < previousRows; ordinal++) {
                 int slot = hashTable.findSlot(key++);
                 hashTable.initialize(slot, key - 1, ordinal);
-                size++;
-                hashTable.growIfNeeded(size);
+                buildCardinality.recordDistinctKey();
+                hashTable.growIfNeeded(buildCardinality.distinctKeyCount());
             }
         }
 
@@ -5443,8 +5448,8 @@ public class HashJoinOperator
                     hashTable,
                     rows,
                     compressedRanges,
-                    size,
-                    rowCount);
+                    buildCardinality.distinctKeyCount(),
+                    buildCardinality.storedRowCount());
             releaseRowArrays();
             if (compressedRanges.isBuilt()) {
                 releaseHashTable();
@@ -5454,7 +5459,7 @@ public class HashJoinOperator
         @Override
         int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)
         {
-            return compactedRows.buildIntPayload(values, directValues, sourcePositions, rowCount);
+            return compactedRows.buildIntPayload(values, directValues, sourcePositions, buildCardinality.storedRowCount());
         }
 
         // Chooses array mode when the build is unique and its keys form a dense integer range, so the
@@ -5466,8 +5471,8 @@ public class HashJoinOperator
                 System.err.printf(
                         "[long-join-build] expected=%d rows=%d keys=%d min=%d max=%d dense=%s direct=%s duplicates=%s implicitReferences=%s compressedDuplicates=%s%n",
                         expectedBuildRows,
-                        rowCount,
-                        size,
+                        buildCardinality.storedRowCount(),
+                        buildCardinality.distinctKeyCount(),
                         minKey,
                         maxKey,
                         denseSequence.keyCandidate(),
@@ -5476,7 +5481,7 @@ public class HashJoinOperator
                         rows.implicitSequentialReferences(),
                         compressDuplicateReferences);
             }
-            if (size == 0) {
+            if (buildCardinality.isEmpty()) {
                 return;
             }
             if (directBuild.isActive()) {
@@ -5488,7 +5493,7 @@ public class HashJoinOperator
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
                             directBuild.sparseDuplicateGroupCount() > 0 ? "sparse" : "dense",
                             directBuild.rowCount(),
-                            size,
+                            buildCardinality.distinctKeyCount(),
                             directBuild.capacity(),
                             directBuild.sparseDuplicateGroupCount(),
                             expectedBuildRows);
@@ -5507,10 +5512,10 @@ public class HashJoinOperator
             long range = maxKey - minKey + 1;
             if (range <= 0 ||
                     range > policy.maxArrayRange() ||
-                    range > (long) policy.directRangeMaxCardinalityRatio() * size) {
+                    range > (long) policy.directRangeMaxCardinalityRatio() * buildCardinality.distinctKeyCount()) {
                 return;
             }
-            if (denseSequence.keyCandidate() && range == size && denseSequence.referenceCandidate()) {
+            if (denseSequence.keyCandidate() && range == buildCardinality.distinctKeyCount() && denseSequence.referenceCandidate()) {
                 denseSequence.activateObservedReferences();
                 directLookup.activateArithmetic(minKey, maxKey);
                 releaseHashTable();
@@ -5518,8 +5523,8 @@ public class HashJoinOperator
                 return;
             }
             if (rows.referencesFit32()) {
-                if (denseSequence.keyCandidate() && range == size) {
-                    directLookup.activateCompact(minKey, maxKey, rows.packReferences32(rowCount));
+                if (denseSequence.keyCandidate() && range == buildCardinality.distinctKeyCount()) {
+                    directLookup.activateCompact(minKey, maxKey, rows.packReferences32(buildCardinality.storedRowCount()));
                 }
                 else {
                     int[] direct = directLookup.activateCompact(minKey, maxKey, (int) range);
@@ -5534,7 +5539,7 @@ public class HashJoinOperator
                 releaseRowArrays();
                 return;
             }
-            if (denseSequence.keyCandidate() && range == size) {
+            if (denseSequence.keyCandidate() && range == buildCardinality.distinctKeyCount()) {
                 directLookup.activateFull(minKey, maxKey, rows.takeFullReferences());
                 releaseHashTable();
                 releaseRowArrays();
@@ -5560,13 +5565,13 @@ public class HashJoinOperator
          */
         private void compactCompletedDirectRangeBuild()
         {
-            if (hasDuplicates() || size < policy.compactCompletedDirectRangeMinSize()) {
+            if (hasDuplicates() || buildCardinality.distinctKeyCount() < policy.compactCompletedDirectRangeMinSize()) {
                 return;
             }
             long range = maxKey - minKey + 1;
             if (range <= 0 ||
                     range > policy.maxArrayRange() ||
-                    range > (long) policy.directRangeMaxCardinalityRatio() * size) {
+                    range > (long) policy.directRangeMaxCardinalityRatio() * buildCardinality.distinctKeyCount()) {
                 return;
             }
 
@@ -5576,20 +5581,20 @@ public class HashJoinOperator
             // synthetic positions; no query, table, column, or logical-type identity participates in admission.
             if (policy.denseUnusedBuildMembership() &&
                     buildRowReferencesUnused &&
-                    size >= policy.denseUnusedBuildMembershipMinKeys() &&
-                    range == size) {
+                    buildCardinality.distinctKeyCount() >= policy.denseUnusedBuildMembershipMinKeys() &&
+                    range == buildCardinality.distinctKeyCount()) {
                 directLookup.activateArithmetic(minKey, maxKey);
                 denseSequence.activateReferences(0, 0, 0);
                 releaseDirectBuildArrays();
                 releaseHashTable();
                 releaseRowArrays();
                 if (policy.debugJoinIndex()) {
-                    System.err.printf("[dense-unused-build-membership] keys=%d min=%d max=%d%n", size, minKey, maxKey);
+                    System.err.printf("[dense-unused-build-membership] keys=%d min=%d max=%d%n", buildCardinality.distinctKeyCount(), minKey, maxKey);
                 }
                 return;
             }
 
-            boolean sequentialReferences = range == size && denseSequence.referenceCandidate();
+            boolean sequentialReferences = range == buildCardinality.distinctKeyCount() && denseSequence.referenceCandidate();
             long firstReference = NO_MATCH_ROW_REFERENCE;
             int firstBatchIndex = 0;
             int firstPosition = 0;
@@ -5666,7 +5671,7 @@ public class HashJoinOperator
 
         private void buildSparseRangeMembership()
         {
-            sparseMembership.build(hashTable, minKey, maxKey, size);
+            sparseMembership.build(hashTable, minKey, maxKey, buildCardinality.distinctKeyCount());
         }
 
         @Override
