@@ -86,6 +86,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.ParquetFilteredPa
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetProgressiveFilterCompactionPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanDiagnostics;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
@@ -218,7 +219,8 @@ public class TestParquetOperator
                                 GENERIC_FILTERED_PAYLOAD,
                                 GENERIC_FILTER_WINDOW,
                                 GENERIC_FILTER_EVALUATION,
-                                ParquetScanDiagnostics.disabled()),
+                                ParquetScanDiagnostics.disabled(),
+                                ParquetScanBatchPolicy.defaults()),
                         allocator,
                         List.of(file),
                         List.of("x"))) {

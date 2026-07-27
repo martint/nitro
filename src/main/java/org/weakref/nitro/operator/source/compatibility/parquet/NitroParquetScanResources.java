@@ -40,6 +40,7 @@ public final class NitroParquetScanResources
     private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
     private final ParquetScanDiagnostics diagnostics;
+    private final ParquetScanBatchPolicy batchPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
@@ -50,7 +51,8 @@ public final class NitroParquetScanResources
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
             ParquetFilterWindowPolicy filterWindowPolicy,
             ParquetFilterEvaluationPolicy filterEvaluationPolicy,
-            ParquetScanDiagnostics diagnostics)
+            ParquetScanDiagnostics diagnostics,
+            ParquetScanBatchPolicy batchPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
@@ -62,6 +64,7 @@ public final class NitroParquetScanResources
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
+        this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -77,7 +80,8 @@ public final class NitroParquetScanResources
                 ParquetFilteredPayloadPolicy.fromSystemProperties(),
                 ParquetFilterWindowPolicy.fromSystemProperties(),
                 ParquetFilterEvaluationPolicy.fromSystemProperties(),
-                ParquetScanDiagnostics.fromSystemProperties());
+                ParquetScanDiagnostics.fromSystemProperties(),
+                ParquetScanBatchPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -138,5 +142,10 @@ public final class NitroParquetScanResources
     ParquetScanDiagnostics diagnostics()
     {
         return diagnostics;
+    }
+
+    ParquetScanBatchPolicy batchPolicy()
+    {
+        return batchPolicy;
     }
 }

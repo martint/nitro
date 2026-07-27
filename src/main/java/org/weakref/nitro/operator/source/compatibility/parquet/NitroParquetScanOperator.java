@@ -56,9 +56,6 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetScanOperator
         implements Operator
 {
-    // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
-    // vector alloc/release) is amortized over the same number of batches in an apples-to-apples comparison.
-    private static final int MAX_BATCH_ROWS = Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000);
     // A wide, all-numeric scan with no downstream constraint is usually feeding a cardinality-preserving operator.
     // In that shape, removing the page-sized materialization buffer can increase TLB pressure in the consumer even
     // though it saves allocation in the decoder. Wait for runtime evidence that a downstream operator is narrowing
@@ -114,6 +111,7 @@ public final class NitroParquetScanOperator
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final ParquetScanDiagnostics diagnostics;
+    private final ParquetScanBatchPolicy batchPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -150,7 +148,7 @@ public final class NitroParquetScanOperator
 
     // The dynamic-filter path decodes a large window (page-spanning, decoupled from the output batch) so a
     // clustered lead filter lets the skip path drop whole non-surviving pages even when a page is larger than an
-    // output batch. The window's surviving rows are buffered densely and then sliced into MAX_BATCH_ROWS output
+    // output batch. The window's surviving rows are buffered densely and then sliced into configured output
     // batches. The window must comfortably exceed a Parquet page (~100K+ rows) for page-skip to be effective.
     // Keep the window large enough to span Parquet pages for page-skip, but not so large that every dynamic-filter
     // scan walks multi-megabyte scratch arrays. 512K keeps q20's page-skip behavior while improving q45 locality.
@@ -241,7 +239,8 @@ public final class NitroParquetScanOperator
                 resources.filteredPayloadPolicy(),
                 resources.filterWindowPolicy(),
                 resources.filterEvaluationPolicy(),
-                resources.diagnostics());
+                resources.diagnostics(),
+                resources.batchPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -259,7 +258,8 @@ public final class NitroParquetScanOperator
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
             ParquetFilterWindowPolicy filterWindowPolicy,
             ParquetFilterEvaluationPolicy filterEvaluationPolicy,
-            ParquetScanDiagnostics diagnostics)
+            ParquetScanDiagnostics diagnostics,
+            ParquetScanBatchPolicy batchPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -284,6 +284,7 @@ public final class NitroParquetScanOperator
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
         this.dictionaryFilterPolicy = requireNonNull(readerPolicy, "readerPolicy is null").dictionaryFilter();
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
+        this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -431,7 +432,7 @@ public final class NitroParquetScanOperator
         if (filtersActive()) {
             return emitSlice();
         }
-        int count = toIntExact(Math.min(MAX_BATCH_ROWS, totalRows - nextRow));
+        int count = toIntExact(Math.min(batchPolicy.maxRows(), totalRows - nextRow));
         nextRow += count;
         return lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count);
     }
@@ -1237,7 +1238,7 @@ public final class NitroParquetScanOperator
         deferredFilteredPayload = deferredPolicy.enabled() &&
                 !dfPayloadBulk &&
                 survivorCount > 0 &&
-                survivorCount <= MAX_BATCH_ROWS &&
+                survivorCount <= batchPolicy.maxRows() &&
                 payloadColumnCount() >= deferredPolicy.minColumns();
         deferredWindowRows = count;
         deferredWindowSurvivors = survivors;
@@ -1455,12 +1456,12 @@ public final class NitroParquetScanOperator
         return count;
     }
 
-    /** Hand out the next {@code MAX_BATCH_ROWS} surviving rows of the current window as an all-rows output batch. */
+    /** Hand out the next configured maximum of surviving rows as an all-rows output batch. */
     private Batch emitSlice()
     {
         int columnCount = readers.length;
         int start = windowSurvivorCursor;
-        int sliceCount = Math.min(MAX_BATCH_ROWS, windowSurvivorCount - start);
+        int sliceCount = Math.min(batchPolicy.maxRows(), windowSurvivorCount - start);
         windowSurvivorCursor += sliceCount;
 
         Output[] outputs = new Output[columnCount];
@@ -1480,11 +1481,11 @@ public final class NitroParquetScanOperator
             // and only that range is exposed (the batch mask below is sliceCount positions); consumers honor the mask,
             // never the backing length.
             BooleanVector nullVector = nullable[c]
-                    ? allocator.allocate(allocationContext, BooleanVector.class, MAX_BATCH_ROWS, BooleanVector::new)
+                    ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
                     : null;
             Vector valueVector;
             if (readers[c].kind() == ColumnReader.Kind.INT) {
-                I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, MAX_BATCH_ROWS, I32Vector::new);
+                I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, batchPolicy.maxRows(), I32Vector::new);
                 System.arraycopy(windowInt[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
             }
@@ -1492,7 +1493,7 @@ public final class NitroParquetScanOperator
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
             }
             else {
-                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, MAX_BATCH_ROWS, I64Vector::new);
+                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, batchPolicy.maxRows(), I64Vector::new);
                 System.arraycopy(windowLong[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
             }
@@ -1643,13 +1644,13 @@ public final class NitroParquetScanOperator
         ColumnReader reader = readers[column];
         boolean isNullable = nullable[column];
         BooleanVector nullVector = isNullable
-                ? allocator.allocate(allocationContext, BooleanVector.class, MAX_BATCH_ROWS, BooleanVector::new)
+                ? allocator.allocate(allocationContext, BooleanVector.class, batchPolicy.maxRows(), BooleanVector::new)
                 : null;
         boolean[] nulls = nullVector == null ? null : nullVector.values();
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(decodeCount, false);
             reader.readSelectedInts(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchInt, isNullable ? lazyScratchNull : null);
-            I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, MAX_BATCH_ROWS, I32Vector::new);
+            I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, batchPolicy.maxRows(), I32Vector::new);
             for (int index = 0; index < decodeCount; index++) {
                 int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
                 vector.values()[outputPosition] = lazyScratchInt[index];
@@ -1663,7 +1664,7 @@ public final class NitroParquetScanOperator
             ensureLazyScratch(decodeCount, true);
             reader.readSelectedLongs(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchLong, isNullable ? lazyScratchNull : null);
             if (reader.isDouble()) {
-                org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, MAX_BATCH_ROWS, org.weakref.nitro.data.F64Vector::new);
+                org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, batchPolicy.maxRows(), org.weakref.nitro.data.F64Vector::new);
                 for (int index = 0; index < decodeCount; index++) {
                     int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
                     vector.values()[outputPosition] = Double.longBitsToDouble(lazyScratchLong[index]);
@@ -1674,7 +1675,7 @@ public final class NitroParquetScanOperator
                 currentValues[column] = vector;
             }
             else {
-                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, MAX_BATCH_ROWS, I64Vector::new);
+                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, batchPolicy.maxRows(), I64Vector::new);
                 for (int index = 0; index < decodeCount; index++) {
                     int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
                     vector.values()[outputPosition] = lazyScratchLong[index];
