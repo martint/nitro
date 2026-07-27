@@ -129,6 +129,8 @@ class TestOperatorResources
                 Operator topNSource = new ConstantTableOperator(allocator, 1, List.of());
                 Operator nestedLoopOuter = new ConstantTableOperator(allocator, 0, List.of());
                 Operator nestedLoopInner = new ConstantTableOperator(allocator, 0, List.of());
+                Operator fullJoinOuter = new ConstantTableOperator(allocator, 1, List.of());
+                Operator fullJoinInner = new ConstantTableOperator(allocator, 1, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
                 Operator filter = new FilterOperator(
                         filterSource,
@@ -182,7 +184,14 @@ class TestOperatorResources
                         operatorResources,
                         allocator,
                         nestedLoopOuter,
-                        nestedLoopInner)) {
+                        nestedLoopInner);
+                Operator fullJoin = new FullJoinOperator(
+                        allocator,
+                        fullJoinOuter,
+                        new int[] {0},
+                        fullJoinInner,
+                        new int[] {0},
+                        operatorResources)) {
             assertThat(group.outputCount()).isEqualTo(1);
             assertThat(filter.outputCount()).isZero();
             assertThat(aggregation.outputCount()).isZero();
@@ -195,6 +204,7 @@ class TestOperatorResources
             assertThat(sort.outputCount()).isEqualTo(1);
             assertThat(topN.outputCount()).isEqualTo(1);
             assertThat(nestedLoopJoin.outputCount()).isZero();
+            assertThat(fullJoin.outputCount()).isEqualTo(2);
             assertThat(operatorResources.semiJoinPolicy()).isEqualTo(SemiJoinOperatorPolicy.defaults());
 
             Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");

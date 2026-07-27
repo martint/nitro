@@ -1603,7 +1603,10 @@ public class TestOperators
                         TestOperators.class,
                         "absoluteIdentical",
                         MethodType.methodType(boolean.class, long.class, long.class))),
-                Optional.empty(),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "absoluteHash",
+                        MethodType.methodType(long.class, long.class))),
                 Optional.of(lookup.findStatic(
                         TestOperators.class,
                         "compareAbsolute",
@@ -1707,6 +1710,56 @@ public class TestOperators
                             row(-2L, 0L),
                             row(2L, 0L)));
         }
+
+        Operator hashOuter = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, 2})},
+                        Mask.all(2)));
+        Operator hashInner = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {-1, -2})},
+                        Mask.all(2)));
+        try (Operator join = new FullJoinOperator(
+                allocator,
+                hashOuter,
+                new int[] {0},
+                hashInner,
+                new int[] {0},
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            row(1L, -1L),
+                            row(2L, -2L)));
+        }
+
+        Operator sortedOuter = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, 2})},
+                        Mask.all(2)));
+        Operator sortedInner = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {-1, -2})},
+                        Mask.all(2)));
+        try (Operator join = FullJoinOperator.sorted(
+                allocator,
+                sortedOuter,
+                new int[] {0},
+                sortedInner,
+                new int[] {0},
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            row(1L, -1L),
+                            row(2L, -2L)));
+        }
     }
 
     private static long readI64(Vector vector, int position)
@@ -1722,6 +1775,11 @@ public class TestOperators
     private static boolean absoluteIdentical(long left, long right)
     {
         return Math.abs(left) == Math.abs(right);
+    }
+
+    private static long absoluteHash(long value)
+    {
+        return Long.hashCode(Math.abs(value));
     }
 
     @Test

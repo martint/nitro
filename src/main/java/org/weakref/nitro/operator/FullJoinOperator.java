@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -33,6 +34,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -53,6 +55,9 @@ public final class FullJoinOperator
     private final boolean sortedInputs;
     private final FullJoinOperatorPolicy policy;
     private final Schema outputSchema;
+    private final TypeBinding[] keyTypes;
+    private final StructuralComparisonKernel[] comparisonKernels;
+    private final StructuralKeyKernel[] keyKernels;
 
     private Streams[] materialized;
     private Mask outputMask;
@@ -67,7 +72,34 @@ public final class FullJoinOperator
             int[] innerJoinColumns,
             FullJoinOperatorPolicy policy)
     {
-        this(allocator, outer, outerJoinColumns, inner, innerJoinColumns, false, policy);
+        this(
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                false,
+                policy,
+                new StructuralTypeKernelFactory());
+    }
+
+    public FullJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                false,
+                requireNonNull(resources, "resources is null").fullJoinPolicy(),
+                resources.codeGeneration().structuralTypes());
     }
 
     /**
@@ -83,7 +115,34 @@ public final class FullJoinOperator
             int[] innerJoinColumns,
             FullJoinOperatorPolicy policy)
     {
-        return new FullJoinOperator(allocator, outer, outerJoinColumns, inner, innerJoinColumns, true, policy);
+        return new FullJoinOperator(
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                true,
+                policy,
+                new StructuralTypeKernelFactory());
+    }
+
+    public static FullJoinOperator sorted(
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            OperatorResources resources)
+    {
+        return new FullJoinOperator(
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                true,
+                requireNonNull(resources, "resources is null").fullJoinPolicy(),
+                resources.codeGeneration().structuralTypes());
     }
 
     private FullJoinOperator(
@@ -93,7 +152,8 @@ public final class FullJoinOperator
             Operator inner,
             int[] innerJoinColumns,
             boolean sortedInputs,
-            FullJoinOperatorPolicy policy)
+            FullJoinOperatorPolicy policy,
+            StructuralTypeKernelFactory structuralTypes)
     {
         if (outerJoinColumns.length == 0) {
             throw new IllegalArgumentException("FullJoinOperator requires at least one join key");
@@ -110,6 +170,52 @@ public final class FullJoinOperator
         this.sortedInputs = sortedInputs;
         this.policy = requireNonNull(policy, "policy is null");
         this.outputSchema = outputSchema(outer.outputSchema(), inner.outputSchema());
+        this.keyTypes = joinKeyTypes(
+                outer.outputSchema(), this.outerJoinColumns, inner.outputSchema(), this.innerJoinColumns);
+        this.comparisonKernels = new StructuralComparisonKernel[keyTypes.length];
+        this.keyKernels = new StructuralKeyKernel[keyTypes.length];
+        for (int keyIndex = 0; keyIndex < keyTypes.length; keyIndex++) {
+            if (sortedInputs) {
+                comparisonKernels[keyIndex] = structuralTypes.comparison(keyTypes[keyIndex]);
+            }
+            else {
+                keyKernels[keyIndex] = structuralTypes.key(keyTypes[keyIndex]);
+            }
+        }
+    }
+
+    private static TypeBinding[] joinKeyTypes(
+            Schema outerSchema,
+            int[] outerJoinColumns,
+            Schema innerSchema,
+            int[] innerJoinColumns)
+    {
+        TypeBinding[] types = new TypeBinding[outerJoinColumns.length];
+        for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
+            int index = keyIndex;
+            Optional<TypeBinding> outerType = typeAt(outerSchema, outerJoinColumns[keyIndex]);
+            Optional<TypeBinding> innerType = typeAt(innerSchema, innerJoinColumns[keyIndex]);
+            if (outerType.filter(TypeBinding::isSpecified).isPresent() &&
+                    innerType.filter(TypeBinding::isSpecified).isPresent() &&
+                    !outerType.orElseThrow().identity().equals(innerType.orElseThrow().identity())) {
+                throw new IllegalArgumentException("Full-join key types do not match at index " + keyIndex);
+            }
+            types[keyIndex] = innerType.filter(TypeBinding::isSpecified)
+                    .or(() -> outerType.filter(TypeBinding::isSpecified))
+                    .or(() -> innerType)
+                    .or(() -> outerType)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Full-join key column is out of bounds at index " + index));
+        }
+        return types;
+    }
+
+    private static Optional<TypeBinding> typeAt(Schema schema, int column)
+    {
+        if (column < 0 || column >= schema.size()) {
+            return Optional.empty();
+        }
+        return Optional.of(schema.field(column).type());
     }
 
     @Override
@@ -197,13 +303,15 @@ public final class FullJoinOperator
 
         MaterializedInput outerInput = materialize(outer);
         MaterializedInput innerInput = materialize(inner);
+        validateKeyVectors(outerInput.pages(), outerJoinColumns, "outer");
+        validateKeyVectors(innerInput.pages(), innerJoinColumns, "inner");
 
         if (sortedInputs) {
             loadSorted(outerInput, innerInput);
             return;
         }
 
-        Map<OperatorKeySemantics.Key, IntArrayList> innerMatches = new HashMap<>();
+        Map<StructuralRowKey, IntArrayList> innerMatches = new HashMap<>();
         int innerRowCount = countRows(innerInput.pages());
         long[] innerRowReferences = arrayPool.borrowLongs(innerRowCount);
         boolean[] matchedInnerRows = arrayPool.borrowBooleans(innerRowCount);
@@ -214,11 +322,12 @@ public final class FullJoinOperator
             try (JoinedRows joinedRows = new JoinedRows(arrayPool)) {
                 for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
                     TableOperator.Page page = outerInput.pages().get(outerPageIndex);
-                    OperatorKeySemantics.Key[] reusableKeys = new OperatorKeySemantics.Key[outerJoinColumns.length];
-                    OperatorKeySemantics.CompositeProbeKey reusableCompositeKey = OperatorKeySemantics.reusableCompositeProbeKey(outerJoinColumns.length);
+                    StructuralRowKey reusableKey = new StructuralRowKey(
+                            outerJoinColumns, keyKernels, page.columns(), 0);
                     for (int position = 0; position < page.rows(); position++) {
                         long outerRowReference = packRowReference(outerPageIndex, position);
-                        OperatorKeySemantics.Key key = probeKey(page.columns(), outerJoinColumns, position, reusableKeys, reusableCompositeKey);
+                        StructuralRowKey key = probeKey(
+                                page.columns(), outerJoinColumns, position, reusableKey);
                         if (key == null) {
                             joinedRows.add(outerRowReference, NO_MATCH);
                             continue;
@@ -327,7 +436,7 @@ public final class FullJoinOperator
         }
     }
 
-    private static int equalRunEnd(List<TableOperator.Page> pages, long[] references, int start, int[] joinColumns)
+    private int equalRunEnd(List<TableOperator.Page> pages, long[] references, int start, int[] joinColumns)
     {
         int end = start + 1;
         while (end < references.length && equalKeys(pages, references[start], joinColumns, pages, references[end], joinColumns)) {
@@ -336,7 +445,7 @@ public final class FullJoinOperator
         return end;
     }
 
-    private static int compareKeys(List<TableOperator.Page> leftPages, long leftReference, int[] leftColumns, List<TableOperator.Page> rightPages, long rightReference, int[] rightColumns)
+    private int compareKeys(List<TableOperator.Page> leftPages, long leftReference, int[] leftColumns, List<TableOperator.Page> rightPages, long rightReference, int[] rightColumns)
     {
         Streams[] left = columns(leftPages, leftReference);
         Streams[] right = columns(rightPages, rightReference);
@@ -345,7 +454,7 @@ public final class FullJoinOperator
         for (int keyIndex = 0; keyIndex < leftColumns.length; keyIndex++) {
             Streams leftKey = left[leftColumns[keyIndex]];
             Streams rightKey = right[rightColumns[keyIndex]];
-            int comparison = OperatorOrderingSemantics.compare(
+            int comparison = comparisonKernels[keyIndex].compare(
                     leftKey.values(), leftKey.getOrNull(Stream.NULLS), leftPosition,
                     rightKey.values(), rightKey.getOrNull(Stream.NULLS), rightPosition);
             if (comparison != 0) {
@@ -355,7 +464,7 @@ public final class FullJoinOperator
         return 0;
     }
 
-    private static boolean equalKeys(List<TableOperator.Page> leftPages, long leftReference, int[] leftColumns, List<TableOperator.Page> rightPages, long rightReference, int[] rightColumns)
+    private boolean equalKeys(List<TableOperator.Page> leftPages, long leftReference, int[] leftColumns, List<TableOperator.Page> rightPages, long rightReference, int[] rightColumns)
     {
         Streams[] left = columns(leftPages, leftReference);
         Streams[] right = columns(rightPages, rightReference);
@@ -364,7 +473,7 @@ public final class FullJoinOperator
         for (int keyIndex = 0; keyIndex < leftColumns.length; keyIndex++) {
             Streams leftKey = left[leftColumns[keyIndex]];
             Streams rightKey = right[rightColumns[keyIndex]];
-            if (!OperatorEqualitySemantics.equal(
+            if (!comparisonKernels[keyIndex].identical(
                     leftKey.values(), leftKey.getOrNull(Stream.NULLS), leftPosition,
                     rightKey.values(), rightKey.getOrNull(Stream.NULLS), rightPosition)) {
                 return false;
@@ -390,18 +499,34 @@ public final class FullJoinOperator
         return pages.get(unpackPageIndex(reference)).columns();
     }
 
-    private void indexInnerRows(List<TableOperator.Page> pages, Map<OperatorKeySemantics.Key, IntArrayList> innerMatches, long[] innerRowReferences)
+    private void validateKeyVectors(List<TableOperator.Page> pages, int[] joinColumns, String side)
+    {
+        for (TableOperator.Page page : pages) {
+            for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
+                TypeBinding type = keyTypes[keyIndex];
+                Vector values = page.columns()[joinColumns[keyIndex]].values();
+                if (type.isSpecified() && !type.supportsVector(values)) {
+                    throw new IllegalArgumentException(
+                            "Full-join " + side + " key vector at index " + keyIndex +
+                                    " is incompatible with plan-time type " + type.identity());
+                }
+            }
+        }
+    }
+
+    private void indexInnerRows(
+            List<TableOperator.Page> pages,
+            Map<StructuralRowKey, IntArrayList> innerMatches,
+            long[] innerRowReferences)
     {
         int innerOrdinal = 0;
         for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
             TableOperator.Page page = pages.get(pageIndex);
-            OperatorKeySemantics.Key[] reusableKeys = new OperatorKeySemantics.Key[innerJoinColumns.length];
-            OperatorKeySemantics.CompositeProbeKey reusableCompositeKey = OperatorKeySemantics.reusableCompositeProbeKey(innerJoinColumns.length);
             for (int position = 0; position < page.rows(); position++) {
                 innerRowReferences[innerOrdinal] = packRowReference(pageIndex, position);
-                OperatorKeySemantics.Key key = probeKey(page.columns(), innerJoinColumns, position, reusableKeys, reusableCompositeKey);
+                StructuralRowKey key = probeKey(page.columns(), innerJoinColumns, position, null);
                 if (key != null) {
-                    innerMatches.computeIfAbsent(OperatorKeySemantics.ownedKey(key), ignored -> new IntArrayList())
+                    innerMatches.computeIfAbsent(key, ignored -> new IntArrayList())
                             .add(innerOrdinal);
                 }
                 innerOrdinal++;
@@ -409,18 +534,23 @@ public final class FullJoinOperator
         }
     }
 
-    private OperatorKeySemantics.Key probeKey(Streams[] columns, int[] joinColumns, int position, OperatorKeySemantics.Key[] reusableKeys, OperatorKeySemantics.CompositeProbeKey reusableCompositeKey)
+    private StructuralRowKey probeKey(
+            Streams[] columns,
+            int[] joinColumns,
+            int position,
+            StructuralRowKey reusable)
     {
         for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
             Streams column = columns[joinColumns[keyIndex]];
-            Vector values = column.values();
-            reusableKeys[keyIndex] = reusableKeys[keyIndex] == null ? OperatorKeySemantics.reusableProbeKey(values) : reusableKeys[keyIndex];
-            reusableKeys[keyIndex] = OperatorKeySemantics.probeKey(values, column.getOrNull(Stream.NULLS), position, reusableKeys[keyIndex]);
-            if (reusableKeys[keyIndex] == null) {
+            if (OperatorVectorSupport.isNull(column.getOrNull(Stream.NULLS), position)) {
                 return null;
             }
         }
-        return OperatorKeySemantics.probeCompositeKey(reusableKeys, reusableCompositeKey);
+        if (reusable == null) {
+            return new StructuralRowKey(joinColumns, keyKernels, columns, position);
+        }
+        reusable.set(columns, position);
+        return reusable;
     }
 
     private Streams materializeOutputColumn(Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
@@ -558,6 +688,68 @@ public final class FullJoinOperator
     private static int unpackPosition(long rowReference)
     {
         return (int) rowReference;
+    }
+
+    private static final class StructuralRowKey
+    {
+        private final int[] joinColumns;
+        private final StructuralKeyKernel[] kernels;
+        private Streams[] columns;
+        private int position;
+        private int hash;
+
+        private StructuralRowKey(
+                int[] joinColumns,
+                StructuralKeyKernel[] kernels,
+                Streams[] columns,
+                int position)
+        {
+            this.joinColumns = joinColumns;
+            this.kernels = kernels;
+            set(columns, position);
+        }
+
+        private void set(Streams[] columns, int position)
+        {
+            this.columns = columns;
+            this.position = position;
+            int result = 1;
+            for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
+                Streams key = columns[joinColumns[keyIndex]];
+                result = 31 * result + Long.hashCode(
+                        kernels[keyIndex].hash(key.values(), key.getOrNull(Stream.NULLS), position));
+            }
+            hash = result;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof StructuralRowKey other) ||
+                    kernels != other.kernels ||
+                    joinColumns.length != other.joinColumns.length) {
+                return false;
+            }
+            for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
+                Streams left = columns[joinColumns[keyIndex]];
+                Streams right = other.columns[other.joinColumns[keyIndex]];
+                if (!kernels[keyIndex].identical(
+                        left.values(), left.getOrNull(Stream.NULLS), position,
+                        right.values(), right.getOrNull(Stream.NULLS), other.position)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return hash;
+        }
     }
 
     private record MaterializedInput(Streams[] schema, List<TableOperator.Page> pages) {}

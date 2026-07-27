@@ -42,6 +42,14 @@ final class OperatorKeySemantics
         return requireHandler(values).probeKey(values, position, reusable);
     }
 
+    public static long hash(Vector values, Vector nulls, int position)
+    {
+        if (OperatorVectorSupport.isNull(nulls, position)) {
+            return 0;
+        }
+        return requireHandler(values).hashInput(values, position);
+    }
+
     public static CompositeProbeKey reusableCompositeProbeKey(int keyCount)
     {
         return new CompositeProbeKey(new Key[keyCount], false);

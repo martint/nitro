@@ -24,7 +24,8 @@ import static java.util.Objects.requireNonNull;
 /// without teaching an operator which Java carrier or logical type they implement.
 ///
 /// [#valueRead()] has signature `(Vector, int) -> carrier`, [#identical()] has signature
-/// `(carrier, carrier) -> boolean`, and [#comparison()] has signature `(carrier, carrier) -> int`.
+/// `(carrier, carrier) -> boolean`, [#hash()] has signature `(carrier) -> long`, and
+/// [#comparison()] has signature `(carrier, carrier) -> int`.
 /// The provider-owned reader is responsible for every vector representation advertised by its
 /// [TypeBinding].
 public record TypeOperators(
