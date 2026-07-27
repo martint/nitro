@@ -81,8 +81,8 @@ public final class ParquetScanOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("ParquetScanOperator", ParquetScanOperator.class);
-    private static final int MAX_BATCH_ROWS = 512;
 
+    private final ParquetScanBatchPolicy batchPolicy;
     private final Allocator allocator;
     private final Schema outputSchema;
     private final ParquetFileReader reader;
@@ -98,8 +98,13 @@ public final class ParquetScanOperator
     private PageReadStore nextRowGroup;
     private RowGroupBatchState currentBatchState;
 
-    public ParquetScanOperator(Allocator allocator, java.nio.file.Path file, List<String> columns)
+    public ParquetScanOperator(
+            ParquetScanBatchPolicy batchPolicy,
+            Allocator allocator,
+            java.nio.file.Path file,
+            List<String> columns)
     {
+        this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(file, "file is null");
         requireNonNull(columns, "columns is null");
@@ -151,7 +156,7 @@ public final class ParquetScanOperator
         advanceRowGroupIfNecessary();
         int rowGroupRowCount = toIntExact(currentRowGroup.getRowCount());
         int batchStart = currentRowGroupPosition;
-        int batchRowCount = Math.min(MAX_BATCH_ROWS, rowGroupRowCount - batchStart);
+        int batchRowCount = Math.min(batchPolicy.maxRows(), rowGroupRowCount - batchStart);
         currentRowGroupPosition += batchRowCount;
 
         RowGroupBatchState batchState = new RowGroupBatchState(
@@ -1383,7 +1388,11 @@ public final class ParquetScanOperator
 
     private static void skipColumnEntries(ColumnReader columnReader, int count)
     {
+        int maxDefinitionLevel = columnReader.getDescriptor().getMaxDefinitionLevel();
         for (int skipped = 0; skipped < count; skipped++) {
+            if (columnReader.getCurrentDefinitionLevel() == maxDefinitionLevel) {
+                columnReader.skip();
+            }
             columnReader.consume();
         }
     }

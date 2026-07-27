@@ -125,6 +125,7 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 public class TestParquetOperator
 {
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
+    private static final ParquetScanBatchPolicy LEGACY_PARQUET_SCAN_BATCH_POLICY = new ParquetScanBatchPolicy(512);
     private static final ParquetPageNavigationPolicy GENERIC_PAGE_NAVIGATION =
             new ParquetPageNavigationPolicy(false, 0, 101, Integer.MAX_VALUE, false, 0, Integer.MAX_VALUE, false);
     private static final ParquetMaterializationPolicy GENERIC_MATERIALIZATION =
@@ -244,7 +245,7 @@ public class TestParquetOperator
         try (Allocator allocator = new Allocator(EngineResources.createDefault());
                 Operator hardwood = new HardwoodParquetScanOperator(HardwoodParquetScanPolicy.defaults(), allocator, file, columns);
                 Operator nitro = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, List.of(file), columns);
-                Operator parquet = new ParquetScanOperator(allocator, file, columns);
+                Operator parquet = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, columns);
                 Operator skip = new SkipDecodeScanOperator(SkipDecodeScanPolicy.defaults(), allocator, List.of(file), columns);
                 Operator trino = new TrinoParquetScanOperator(TrinoParquetScanPolicy.defaults(), allocator, file, columns)) {
             for (Operator scan : List.of(hardwood, nitro, parquet, skip, trino)) {
@@ -463,12 +464,39 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
                             Row.row(12L, 0L, null),
                             Row.row(13L, 1L, 103L)));
+        }
+    }
+
+    @Test
+    void testParquetScanUsesSuppliedBatchPolicy()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("configured-batches.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, false, null),
+                new ParquetRow(13, true, 103L)));
+
+        try (ParquetScanOperator operator = new ParquetScanOperator(
+                new ParquetScanBatchPolicy(2),
+                new Allocator(EngineResources.createDefault()),
+                file,
+                List.of("x"))) {
+            Batch first = operator.next();
+            assertThat(first.borrowMask()).hasSize(2);
+            assertThat(((I64Vector) first.output(0).borrow(Stream.VALUES)).values())
+                    .startsWith(11, 12);
+
+            Batch second = operator.next();
+            assertThat(second.borrowMask()).hasSize(1);
+            assertThat(((I64Vector) second.output(0).borrow(Stream.VALUES)).values()[0])
+                    .isEqualTo(13);
+            assertThat(operator.hasNext()).isFalse();
         }
     }
 
@@ -553,7 +581,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "x");
 
-        try (ParquetScanOperator scan = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
+        try (ParquetScanOperator scan = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             Batch batch = scan.next();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
         }
@@ -577,7 +605,7 @@ public class TestParquetOperator
                 projectionPlan,
                 primitiveRegistry,
                 new FilterOperator(
-                        new ParquetScanOperator(allocator, file, List.of("x", "flag", "maybe")),
+                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("x", "flag", "maybe")),
                         new EvaluationPlan(List.of(), List.of()),
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
@@ -843,7 +871,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, 102L),
                 new ParquetRow(13, true, 103L)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             Batch batch = operator.next();
             Mask constrainedMask = Mask.sparse(new int[] {2}, 3);
 
@@ -1189,7 +1217,7 @@ public class TestParquetOperator
                 new BinaryParquetRow("bob", null),
                 new BinaryParquetRow("charlie", bytes(4, 5))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector payloads = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
@@ -1219,7 +1247,7 @@ public class TestParquetOperator
                 new ArrayParquetRow(List.of(30L)),
                 new ArrayParquetRow(List.of(40L, 50L, 60L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             I64Vector elements = (I64Vector) arrays.elementValues();
@@ -1242,7 +1270,7 @@ public class TestParquetOperator
                 new ArrayParquetRow(List.of(30L)),
                 new ArrayParquetRow(List.of(40L, 50L, 60L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {3}, 4));
 
@@ -1269,7 +1297,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "name");
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
             DictionaryVector names = (DictionaryVector) batch.output(0).borrow(Stream.VALUES);
@@ -1302,7 +1330,7 @@ public class TestParquetOperator
                         new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(allocator, file, List.of("name")),
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("name")),
                 plan,
                 primitiveRegistry,
                 new ReferenceMask(new Reference(contains, Stream.VALUES)),
@@ -1324,7 +1352,7 @@ public class TestParquetOperator
                 new Utf8PairRow("beta", null),
                 new Utf8PairRow("gamma", "delta")));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
             Batch batch = operator.next();
             BinaryVector left = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector right = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
@@ -1361,7 +1389,7 @@ public class TestParquetOperator
                 new Utf8PairRow("élan", "élan"),
                 new Utf8PairRow("élan", "été")));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name"))) {
             Batch batch = operator.next();
             var leftValues = batch.output(0).borrow(Stream.VALUES);
             var rightValues = batch.output(1).borrow(Stream.VALUES);
@@ -1521,7 +1549,7 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(allocator, file, List.of("left_name", "right_name")),
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("left_name", "right_name")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
@@ -1562,7 +1590,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1602,7 +1630,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("left_name", "right_name")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1652,7 +1680,7 @@ public class TestParquetOperator
                                         new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))))))
+                                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("name")))))))
                 .matchesExactly(List.of(
                         Row.row(expectedUtf8Hash("alpha"), 2L),
                         Row.row(expectedUtf8Hash("beta"), 2L),
@@ -1673,7 +1701,7 @@ public class TestParquetOperator
         try (GroupOperator operator = new GroupOperator(
                 new Allocator(EngineResources.createDefault()),
                 0,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
             Batch batch = operator.next();
             I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             org.weakref.nitro.data.Vector names = batch.output(1).borrow(Stream.VALUES);
@@ -1700,7 +1728,7 @@ public class TestParquetOperator
         try (GroupOperator operator = new GroupOperator(
                 new Allocator(EngineResources.createDefault()),
                 0,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("name")))) {
             Batch batch = operator.next();
             I64Vector groups = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BinaryVector names = binaryValues(batch.output(1).borrow(Stream.VALUES));
@@ -1735,7 +1763,7 @@ public class TestParquetOperator
                         new Allocator(EngineResources.createDefault()),
                         projectionPlan,
                         primitiveRegistry,
-                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))
+                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))))
                 .matchesExactly(List.of(
                         Row.row(2L),
                         Row.row(0L),
@@ -1779,7 +1807,7 @@ public class TestParquetOperator
                                         new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
+                                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(1L, 2L),
                         Row.row(0L, 2L),
@@ -1796,7 +1824,7 @@ public class TestParquetOperator
                 new NullableArrayParquetRow(Arrays.asList((Long) null)),
                 new NullableArrayParquetRow(List.of(30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             I64Vector elements = (I64Vector) arrays.elementValues();
@@ -1840,7 +1868,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "index")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items", "index")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1878,7 +1906,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -1912,7 +1940,7 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(allocator, file, List.of("items", "needle")),
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
@@ -1936,7 +1964,7 @@ public class TestParquetOperator
                 new StructParquetRow(12, null, false),
                 new StructParquetRow(13, "carol", null)));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
 
@@ -1969,7 +1997,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(null),
                 new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             StructVector struct = (StructVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector structNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
@@ -1996,7 +2024,7 @@ public class TestParquetOperator
                 new OptionalStructParquetRow(null),
                 new OptionalStructParquetRow(new StructParquetRow(22, null, false))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("person"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {2}, 3));
 
@@ -2027,7 +2055,7 @@ public class TestParquetOperator
                 new MapParquetRow(Map.of()),
                 new MapParquetRow(orderedMap("gamma", 30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             MapVector maps = (MapVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector mapNulls = (BooleanVector) batch.output(0).borrow(Stream.NULLS);
@@ -2061,7 +2089,7 @@ public class TestParquetOperator
                 new MapParquetRow(Map.of()),
                 new MapParquetRow(orderedMap("gamma", 30L))));
 
-        try (ParquetScanOperator operator = new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
+        try (ParquetScanOperator operator = new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items"))) {
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {3}, 4));
 
@@ -2105,7 +2133,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("person")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("person")))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2138,7 +2166,7 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(allocator, file, List.of("person")),
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("person")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(active, Stream.VALUES),
@@ -2192,7 +2220,7 @@ public class TestParquetOperator
                                         projectionPlan,
                                         primitiveRegistry,
                                         new FilterOperator(
-                                                new ParquetScanOperator(allocator, file, List.of("person")),
+                                                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("person")),
                                                 new EvaluationPlan(List.of(), List.of()),
                                                 primitiveRegistry,
                                                 new NotMask(new ReferenceMask(new Reference(new Input(0), Stream.NULLS))),
@@ -2228,7 +2256,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2263,7 +2291,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2312,7 +2340,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2347,7 +2375,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2395,7 +2423,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2430,7 +2458,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             ArrayVector arrays = (ArrayVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2480,7 +2508,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2526,7 +2554,7 @@ public class TestParquetOperator
                                         new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
+                                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(2L, 2L),
                         Row.row(0L, 2L),
@@ -2561,7 +2589,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             BooleanVector values = (BooleanVector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2595,7 +2623,7 @@ public class TestParquetOperator
                 List.of());
 
         try (FilterOperator operator = new FilterOperator(
-                new ParquetScanOperator(allocator, file, List.of("items", "needle")),
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, allocator, file, List.of("items", "needle")),
                 filterPlan,
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
@@ -2640,7 +2668,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2680,7 +2708,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items", "needle")))) {
             Batch batch = operator.next();
             org.weakref.nitro.data.Vector values = batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2715,7 +2743,7 @@ public class TestParquetOperator
                         new Allocator(EngineResources.createDefault()),
                         projectionPlan,
                         primitiveRegistry,
-                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))
+                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))))
                 .matchesExactly(List.of(
                         Row.row(30L),
                         Row.row(0L),
@@ -2749,7 +2777,7 @@ public class TestParquetOperator
                 new Allocator(EngineResources.createDefault()),
                 projectionPlan,
                 primitiveRegistry,
-                new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
+                new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))) {
             Batch batch = operator.next();
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
             BooleanVector nulls = (BooleanVector) batch.output(1).borrow(Stream.NULLS);
@@ -2795,7 +2823,7 @@ public class TestParquetOperator
                                         new Allocator(EngineResources.createDefault()),
                                         projectionPlan,
                                         primitiveRegistry,
-                                        new ParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
+                                        new ParquetScanOperator(LEGACY_PARQUET_SCAN_BATCH_POLICY, new Allocator(EngineResources.createDefault()), file, List.of("items")))))))
                 .matchesExactly(List.of(
                         Row.row(30L, 3L),
                         Row.row(0L, 2L)));
