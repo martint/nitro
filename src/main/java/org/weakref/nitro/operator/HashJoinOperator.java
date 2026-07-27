@@ -3566,14 +3566,7 @@ public class HashJoinOperator
         // predominantly-negative probe avoid the larger tag/key hash table entirely.  Unlike a Bloom filter this
         // has no false positives; the hash table is consulted only for keys whose bit is present.
         private final SparseLongRangeMembership sparseMembership;
-        private boolean denseBuildCandidate;
-        private long denseFirstKey;
-        private long denseNextKey;
-        private boolean denseSingleBatchRowReferenceCandidate;
-        private boolean denseSingleBatchRowReferenceMode;
-        private int denseRowReferenceBatchIndex;
-        private int denseRowReferenceFirstPosition;
-        private long denseRowReferenceBase;
+        private final DenseJoinSequence denseSequence;
         private int[] denseDictionaryPositionScratch;
         // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous slice of
         // orderedRows[rangeStart[slot] .. +slotCount[slot]) in FIFO order, so a probe reads a sequential range instead
@@ -3629,8 +3622,9 @@ public class HashJoinOperator
                     policy.sparseDirectDuplicateMinExpectedDomainRatio(),
                     policy.directDuplicateGroupInitialCapacity(),
                     EMPTY);
-            this.denseBuildCandidate = policy.denseBuildFastPath();
-            this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
+            this.denseSequence = new DenseJoinSequence(
+                    policy.denseBuildFastPath(),
+                    policy.computeDenseSingleBatchRowReferences());
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
             this.expectedBuildRows = expectedSize;
@@ -3676,7 +3670,7 @@ public class HashJoinOperator
                     }
                 }
                 directBuild.initialize(directCapacity);
-                denseBuildCandidate = false;
+                denseSequence.disableKeyCandidate();
             }
         }
 
@@ -4055,7 +4049,7 @@ public class HashJoinOperator
             }
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
-            if (policy.denseSingleBatchProbeSpecialization() && denseSingleBatchRowReferenceMode) {
+            if (policy.denseSingleBatchProbeSpecialization() && denseSequence.referencesActive()) {
                 matchDenseSingleBatchRows(values, nulls, hasNulls, positions, positionCount, refs);
                 return;
             }
@@ -4126,7 +4120,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return policy.compactDenseSingleMatchReferences() && denseSingleBatchRowReferenceMode && rows.referencesFit32();
+            return policy.compactDenseSingleMatchReferences() && denseSequence.referencesActive() && rows.referencesFit32();
         }
 
         @Override
@@ -4135,7 +4129,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return policy.denseSingleBatchMatchPositions() && denseSingleBatchRowReferenceMode;
+            return policy.denseSingleBatchMatchPositions() && denseSequence.referencesActive();
         }
 
         @Override
@@ -4144,7 +4138,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return policy.denseSingleBatchRangeProbe() && denseSingleBatchRowReferenceMode;
+            return policy.denseSingleBatchRangeProbe() && denseSequence.referencesActive();
         }
 
         @Override
@@ -4153,10 +4147,10 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            if (!denseSingleBatchRowReferenceMode) {
+            if (!denseSequence.referencesActive()) {
                 throw new IllegalStateException("Position single-match refs require dense single-batch row references");
             }
-            return denseRowReferenceBatchIndex;
+            return denseSequence.referenceBatchIndex();
         }
 
         @Override
@@ -4165,7 +4159,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            if (!denseSingleBatchRowReferenceMode) {
+            if (!denseSequence.referencesActive()) {
                 throw new IllegalStateException("Position single-match refs require dense single-batch row references");
             }
             matchDenseSingleBatchRowsPositions(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, positions, positionCount, logicalPositions);
@@ -4177,7 +4171,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            if (!denseSingleBatchRowReferenceMode) {
+            if (!denseSequence.referencesActive()) {
                 throw new IllegalStateException("Range position single-match refs require dense single-batch row references");
             }
             matchDenseSingleBatchRowsPositionsRange(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, startPosition, positionCount, logicalPositions);
@@ -4189,7 +4183,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return denseSingleBatchRowReferenceMode;
+            return denseSequence.referencesActive();
         }
 
         @Override
@@ -4198,7 +4192,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            if (!denseSingleBatchRowReferenceMode) {
+            if (!denseSequence.referencesActive()) {
                 throw new IllegalStateException("Direct range output requires dense single-batch row references");
             }
             return emitDenseSingleBatchRowsPositionsRange(
@@ -4218,7 +4212,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            if (!denseSingleBatchRowReferenceMode || !rows.referencesFit32()) {
+            if (!denseSequence.referencesActive() || !rows.referencesFit32()) {
                 throw new IllegalStateException("Compact single-match refs require dense single-batch row references that fit 32 bits");
             }
             matchDenseSingleBatchRowsCompact(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, positions, positionCount, refs);
@@ -4242,7 +4236,7 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         long min = minKey;
                         long max = maxKey;
-                        int firstPosition = denseRowReferenceFirstPosition;
+                        int firstPosition = denseSequence.firstReferencePosition();
                         for (int index = 0; index < positionCount; index++) {
                             int position = positions[index];
                             if (nullValues.value(position)) {
@@ -4261,7 +4255,7 @@ public class HashJoinOperator
                     long[] vv = longValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4271,7 +4265,7 @@ public class HashJoinOperator
                     int[] vv = intValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4281,7 +4275,7 @@ public class HashJoinOperator
                     int[] ids = dictionary.ids();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     switch (dictionary.values()) {
                         case org.weakref.nitro.data.I64Vector lv -> {
                             long[] dv = lv.values();
@@ -4310,7 +4304,7 @@ public class HashJoinOperator
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = rowValues.value(positions[index]);
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4331,7 +4325,7 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         long min = minKey;
                         long max = maxKey;
-                        int firstPosition = denseRowReferenceFirstPosition;
+                        int firstPosition = denseSequence.firstReferencePosition();
                         for (int index = 0; index < positionCount; index++) {
                             int position = startPosition + index;
                             if (nullValues.value(position)) {
@@ -4350,7 +4344,7 @@ public class HashJoinOperator
                     long[] vv = longValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[startPosition + index];
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4360,7 +4354,7 @@ public class HashJoinOperator
                     int[] vv = intValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[startPosition + index];
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4370,7 +4364,7 @@ public class HashJoinOperator
                     int[] ids = dictionary.ids();
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     switch (dictionary.values()) {
                         case org.weakref.nitro.data.I64Vector lv -> {
                             long[] dv = lv.values();
@@ -4399,7 +4393,7 @@ public class HashJoinOperator
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = rowValues.value(startPosition + index);
                         logicalPositions[index] = denseSingleBatchRowPositionForKey(key, min, max, firstPosition);
@@ -4420,7 +4414,7 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         long min = minKey;
                         long max = maxKey;
-                        int firstPosition = denseRowReferenceFirstPosition;
+                        int firstPosition = denseSequence.firstReferencePosition();
                         int output = outputStart;
                         for (int index = 0; index < positionCount; index++) {
                             int position = startPosition + index;
@@ -4446,7 +4440,7 @@ public class HashJoinOperator
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     long min = minKey;
                     long max = maxKey;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int firstPosition = denseSequence.firstReferencePosition();
                     int output = outputStart;
                     for (int index = 0; index < positionCount; index++) {
                         int position = startPosition + index;
@@ -4474,7 +4468,7 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         long min = minKey;
                         long max = maxKey;
-                        long base = denseRowReferenceBase;
+                        long base = denseSequence.referenceBase();
                         for (int index = 0; index < positionCount; index++) {
                             int position = positions[index];
                             if (nullValues.value(position)) {
@@ -4493,7 +4487,7 @@ public class HashJoinOperator
                     long[] vv = longValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    long base = denseRowReferenceBase;
+                    long base = denseSequence.referenceBase();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
@@ -4503,7 +4497,7 @@ public class HashJoinOperator
                     int[] vv = intValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    long base = denseRowReferenceBase;
+                    long base = denseSequence.referenceBase();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
@@ -4513,7 +4507,7 @@ public class HashJoinOperator
                     int[] ids = dictionary.ids();
                     long min = minKey;
                     long max = maxKey;
-                    long base = denseRowReferenceBase;
+                    long base = denseSequence.referenceBase();
                     switch (dictionary.values()) {
                         case org.weakref.nitro.data.I64Vector lv -> {
                             long[] dv = lv.values();
@@ -4542,7 +4536,7 @@ public class HashJoinOperator
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     long min = minKey;
                     long max = maxKey;
-                    long base = denseRowReferenceBase;
+                    long base = denseSequence.referenceBase();
                     for (int index = 0; index < positionCount; index++) {
                         long key = rowValues.value(positions[index]);
                         refs[index] = denseSingleBatchRowReferenceForKey(key, min, max, base);
@@ -4563,8 +4557,8 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         long min = minKey;
                         long max = maxKey;
-                        int batch = denseRowReferenceBatchIndex;
-                        int firstPosition = denseRowReferenceFirstPosition;
+                        int batch = denseSequence.referenceBatchIndex();
+                        int firstPosition = denseSequence.firstReferencePosition();
                         for (int index = 0; index < positionCount; index++) {
                             int position = positions[index];
                             if (nullValues.value(position)) {
@@ -4583,8 +4577,8 @@ public class HashJoinOperator
                     long[] vv = longValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int batch = denseRowReferenceBatchIndex;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int batch = denseSequence.referenceBatchIndex();
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
@@ -4594,8 +4588,8 @@ public class HashJoinOperator
                     int[] vv = intValues.values();
                     long min = minKey;
                     long max = maxKey;
-                    int batch = denseRowReferenceBatchIndex;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int batch = denseSequence.referenceBatchIndex();
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = vv[positions[index]];
                         refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
@@ -4605,8 +4599,8 @@ public class HashJoinOperator
                     int[] ids = dictionary.ids();
                     long min = minKey;
                     long max = maxKey;
-                    int batch = denseRowReferenceBatchIndex;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int batch = denseSequence.referenceBatchIndex();
+                    int firstPosition = denseSequence.firstReferencePosition();
                     switch (dictionary.values()) {
                         case org.weakref.nitro.data.I64Vector lv -> {
                             long[] dv = lv.values();
@@ -4635,8 +4629,8 @@ public class HashJoinOperator
                     VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                     long min = minKey;
                     long max = maxKey;
-                    int batch = denseRowReferenceBatchIndex;
-                    int firstPosition = denseRowReferenceFirstPosition;
+                    int batch = denseSequence.referenceBatchIndex();
+                    int firstPosition = denseSequence.firstReferencePosition();
                     for (int index = 0; index < positionCount; index++) {
                         long key = rowValues.value(positions[index]);
                         refs[index] = denseSingleBatchRowReference32ForKey(key, min, max, batch, firstPosition);
@@ -4649,7 +4643,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            long base = denseRowReferenceBase;
+            long base = denseSequence.referenceBase();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -4665,7 +4659,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            long base = denseRowReferenceBase;
+            long base = denseSequence.referenceBase();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -4682,7 +4676,7 @@ public class HashJoinOperator
             int[] ids = values.ids();
             long min = minKey;
             long max = maxKey;
-            long base = denseRowReferenceBase;
+            long base = denseSequence.referenceBase();
             switch (values.values()) {
                 case org.weakref.nitro.data.I64Vector longValues -> {
                     long[] dictionaryValues = longValues.values();
@@ -4727,7 +4721,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             int output = outputStart;
             if (nullValues == null) {
                 for (int index = 0; index < positionCount; index++) {
@@ -4760,7 +4754,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             int output = outputStart;
             if (nullValues == null) {
                 for (int index = 0; index < positionCount; index++) {
@@ -4794,7 +4788,7 @@ public class HashJoinOperator
             int[] ids = values.ids();
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             int output = outputStart;
             if (nullValues == null) {
                 switch (values.values()) {
@@ -4984,7 +4978,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -5000,7 +4994,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -5017,7 +5011,7 @@ public class HashJoinOperator
             int[] ids = values.ids();
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             switch (values.values()) {
                 case org.weakref.nitro.data.I64Vector longValues -> {
                     long[] dictionaryValues = longValues.values();
@@ -5062,7 +5056,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = startPosition + index;
                 if (nullValues.value(position)) {
@@ -5078,7 +5072,7 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = startPosition + index;
                 if (nullValues.value(position)) {
@@ -5095,7 +5089,7 @@ public class HashJoinOperator
             int[] ids = values.ids();
             long min = minKey;
             long max = maxKey;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int firstPosition = denseSequence.firstReferencePosition();
             switch (values.values()) {
                 case org.weakref.nitro.data.I64Vector longValues -> {
                     long[] dictionaryValues = longValues.values();
@@ -5140,8 +5134,8 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int batch = denseRowReferenceBatchIndex;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int batch = denseSequence.referenceBatchIndex();
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -5157,8 +5151,8 @@ public class HashJoinOperator
         {
             long min = minKey;
             long max = maxKey;
-            int batch = denseRowReferenceBatchIndex;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int batch = denseSequence.referenceBatchIndex();
+            int firstPosition = denseSequence.firstReferencePosition();
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
                 if (nullValues.value(position)) {
@@ -5175,8 +5169,8 @@ public class HashJoinOperator
             int[] ids = values.ids();
             long min = minKey;
             long max = maxKey;
-            int batch = denseRowReferenceBatchIndex;
-            int firstPosition = denseRowReferenceFirstPosition;
+            int batch = denseSequence.referenceBatchIndex();
+            int firstPosition = denseSequence.firstReferencePosition();
             switch (values.values()) {
                 case org.weakref.nitro.data.I64Vector longValues -> {
                     long[] dictionaryValues = longValues.values();
@@ -5274,7 +5268,7 @@ public class HashJoinOperator
                 if (key < minKey || key > maxKey) {
                     return NO_MATCH_ROW_REFERENCE;
                 }
-                if (denseSingleBatchRowReferenceMode) {
+                if (denseSequence.referencesActive()) {
                     return denseSingleBatchRowReference((int) (key - minKey));
                 }
                 if (directRows32 != null) {
@@ -5293,7 +5287,7 @@ public class HashJoinOperator
 
         private long denseSingleBatchRowReference(int ordinal)
         {
-            return denseRowReferenceBase + ordinal;
+            return denseSequence.referenceAt(ordinal);
         }
 
         private static long denseSingleBatchRowReferenceForKey(long key, long minKey, long maxKey, long base)
@@ -5339,14 +5333,13 @@ public class HashJoinOperator
                 }
                 materializeDirectRangeBuildAsHash();
             }
-            if (denseBuildCandidate) {
-                if (rowCount == 0 || key == denseNextKey) {
+            if (denseSequence.keyCandidate()) {
+                if (denseSequence.acceptsKey(key, rowCount)) {
                     appendDenseRow(key, rowReference);
                     return;
                 }
                 materializeDenseBuildAsHash();
-                denseBuildCandidate = false;
-                denseSingleBatchRowReferenceCandidate = false;
+                denseSequence.reject();
             }
             int slot = hashTable.findSlot(key);
             boolean newKey = !hashTable.isOccupied(slot);
@@ -5472,39 +5465,16 @@ public class HashJoinOperator
 
         private void appendDenseRow(long key, long rowReference)
         {
-            observeDenseSingleBatchRowReference(rowReference);
-            if (rowCount == 0) {
-                denseFirstKey = key;
-            }
+            denseSequence.observeDenseRow(key, rowReference, rowCount);
             rows.append(rowCount, rowReference);
             rowCount++;
             size++;
-            denseNextKey = key + 1;
-        }
-
-        private void observeDenseSingleBatchRowReference(long rowReference)
-        {
-            if (!denseSingleBatchRowReferenceCandidate) {
-                return;
-            }
-            int batchIndex = JoinRowReference.batchIndex(rowReference);
-            int rowPosition = JoinRowReference.position(rowReference);
-            if (rowCount == 0) {
-                denseRowReferenceBatchIndex = batchIndex;
-                denseRowReferenceFirstPosition = rowPosition;
-                denseRowReferenceBase = rowReference;
-                return;
-            }
-            if (batchIndex != denseRowReferenceBatchIndex ||
-                    rowPosition != (long) denseRowReferenceFirstPosition + rowCount) {
-                denseSingleBatchRowReferenceCandidate = false;
-            }
         }
 
         private void materializeDenseBuildAsHash()
         {
             int previousRows = rowCount;
-            long key = denseFirstKey;
+            long key = denseSequence.firstKey();
             size = 0;
             for (int ordinal = 0; ordinal < previousRows; ordinal++) {
                 int slot = hashTable.findSlot(key++);
@@ -5622,7 +5592,7 @@ public class HashJoinOperator
                         size,
                         minKey,
                         maxKey,
-                        denseBuildCandidate,
+                        denseSequence.keyCandidate(),
                         directBuild.isActive(),
                         hasDuplicates,
                         rows.implicitSequentialReferences(),
@@ -5662,15 +5632,15 @@ public class HashJoinOperator
                     range > (long) policy.directRangeMaxCardinalityRatio() * size) {
                 return;
             }
-            if (denseBuildCandidate && range == size && denseSingleBatchRowReferenceCandidate) {
-                denseSingleBatchRowReferenceMode = true;
+            if (denseSequence.keyCandidate() && range == size && denseSequence.referenceCandidate()) {
+                denseSequence.activateObservedReferences();
                 arrayMode = true;
                 releaseHashTable();
                 releaseRowArrays();
                 return;
             }
             if (rows.referencesFit32()) {
-                if (denseBuildCandidate && range == size) {
+                if (denseSequence.keyCandidate() && range == size) {
                     directRows32 = rows.packReferences32(rowCount);
                 }
                 else {
@@ -5689,7 +5659,7 @@ public class HashJoinOperator
                 releaseRowArrays();
                 return;
             }
-            if (denseBuildCandidate && range == size) {
+            if (denseSequence.keyCandidate() && range == size) {
                 directRows = rows.takeFullReferences();
                 arrayMode = true;
                 releaseHashTable();
@@ -5738,10 +5708,7 @@ public class HashJoinOperator
                     size >= policy.denseUnusedBuildMembershipMinKeys() &&
                     range == size) {
                 arrayMode = true;
-                denseSingleBatchRowReferenceMode = true;
-                denseRowReferenceBatchIndex = 0;
-                denseRowReferenceFirstPosition = 0;
-                denseRowReferenceBase = 0;
+                denseSequence.activateReferences(0, 0, 0);
                 releaseDirectBuildArrays();
                 releaseHashTable();
                 releaseRowArrays();
@@ -5751,7 +5718,7 @@ public class HashJoinOperator
                 return;
             }
 
-            boolean sequentialReferences = range == size && denseSingleBatchRowReferenceCandidate;
+            boolean sequentialReferences = range == size && denseSequence.referenceCandidate();
             long firstReference = NO_MATCH_ROW_REFERENCE;
             int firstBatchIndex = 0;
             int firstPosition = 0;
@@ -5781,10 +5748,7 @@ public class HashJoinOperator
                 return;
             }
             arrayMode = true;
-            denseSingleBatchRowReferenceMode = true;
-            denseRowReferenceBatchIndex = firstBatchIndex;
-            denseRowReferenceFirstPosition = firstPosition;
-            denseRowReferenceBase = firstReference;
+            denseSequence.activateReferences(firstBatchIndex, firstPosition, firstReference);
             releaseDirectBuildArrays();
             releaseHashTable();
             releaseRowArrays();
@@ -5824,7 +5788,7 @@ public class HashJoinOperator
                     return LongLists.emptyList();
                 }
                 long rowReference;
-                if (denseSingleBatchRowReferenceMode) {
+                if (denseSequence.referencesActive()) {
                     rowReference = denseSingleBatchRowReference((int) (key - minKey));
                 }
                 else if (directRows32 != null) {
