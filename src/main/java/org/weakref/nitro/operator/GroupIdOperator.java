@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -22,6 +24,8 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -35,6 +39,7 @@ public final class GroupIdOperator
     private final int[][] groupingSetInputs;
     private final GroupIdOperatorPolicy policy;
     private final boolean[] outputCanBeNullExtended;
+    private final Schema outputSchema;
     private final DictionaryVector[] currentDenseDictionaryMappings;
     private int[] currentSourcePositions;
 
@@ -51,14 +56,21 @@ public final class GroupIdOperator
         this.source = source;
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
         this.policy = requireNonNull(policy, "policy is null");
-        this.outputCanBeNullExtended = computeOutputNullExtension(groupingSetInputs);
+        this.outputCanBeNullExtended = computeOutputNullExtension(this.groupingSetInputs);
+        this.outputSchema = outputSchema(source.outputSchema(), this.groupingSetInputs, outputCanBeNullExtended);
         this.currentDenseDictionaryMappings = new DictionaryVector[outputCanBeNullExtended.length];
     }
 
     @Override
     public int outputCount()
     {
-        return groupingSetInputs[0].length + 1;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override
@@ -330,5 +342,62 @@ public final class GroupIdOperator
             }
         }
         return result;
+    }
+
+    private static Schema outputSchema(Schema sourceSchema, int[][] groupingSetInputs, boolean[] outputCanBeNullExtended)
+    {
+        List<Field> fields = new ArrayList<>(outputCanBeNullExtended.length + 1);
+        for (int outputIndex = 0; outputIndex < outputCanBeNullExtended.length; outputIndex++) {
+            fields.add(outputField(sourceSchema, groupingSetInputs, outputIndex, outputCanBeNullExtended[outputIndex]));
+        }
+        fields.add(unspecifiedField(false));
+        return new Schema(fields);
+    }
+
+    private static Field outputField(Schema sourceSchema, int[][] groupingSetInputs, int outputIndex, boolean nullExtended)
+    {
+        Field field = null;
+        boolean nullable = nullExtended;
+        boolean ambiguous = false;
+        for (int[] groupingSet : groupingSetInputs) {
+            int sourceIndex = groupingSet[outputIndex];
+            if (sourceIndex < 0) {
+                continue;
+            }
+            if (sourceIndex >= sourceSchema.size()) {
+                ambiguous = true;
+                continue;
+            }
+
+            Field mappedField = sourceSchema.field(sourceIndex);
+            nullable |= mappedField.nullable();
+            if (field == null) {
+                field = mappedField;
+            }
+            else if (!field.name().equals(mappedField.name()) ||
+                    !field.type().identity().equals(mappedField.type().identity())) {
+                ambiguous = true;
+            }
+        }
+
+        if (ambiguous) {
+            return unspecifiedField(nullable);
+        }
+        if (field == null) {
+            if (outputIndex >= sourceSchema.size()) {
+                return unspecifiedField(true);
+            }
+            field = sourceSchema.field(outputIndex);
+            nullable |= field.nullable();
+        }
+        if (field.nullable() == nullable) {
+            return field;
+        }
+        return new Field(field.name(), field.type(), nullable);
+    }
+
+    private static Field unspecifiedField(boolean nullable)
+    {
+        return new Field(Schema.unspecified(1).field(0).type(), nullable);
     }
 }

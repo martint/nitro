@@ -57,6 +57,7 @@ import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
+import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -1432,6 +1433,30 @@ public class TestOperators
             assertThat(group.outputSchema().field(0).type().isSpecified()).isFalse();
             assertThat(group.outputSchema().field(1)).isSameAs(first);
             assertThat(group.outputSchema().field(2)).isSameAs(second);
+        }
+    }
+
+    @Test
+    void testGroupIdOperatorPreservesMappedFieldsAndWidensNullability()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field rollup = new Field("rollup", i32Only, false);
+        Field payload = new Field("payload", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(rollup, payload));
+
+        try (Operator groupId = new GroupIdOperator(
+                allocator,
+                typedTable(sourceSchema),
+                new int[][] {
+                        {-1, 1},
+                        {0, 1}},
+                allocator.engineResources().operatorResources().groupIdPolicy())) {
+            assertThat(groupId.outputSchema().field(0).name()).isEqualTo(rollup.name());
+            assertThat(groupId.outputSchema().field(0).type()).isSameAs(i32Only);
+            assertThat(groupId.outputSchema().field(0).nullable()).isTrue();
+            assertThat(groupId.outputSchema().field(1)).isSameAs(payload);
+            assertThat(groupId.outputSchema().field(2).type().isSpecified()).isFalse();
+            assertThat(groupId.outputSchema().field(2).nullable()).isFalse();
         }
     }
 
