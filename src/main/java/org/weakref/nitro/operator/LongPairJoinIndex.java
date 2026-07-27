@@ -112,9 +112,7 @@ final class LongPairJoinIndex
     private int maxFill;
     private int size;
     private boolean pairHasDuplicates;
-    private final SingleLongList singleMatch = new SingleLongList();
-    private final ChainLongList scalarChain = new ChainLongList();
-    private ChainLongList[] chainMatches;
+    private final JoinMatchScratch matchScratch = new JoinMatchScratch();
 
     LongPairJoinIndex(
             HashJoinIndexPolicy policy,
@@ -338,12 +336,13 @@ final class LongPairJoinIndex
         if (slot < 0) {
             return LongLists.emptyList();
         }
-        return matchesForSlot(slot, singleMatch, scalarChain);
+        return matchesForSlot(slot, matchScratch.scalarSingle(), matchScratch.scalarChain());
     }
 
     @Override
     public void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
     {
+        matchScratch.prepareBatch(executionPolicy.maxBatchRows());
         VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
         VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
         if (!hasNulls) {
@@ -356,7 +355,7 @@ final class LongPairJoinIndex
                     matches[index] = LongLists.emptyList();
                     continue;
                 }
-                matches[index] = matchesForSlot(slot, singleMatches[index], chainMatches()[index]);
+                matches[index] = matchesForSlot(slot, singleMatches[index], matchScratch.batchChain(index));
             }
             return;
         }
@@ -375,7 +374,7 @@ final class LongPairJoinIndex
                 matches[index] = LongLists.emptyList();
                 continue;
             }
-            matches[index] = matchesForSlot(slot, singleMatches[index], chainMatches()[index]);
+            matches[index] = matchesForSlot(slot, singleMatches[index], matchScratch.batchChain(index));
         }
     }
 
@@ -407,14 +406,6 @@ final class LongPairJoinIndex
                         ? chain.resetCompactSingleBatch(duplicateRows32, duplicateNext, head, duplicateCount[slot], denseRowsBatchIndex)
                         : chain.resetCompact(duplicateRows32, duplicateNext, head, duplicateCount[slot])
                 : chain.reset(duplicateRows, duplicateNext, head, duplicateCount[slot]);
-    }
-
-    private ChainLongList[] chainMatches()
-    {
-        if (chainMatches == null) {
-            chainMatches = ChainLongList.createArray(executionPolicy.maxBatchRows());
-        }
-        return chainMatches;
     }
 
     @Override

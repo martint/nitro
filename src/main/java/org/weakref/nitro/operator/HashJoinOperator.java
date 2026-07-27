@@ -3571,7 +3571,7 @@ public class HashJoinOperator
         // query, column, or logical type. Each nonzero entry packs an ordered-row start + 1 in 24 bits and the match
         // count in 8 bits, preserving the same insertion-ordered slices as the ordinary compacted hash representation.
         private final CompressedLongRangeIndex compressedRanges;
-        private final LongJoinMatchScratch matchScratch = new LongJoinMatchScratch();
+        private final JoinMatchScratch matchScratch = new JoinMatchScratch();
 
         private LongJoinIndex(
                 HashJoinIndexPolicy policy,

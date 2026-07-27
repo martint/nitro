@@ -17,12 +17,12 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class TestLongJoinMatchScratch
+class TestJoinMatchScratch
 {
     @Test
     void ownsReusableScalarAndBatchViews()
     {
-        LongJoinMatchScratch scratch = new LongJoinMatchScratch();
+        JoinMatchScratch scratch = new JoinMatchScratch();
 
         assertThat((Object) scratch.scalarSingle()).isSameAs(scratch.scalarSingle());
         assertThat((Object) scratch.scalarChain()).isSameAs(scratch.scalarChain());

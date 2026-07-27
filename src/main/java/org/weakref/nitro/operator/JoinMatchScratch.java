@@ -14,9 +14,9 @@
 package org.weakref.nitro.operator;
 
 /**
- * Reusable scalar and batch list views for long-join matches.
+ * Reusable scalar and batch list views for join matches.
  */
-final class LongJoinMatchScratch
+final class JoinMatchScratch
 {
     private final SingleLongList scalarSingle = new SingleLongList();
     private final ChainLongList scalarChain = new ChainLongList();
