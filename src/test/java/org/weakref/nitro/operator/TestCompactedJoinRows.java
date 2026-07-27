@@ -43,7 +43,7 @@ class TestCompactedJoinRows
         CompressedLongRangeIndex compressedRanges = new CompressedLongRangeIndex(arrayPool, false, 1, 16, 2, false);
         CompactedJoinRows compactedRows = new CompactedJoinRows(arrayPool, EMPTY);
 
-        compactedRows.build(hashTable, rows, compressedRanges, 2, 3, 2);
+        compactedRows.build(hashTable, rows, compressedRanges, 2, 3);
 
         assertThat(compactedRows.isBuilt()).isTrue();
         int firstStart = compactedRows.start(firstSlot);

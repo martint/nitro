@@ -41,14 +41,12 @@ final class CompactedJoinRows
             JoinRowStore rows,
             CompressedLongRangeIndex compressedRanges,
             int distinctSize,
-            int rowCount,
-            int maximumMatchCount)
+            int rowCount)
     {
         boolean compressedCandidate = compressedRanges.prepare(
                 hashTable,
                 distinctSize,
-                rowCount,
-                maximumMatchCount);
+                rowCount);
         long[] ordered = arrayPool.borrowLongs(rowCount);
         int[] starts = arrayPool.borrowInts(hashTable.capacity());
         int cursor = 0;

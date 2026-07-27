@@ -58,19 +58,18 @@ final class CompressedLongRangeIndex
     boolean prepare(
             LongJoinHashTable hashTable,
             int distinctSize,
-            int rowCount,
-            int maximumMatchCount)
+            int rowCount)
     {
         if (!enabled ||
                 !hashTable.isAllocated() ||
                 distinctSize < minimumKeys ||
                 rowCount > START_MASK ||
-                maximumMatchCount > MAX_COUNT ||
                 (long) distinctSize * 2 > hashTable.capacity()) {
             return false;
         }
         long keyAnd = -1L;
         long keyOr = 0;
+        int maximumMatchCount = 0;
         for (int slot = 0; slot < hashTable.capacity(); slot++) {
             if (!hashTable.isOccupied(slot)) {
                 continue;
@@ -78,6 +77,10 @@ final class CompressedLongRangeIndex
             long key = hashTable.key(slot);
             keyAnd &= key;
             keyOr |= key;
+            maximumMatchCount = Math.max(maximumMatchCount, hashTable.count(slot));
+        }
+        if (maximumMatchCount > MAX_COUNT) {
+            return false;
         }
         long candidateVariableMask = keyAnd ^ keyOr;
         int variableBits = Long.bitCount(candidateVariableMask);

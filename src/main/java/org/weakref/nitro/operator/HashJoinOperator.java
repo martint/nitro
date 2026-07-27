@@ -3548,7 +3548,6 @@ public class HashJoinOperator
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
         private int size;
-        private int maximumMatchCount;
         // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
         // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
         // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
@@ -5296,7 +5295,7 @@ public class HashJoinOperator
                 hasDuplicates = true;
                 hashTable.ensureDuplicateState();
                 if (compressDuplicateReferences) {
-                    maximumMatchCount = Math.max(maximumMatchCount, hashTable.incrementCount(slot));
+                    hashTable.incrementCount(slot);
                     return;
                 }
                 rows.ensureChainState(rowCount);
@@ -5305,7 +5304,6 @@ public class HashJoinOperator
             rows.append(ordinal, rowReference);
             if (newKey) {
                 hashTable.initialize(slot, key, ordinal);
-                maximumMatchCount = Math.max(maximumMatchCount, 1);
                 size++;
                 // Rehash after the slot is populated so it carries a non-empty head into the new table.
                 hashTable.growIfNeeded(size);
@@ -5313,7 +5311,6 @@ public class HashJoinOperator
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
             rows.link(hashTable.append(slot, ordinal), ordinal);
-            maximumMatchCount = Math.max(maximumMatchCount, hashTable.count(slot));
         }
 
         private void addDirectRangeRow(int key, long rowReference)
@@ -5462,8 +5459,7 @@ public class HashJoinOperator
                     rows,
                     compressedRanges,
                     size,
-                    rowCount,
-                    maximumMatchCount);
+                    rowCount);
             releaseRowArrays();
             if (compressedRanges.isBuilt()) {
                 releaseHashTable();
