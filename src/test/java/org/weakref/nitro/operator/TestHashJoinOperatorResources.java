@@ -28,7 +28,7 @@ class TestHashJoinOperatorResources
         HashJoinOutputPolicy outputPolicy = HashJoinOutputPolicy.defaults();
         HashJoinFilterPolicy filterPolicy = HashJoinFilterPolicy.defaults();
         HashJoinExecutionPolicy executionPolicy = HashJoinExecutionPolicy.defaults();
-        HashJoinOperatorResources first = new HashJoinOperatorResources(true);
+        HashJoinOperatorResources first = defaultResources(true);
         HashJoinOperatorResources second = new HashJoinOperatorResources(
                 true,
                 null,
@@ -93,11 +93,24 @@ class TestHashJoinOperatorResources
     @Test
     void testDisabledSharingRetainsLocalCompatibilityDomain()
     {
-        HashJoinOperatorResources resources = new HashJoinOperatorResources(false);
+        HashJoinOperatorResources resources = defaultResources(false);
         Object firstLocal = new Object();
         Object secondLocal = new Object();
 
         assertThat(resources.bufferPoolCompatibilityGroup(firstLocal)).isSameAs(firstLocal);
         assertThat(resources.bufferPoolCompatibilityGroup(secondLocal)).isSameAs(secondLocal);
+    }
+
+    private static HashJoinOperatorResources defaultResources(boolean shareBufferPoolAcrossOperators)
+    {
+        return new HashJoinOperatorResources(
+                shareBufferPoolAcrossOperators,
+                null,
+                HashJoinIndexPolicy.defaults(),
+                HashJoinDynamicFilterPolicy.defaults(),
+                HashJoinBuildPolicy.defaults(),
+                HashJoinOutputPolicy.defaults(),
+                HashJoinFilterPolicy.defaults(),
+                HashJoinExecutionPolicy.defaults());
     }
 }
