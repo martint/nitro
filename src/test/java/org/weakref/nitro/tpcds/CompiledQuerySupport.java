@@ -3409,8 +3409,13 @@ public final class CompiledQuerySupport
                     io.airlift.slice.Slices.utf8Slice(spec.regexpPattern()));
             io.airlift.slice.Slice replacement = org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8.translateReplacement(
                     io.airlift.slice.Slices.utf8Slice(spec.regexpReplacement()));
+            org.weakref.nitro.function.scalar.builtin.JoniRegexpPolicy policy =
+                    org.weakref.nitro.function.scalar.builtin.JoniRegexpPolicy.fromSystemProperties();
             return (data, offset, length) -> org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
-                    io.airlift.slice.Slices.wrappedBuffer(data, offset, length), pattern, replacement).getBytes();
+                    io.airlift.slice.Slices.wrappedBuffer(data, offset, length),
+                    pattern,
+                    replacement,
+                    policy).getBytes();
         }
         if (spec.substringLength() >= 0) {
             return (data, offset, length) -> utf8Substring(

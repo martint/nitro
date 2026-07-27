@@ -54,6 +54,7 @@ import org.weakref.nitro.function.scalar.builtin.IfUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.IsNullI32;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
+import org.weakref.nitro.function.scalar.builtin.JoniRegexpPolicy;
 import org.weakref.nitro.function.scalar.builtin.LengthUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
@@ -175,7 +176,9 @@ public final class TestPrimitiveFunctions
             return scalarLoader.load(new CoalesceI64(CoalesceI64Policy.fromSystemProperties()));
         }
         if (functionClass == RegexpReplaceUtf8.class) {
-            return scalarLoader.load(new RegexpReplaceUtf8(RegexpReplaceUtf8Policy.fromSystemProperties()));
+            return scalarLoader.load(new RegexpReplaceUtf8(
+                    RegexpReplaceUtf8Policy.fromSystemProperties(),
+                    JoniRegexpPolicy.fromSystemProperties()));
         }
         return scalarLoader.load(functionClass);
     }

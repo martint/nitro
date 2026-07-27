@@ -885,7 +885,10 @@ public class TestPlanEvaluator
                 io.airlift.slice.Slices.utf8Slice(replacementText));
         for (int position = 0; position < inputs.length; position++) {
             String expected = org.weakref.nitro.function.scalar.builtin.JoniRegexpSupport.replace(
-                    io.airlift.slice.Slices.utf8Slice(inputs[position]), patternRegex, replacementSlice).toStringUtf8();
+                    io.airlift.slice.Slices.utf8Slice(inputs[position]),
+                    patternRegex,
+                    replacementSlice,
+                    org.weakref.nitro.function.scalar.builtin.JoniRegexpPolicy.defaults()).toStringUtf8();
             assertThat(utf8(actualValues, actual.ids()[position]))
                     .as("input at position %d", position)
                     .isEqualTo(expected);

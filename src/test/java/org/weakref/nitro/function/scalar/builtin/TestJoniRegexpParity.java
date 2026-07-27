@@ -73,7 +73,7 @@ public class TestJoniRegexpParity
                     catch (RuntimeException e) {
                         // Trino rejects this (pattern, replacement) pair; Nitro must reject it too.
                         try {
-                            JoniRegexpSupport.replace(source, nitroPattern, replacement);
+                            JoniRegexpSupport.replace(source, nitroPattern, replacement, JoniRegexpPolicy.defaults());
                         }
                         catch (RuntimeException expected) {
                             continue;
@@ -81,11 +81,13 @@ public class TestJoniRegexpParity
                         throw new AssertionError("Nitro accepted what Trino rejected: pattern=[" + patternString
                                 + "] replacement=[" + replacementString + "] source=[" + sourceString + "]");
                     }
-                    String nitro = JoniRegexpSupport.replace(source, nitroPattern, replacement).toStringUtf8();
-                    assertThat(nitro)
-                            .withFailMessage("pattern=[%s] replacement=[%s] source=[%s]: nitro=[%s] trino=[%s]",
-                                    patternString, replacementString, sourceString, nitro, trino)
-                            .isEqualTo(trino);
+                    for (JoniRegexpPolicy policy : List.of(JoniRegexpPolicy.defaults(), new JoniRegexpPolicy(false))) {
+                        String nitro = JoniRegexpSupport.replace(source, nitroPattern, replacement, policy).toStringUtf8();
+                        assertThat(nitro)
+                                .withFailMessage("pattern=[%s] replacement=[%s] source=[%s] policy=[%s]: nitro=[%s] trino=[%s]",
+                                        patternString, replacementString, sourceString, policy, nitro, trino)
+                                .isEqualTo(trino);
+                    }
                 }
             }
         }

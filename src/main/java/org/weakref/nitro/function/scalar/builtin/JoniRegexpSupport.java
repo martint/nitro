@@ -36,9 +36,6 @@ import io.airlift.slice.SliceUtf8;
  */
 public final class JoniRegexpSupport
 {
-    private static final boolean ZERO_COPY_MATCHER =
-            Boolean.parseBoolean(System.getProperty("nitro.regexp.zeroCopyMatcher", "true"));
-
     private JoniRegexpSupport() {}
 
     /** Compile a UTF-8 pattern with the same encoding/syntax/options Trino uses for its Joni regexp type. */
@@ -53,9 +50,9 @@ public final class JoniRegexpSupport
     }
 
     /** Replace every match of {@code pattern} in {@code source} with {@code replacement}. */
-    public static Slice replace(Slice source, Regex pattern, Slice replacement)
+    public static Slice replace(Slice source, Regex pattern, Slice replacement, JoniRegexpPolicy policy)
     {
-        byte[] sourceBytes = ZERO_COPY_MATCHER ? source.byteArray() : null;
+        byte[] sourceBytes = policy.zeroCopyMatcher() ? source.byteArray() : null;
         int sourceStart;
         if (sourceBytes == null) {
             sourceBytes = source.getBytes();

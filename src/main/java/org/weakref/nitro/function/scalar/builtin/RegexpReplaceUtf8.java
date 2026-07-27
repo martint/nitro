@@ -47,16 +47,23 @@ public final class RegexpReplaceUtf8
     private static final Slice HOST_PATTERN = Slices.utf8Slice("^https?://(?:www\\.)?([^/]+)/.*$");
     private static final Slice HOST_REPLACEMENT = Slices.utf8Slice("\\1");
     private final RegexpReplaceUtf8Policy policy;
+    private final JoniRegexpPolicy joniPolicy;
     private final ExtractHostUtf8 hostExtractor;
 
     public RegexpReplaceUtf8()
     {
-        this(RegexpReplaceUtf8Policy.defaults());
+        this(RegexpReplaceUtf8Policy.defaults(), JoniRegexpPolicy.defaults());
     }
 
     public RegexpReplaceUtf8(RegexpReplaceUtf8Policy policy)
     {
+        this(policy, JoniRegexpPolicy.defaults());
+    }
+
+    public RegexpReplaceUtf8(RegexpReplaceUtf8Policy policy, JoniRegexpPolicy joniPolicy)
+    {
         this.policy = requireNonNull(policy, "policy is null");
+        this.joniPolicy = requireNonNull(joniPolicy, "joniPolicy is null");
         hostExtractor = policy.specializeHostExtraction() ? new ExtractHostUtf8() : null;
     }
 
@@ -162,7 +169,7 @@ public final class RegexpReplaceUtf8
                 replacementValue = translateReplacement(utf8Slice(replacementValues, position));
                 pattern = patterns.computeIfAbsent(patternValue, JoniRegexpSupport::compile);
             }
-            byte[] bytes = JoniRegexpSupport.replace(input, pattern, replacementValue).getBytes();
+            byte[] bytes = JoniRegexpSupport.replace(input, pattern, replacementValue, joniPolicy).getBytes();
             rewritten[index++] = bytes;
             totalBytes += bytes.length;
             asciiOnly &= isAscii(bytes);
