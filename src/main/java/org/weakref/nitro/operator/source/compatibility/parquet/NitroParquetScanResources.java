@@ -33,20 +33,24 @@ public final class NitroParquetScanResources
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final ParquetReaderPolicy readerPolicy;
+    private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
-            ParquetReaderPolicy readerPolicy)
+            ParquetReaderPolicy readerPolicy,
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
+        this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
     {
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
-                ParquetReaderPolicy.fromSystemProperties());
+                ParquetReaderPolicy.fromSystemProperties(),
+                ParquetNumericDecodeAdmissionPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -72,5 +76,10 @@ public final class NitroParquetScanResources
     ParquetReaderPolicy readerPolicy()
     {
         return readerPolicy;
+    }
+
+    ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy()
+    {
+        return numericDecodeAdmissionPolicy;
     }
 }

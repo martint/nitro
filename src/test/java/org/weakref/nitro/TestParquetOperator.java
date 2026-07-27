@@ -80,6 +80,7 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.parquet.ColumnReader;
@@ -148,7 +149,16 @@ public class TestParquetOperator
                                         ParquetReaderDiagnostics.disabled(),
                                         GENERIC_MATERIALIZATION,
                                         new ParquetNumericDecodePolicy(false, false, false),
-                                        GENERIC_DICTIONARY_FILTER)),
+                                        GENERIC_DICTIONARY_FILTER),
+                                new ParquetNumericDecodeAdmissionPolicy(
+                                        Integer.MAX_VALUE,
+                                        Long.MAX_VALUE,
+                                        false,
+                                        false,
+                                        Integer.MAX_VALUE,
+                                        Integer.MAX_VALUE,
+                                        Long.MAX_VALUE,
+                                        false)),
                         allocator,
                         List.of(file),
                         List.of("x"))) {

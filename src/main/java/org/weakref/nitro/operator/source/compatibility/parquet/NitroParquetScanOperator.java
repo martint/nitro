@@ -58,31 +58,15 @@ public final class NitroParquetScanOperator
     // Match TrinoParquetScanOperator's default so the per-batch operator overhead (Output objects, pooled
     // vector alloc/release) is amortized over the same number of batches in an apples-to-apples comparison.
     private static final int MAX_BATCH_ROWS = Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000);
-    private static final int DIRECT_NUMERIC_BATCH_DECODE_MIN_INT_COLUMNS =
-            Integer.getInteger("nitro.parquet.directNumericBatchDecodeMinIntColumns", 3);
-    private static final long DIRECT_NUMERIC_BATCH_DECODE_MIN_ROWS =
-            Long.getLong("nitro.parquet.directNumericBatchDecodeMinRows", 1L << 24);
     // A wide, all-numeric scan with no downstream constraint is usually feeding a cardinality-preserving operator.
     // In that shape, removing the page-sized materialization buffer can increase TLB pressure in the consumer even
     // though it saves allocation in the decoder. Wait for runtime evidence that a downstream operator is narrowing
     // the stream before enabling direct decode. Mixed scans retain immediate admission: their binary readers already
     // preserve page materialization, so the numeric decoder is not removing the pipeline's last page-local buffer.
-    private static final boolean DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericBatchDecodeRequireConstraintForAllNumeric", "true"));
     // Repeated scans of the same large physical column have already paid for independent reader state and will
     // revisit the same page-sized materialization. Decode dictionary/plain data directly into each public batch:
     // this removes that intermediate flat page while preserving the receiver's ordinary flat-vector contract.
     // Admission is execution-local and keyed only by normalized file/physical-column identity.
-    private static final boolean DIRECT_NUMERIC_REPEATED_SOURCE_DECODE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericRepeatedSourceDecode", "true"));
-    private static final int DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_CONSUMERS =
-            Integer.getInteger("nitro.parquet.directNumericRepeatedSourceAnchorMinConsumers", 3);
-    private static final int DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_COLUMNS =
-            Integer.getInteger("nitro.parquet.directNumericRepeatedSourceAnchorMinColumns", 2);
-    private static final long DIRECT_NUMERIC_REPEATED_SOURCE_MIN_ROWS =
-            Long.getLong("nitro.parquet.directNumericRepeatedSourceMinRows", 1L << 25);
-    private static final boolean DEBUG_DIRECT_NUMERIC_BATCH_DECODE =
-            Boolean.getBoolean("nitro.debug.directNumericBatchDecode");
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
     // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
     // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
@@ -187,6 +171,7 @@ public final class NitroParquetScanOperator
     private final DecompressedPageCache decompressedPages;
     private final Allocator.SharedResource<DirectNumericBatchDecodeAdmission> directNumericBatchDecodeLease;
     private final DirectNumericBatchDecodeAdmission directNumericBatchDecodeAdmission;
+    private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -334,7 +319,8 @@ public final class NitroParquetScanOperator
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
                 resources.decompressedPageCachePolicy(),
-                resources.readerPolicy());
+                resources.readerPolicy(),
+                resources.numericDecodeAdmissionPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -345,7 +331,8 @@ public final class NitroParquetScanOperator
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
-            ParquetReaderPolicy readerPolicy)
+            ParquetReaderPolicy readerPolicy,
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -360,8 +347,10 @@ public final class NitroParquetScanOperator
                                 allocator.nativeBufferAdvice()))
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
+        this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
-                directNumericBatchDecodeAdmissionKey, DirectNumericBatchDecodeAdmission::new);
+                directNumericBatchDecodeAdmissionKey,
+                () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
         this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
         checkArgument(!paths.isEmpty(), "paths is empty");
@@ -524,21 +513,21 @@ public final class NitroParquetScanOperator
         }
         boolean broadEligible = directNumericBatchDecodeAdmission.admitted();
         boolean broadAdmission = broadEligible &&
-                (!DIRECT_NUMERIC_BATCH_DECODE_REQUIRE_CONSTRAINT_FOR_ALL_NUMERIC || !allNumeric || lazyConstrained);
-        boolean repeatedSourceCandidate = DIRECT_NUMERIC_REPEATED_SOURCE_DECODE &&
-                totalRows >= DIRECT_NUMERIC_REPEATED_SOURCE_MIN_ROWS;
+                (!numericDecodeAdmissionPolicy.requireConstraintForAllNumeric() || !allNumeric || lazyConstrained);
+        boolean repeatedSourceCandidate = numericDecodeAdmissionPolicy.repeatedSourceDecode() &&
+                totalRows >= numericDecodeAdmissionPolicy.repeatedSourceMinRows();
         int repeatedAnchorColumns = 0;
         if (repeatedSourceCandidate) {
             for (ColumnReader reader : readers) {
                 if (reader.kind() != ColumnReader.Kind.BINARY &&
-                        reader.hasRepeatedSource(DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_CONSUMERS)) {
+                        reader.hasRepeatedSource(numericDecodeAdmissionPolicy.repeatedSourceAnchorMinConsumers())) {
                     repeatedAnchorColumns++;
                 }
             }
         }
         boolean repeatedSourceAdmission =
-                repeatedAnchorColumns >= DIRECT_NUMERIC_REPEATED_SOURCE_ANCHOR_MIN_COLUMNS;
-        if (DEBUG_DIRECT_NUMERIC_BATCH_DECODE && repeatedAnchorColumns > 0 && !repeatedSourceAdmissionReported) {
+                repeatedAnchorColumns >= numericDecodeAdmissionPolicy.repeatedSourceAnchorMinColumns();
+        if (numericDecodeAdmissionPolicy.diagnostics() && repeatedAnchorColumns > 0 && !repeatedSourceAdmissionReported) {
             repeatedSourceAdmissionReported = true;
             System.err.printf(
                     "[direct-numeric-repeated-source-admission] rows=%d repeatedAnchorColumns=%d admitted=%s%n",
@@ -2091,14 +2080,20 @@ public final class NitroParquetScanOperator
     private static final class DirectNumericBatchDecodeAdmission
             implements AutoCloseable
     {
+        private final ParquetNumericDecodeAdmissionPolicy policy;
         private int scans;
         private int qualifyingScans;
         private boolean reported;
 
+        private DirectNumericBatchDecodeAdmission(ParquetNumericDecodeAdmissionPolicy policy)
+        {
+            this.policy = requireNonNull(policy, "policy is null");
+        }
+
         public void register(long rows, int intColumns)
         {
             scans++;
-            if (rows >= DIRECT_NUMERIC_BATCH_DECODE_MIN_ROWS && intColumns >= DIRECT_NUMERIC_BATCH_DECODE_MIN_INT_COLUMNS) {
+            if (rows >= policy.minRows() && intColumns >= policy.minIntColumns()) {
                 qualifyingScans++;
             }
         }
@@ -2106,7 +2101,7 @@ public final class NitroParquetScanOperator
         public boolean admitted()
         {
             boolean admitted = qualifyingScans > 0;
-            if (DEBUG_DIRECT_NUMERIC_BATCH_DECODE && !reported) {
+            if (policy.diagnostics() && !reported) {
                 reported = true;
                 System.err.printf(
                         "[direct-numeric-batch-admission] scans=%d qualifyingScans=%d admitted=%s%n",
