@@ -275,11 +275,31 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean generatedDictionaryHashProbeBatch,
             int singleDictionaryGroupCacheMaxCardinalityAmplification,
             int singleDictionaryGroupCacheMaxCardinality,
+            int normalizedScratchMinPositions,
+            int normalizedScratchMaxAmplification,
+            int sparseCompositeAdmissionSampleSize,
+            int sparseCompositeAdmissionMaxDistinct,
+            int sparseCompositeExpensiveMinFields,
+            int sparseCompositeExpensiveMinDistinct,
             boolean identityGroupIds)
     {
+        public Table
+        {
+            if (normalizedScratchMinPositions <= 0 ||
+                    normalizedScratchMaxAmplification <= 0 ||
+                    sparseCompositeAdmissionSampleSize <= 0 ||
+                    sparseCompositeAdmissionMaxDistinct < 0 ||
+                    sparseCompositeAdmissionMaxDistinct > sparseCompositeAdmissionSampleSize ||
+                    sparseCompositeExpensiveMinFields <= 0 ||
+                    sparseCompositeExpensiveMinDistinct < 0 ||
+                    sparseCompositeExpensiveMinDistinct > sparseCompositeAdmissionSampleSize) {
+                throw new IllegalArgumentException("Invalid flat table admission policy");
+            }
+        }
+
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, 2, 1 << 16, true);
+            return new Table(false, false, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, true);
         }
 
         public static Table fromSystemProperties()
@@ -304,6 +324,24 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinality",
                             defaults.singleDictionaryGroupCacheMaxCardinality()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.normalizedScratchMinPositions",
+                            defaults.normalizedScratchMinPositions()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.normalizedScratchMaxAmplification",
+                            defaults.normalizedScratchMaxAmplification()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.sparseCompositeAdmissionSampleSize",
+                            defaults.sparseCompositeAdmissionSampleSize()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.sparseCompositeAdmissionMaxDistinct",
+                            defaults.sparseCompositeAdmissionMaxDistinct()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.sparseCompositeExpensiveMinFields",
+                            defaults.sparseCompositeExpensiveMinFields()),
+                    Integer.getInteger(
+                            "nitro.flatGrouping.sparseCompositeExpensiveMinDistinct",
+                            defaults.sparseCompositeExpensiveMinDistinct()),
                     booleanProperty("nitro.flatGrouping.identityGroupIds", defaults.identityGroupIds()));
         }
     }

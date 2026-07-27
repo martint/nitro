@@ -37,12 +37,6 @@ final class FlatGroupingTable
     private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
     private static final int MIN_RECORDS_PER_CHUNK_SHIFT = 10;
     private static final int MAX_RECORDS_PER_CHUNK_SHIFT = 16;
-    private static final int MIN_NORMALIZED_SCRATCH_POSITIONS = 128;
-    private static final int MAX_NORMALIZED_SCRATCH_AMPLIFICATION = 4;
-    private static final int SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE = 128;
-    private static final int SPARSE_COMPOSITE_ADMISSION_MAX_DISTINCT = 124;
-    private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS = 6;
-    private static final int SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT = 64;
     private static final double DEFAULT_LOAD_FACTOR = 15.0 / 16;
 
     private final FlatKeyLayout layout;
@@ -261,7 +255,7 @@ final class FlatGroupingTable
             return;
         }
         batchNormalizedHashesValid = layout.batchSupportsNormalizedIntKey() &&
-                shouldPrepareNormalizedScratch(size, mask.selectedCount());
+                shouldPrepareNormalizedScratch(policy, size, mask.selectedCount());
         if (batchNormalizedHashesValid) {
             ensureBatchNormalizedCapacity(size);
             Arrays.fill(batchNormalizedValid, 0, size, (byte) 0);
@@ -322,7 +316,7 @@ final class FlatGroupingTable
             arrayPool.release(previous);
         }
         batchNormalizedHashesValid = layout.batchSupportsNormalizedIntKey() &&
-                shouldPrepareNormalizedScratch(size, positionCount);
+                shouldPrepareNormalizedScratch(policy, size, positionCount);
         if (batchNormalizedHashesValid) {
             ensureBatchNormalizedCapacity(size);
             Arrays.fill(batchNormalizedValid, 0, size, (byte) 0);
@@ -357,10 +351,13 @@ final class FlatGroupingTable
      * bytes for every live row. Keep the accelerator only when that address space remains proportional to the work;
      * sparse batches retain the existing exact hash and record-equality path.
      */
-    static boolean shouldPrepareNormalizedScratch(int addressablePositions, int selectedPositions)
+    static boolean shouldPrepareNormalizedScratch(
+            FlatKeyTablePolicy.Table policy,
+            int addressablePositions,
+            int selectedPositions)
     {
-        return selectedPositions >= MIN_NORMALIZED_SCRATCH_POSITIONS &&
-                (long) addressablePositions <= (long) selectedPositions * MAX_NORMALIZED_SCRATCH_AMPLIFICATION;
+        return selectedPositions >= policy.normalizedScratchMinPositions() &&
+                (long) addressablePositions <= (long) selectedPositions * policy.normalizedScratchMaxAmplification();
     }
 
     private void ensureBatchNormalizedCapacity(int size)
@@ -513,11 +510,11 @@ final class FlatGroupingTable
         if (!sparseCompositeAdmissionCandidate(mask.selectedCount())) {
             return;
         }
-        long[] samples = arrayPool.borrowLongs(SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE);
+        long[] samples = arrayPool.borrowLongs(policy.sparseCompositeAdmissionSampleSize());
         int count = 0;
         for (int position : mask) {
             samples[count++] = layout.compositeValueId(position);
-            if (count == SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE) {
+            if (count == policy.sparseCompositeAdmissionSampleSize()) {
                 break;
             }
         }
@@ -530,8 +527,8 @@ final class FlatGroupingTable
         if (!sparseCompositeAdmissionCandidate(positionCount)) {
             return;
         }
-        long[] samples = arrayPool.borrowLongs(SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE);
-        for (int index = 0; index < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE; index++) {
+        long[] samples = arrayPool.borrowLongs(policy.sparseCompositeAdmissionSampleSize());
+        for (int index = 0; index < policy.sparseCompositeAdmissionSampleSize(); index++) {
             samples[index] = layout.compositeValueId(positions[index]);
         }
         finishSparseCompositeAdmission(samples);
@@ -542,13 +539,13 @@ final class FlatGroupingTable
     {
         if (!policy.sparseCompositeGroupCache() ||
                 sparseCompositeAdmissionDecided ||
-                positionCount < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE ||
+                positionCount < policy.sparseCompositeAdmissionSampleSize() ||
                 layout.batchDirectCompositeEligible() ||
                 !layout.batchArrayModeEligible()) {
             return false;
         }
         int fields = layout.fieldCount();
-        if (fields > 3 && fields < SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS) {
+        if (fields > 3 && fields < policy.sparseCompositeExpensiveMinFields()) {
             sparseCompositeAdmissionDecided = true;
             return false;
         }
@@ -558,10 +555,10 @@ final class FlatGroupingTable
     private void finishSparseCompositeAdmission(long[] samples)
     {
         int distinct = 0;
-        for (int index = 0; index < SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE; index++) {
+        for (int index = 0; index < policy.sparseCompositeAdmissionSampleSize(); index++) {
             long composite = samples[index];
             if (composite < 0) {
-                distinct = SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE;
+                distinct = policy.sparseCompositeAdmissionSampleSize();
                 break;
             }
             boolean seen = false;
@@ -579,13 +576,13 @@ final class FlatGroupingTable
         // composites have a different break-even point: a locally near-constant prefix is already cheap for the
         // authoritative hash table and can later expand into a large cache, while a broad but bounded first window
         // can amortize its costly full-key hash when the same stable composite ids recur in later batches.
-        sparseCompositeAdmitted = distinct <= SPARSE_COMPOSITE_ADMISSION_MAX_DISTINCT &&
-                (layout.fieldCount() < SPARSE_COMPOSITE_EXPENSIVE_MIN_FIELDS ||
-                        distinct >= SPARSE_COMPOSITE_EXPENSIVE_MIN_DISTINCT);
+        sparseCompositeAdmitted = distinct <= policy.sparseCompositeAdmissionMaxDistinct() &&
+                (layout.fieldCount() < policy.sparseCompositeExpensiveMinFields() ||
+                        distinct >= policy.sparseCompositeExpensiveMinDistinct());
         sparseCompositeAdmissionDecided = true;
         if (policy.debugSparseCompositeGroupCache()) {
             System.err.printf("[sparse-composite-admission] fields=%d samples=%d distinct=%d admitted=%s%n",
-                    layout.fieldCount(), SPARSE_COMPOSITE_ADMISSION_SAMPLE_SIZE, distinct, sparseCompositeAdmitted);
+                    layout.fieldCount(), policy.sparseCompositeAdmissionSampleSize(), distinct, sparseCompositeAdmitted);
         }
     }
 

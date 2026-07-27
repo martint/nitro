@@ -925,12 +925,13 @@ class TestFlatGroupingTable
     @Test
     void testNormalizedScratchRequiresProportionalAddressSpace()
     {
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(1024, 1024)).isTrue();
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(1024, 256)).isTrue();
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(1024, 255)).isFalse();
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(127, 127)).isFalse();
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(1 << 26, 2)).isFalse();
-        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(0, 0)).isFalse();
+        FlatKeyTablePolicy.Table policy = flatKeyTablePolicy.table();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 1024, 1024)).isTrue();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 1024, 256)).isTrue();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 1024, 255)).isFalse();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 127, 127)).isFalse();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 1 << 26, 2)).isFalse();
+        assertThat(FlatGroupingTable.shouldPrepareNormalizedScratch(policy, 0, 0)).isFalse();
     }
 
     @Test
