@@ -68,7 +68,15 @@ public final class WindowOperator
 
     public WindowOperator(Allocator allocator, Operator source, int[] partitionColumns, int[] orderingColumns, boolean[] descendingByColumn, List<RunningWindowFunction> windowFunctions)
     {
-        this(allocator, source, partitionColumns, orderingColumns, descendingByColumn, windowFunctions, Schema.unspecified(windowFunctions.size()));
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                windowFunctions,
+                Schema.unspecified(windowFunctions.size()),
+                allocator.engineResources().operatorResources().windowPolicy());
     }
 
     public WindowOperator(
@@ -80,6 +88,27 @@ public final class WindowOperator
             List<RunningWindowFunction> windowFunctions,
             Schema windowSchema)
     {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                windowFunctions,
+                windowSchema,
+                allocator.engineResources().operatorResources().windowPolicy());
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            WindowOperatorPolicy policy)
+    {
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
         }
@@ -90,7 +119,7 @@ public final class WindowOperator
         if (windowSchema.size() != windowFunctions.size()) {
             throw new IllegalArgumentException("windowSchema size must match windowFunctions size");
         }
-        this.policy = allocator.engineResources().operatorResources().windowPolicy();
+        this.policy = requireNonNull(policy, "policy is null");
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;

@@ -124,6 +124,7 @@ class TestOperatorResources
                 Operator semiInner = new ConstantTableOperator(allocator, 0, List.of());
                 Operator joinOuter = new ConstantTableOperator(allocator, 0, List.of());
                 Operator joinInner = new ConstantTableOperator(allocator, 0, List.of());
+                Operator windowSource = new ConstantTableOperator(allocator, 0, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
                 Operator filter = new FilterOperator(
                         filterSource,
@@ -150,7 +151,16 @@ class TestOperatorResources
                         true,
                         false,
                         operatorResources);
-                Operator hashJoin = new HashJoinOperator(operatorResources, allocator, joinOuter, 0, joinInner, 0)) {
+                Operator hashJoin = new HashJoinOperator(operatorResources, allocator, joinOuter, 0, joinInner, 0);
+                Operator window = new WindowOperator(
+                        allocator,
+                        windowSource,
+                        new int[0],
+                        new int[0],
+                        new boolean[0],
+                        List.of(new PartitionSumI64WindowFunction(0)),
+                        org.weakref.nitro.core.type.Schema.unspecified(1),
+                        operatorResources.windowPolicy())) {
             assertThat(group.outputCount()).isEqualTo(1);
             assertThat(filter.outputCount()).isZero();
             assertThat(aggregation.outputCount()).isZero();
@@ -159,6 +169,7 @@ class TestOperatorResources
             assertThat(marker.outputCount()).isEqualTo(1);
             assertThat(semiJoin.outputCount()).isZero();
             assertThat(hashJoin.outputCount()).isZero();
+            assertThat(window.outputCount()).isEqualTo(1);
             assertThat(operatorResources.semiJoinPolicy()).isEqualTo(SemiJoinOperatorPolicy.defaults());
 
             Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");
