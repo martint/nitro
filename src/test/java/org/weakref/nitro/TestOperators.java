@@ -1760,6 +1760,31 @@ public class TestOperators
                             row(1L, -1L),
                             row(2L, -2L)));
         }
+
+        Operator nestedOuter = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, 2})},
+                        Mask.all(2)));
+        Operator nestedInner = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {-1, -2})},
+                        Mask.all(2)));
+        try (Operator join = new NestedLoopJoinOperator(
+                allocator.engineResources().operatorResources(),
+                allocator,
+                nestedOuter,
+                0,
+                nestedInner,
+                0)) {
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            row(1L, -1L),
+                            row(2L, -2L)));
+        }
     }
 
     private static long readI64(Vector vector, int position)

@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Vector;
 
 interface StructuralComparisonKernel
+        extends StructuralIdentityKernel
 {
     default boolean allowsLegacyPhysicalShortcuts()
     {
@@ -23,14 +24,6 @@ interface StructuralComparisonKernel
     }
 
     int compare(
-            Vector leftValues,
-            Vector leftNulls,
-            int leftPosition,
-            Vector rightValues,
-            Vector rightNulls,
-            int rightPosition);
-
-    boolean identical(
             Vector leftValues,
             Vector leftNulls,
             int leftPosition,

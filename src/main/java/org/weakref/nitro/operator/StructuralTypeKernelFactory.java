@@ -31,6 +31,25 @@ import static java.util.Objects.requireNonNull;
  */
 public final class StructuralTypeKernelFactory
 {
+    StructuralIdentityKernel identity(TypeBinding type)
+    {
+        requireNonNull(type, "type is null");
+        TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
+        boolean hasValueRead = operators.valueRead().isPresent();
+        boolean hasIdentical = operators.identical().isPresent();
+        if (!hasValueRead && !hasIdentical) {
+            return LegacyStructuralIdentityKernel.INSTANCE;
+        }
+        if (!hasValueRead || !hasIdentical) {
+            throw new IllegalArgumentException("Type %s must provide valueRead and identical together"
+                    .formatted(type.identity()));
+        }
+        return new BoundStructuralIdentityKernel(
+                type,
+                operators.valueRead().orElseThrow(),
+                operators.identical().orElseThrow());
+    }
+
     StructuralKeyKernel key(TypeBinding type)
     {
         requireNonNull(type, "type is null");
@@ -50,6 +69,48 @@ public final class StructuralTypeKernelFactory
                 operators.valueRead().orElseThrow(),
                 operators.hash().orElseThrow(),
                 operators.identical().orElseThrow());
+    }
+
+    private static final class BoundStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        private static final MethodType STRUCTURAL_IDENTICAL_TYPE =
+                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class);
+
+        private final MethodHandle identical;
+
+        private BoundStructuralIdentityKernel(TypeBinding type, MethodHandle valueRead, MethodHandle identical)
+        {
+            Class<?> carrier = type.carrierType();
+            BoundStructuralComparisonKernel.requireValueReadType(type, valueRead, carrier);
+            BoundStructuralComparisonKernel.requireType(
+                    type, "identical", identical, MethodType.methodType(boolean.class, carrier, carrier));
+            MethodHandle structuralRead =
+                    valueRead.asType(MethodType.methodType(carrier, Vector.class, int.class));
+            this.identical = BoundStructuralComparisonKernel.bindBinary(
+                    structuralRead, identical, STRUCTURAL_IDENTICAL_TYPE);
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            if (OperatorVectorSupport.isNull(leftNulls, leftPosition) ||
+                    OperatorVectorSupport.isNull(rightNulls, rightPosition)) {
+                return false;
+            }
+            try {
+                return (boolean) identical.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Structural identity comparison failed", throwable);
+            }
+        }
     }
 
     StructuralComparisonKernel comparison(TypeBinding type)
@@ -249,6 +310,25 @@ public final class StructuralTypeKernelFactory
                 throw new IllegalStateException("Unexpected structural method-handle type: " + bound.type());
             }
             return bound;
+        }
+    }
+
+    private enum LegacyStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        INSTANCE;
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            return OperatorEqualitySemantics.equal(
+                    leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition);
         }
     }
 

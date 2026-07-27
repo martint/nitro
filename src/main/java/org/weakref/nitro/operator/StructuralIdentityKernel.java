@@ -15,8 +15,13 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Vector;
 
-interface StructuralKeyKernel
-        extends StructuralIdentityKernel
+interface StructuralIdentityKernel
 {
-    long hash(Vector values, Vector nulls, int position);
+    boolean identical(
+            Vector leftValues,
+            Vector leftNulls,
+            int leftPosition,
+            Vector rightValues,
+            Vector rightNulls,
+            int rightPosition);
 }
