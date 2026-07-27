@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -80,6 +81,7 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanPolicy;
@@ -87,7 +89,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanO
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
-import org.weakref.nitro.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.parquet.NitroParquetBatchSource;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
 import org.weakref.nitro.parquet.ParquetFile;
@@ -231,6 +233,39 @@ public class TestParquetOperator
                         List.of(file),
                         List.of("x"))) {
             assertThat(operator(scan)).matchesExactly(List.of(Row.row(10L), Row.row(20L)));
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceEmitsNativeSourceBatch()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-native-source.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, false, null),
+                new ParquetRow(30, true, 300L)));
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            assertThat(source.schema()).isSameAs(schema);
+            assertThat(source.column(0)).isSameAs(source.column(0));
+
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            var batch = ready.batch();
+            batch.select(new org.weakref.nitro.data.MaskSelection(Mask.sparse(new int[] {0, 2}, 3)));
+            assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
+                    .startsWith(100L, 0L, 300L);
+            assertThat(((BooleanVector) batch.column(0).borrow(Stream.NULLS)).values())
+                    .startsWith(false, true, false);
+            batch.close();
+
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
     }
 

@@ -14,8 +14,17 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.BatchSource;
 import org.weakref.nitro.core.source.LongDomain;
+import org.weakref.nitro.core.source.LongDomainCapability;
+import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
+import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
+import org.weakref.nitro.core.source.SourceCapability;
+import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BatchBufferOwner;
@@ -27,15 +36,13 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
-import org.weakref.nitro.operator.Batch;
-import org.weakref.nitro.operator.BatchBufferScope;
-import org.weakref.nitro.operator.DynamicFilter;
-import org.weakref.nitro.operator.Operator;
-import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
+import org.weakref.nitro.data.VectorBatchScope;
+import org.weakref.nitro.data.VectorColumnGeneration;
+import org.weakref.nitro.data.VectorSourceBatch;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -46,13 +53,12 @@ import static java.util.Objects.requireNonNull;
 /**
  * A Nitro-native Parquet scan operator built on {@link org.weakref.nitro.parquet} — mmap input, full
  * buffer reuse, and decoding straight into Nitro's flat value arrays (no per-position bridge, no
- * intermediate copies). This is the apples-to-apples counterpart of {@link TrinoParquetScanOperator}'s
- * full-decode path for measuring the decoder rewrite.
+ * intermediate copies).
  *
  * <p>First-slice scope: flat INT32/INT64 columns; produces {@code all()}-mask batches of up to 512 rows.
  */
-public final class NitroParquetScanOperator
-        implements Operator
+public final class NitroParquetBatchSource
+        implements BatchSource
 {
     // A wide, all-numeric scan with no downstream constraint is usually feeding a cardinality-preserving operator.
     // In that shape, removing the page-sized materialization buffer can increase TLB pressure in the consumer even
@@ -94,7 +100,7 @@ public final class NitroParquetScanOperator
     // window is convincingly dense — a genuinely non-selective filter reads dense everywhere, so even a biased sample
     // clears this higher bar. A merely-front-loaded window (q39: 21.9% first vs 1.5% overall) stays on skip.
     private final Allocator allocator;
-    private final BatchBufferScope batchBuffers;
+    private final VectorBatchScope batchBuffers;
     private final Allocator.Context allocationContext;
     private final Allocator.SharedResource<DecompressedPageCache> decompressedPageCacheLease;
     private final DecompressedPageCache decompressedPages;
@@ -113,6 +119,7 @@ public final class NitroParquetScanOperator
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final Schema outputSchema;
+    private final SourceColumnHandle[] sourceColumns;
     private final ParquetFile[] files;
     private final ColumnReader[] readers;
     private final ColumnReader[] nullReaders;
@@ -173,7 +180,7 @@ public final class NitroParquetScanOperator
     private boolean dfPayloadBulk;
 
     private long nextRow;
-    private Batch currentBatch;
+    private SourceBatch currentBatch;
     // Reused high-water scratch for decoding double columns (raw long bits -> reinterpreted into the value array),
     // so the eager full-batch path doesn't allocate a fresh long[] per batch per double column.
     private long[] doubleDecodeScratch;
@@ -217,16 +224,17 @@ public final class NitroParquetScanOperator
     private final boolean[] directNullResolved;
     private final long[] directNullPendingAdvance;
 
-    public NitroParquetScanOperator(
+    public NitroParquetBatchSource(
             NitroParquetScanResources resources,
             Allocator allocator,
             List<Path> paths,
-            List<String> columns)
+            Schema schema)
     {
         this(
                 allocator,
                 paths,
-                columns,
+                requireColumnNames(schema),
+                schema,
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
@@ -242,10 +250,11 @@ public final class NitroParquetScanOperator
                 resources.batchPolicy());
     }
 
-    private NitroParquetScanOperator(
+    private NitroParquetBatchSource(
             Allocator allocator,
             List<Path> paths,
             List<String> columns,
+            Schema schema,
             Object batchBufferPoolKey,
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
@@ -262,7 +271,7 @@ public final class NitroParquetScanOperator
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
-        this.batchBuffers = new BatchBufferScope(allocator, "NitroParquetScanOperator", batchBufferPoolKey);
+        this.batchBuffers = new VectorBatchScope(allocator, "NitroParquetBatchSource", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
         this.decompressedPageCacheLease = decompressedPageCachePolicy.enabled()
                 ? allocator.acquireSharedResource(
@@ -289,7 +298,14 @@ public final class NitroParquetScanOperator
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
         this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
-        this.outputSchema = Schema.unspecified(this.columnNames);
+        this.outputSchema = requireNonNull(schema, "schema is null");
+        if (schema.size() != this.columnNames.size()) {
+            throw new IllegalArgumentException("schema size does not match projected columns");
+        }
+        this.sourceColumns = new SourceColumnHandle[schema.size()];
+        for (int column = 0; column < sourceColumns.length; column++) {
+            sourceColumns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
+        }
         checkArgument(!paths.isEmpty(), "paths is empty");
 
         this.files = paths.stream().map(ParquetFile::open).toArray(ParquetFile[]::new);
@@ -374,12 +390,6 @@ public final class NitroParquetScanOperator
         this.debugFilterOutputs = new long[columnCount];
     }
 
-    @Override
-    public void pushDynamicFilter(DynamicFilter filter)
-    {
-        pushLongDomain(filter.column(), filter);
-    }
-
     private void pushLongDomain(int column, LongDomain filter)
     {
         // Only all-numeric scans take the skip-decode DF path (mirrors SkipDecodeScanOperator's eligibility):
@@ -407,44 +417,75 @@ public final class NitroParquetScanOperator
     }
 
     @Override
-    public boolean supportsDynamicFilterPushdown(int column)
-    {
-        return allNumeric && column >= 0 && column < readers.length;
-    }
-
-    @Override
-    public int outputCount()
-    {
-        return outputSchema.size();
-    }
-
-    @Override
-    public Schema outputSchema()
+    public Schema schema()
     {
         return outputSchema;
     }
 
     @Override
-    public boolean hasNext()
+    public SourceColumnHandle column(int outputIndex)
     {
-        return filtersActive() ? ensureWindow() : nextRow < totalRows;
+        return sourceColumns[outputIndex];
     }
 
     @Override
-    public Batch next()
+    public Set<SourceCapability> capabilities()
     {
-        if (!hasNext()) {
-            throw new IllegalStateException("No more Parquet rows");
+        if (deferredFilteredPayload) {
+            return allNumeric
+                    ? Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER, SourceCapability.CONSTRAINED_REBORROW)
+                    : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.CONSTRAINED_REBORROW);
+        }
+        return allNumeric
+                ? Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER)
+                : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN);
+    }
+
+    @Override
+    public OptionalLong exactRows()
+    {
+        return OptionalLong.of(totalRows);
+    }
+
+    @Override
+    public SourcePoll poll()
+    {
+        checkOpen();
+        if (!(filtersActive() ? ensureWindow() : nextRow < totalRows)) {
+            return SourcePoll.Finished.FINISHED;
         }
         closeCurrentBatch();
         enableDirectNumericBatchDecodeIfAdmitted();
 
         if (filtersActive()) {
-            return emitSlice();
+            return new SourcePoll.Ready(emitSlice());
         }
         int count = toIntExact(Math.min(batchPolicy.maxRows(), totalRows - nextRow));
         nextRow += count;
-        return lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count);
+        return new SourcePoll.Ready(lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count));
+    }
+
+    @Override
+    public RuntimeFilterAcceptance addRuntimeFilter(RuntimeFilter filter)
+    {
+        checkOpen();
+        requireNonNull(filter, "filter is null");
+        int column = columnIndex(filter.column());
+        if (column < 0 || !allNumeric) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        LongDomain domain = filter.domain().capability(LongDomainCapability.LONG_DOMAIN).orElse(null);
+        if (domain == null) {
+            return RuntimeFilterAcceptance.REJECTED;
+        }
+        pushLongDomain(column, domain);
+        return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+    }
+
+    @Override
+    public boolean supportsRuntimeFilter(SourceColumnHandle column)
+    {
+        return allNumeric && columnIndex(requireNonNull(column, "column is null")) >= 0;
     }
 
     private boolean directNumericBatchDecodeConfigured;
@@ -606,11 +647,11 @@ public final class NitroParquetScanOperator
         return false;
     }
 
-    private Batch fullBatch(int count)
+    private SourceBatch fullBatch(int count)
     {
         int columnCount = readers.length;
         lazyOutputResolution = false;
-        Output[] outputs = new Output[columnCount];
+        VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
 
         for (int c = 0; c < columnCount; c++) {
             ColumnReader reader = readers[c];
@@ -653,14 +694,14 @@ public final class NitroParquetScanOperator
             currentNulls[c] = nullVector;
 
             ScanOutputResolver outputResolver = outputResolvers[c];
-            outputs[c] = new Output(
+            outputs[c] = new VectorColumnGeneration(
                     nullVector == null ? Set.of(Stream.VALUES) : Set.of(Stream.VALUES, Stream.NULLS),
                     outputResolver.resolver(),
                     outputResolver);
         }
 
         Mask mask = allocator.allocateAllMask(allocationContext, count);
-        Batch batch = batchBuffers.batch(mask, noOpConstrainer, noOpClose, outputs);
+        SourceBatch batch = new VectorSourceBatch(outputSchema, mask, outputs, batchBuffers, noOpConstrainer, noOpClose);
         currentBatch = batch;
         return batch;
     }
@@ -671,7 +712,7 @@ public final class NitroParquetScanOperator
      * afterwards skip-decode only the survivor rows and scatter them back to position. Any column never pulled is
      * advanced past the batch when it closes so every reader stays aligned to the batch boundary.
      */
-    private Batch lazyBatch(int count)
+    private SourceBatch lazyBatch(int count)
     {
         int columnCount = readers.length;
         lazyOutputResolution = true;
@@ -688,10 +729,10 @@ public final class NitroParquetScanOperator
             java.util.Arrays.fill(lazyResolved, 0, columnCount, false);
         }
         java.util.Arrays.fill(directNullResolved, false);
-        Output[] outputs = new Output[columnCount];
+        VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
         for (int c = 0; c < columnCount; c++) {
             ScanOutputResolver outputResolver = outputResolvers[c];
-            outputs[c] = new Output(
+            outputs[c] = new VectorColumnGeneration(
                     nullable[c] ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
                     outputResolver.resolver(),
                     null,
@@ -700,7 +741,7 @@ public final class NitroParquetScanOperator
                     null,
                     outputResolver);
         }
-        Batch batch = batchBuffers.batch(lazyMask, lazyMaskConstrainer, lazyClose, outputs);
+        SourceBatch batch = new VectorSourceBatch(outputSchema, lazyMask, outputs, batchBuffers, lazyMaskConstrainer, lazyClose);
         currentBatch = batch;
         return batch;
     }
@@ -1467,20 +1508,20 @@ public final class NitroParquetScanOperator
     }
 
     /** Hand out the next configured maximum of surviving rows as an all-rows output batch. */
-    private Batch emitSlice()
+    private SourceBatch emitSlice()
     {
         int columnCount = readers.length;
         int start = windowSurvivorCursor;
         int sliceCount = Math.min(batchPolicy.maxRows(), windowSurvivorCount - start);
         windowSurvivorCursor += sliceCount;
 
-        Output[] outputs = new Output[columnCount];
+        VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
         for (int c = 0; c < columnCount; c++) {
             if (deferredFilteredPayload && !isFilterColumn(c)) {
                 currentValues[c] = null;
                 currentNulls[c] = null;
                 ScanOutputResolver outputResolver = outputResolvers[c];
-                outputs[c] = new Output(
+                outputs[c] = new VectorColumnGeneration(
                         nullable[c] ? Set.of(Stream.VALUES, Stream.NULLS) : Set.of(Stream.VALUES),
                         outputResolver.resolver(),
                         outputResolver);
@@ -1513,7 +1554,7 @@ public final class NitroParquetScanOperator
             currentValues[c] = valueVector;
             currentNulls[c] = nullVector;
             ScanOutputResolver outputResolver = outputResolvers[c];
-            outputs[c] = new Output(
+            outputs[c] = new VectorColumnGeneration(
                     nullVector == null ? Set.of(Stream.VALUES) : Set.of(Stream.VALUES, Stream.NULLS),
                     outputResolver.resolver(),
                     outputResolver);
@@ -1524,11 +1565,13 @@ public final class NitroParquetScanOperator
             lazyCount = sliceCount;
             lazyConstrained = false;
         }
-        Batch batch = batchBuffers.batch(
+        SourceBatch batch = new VectorSourceBatch(
+                outputSchema,
                 mask,
+                outputs,
+                batchBuffers,
                 deferredFilteredPayload ? lazyMaskConstrainer : noOpConstrainer,
-                deferredFilteredPayload ? deferredFilteredClose : noOpClose,
-                outputs);
+                deferredFilteredPayload ? deferredFilteredClose : noOpClose);
         currentBatch = batch;
         return batch;
     }
@@ -1538,7 +1581,7 @@ public final class NitroParquetScanOperator
     {
         private final int column;
         private final Function<Stream, Vector> resolver = this::resolve;
-        private final Output.MaskResolver maskResolver = this::resolveMask;
+        private final VectorColumnGeneration.MaskResolver maskResolver = this::resolveMask;
 
         private ScanOutputResolver(int column)
         {
@@ -1550,7 +1593,7 @@ public final class NitroParquetScanOperator
             return resolver;
         }
 
-        private Output.MaskResolver maskResolver()
+        private VectorColumnGeneration.MaskResolver maskResolver()
         {
             return maskResolver;
         }
@@ -1942,34 +1985,6 @@ public final class NitroParquetScanOperator
         }
     }
 
-    @Override
-    public void constrain(Mask mask)
-    {
-        // Late materialization: narrow the active mask so columns not yet pulled decode only for survivor rows.
-        if (lazyMask != null) {
-            lazyMask = mask;
-            lazyConstrained = true;
-        }
-    }
-
-    @Override
-    public boolean supportsRetainedBatches()
-    {
-        return false;
-    }
-
-    @Override
-    public long exactOutputRows()
-    {
-        return totalRows;
-    }
-
-    @Override
-    public boolean supportsConstrainedReborrow()
-    {
-        return deferredFilteredPayload;
-    }
-
     private boolean closed;
 
     @Override
@@ -2138,7 +2153,7 @@ public final class NitroParquetScanOperator
         return replacement;
     }
 
-    /** Drop stale aliases after BatchBufferScope has returned the closed generation's buffers to its pools. */
+    /** Drop stale aliases after the vector scope has returned the closed generation's buffers to its pools. */
     private void clearColumnVectors()
     {
         if (currentValues != null) {
@@ -2151,5 +2166,30 @@ public final class NitroParquetScanOperator
                 currentNulls[c] = null;
             }
         }
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("source is closed");
+        }
+    }
+
+    private int columnIndex(SourceColumnHandle handle)
+    {
+        for (int index = 0; index < sourceColumns.length; index++) {
+            if (sourceColumns[index] == handle) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static List<String> requireColumnNames(Schema schema)
+    {
+        requireNonNull(schema, "schema is null");
+        return schema.fields().stream()
+                .map(field -> field.name().orElseThrow(() -> new IllegalArgumentException("schema field name is required")))
+                .toList();
     }
 }

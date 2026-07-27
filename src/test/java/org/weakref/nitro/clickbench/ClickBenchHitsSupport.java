@@ -64,7 +64,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
-import org.weakref.nitro.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 

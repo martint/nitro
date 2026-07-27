@@ -21,6 +21,7 @@ import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -194,6 +195,15 @@ public final class VectorSourceBatch
         public Vector take(Stream stream)
         {
             return column.take(stream);
+        }
+
+        @Override
+        public <T> Optional<T> capability(org.weakref.nitro.core.batch.ColumnCapability<T> capability)
+        {
+            if (capability == VectorColumnCapability.VECTOR_GENERATION) {
+                return Optional.of(capability.valueType().cast(column));
+            }
+            return Optional.empty();
         }
     }
 }

@@ -24,9 +24,9 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
-import org.weakref.nitro.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 
 import java.nio.file.Path;
