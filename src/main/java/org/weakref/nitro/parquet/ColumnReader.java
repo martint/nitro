@@ -102,7 +102,6 @@ public final class ColumnReader
     // The crossover sits between the measured branchy-favoring queries (accepted fraction <= 0.09) and q20 (0.144);
     // 1/9 puts the boundary at ~0.111 with symmetric margin. Below the threshold a query keeps the branchy path, so a
     // misestimate near the boundary only trades ~equal costs.
-    private static final int VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR = 12;
     // The fused definition/ID cursor pays only for a durable, physically narrow regime: sparse nulls make almost
     // every ordinary definition tile mixed, wide IDs make the avoided scratch pass expensive, and a small but
     // nonzero acceptance set rules out the cheaper zero-acceptance cursor. Broader admission wins wall time while
@@ -1422,7 +1421,7 @@ public final class ColumnReader
         // acceptance table. Rebuilding the table is useful warm-up at that shape, so retain versioned reuse only
         // outside the narrow 1/12..1/9 acceptance band.
         boolean warmBranchyTable = sameChunk &&
-                (long) acceptedCount * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionarySize &&
+                (long) acceptedCount * dictionaryFilterPolicy.versionedPredicate().warmBranchyDenominator() >= dictionarySize &&
                 (long) acceptedCount * dictionaryFilterPolicy.compaction().branchlessDenominator() < dictionarySize;
         if (diagnostics.versionedDictionaryPredicates() &&
                 !versionedDictionaryPredicateReuseReported &&

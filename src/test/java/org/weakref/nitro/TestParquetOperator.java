@@ -129,7 +129,8 @@ public class TestParquetOperator
                     false,
                     new ParquetDictionaryFilterPolicy.Compaction(0, false, 0, 0, Integer.MAX_VALUE, false, Long.MAX_VALUE),
                     new ParquetDictionaryFilterPolicy.NullableFilter(false, false, Integer.MAX_VALUE, Integer.MAX_VALUE),
-                    new ParquetDictionaryFilterPolicy.ZeroAcceptedPageSkip(false, Long.MAX_VALUE));
+                    new ParquetDictionaryFilterPolicy.ZeroAcceptedPageSkip(false, Long.MAX_VALUE),
+                    new ParquetDictionaryFilterPolicy.VersionedPredicate(false, Integer.MAX_VALUE, 12));
     private static final ParquetLateMaterializationPolicy GENERIC_LATE_MATERIALIZATION =
             new ParquetLateMaterializationPolicy(
                     false,

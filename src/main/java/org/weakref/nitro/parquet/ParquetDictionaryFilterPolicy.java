@@ -23,13 +23,15 @@ public record ParquetDictionaryFilterPolicy(
         boolean vectorFilter,
         Compaction compaction,
         NullableFilter nullableFilter,
-        ZeroAcceptedPageSkip zeroAcceptedPageSkip)
+        ZeroAcceptedPageSkip zeroAcceptedPageSkip,
+        VersionedPredicate versionedPredicate)
 {
     public ParquetDictionaryFilterPolicy
     {
         requireNonNull(compaction, "compaction is null");
         requireNonNull(nullableFilter, "nullableFilter is null");
         requireNonNull(zeroAcceptedPageSkip, "zeroAcceptedPageSkip is null");
+        requireNonNull(versionedPredicate, "versionedPredicate is null");
     }
 
     public static ParquetDictionaryFilterPolicy defaults()
@@ -39,7 +41,8 @@ public record ParquetDictionaryFilterPolicy(
                 false,
                 new Compaction(9, true, 16, 12, 256, true, 1L << 16),
                 new NullableFilter(true, true, 100, 10),
-                new ZeroAcceptedPageSkip(true, 1L << 20));
+                new ZeroAcceptedPageSkip(true, 1L << 20),
+                new VersionedPredicate(true, 64 * 1024, 12));
     }
 
     public static ParquetDictionaryFilterPolicy fromSystemProperties()
@@ -68,7 +71,12 @@ public record ParquetDictionaryFilterPolicy(
                 new ZeroAcceptedPageSkip(
                         Boolean.parseBoolean(System.getProperty(
                                 "nitro.parquet.zeroAcceptedDictionaryPageSkip", "true")),
-                        Long.getLong("nitro.parquet.zeroAcceptedDictionaryMinObservedRows", 1L << 20)));
+                        Long.getLong("nitro.parquet.zeroAcceptedDictionaryMinObservedRows", 1L << 20)),
+                new VersionedPredicate(
+                        Boolean.parseBoolean(System.getProperty(
+                                "nitro.parquet.reuseVersionedDictionaryPredicates", "true")),
+                        Integer.getInteger("nitro.parquet.minVersionedDictionaryPredicateEntries", 64 * 1024),
+                        12));
     }
 
     public record Compaction(
@@ -87,4 +95,19 @@ public record ParquetDictionaryFilterPolicy(
             int directMinIdBitWidth) {}
 
     public record ZeroAcceptedPageSkip(boolean enabled, long minObservedRows) {}
+
+    public record VersionedPredicate(
+            boolean enabled,
+            int minDictionaryEntries,
+            int warmBranchyDenominator) {}
+
+    public boolean admitsVersionedPredicate(int dictionaryEntries, int filterValues)
+    {
+        boolean warmBranchyTable =
+                (long) filterValues * versionedPredicate.warmBranchyDenominator() >= dictionaryEntries &&
+                        (long) filterValues * compaction.branchlessDenominator() < dictionaryEntries;
+        return versionedPredicate.enabled() &&
+                dictionaryEntries >= versionedPredicate.minDictionaryEntries() &&
+                !warmBranchyTable;
+    }
 }

@@ -32,6 +32,7 @@ import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
+import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetReaderPolicy;
 
@@ -111,6 +112,7 @@ public final class NitroParquetScanOperator
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
+    private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -277,6 +279,7 @@ public final class NitroParquetScanOperator
         this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
+        this.dictionaryFilterPolicy = requireNonNull(readerPolicy, "readerPolicy is null").dictionaryFilter();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -388,11 +391,7 @@ public final class NitroParquetScanOperator
         }
         filtersByColumn[column] = filter;
         int dictionaryEntries = readers[column].peekDictionarySize();
-        boolean warmBranchyTable = (long) filter.size() * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionaryEntries &&
-                (long) filter.size() * DICTIONARY_BRANCHLESS_COMPACTION_DENOMINATOR < dictionaryEntries;
-        filterVersionsByColumn[column] = REUSE_VERSIONED_DICTIONARY_PREDICATES &&
-                dictionaryEntries >= MIN_VERSIONED_DICTIONARY_PREDICATE_ENTRIES &&
-                !warmBranchyTable
+        filterVersionsByColumn[column] = dictionaryFilterPolicy.admitsVersionedPredicate(dictionaryEntries, filter.size())
                 ? filter
                 : null;
         hasFilters = true;
@@ -533,14 +532,6 @@ public final class NitroParquetScanOperator
     }
 
     private static final boolean DEBUG_ROW_COUNTS = Boolean.getBoolean("nitro.debug.rowcounts");
-    private static final boolean REUSE_VERSIONED_DICTIONARY_PREDICATES =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.reuseVersionedDictionaryPredicates", "true"));
-    // A complete acceptance pass needs enough later row-id probes to amortize its table and code-shape cost. The
-    // only 45.5K-entry activation shapes lost their three-fork counter controls; every retained activation is >=100K.
-    private static final int MIN_VERSIONED_DICTIONARY_PREDICATE_ENTRIES =
-            Integer.getInteger("nitro.parquet.minVersionedDictionaryPredicateEntries", 64 * 1024);
-    private static final int VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR = 12;
-    private static final int DICTIONARY_BRANCHLESS_COMPACTION_DENOMINATOR = 9;
     private static final boolean DEBUG_DECOMPRESSION = Boolean.getBoolean("nitro.debug.decompression");
     private long debugRawRows;
     private long debugSurvivors;
