@@ -14,6 +14,9 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -21,18 +24,49 @@ import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Vector;
+
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestMembershipSet
 {
+    @Test
+    void membershipRejectsVectorOutsidePlanTimeTypeBinding()
+    {
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        TypeBinding i32Only = new TestingTypeBinding(new TypeIdentity("testing:i32-only"), Set.of(I32Vector.class));
+        MembershipSet set = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                Optional.of(i32Only));
+        try {
+            assertThatThrownBy(() -> set.addBatch(
+                    new I64Vector(new long[] {1}),
+                    null,
+                    Mask.all(1)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("testing:i32-only");
+        }
+        finally {
+            set.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
     @Test
     void exactLongMembershipSurvivesRangeExpansionAndEncodedProbe()
     {
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
         try {
             long[] initial = new long[1_024];
             for (int index = 0; index < initial.length; index++) {
@@ -68,7 +102,7 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
         try {
             set.addBatch(
                     new I64Vector(new long[] {Long.MIN_VALUE, 0, Long.MAX_VALUE}),
@@ -99,7 +133,7 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
         try {
             set.addBatch(new I64Vector(new long[] {1, 2, 2, 3}), null, Mask.all(4));
             set.addBatch(new I64Vector(new long[] {100_000_000}), null, Mask.all(1));
@@ -130,7 +164,7 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources());
+        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
         try {
             set.beginProbeBatch(new I64Vector(new long[] {1, 2}), null);
             try {
@@ -144,6 +178,22 @@ class TestMembershipSet
         finally {
             set.releaseBuffers();
             allocator.release(allocationContext);
+        }
+    }
+
+    private record TestingTypeBinding(TypeIdentity identity, Set<Class<? extends Vector>> supportedVectorTypes)
+            implements TypeBinding
+    {
+        @Override
+        public Class<?> carrierType()
+        {
+            return long.class;
+        }
+
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
         }
     }
 }

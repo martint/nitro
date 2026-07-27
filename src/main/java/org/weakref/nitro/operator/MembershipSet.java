@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -22,8 +23,10 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
+import java.util.Optional;
 
 import static java.lang.Math.toIntExact;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Exact, null-rejecting membership state selected from the physical key shape. Operators use this contract instead
@@ -34,34 +37,51 @@ final class MembershipSet
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
     private final OperatorResources operatorResources;
+    private final Optional<TypeBinding> keyType;
     private Index index;
 
-    MembershipSet(Allocator allocator, Allocator.Context allocationContext, OperatorResources operatorResources)
+    MembershipSet(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            OperatorResources operatorResources,
+            Optional<TypeBinding> keyType)
     {
         this.allocator = allocator;
         this.allocationContext = allocationContext;
         this.operatorResources = operatorResources;
+        this.keyType = requireNonNull(keyType, "keyType is null");
     }
 
     void addBatch(Vector values, Vector nulls, Mask mask)
     {
+        validateKeyType(values);
         if (index == null) {
             FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
             LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
                     ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
                     : null;
-            index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources);
+            index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources, keyType);
         }
         index.addBatch(values, nulls, mask);
     }
 
     void beginProbeBatch(Vector values, Vector nulls)
     {
+        validateKeyType(values);
         if (index == null) {
             // An empty build has no schema-bearing batch. The probe still needs an exact always-false index.
             index = new EmptyIndex();
         }
         index.beginProbeBatch(values, nulls);
+    }
+
+    private void validateKeyType(Vector values)
+    {
+        keyType.filter(TypeBinding::isSpecified)
+                .filter(type -> !type.supportsVector(values))
+                .ifPresent(type -> {
+                    throw new IllegalArgumentException("Membership key vector is not supported by type " + type.identity());
+                });
     }
 
     boolean contains(int position)
@@ -185,7 +205,11 @@ final class MembershipSet
         private Vector probeValues;
         private Vector probeNulls;
 
-        private GroupingIndex(Allocator allocator, Allocator.Context allocationContext, OperatorResources operatorResources)
+        private GroupingIndex(
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                OperatorResources operatorResources,
+                Optional<TypeBinding> keyType)
         {
             this.allocator = allocator;
             this.allocationContext = allocationContext;
@@ -194,7 +218,8 @@ final class MembershipSet
                     operatorResources.codeGeneration(),
                     operatorResources.grouping(),
                     operatorResources.adaptiveLongGroupingPolicy(),
-                    operatorResources.flatKeyTablePolicy());
+                    operatorResources.flatKeyTablePolicy(),
+                    keyType.stream().toList());
         }
 
         @Override

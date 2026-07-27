@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -30,6 +32,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -100,7 +103,38 @@ public class SemiJoinOperator
         this.policy = operatorResources.semiJoinPolicy();
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
-        this.membership = new MembershipSet(allocator, allocationContext, operatorResources);
+        this.membership = new MembershipSet(
+                allocator,
+                allocationContext,
+                operatorResources,
+                joinType(outer.outputSchema(), outerJoinColumn, inner.outputSchema(), innerJoinColumn));
+    }
+
+    private static Optional<TypeBinding> joinType(
+            Schema outerSchema,
+            int outerJoinColumn,
+            Schema innerSchema,
+            int innerJoinColumn)
+    {
+        Optional<TypeBinding> outerType = typeAt(outerSchema, outerJoinColumn);
+        Optional<TypeBinding> innerType = typeAt(innerSchema, innerJoinColumn);
+        if (outerType.filter(TypeBinding::isSpecified).isPresent() &&
+                innerType.filter(TypeBinding::isSpecified).isPresent() &&
+                !outerType.orElseThrow().identity().equals(innerType.orElseThrow().identity())) {
+            throw new IllegalArgumentException("Semi-join key types do not match");
+        }
+        return innerType.filter(TypeBinding::isSpecified)
+                .or(() -> outerType.filter(TypeBinding::isSpecified))
+                .or(() -> innerType)
+                .or(() -> outerType);
+    }
+
+    private static Optional<TypeBinding> typeAt(Schema schema, int column)
+    {
+        if (column < 0 || column >= schema.size()) {
+            return Optional.empty();
+        }
+        return Optional.of(schema.field(column).type());
     }
 
     @Override
