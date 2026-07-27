@@ -479,8 +479,6 @@ final class DistinctKeySet
         private static final int PAGE_SHIFT = 16;
         private static final int PAGE_BITS = 1 << PAGE_SHIFT;
         private static final int PAGE_WORDS = PAGE_BITS / Long.SIZE;
-        private static final int MIN_BITMAP_KEYS = 4_096;
-        private static final long MAX_BITS_PER_KEY = 64;
         private final PrimitiveArrayPool arrayPool;
         private final DistinctKeySetPolicy policy;
 
@@ -522,7 +520,7 @@ final class DistinctKeySet
             if (bitmapPages != null && mask.all()) {
                 return addDenseBitmapBatch(keyValues, keyNulls, mask.size(), distinctPositions);
             }
-            if (bitmapPages == null && (!policy.adaptivePagedLongBitmap() || size >= MIN_BITMAP_KEYS)) {
+            if (bitmapPages == null && (!policy.adaptivePagedLongBitmap() || size >= policy.pagedLongBitmapMinKeys())) {
                 pooledKeys.enableVectorTags();
                 return addFinalHashBatch(keyValues, keyNulls, mask, distinctPositions);
             }
@@ -570,7 +568,8 @@ final class DistinctKeySet
                     page = arrayPool.borrowLongs(PAGE_WORDS);
                     Arrays.fill(page, 0);
                     bitmapPages.put(pageId, page);
-                    if ((long) bitmapPages.size() * PAGE_BITS > Math.max(MIN_BITMAP_KEYS, size) * MAX_BITS_PER_KEY) {
+                    if ((long) bitmapPages.size() * PAGE_BITS >
+                            Math.max(policy.pagedLongBitmapMinKeys(), size) * policy.pagedLongBitmapMaxBitsPerKey()) {
                         convertToHash();
                         if (addHashKey(key)) {
                             size++;
@@ -716,10 +715,10 @@ final class DistinctKeySet
             // Representation selection is a bounded admission phase, not a permanent steady-state tax. A stream
             // whose first window is sparse remains a hash set; continuing to maintain its extrema and retest the
             // same predicate made wide 64-bit domains pay several operations for every later distinct key.
-            if (policy.adaptivePagedLongBitmap() && size <= MIN_BITMAP_KEYS) {
+            if (policy.adaptivePagedLongBitmap() && size <= policy.pagedLongBitmapMinKeys()) {
                 minimumKey = Math.min(minimumKey, key);
                 maximumKey = Math.max(maximumKey, key);
-                if (size == MIN_BITMAP_KEYS && denseEnoughForBitmap()) {
+                if (size == policy.pagedLongBitmapMinKeys() && denseEnoughForBitmap()) {
                     convertToBitmap();
                 }
             }
@@ -734,7 +733,8 @@ final class DistinctKeySet
                 page = arrayPool.borrowLongs(PAGE_WORDS);
                 Arrays.fill(page, 0);
                 bitmapPages.put(pageId, page);
-                if ((long) bitmapPages.size() * PAGE_BITS > Math.max(MIN_BITMAP_KEYS, size) * MAX_BITS_PER_KEY) {
+                if ((long) bitmapPages.size() * PAGE_BITS >
+                        Math.max(policy.pagedLongBitmapMinKeys(), size) * policy.pagedLongBitmapMaxBitsPerKey()) {
                     convertToHash();
                     return addKey(key);
                 }
@@ -753,7 +753,7 @@ final class DistinctKeySet
         private boolean denseEnoughForBitmap()
         {
             long range = maximumKey - minimumKey;
-            return range >= 0 && range / MAX_BITS_PER_KEY < size;
+            return range >= 0 && range / policy.pagedLongBitmapMaxBitsPerKey() < size;
         }
 
         private void convertToBitmap()
@@ -775,7 +775,7 @@ final class DistinctKeySet
 
         private void convertToHash()
         {
-            createHash(Math.max(MIN_BITMAP_KEYS, size));
+            createHash(Math.max(policy.pagedLongBitmapMinKeys(), size));
             for (Long2ObjectMap.Entry<long[]> entry : bitmapPages.long2ObjectEntrySet()) {
                 long pageBase = entry.getLongKey() << PAGE_SHIFT;
                 long[] page = entry.getValue();

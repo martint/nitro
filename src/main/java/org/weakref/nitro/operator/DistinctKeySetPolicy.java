@@ -33,6 +33,8 @@ public record DistinctKeySetPolicy(
         int adaptiveCompactLongPairSampleSize,
         int adaptiveCompactMultiLongMinArity,
         boolean adaptivePagedLongBitmap,
+        int pagedLongBitmapMinKeys,
+        long pagedLongBitmapMaxBitsPerKey,
         boolean emptyBinaryFastPath,
         boolean filterSentinelBeforeHash,
         boolean adaptiveDirectBatch,
@@ -53,6 +55,9 @@ public record DistinctKeySetPolicy(
         if (adaptiveCompactLongPairStartBatch <= 0) {
             throw new IllegalArgumentException("adaptiveCompactLongPairStartBatch must be positive");
         }
+        if (pagedLongBitmapMinKeys <= 0 || pagedLongBitmapMaxBitsPerKey <= 0) {
+            throw new IllegalArgumentException("Paged-long bitmap admission values must be positive");
+        }
     }
 
     public static DistinctKeySetPolicy defaults()
@@ -69,6 +74,8 @@ public record DistinctKeySetPolicy(
                 256,
                 3,
                 true,
+                4_096,
+                64,
                 true,
                 true,
                 true,
@@ -92,6 +99,8 @@ public record DistinctKeySetPolicy(
                 Integer.getInteger("nitro.distinct.adaptiveCompactLongPairSampleSize", 256),
                 Integer.getInteger("nitro.distinct.adaptiveCompactMultiLongMinArity", 3),
                 booleanProperty("nitro.distinct.adaptivePagedLongBitmap", true),
+                Integer.getInteger("nitro.distinct.pagedLongBitmapMinKeys", 4_096),
+                Long.getLong("nitro.distinct.pagedLongBitmapMaxBitsPerKey", 64L),
                 booleanProperty("nitro.distinct.emptyBinaryFastPath", true),
                 booleanProperty("nitro.distinct.filterSentinelBeforeHash", true),
                 booleanProperty("nitro.distinct.adaptiveDirectBatch", true),
