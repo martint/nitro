@@ -32,13 +32,8 @@ import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCache;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
-import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
 import org.weakref.nitro.parquet.ParquetFile;
-import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
-import org.weakref.nitro.parquet.ParquetNumericDecodePolicy;
-import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
-import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
-import org.weakref.nitro.parquet.RleReaderPolicy;
+import org.weakref.nitro.parquet.ParquetReaderPolicy;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -339,12 +334,7 @@ public final class NitroParquetScanOperator
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
                 resources.decompressedPageCachePolicy(),
-                resources.rleReaderPolicy(),
-                resources.pageNavigationPolicy(),
-                resources.readerDiagnostics(),
-                resources.materializationPolicy(),
-                resources.numericDecodePolicy(),
-                resources.dictionaryFilterPolicy());
+                resources.readerPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -355,12 +345,7 @@ public final class NitroParquetScanOperator
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
-            RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy,
-            ParquetReaderDiagnostics readerDiagnostics,
-            ParquetMaterializationPolicy materializationPolicy,
-            ParquetNumericDecodePolicy numericDecodePolicy,
-            ParquetDictionaryFilterPolicy dictionaryFilterPolicy)
+            ParquetReaderPolicy readerPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -402,12 +387,7 @@ public final class NitroParquetScanOperator
                     first.decimal(),
                     decompressedPages,
                     arrayPool,
-                    rleReaderPolicy,
-                    pageNavigationPolicy,
-                    readerDiagnostics,
-                    materializationPolicy,
-                    numericDecodePolicy,
-                    dictionaryFilterPolicy);
+                    readerPolicy);
             nullable[c] = first.optional();
             if (DIRECT_NULL_MASK_READER && first.optional()) {
                 directNullScratch[c] = new boolean[0];

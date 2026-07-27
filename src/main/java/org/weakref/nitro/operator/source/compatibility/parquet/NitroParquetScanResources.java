@@ -14,12 +14,7 @@
 package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
-import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
-import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
-import org.weakref.nitro.parquet.ParquetNumericDecodePolicy;
-import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
-import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
-import org.weakref.nitro.parquet.RleReaderPolicy;
+import org.weakref.nitro.parquet.ParquetReaderPolicy;
 
 import static java.util.Objects.requireNonNull;
 
@@ -37,41 +32,21 @@ public final class NitroParquetScanResources
     private final Object decompressedPageCache = new Object();
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
-    private final RleReaderPolicy rleReaderPolicy;
-    private final ParquetPageNavigationPolicy pageNavigationPolicy;
-    private final ParquetReaderDiagnostics readerDiagnostics;
-    private final ParquetMaterializationPolicy materializationPolicy;
-    private final ParquetNumericDecodePolicy numericDecodePolicy;
-    private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
+    private final ParquetReaderPolicy readerPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
-            RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy,
-            ParquetReaderDiagnostics readerDiagnostics,
-            ParquetMaterializationPolicy materializationPolicy,
-            ParquetNumericDecodePolicy numericDecodePolicy,
-            ParquetDictionaryFilterPolicy dictionaryFilterPolicy)
+            ParquetReaderPolicy readerPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
-        this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
-        this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
-        this.readerDiagnostics = requireNonNull(readerDiagnostics, "readerDiagnostics is null");
-        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
-        this.numericDecodePolicy = requireNonNull(numericDecodePolicy, "numericDecodePolicy is null");
-        this.dictionaryFilterPolicy = requireNonNull(dictionaryFilterPolicy, "dictionaryFilterPolicy is null");
+        this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
     {
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
-                RleReaderPolicy.fromSystemProperties(),
-                ParquetPageNavigationPolicy.fromSystemProperties(),
-                ParquetReaderDiagnostics.fromSystemProperties(),
-                ParquetMaterializationPolicy.fromSystemProperties(),
-                ParquetNumericDecodePolicy.fromSystemProperties(),
-                ParquetDictionaryFilterPolicy.fromSystemProperties());
+                ParquetReaderPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -94,33 +69,8 @@ public final class NitroParquetScanResources
         return decompressedPageCachePolicy;
     }
 
-    RleReaderPolicy rleReaderPolicy()
+    ParquetReaderPolicy readerPolicy()
     {
-        return rleReaderPolicy;
-    }
-
-    ParquetPageNavigationPolicy pageNavigationPolicy()
-    {
-        return pageNavigationPolicy;
-    }
-
-    ParquetReaderDiagnostics readerDiagnostics()
-    {
-        return readerDiagnostics;
-    }
-
-    ParquetMaterializationPolicy materializationPolicy()
-    {
-        return materializationPolicy;
-    }
-
-    ParquetNumericDecodePolicy numericDecodePolicy()
-    {
-        return numericDecodePolicy;
-    }
-
-    ParquetDictionaryFilterPolicy dictionaryFilterPolicy()
-    {
-        return dictionaryFilterPolicy;
+        return readerPolicy;
     }
 }

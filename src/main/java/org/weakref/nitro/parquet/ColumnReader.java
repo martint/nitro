@@ -132,6 +132,7 @@ public final class ColumnReader
     private int cachedDictionarySize = Integer.MIN_VALUE;
     private long zeroAcceptedDictionaryRowsObserved;
 
+    private final ParquetReaderPolicy readerPolicy;
     private final RleReaderPolicy rleReaderPolicy;
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final ParquetReaderDiagnostics diagnostics;
@@ -292,20 +293,16 @@ public final class ColumnReader
             boolean decimal,
             DecompressedPageCache decompressedPages,
             PrimitiveArrayPool arrayPool,
-            RleReaderPolicy rleReaderPolicy,
-            ParquetPageNavigationPolicy pageNavigationPolicy,
-            ParquetReaderDiagnostics diagnostics,
-            ParquetMaterializationPolicy materializationPolicy,
-            ParquetNumericDecodePolicy numericDecodePolicy,
-            ParquetDictionaryFilterPolicy dictionaryFilterPolicy)
+            ParquetReaderPolicy readerPolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
-        this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
-        this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
-        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
-        this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
-        this.numericDecodePolicy = requireNonNull(numericDecodePolicy, "numericDecodePolicy is null");
-        this.dictionaryFilterPolicy = requireNonNull(dictionaryFilterPolicy, "dictionaryFilterPolicy is null");
+        this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
+        this.rleReaderPolicy = readerPolicy.rle();
+        this.pageNavigationPolicy = readerPolicy.pageNavigation();
+        this.diagnostics = readerPolicy.diagnostics();
+        this.materializationPolicy = readerPolicy.materialization();
+        this.numericDecodePolicy = readerPolicy.numericDecode();
+        this.dictionaryFilterPolicy = readerPolicy.dictionaryFilter();
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -357,12 +354,7 @@ public final class ColumnReader
                 flbaDecimal,
                 decompressedPages,
                 arrayPool,
-                rleReaderPolicy,
-                pageNavigationPolicy,
-                diagnostics,
-                materializationPolicy,
-                numericDecodePolicy,
-                dictionaryFilterPolicy);
+                readerPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
