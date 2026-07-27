@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -31,7 +32,9 @@ import org.weakref.nitro.data.VectorAccess;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -141,6 +144,18 @@ public class SemiJoinOperator
     public int outputCount()
     {
         return outer.outputCount() + (outputMatches ? 1 : 0);
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        Schema outerSchema = outer.outputSchema();
+        if (!outputMatches) {
+            return outerSchema;
+        }
+        List<Field> fields = new ArrayList<>(outerSchema.fields());
+        fields.add(new Field(Schema.unspecified(1).field(0).type(), false));
+        return new Schema(fields);
     }
 
     @Override

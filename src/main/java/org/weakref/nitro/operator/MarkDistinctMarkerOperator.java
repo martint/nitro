@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -22,6 +23,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -82,6 +84,14 @@ public final class MarkDistinctMarkerOperator
     public int outputCount()
     {
         return source.outputCount() + 1;
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        List<Field> fields = new ArrayList<>(source.outputSchema().fields());
+        fields.add(new Field(Schema.unspecified(1).field(0).type(), false));
+        return new Schema(fields);
     }
 
     @Override

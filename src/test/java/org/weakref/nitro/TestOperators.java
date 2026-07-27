@@ -1443,6 +1443,51 @@ public class TestOperators
     }
 
     @Test
+    void testMarkerOperatorsPreserveSourceSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field key = new Field("key", i32Only, false);
+        Field payload = new Field("payload", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(key, payload));
+        Schema keySchema = new Schema(List.of(key));
+
+        try (Operator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0},
+                typedTable(sourceSchema),
+                false,
+                allocator.engineResources().operatorResources());
+                Operator filteringSemiJoin = new SemiJoinOperator(
+                        allocator,
+                        typedTable(sourceSchema),
+                        0,
+                        typedTable(keySchema),
+                        0,
+                        true,
+                        false);
+                Operator markingSemiJoin = new SemiJoinOperator(
+                        allocator,
+                        typedTable(sourceSchema),
+                        0,
+                        typedTable(keySchema),
+                        0,
+                        true,
+                        true)) {
+            assertThat(filteringSemiJoin.outputSchema()).isSameAs(sourceSchema);
+            assertMarkerSchema(distinct.outputSchema(), key, payload);
+            assertMarkerSchema(markingSemiJoin.outputSchema(), key, payload);
+        }
+    }
+
+    private static void assertMarkerSchema(Schema schema, Field key, Field payload)
+    {
+        assertThat(schema.field(0)).isSameAs(key);
+        assertThat(schema.field(1)).isSameAs(payload);
+        assertThat(schema.field(2).type().isSpecified()).isFalse();
+        assertThat(schema.field(2).nullable()).isFalse();
+    }
+
+    @Test
     void testGroupedConditionalProductSumPreservesSqlNullAndZeroSemantics()
     {
         assertThat(operator(new GroupedAggregationOperator(
