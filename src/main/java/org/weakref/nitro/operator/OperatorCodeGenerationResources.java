@@ -34,6 +34,7 @@ public final class OperatorCodeGenerationResources
     private final DictionaryHashBatchKernelGenerator dictionaryHash = new DictionaryHashBatchKernelGenerator();
     private final MixedComposite3GroupingKernelGenerator mixedComposite3Grouping = new MixedComposite3GroupingKernelGenerator();
     private final DictionaryRecordEqualityKernelGenerator dictionaryRecordEquality = new DictionaryRecordEqualityKernelGenerator();
+    private final StructuralTypeKernelFactory structuralTypes = new StructuralTypeKernelFactory();
     private boolean closed;
 
     public OperatorCodeGenerationResources()
@@ -93,6 +94,12 @@ public final class OperatorCodeGenerationResources
     {
         checkOpen();
         return dictionaryRecordEquality;
+    }
+
+    public StructuralTypeKernelFactory structuralTypes()
+    {
+        checkOpen();
+        return structuralTypes;
     }
 
     @Override

@@ -43,6 +43,7 @@ public class TopNRankingOperator
     private final int limit;
     private final int maxBatchRows;
     private final Schema outputSchema;
+    private final StructuralComparisonKernel[] comparisonKernels;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -59,7 +60,15 @@ public class TopNRankingOperator
             Operator source,
             TopNRankingOperatorPolicy policy)
     {
-        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, defaultRankingSchema(), policy);
+        this(
+                allocator,
+                limit,
+                new int[0],
+                orderingColumns,
+                descendingByColumn,
+                source,
+                defaultRankingSchema(),
+                policy);
     }
 
     public TopNRankingOperator(
@@ -71,7 +80,16 @@ public class TopNRankingOperator
             Schema rankingSchema,
             TopNRankingOperatorPolicy policy)
     {
-        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, rankingSchema, policy);
+        this(
+                allocator,
+                limit,
+                new int[0],
+                orderingColumns,
+                descendingByColumn,
+                source,
+                rankingSchema,
+                policy,
+                allocator.engineResources().operatorResources().codeGeneration().structuralTypes());
     }
 
     public TopNRankingOperator(
@@ -83,7 +101,15 @@ public class TopNRankingOperator
             Operator source,
             TopNRankingOperatorPolicy policy)
     {
-        this(allocator, limit, partitionColumns, orderingColumns, descendingByColumn, source, defaultRankingSchema(), policy);
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                source,
+                defaultRankingSchema(),
+                policy);
     }
 
     public TopNRankingOperator(
@@ -95,6 +121,51 @@ public class TopNRankingOperator
             Operator source,
             Schema rankingSchema,
             TopNRankingOperatorPolicy policy)
+    {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                source,
+                rankingSchema,
+                policy,
+                allocator.engineResources().operatorResources().codeGeneration().structuralTypes());
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            Schema rankingSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                source,
+                rankingSchema,
+                requireNonNull(resources, "resources is null").topNRankingPolicy(),
+                resources.codeGeneration().structuralTypes());
+    }
+
+    private TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            Schema rankingSchema,
+            TopNRankingOperatorPolicy policy,
+            StructuralTypeKernelFactory structuralTypes)
     {
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopNRanking requires at least one ordering column");
@@ -114,6 +185,11 @@ public class TopNRankingOperator
         this.limit = limit;
         this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
         this.outputSchema = outputSchema(source.outputSchema(), rankingSchema);
+        this.comparisonKernels = comparisonKernels(
+                source.outputSchema(),
+                this.partitionColumns,
+                this.orderingColumns,
+                requireNonNull(structuralTypes, "structuralTypes is null"));
     }
 
     @Override
@@ -139,6 +215,22 @@ public class TopNRankingOperator
         List<Field> fields = new ArrayList<>(sourceSchema.fields());
         fields.add(rankingSchema.field(0));
         return new Schema(fields);
+    }
+
+    private static StructuralComparisonKernel[] comparisonKernels(
+            Schema sourceSchema,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            StructuralTypeKernelFactory structuralTypes)
+    {
+        StructuralComparisonKernel[] kernels = new StructuralComparisonKernel[sourceSchema.size()];
+        for (int column : partitionColumns) {
+            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        }
+        for (int column : orderingColumns) {
+            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        }
+        return kernels;
     }
 
     @Override
@@ -409,7 +501,7 @@ public class TopNRankingOperator
     {
         Streams leftStreams = left.page().columns()[column];
         Streams rightStreams = right.page().columns()[column];
-        return OperatorOrderingSemantics.compare(
+        return comparisonKernels[column].compare(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
                 left.position(),
@@ -422,7 +514,7 @@ public class TopNRankingOperator
     {
         Streams leftStreams = left.page().columns()[column];
         Streams rightStreams = right.page().columns()[column];
-        return OperatorEqualitySemantics.equal(
+        return comparisonKernels[column].identical(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
                 left.position(),

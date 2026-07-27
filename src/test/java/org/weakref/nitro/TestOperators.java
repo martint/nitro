@@ -114,6 +114,8 @@ import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.generator.SequenceGenerator;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -1588,6 +1590,94 @@ public class TestOperators
             assertThat(window.outputSchema().field(1)).isSameAs(rankField);
             assertThat(window.outputSchema().field(2)).isSameAs(runningField);
         }
+    }
+
+    @Test
+    void testTopNRankingUsesRegistrySuppliedStructuralSemantics()
+            throws ReflectiveOperationException
+    {
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        TypeOperators operators = new TypeOperators(
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "absoluteIdentical",
+                        MethodType.methodType(boolean.class, long.class, long.class))),
+                Optional.empty(),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "compareAbsolute",
+                        MethodType.methodType(int.class, long.class, long.class))),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "readI64",
+                        MethodType.methodType(long.class, Vector.class, int.class))));
+        TypeBinding absoluteLong = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:absolute-long");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        Schema sourceSchema = new Schema(List.of(new Field("value", absoluteLong, false)));
+        Operator source = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
+                        Mask.all(4)));
+
+        try (Operator ranking = new TopNRankingOperator(
+                allocator,
+                10,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                source,
+                Schema.unspecified(1),
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(ranking))
+                    .matchesExactly(List.of(
+                            row(1L, 1L),
+                            row(-1L, 1L),
+                            row(-2L, 3L),
+                            row(2L, 3L)));
+        }
+    }
+
+    private static long readI64(Vector vector, int position)
+    {
+        return ((I64Vector) vector).values()[position];
+    }
+
+    private static int compareAbsolute(long left, long right)
+    {
+        return Long.compare(Math.abs(left), Math.abs(right));
+    }
+
+    private static boolean absoluteIdentical(long left, long right)
+    {
+        return Math.abs(left) == Math.abs(right);
     }
 
     @Test
