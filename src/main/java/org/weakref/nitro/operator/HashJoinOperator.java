@@ -3000,7 +3000,9 @@ public class HashJoinOperator
         // per-output-row id remap are pure overhead. Abandon as soon as the distinct count shows the
         // column is high cardinality and cache a NOT_DICTIONARY marker so the caller wraps the raw
         // build column directly.
-        int distinctLimit = Math.max(16, length / 2);
+        int distinctLimit = Math.max(
+                outputPolicy.buildDictionaryMinDistinctValues(),
+                (int) ((long) length * outputPolicy.buildDictionaryMaxDistinctPercent() / 100));
         ValueIdInterner interner = new ValueIdInterner(distinctLimit, valueIdPolicy);
         byte[] data = source.data();
         long totalBytes = 0;
