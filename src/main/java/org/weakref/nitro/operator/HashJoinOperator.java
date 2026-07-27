@@ -3530,7 +3530,6 @@ public class HashJoinOperator
     {
         private static final float LOAD_FACTOR = 0.75f;
         private static final int EMPTY = -1;
-        private static final int NO_MATCH_ROW_REFERENCE32 = -1;
         // A large key-only build does not need payload columns, and an exact non-negative range map can be built
         // without first paying for an open-addressed hash table. Keys outside the bounded domain fall back to the
         // ordinary hash representation; duplicates retain their exact multiplicity through the existing direct
@@ -3559,9 +3558,7 @@ public class HashJoinOperator
         private long maxKey = Long.MIN_VALUE;
         private boolean hasDuplicates;
         private boolean finalized;
-        private boolean arrayMode;
-        private long[] directRows;
-        private int[] directRows32;
+        private final DirectLongJoinLookup directLookup;
         // Exact membership filter for a sparse but bounded integer domain.  One bit per possible key lets a
         // predominantly-negative probe avoid the larger tag/key hash table entirely.  Unlike a Bloom filter this
         // has no false positives; the hash table is consulted only for keys whose bit is present.
@@ -3625,6 +3622,7 @@ public class HashJoinOperator
             this.denseSequence = new DenseJoinSequence(
                     policy.denseBuildFastPath(),
                     policy.computeDenseSingleBatchRowReferences());
+            this.directLookup = new DirectLongJoinLookup(arrayPool, NO_MATCH_ROW_REFERENCE);
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
             this.expectedBuildRows = expectedSize;
@@ -5264,18 +5262,8 @@ public class HashJoinOperator
                 int entry = directBuild.entry((int) key);
                 return entry == EMPTY ? NO_MATCH_ROW_REFERENCE : rows.referenceAt(directEntryHead(entry));
             }
-            if (arrayMode) {
-                if (key < minKey || key > maxKey) {
-                    return NO_MATCH_ROW_REFERENCE;
-                }
-                if (denseSequence.referencesActive()) {
-                    return denseSingleBatchRowReference((int) (key - minKey));
-                }
-                if (directRows32 != null) {
-                    int rowReference = directRows32[(int) (key - minKey)];
-                    return rowReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : JoinRowReference.unpackCompact(rowReference);
-                }
-                return directRows[(int) (key - minKey)];
+            if (directLookup.isActive()) {
+                return directLookup.reference(key, denseSequence);
             }
             if (!sparseRangeContains(key)) {
                 return NO_MATCH_ROW_REFERENCE;
@@ -5283,11 +5271,6 @@ public class HashJoinOperator
             int slot = hashTable.findSlot(key);
             int head = hashTable.head(slot);
             return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rows.referenceAt(head);
-        }
-
-        private long denseSingleBatchRowReference(int ordinal)
-        {
-            return denseSequence.referenceAt(ordinal);
         }
 
         private static long denseSingleBatchRowReferenceForKey(long key, long minKey, long maxKey, long base)
@@ -5634,48 +5617,41 @@ public class HashJoinOperator
             }
             if (denseSequence.keyCandidate() && range == size && denseSequence.referenceCandidate()) {
                 denseSequence.activateObservedReferences();
-                arrayMode = true;
+                directLookup.activateArithmetic(minKey, maxKey);
                 releaseHashTable();
                 releaseRowArrays();
                 return;
             }
             if (rows.referencesFit32()) {
                 if (denseSequence.keyCandidate() && range == size) {
-                    directRows32 = rows.packReferences32(rowCount);
+                    directLookup.activateCompact(minKey, maxKey, rows.packReferences32(rowCount));
                 }
                 else {
-                    int[] direct = arrayPool.borrowInts((int) range);
-                    Arrays.fill(direct, NO_MATCH_ROW_REFERENCE32);
+                    int[] direct = directLookup.activateCompact(minKey, maxKey, (int) range);
                     for (int slot = 0; slot < hashTable.capacity(); slot++) {
                         int head = hashTable.head(slot);
                         if (head != EMPTY) {
                             direct[(int) (hashTable.key(slot) - minKey)] = JoinRowReference.packCompact(rows.referenceAt(head));
                         }
                     }
-                    directRows32 = direct;
                 }
-                arrayMode = true;
                 releaseHashTable();
                 releaseRowArrays();
                 return;
             }
             if (denseSequence.keyCandidate() && range == size) {
-                directRows = rows.takeFullReferences();
-                arrayMode = true;
+                directLookup.activateFull(minKey, maxKey, rows.takeFullReferences());
                 releaseHashTable();
                 releaseRowArrays();
                 return;
             }
-            long[] direct = arrayPool.borrowLongs((int) range);
-            Arrays.fill(direct, NO_MATCH_ROW_REFERENCE);
+            long[] direct = directLookup.activateFull(minKey, maxKey, (int) range);
             for (int slot = 0; slot < hashTable.capacity(); slot++) {
                 int head = hashTable.head(slot);
                 if (head != EMPTY) {
                     direct[(int) (hashTable.key(slot) - minKey)] = rows.referenceAt(head);
                 }
             }
-            directRows = direct;
-            arrayMode = true;
             // The hash table and chain are no longer consulted in array mode.
             releaseHashTable();
             releaseRowArrays();
@@ -5707,7 +5683,7 @@ public class HashJoinOperator
                     buildRowReferencesUnused &&
                     size >= policy.denseUnusedBuildMembershipMinKeys() &&
                     range == size) {
-                arrayMode = true;
+                directLookup.activateArithmetic(minKey, maxKey);
                 denseSequence.activateReferences(0, 0, 0);
                 releaseDirectBuildArrays();
                 releaseHashTable();
@@ -5747,7 +5723,7 @@ public class HashJoinOperator
             if (!sequentialReferences) {
                 return;
             }
-            arrayMode = true;
+            directLookup.activateArithmetic(minKey, maxKey);
             denseSequence.activateReferences(firstBatchIndex, firstPosition, firstReference);
             releaseDirectBuildArrays();
             releaseHashTable();
@@ -5783,21 +5759,8 @@ public class HashJoinOperator
                 }
                 return rows.resetChain(chain, head, count);
             }
-            if (arrayMode) {
-                if (key < minKey || key > maxKey) {
-                    return LongLists.emptyList();
-                }
-                long rowReference;
-                if (denseSequence.referencesActive()) {
-                    rowReference = denseSingleBatchRowReference((int) (key - minKey));
-                }
-                else if (directRows32 != null) {
-                    int compactReference = directRows32[(int) (key - minKey)];
-                    rowReference = compactReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : JoinRowReference.unpackCompact(compactReference);
-                }
-                else {
-                    rowReference = directRows[(int) (key - minKey)];
-                }
+            if (directLookup.isActive()) {
+                long rowReference = directLookup.reference(key, denseSequence);
                 return rowReference == NO_MATCH_ROW_REFERENCE ? LongLists.emptyList() : single.withValue(rowReference);
             }
             if (!sparseRangeContains(key)) {
@@ -5829,10 +5792,7 @@ public class HashJoinOperator
             releaseHashTable();
             releaseRowArrays();
             releaseDirectBuildArrays();
-            arrayPool.release(directRows);
-            directRows = null;
-            arrayPool.release(directRows32);
-            directRows32 = null;
+            directLookup.release();
             sparseMembership.release();
             arrayPool.release(orderedRows);
             orderedRows = null;
