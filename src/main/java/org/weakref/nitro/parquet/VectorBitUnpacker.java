@@ -23,7 +23,7 @@ import java.nio.ByteOrder;
 
 /**
  * SIMD unpacker for one byte-aligned group of 8 bit-packed values, generalized over the bit width into a
- * single parametric kernel (one {@link Tables} per width, cached). Mirrors the technique in Trino's
+ * single parametric kernel (one {@link Tables} value per width and reader). Mirrors the technique in Trino's
  * hand-written per-width unpackers — load 8 little-endian ints (256 bits), and for each output lane gather
  * the int holding the value's low bits (shift right + mask) OR the int holding any bits that spilled into
  * the next int (mask + shift left) — but derives the shuffles/shifts/masks arithmetically from the width
@@ -33,8 +33,6 @@ import java.nio.ByteOrder;
  */
 final class VectorBitUnpacker
 {
-    private static final Tables[] CACHE = new Tables[33];
-
     private VectorBitUnpacker() {}
 
     record Tables(
@@ -45,17 +43,7 @@ final class VectorBitUnpacker
             IntVector maskBeforeShiftLeft,
             IntVector mask) {}
 
-    static Tables tablesFor(int width)
-    {
-        Tables tables = CACHE[width];
-        if (tables == null) {
-            tables = build(width);
-            CACHE[width] = tables;
-        }
-        return tables;
-    }
-
-    private static Tables build(int width)
+    static Tables buildTables(int width)
     {
         int[] shuffleLow = new int[8];
         int[] shuffleHigh = new int[8];

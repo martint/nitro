@@ -45,6 +45,8 @@ final class RleReader
     private int rleRemaining;
     private int bitPackedRemaining;
     private long bitCursor; // absolute bit offset into the segment, within the active bit-packed run
+    private int vectorTablesWidth = -1;
+    private VectorBitUnpacker.Tables vectorTables;
 
     RleReader(RleReaderPolicy policy)
     {
@@ -399,7 +401,7 @@ final class RleReader
         // cursor mid-byte (skip-decode) -- then the scalar branchless reader runs. cursor advances by width*8 bits
         // = whole bytes per group, so alignment is invariant across groups.
         if ((cursor & 7) == 0) {
-            VectorBitUnpacker.Tables tables = VectorBitUnpacker.tablesFor(width);
+            VectorBitUnpacker.Tables tables = vectorTablesFor(width);
             int groups = n & ~7;
             long limit = segmentLimit - 32;
             while (i < groups) {
@@ -418,6 +420,15 @@ final class RleReader
             cursor += width;
         }
         bitCursor = cursor;
+    }
+
+    private VectorBitUnpacker.Tables vectorTablesFor(int width)
+    {
+        if (vectorTablesWidth != width) {
+            vectorTables = VectorBitUnpacker.buildTables(width);
+            vectorTablesWidth = width;
+        }
+        return vectorTables;
     }
 
     /**

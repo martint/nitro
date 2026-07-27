@@ -109,6 +109,20 @@ class TestRleReader
     }
 
     @Test
+    void testReaderLocalVectorTablesFollowChangingBitWidths()
+    {
+        RleReader reader = new RleReader(DEFAULT_POLICY);
+
+        for (int width : new int[] {3, 7, 3}) {
+            int[] expected = {0, 1, 2, 3, 4, 5, 6, (1 << width) - 1};
+            reader.init(MemorySegment.ofArray(bitPackedRun(width, expected)), 0, width);
+            int[] actual = new int[expected.length];
+            reader.read(actual, 0, actual.length);
+            assertThat(actual).containsExactly(expected);
+        }
+    }
+
+    @Test
     void testDisabledPolicyUsesGenericDecodingPaths()
     {
         RleReaderPolicy policy = new RleReaderPolicy(false, false, false, false);
