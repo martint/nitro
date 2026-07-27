@@ -55,6 +55,7 @@ public class SemiJoinOperator
     private final MembershipSet membership;
     private final PositionScratch selectionScratch;
     private final SemiJoinOperatorPolicy policy;
+    private final DynamicFilterPolicy dynamicFilterPolicy;
     private final Schema outputSchema;
     private final boolean allowsLegacyKeyShortcuts;
 
@@ -153,6 +154,7 @@ public class SemiJoinOperator
                 operatorResources.grouping().semiJoinBufferPool());
         this.selectionScratch = new PositionScratch(allocator.primitiveArrays());
         this.policy = operatorResources.semiJoinPolicy();
+        this.dynamicFilterPolicy = operatorResources.dynamicFilterPolicy();
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
         if (outputMatches) {
@@ -464,7 +466,7 @@ public class SemiJoinOperator
     private void pushDynamicFilterIfReady()
     {
         if (dynamicFilterValues != null && !dynamicFilterValues.isEmpty()) {
-            outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumn, dynamicFilterValues));
+            outer.pushDynamicFilter(DynamicFilter.fromValues(outerJoinColumn, dynamicFilterValues, dynamicFilterPolicy));
         }
     }
 

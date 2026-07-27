@@ -17,6 +17,7 @@ import org.weakref.nitro.operator.AdaptiveLongGroupingPolicy;
 import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.BufferedJoinInputPolicy;
 import org.weakref.nitro.operator.DistinctKeySetPolicy;
+import org.weakref.nitro.operator.DynamicFilterPolicy;
 import org.weakref.nitro.operator.FilterOperatorPolicy;
 import org.weakref.nitro.operator.FlatKeyTablePolicy;
 import org.weakref.nitro.operator.FullJoinOperatorPolicy;
@@ -74,6 +75,7 @@ public final class EngineResources
                         JoinBufferPolicy.fromSystemProperties(),
                         NestedLoopJoinPolicy.fromSystemProperties(),
                         SemiJoinOperatorPolicy.fromSystemProperties(),
+                        DynamicFilterPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         SortOperatorPolicy.fromSystemProperties(),
@@ -105,6 +107,7 @@ public final class EngineResources
                         JoinBufferPolicy.fromSystemProperties(),
                         NestedLoopJoinPolicy.fromSystemProperties(),
                         SemiJoinOperatorPolicy.fromSystemProperties(),
+                        DynamicFilterPolicy.fromSystemProperties(),
                         hashJoinOperator,
                         groupingState,
                         SortOperatorPolicy.fromSystemProperties(),

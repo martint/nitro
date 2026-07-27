@@ -36,10 +36,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestDynamicFilter
 {
     @Test
+    void representationPolicyPreservesExactSparseFallback()
+    {
+        it.unimi.dsi.fastutil.longs.LongSet values =
+                new it.unimi.dsi.fastutil.longs.LongOpenHashSet(new long[] {10, 11, 12});
+        DynamicFilter filter = DynamicFilter.fromValues(0, values, new DynamicFilterPolicy(0));
+
+        assertThat(filter.size()).isEqualTo(3);
+        assertThat(filter.accepts(9)).isFalse();
+        assertThat(filter.accepts(10)).isTrue();
+        assertThat(filter.accepts(12)).isTrue();
+        assertThat(filter.accepts(13)).isFalse();
+    }
+
+    @Test
     void testCollectedValuesPreserveExactMembershipAndDistinctSize()
     {
         long[] values = {0, -7, 12, -7, 12, 3};
-        DynamicFilter filter = DynamicFilter.fromCollectedValues(2, values, values.length, -7, 12);
+        DynamicFilter filter = DynamicFilter.fromCollectedValues(
+                2,
+                values,
+                values.length,
+                -7,
+                12,
+                DynamicFilterPolicy.defaults());
 
         assertThat(filter.column()).isEqualTo(2);
         assertThat(filter.size()).isEqualTo(4);
@@ -61,7 +81,8 @@ class TestDynamicFilter
                 values,
                 values.length,
                 Long.MIN_VALUE,
-                Long.MAX_VALUE);
+                Long.MAX_VALUE,
+                DynamicFilterPolicy.defaults());
 
         assertThat(filter.size()).isEqualTo(3);
         assertThat(filter.accepts(Long.MIN_VALUE)).isTrue();

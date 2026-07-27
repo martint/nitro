@@ -39,6 +39,7 @@ public final class OperatorResources
     private final JoinBufferPolicy joinBufferPolicy;
     private final NestedLoopJoinPolicy nestedLoopJoinPolicy;
     private final SemiJoinOperatorPolicy semiJoinPolicy;
+    private final DynamicFilterPolicy dynamicFilterPolicy;
     private final HashJoinOperatorResources hashJoin;
     private final GenericJoinIndexFactory genericJoinIndexes;
     private final GroupingStateResources grouping;
@@ -61,6 +62,7 @@ public final class OperatorResources
             JoinBufferPolicy joinBufferPolicy,
             NestedLoopJoinPolicy nestedLoopJoinPolicy,
             SemiJoinOperatorPolicy semiJoinPolicy,
+            DynamicFilterPolicy dynamicFilterPolicy,
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             SortOperatorPolicy sortPolicy,
@@ -83,6 +85,7 @@ public final class OperatorResources
         this.joinBufferPolicy = requireNonNull(joinBufferPolicy, "joinBufferPolicy is null");
         this.nestedLoopJoinPolicy = requireNonNull(nestedLoopJoinPolicy, "nestedLoopJoinPolicy is null");
         this.semiJoinPolicy = requireNonNull(semiJoinPolicy, "semiJoinPolicy is null");
+        this.dynamicFilterPolicy = requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.genericJoinIndexes = new GenericJoinIndexFactory(
                 codeGeneration,
@@ -125,6 +128,7 @@ public final class OperatorResources
                 JoinBufferPolicy.fromSystemProperties(),
                 NestedLoopJoinPolicy.fromSystemProperties(),
                 SemiJoinOperatorPolicy.fromSystemProperties(),
+                DynamicFilterPolicy.fromSystemProperties(),
                 new HashJoinOperatorResources(Boolean.parseBoolean(
                         System.getProperty("nitro.hash.join.shareBufferPoolAcrossOperators", "true")),
                         hashJoinMaterializationListener,
@@ -238,6 +242,12 @@ public final class OperatorResources
     {
         checkOpen();
         return semiJoinPolicy;
+    }
+
+    public DynamicFilterPolicy dynamicFilterPolicy()
+    {
+        checkOpen();
+        return dynamicFilterPolicy;
     }
 
     public GroupingStateResources grouping()

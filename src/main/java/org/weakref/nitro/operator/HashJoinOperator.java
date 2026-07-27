@@ -120,6 +120,7 @@ public class HashJoinOperator
     private final GenericJoinIndexFactory genericJoinIndexes;
     private final HashJoinIndexPolicy joinIndexPolicy;
     private final HashJoinDynamicFilterPolicy dynamicFilterPolicy;
+    private final DynamicFilterPolicy dynamicFilterRepresentationPolicy;
     private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinFilterPolicy filterPolicy;
@@ -397,6 +398,7 @@ public class HashJoinOperator
         this.genericJoinIndexes = operatorResources.genericJoinIndexes();
         this.joinIndexPolicy = operatorResources.hashJoin().indexPolicy();
         this.dynamicFilterPolicy = operatorResources.hashJoin().dynamicFilterPolicy();
+        this.dynamicFilterRepresentationPolicy = operatorResources.dynamicFilterPolicy();
         this.buildPolicy = operatorResources.hashJoin().buildPolicy();
         this.outputPolicy = operatorResources.hashJoin().outputPolicy();
         this.filterPolicy = operatorResources.hashJoin().filterPolicy();
@@ -1049,7 +1051,8 @@ public class HashJoinOperator
                         collectedBuildKeys,
                         collectedBuildKeyCount,
                         buildKeyMins[0],
-                        buildKeyMaxs[0]));
+                        buildKeyMaxs[0],
+                        dynamicFilterRepresentationPolicy));
             }
             releaseCollectedBuildKeys();
             return;
@@ -1060,8 +1063,16 @@ public class HashJoinOperator
         for (int column = 0; column < buildKeyValues.length; column++) {
             if (!buildKeyColumnAbandoned[column] && buildKeyValues[column] != null && !buildKeyValues[column].isEmpty()) {
                 DynamicFilter filter = dynamicFilterPolicy.trackValueRange() && buildKeyMins != null
-                        ? DynamicFilter.fromValues(outerJoinColumns[column], buildKeyValues[column], buildKeyMins[column], buildKeyMaxs[column])
-                        : DynamicFilter.fromValues(outerJoinColumns[column], buildKeyValues[column]);
+                        ? DynamicFilter.fromValues(
+                                outerJoinColumns[column],
+                                buildKeyValues[column],
+                                buildKeyMins[column],
+                                buildKeyMaxs[column],
+                                dynamicFilterRepresentationPolicy)
+                        : DynamicFilter.fromValues(
+                                outerJoinColumns[column],
+                                buildKeyValues[column],
+                                dynamicFilterRepresentationPolicy);
                 outer.pushDynamicFilter(filter);
             }
         }
@@ -1092,7 +1103,10 @@ public class HashJoinOperator
             return;
         }
         for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
-            inner.pushDynamicFilter(DynamicFilter.fromValues(innerJoinColumns[keyIndex], values[keyIndex]));
+            inner.pushDynamicFilter(DynamicFilter.fromValues(
+                    innerJoinColumns[keyIndex],
+                    values[keyIndex],
+                    dynamicFilterRepresentationPolicy));
         }
     }
 

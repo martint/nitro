@@ -30,10 +30,6 @@ import org.weakref.nitro.function.VersionedLongPredicate;
 public final class DynamicFilter
         implements VersionedLongPredicate
 {
-    // Above this value span a membership bitset would be too large; fall back to the hash set. Surrogate-key
-    // domains (stores, time-of-day, demographics) are far smaller than this, so they take the bitset fast path.
-    private static final long MAX_BITSET_SPAN = 1L << 26;   // up to ~64M entries (8MB), well above any dimension key range
-
     private final int column;
     private final LongSet values;
     private final int distinctSize;
@@ -49,7 +45,7 @@ public final class DynamicFilter
     private final long[] presentBits;
 
     /** Build a filter over the distinct build-side key values for the given probe column. */
-    public static DynamicFilter fromValues(int column, LongSet values)
+    public static DynamicFilter fromValues(int column, LongSet values, DynamicFilterPolicy policy)
     {
         long min = Long.MAX_VALUE;
         long max = Long.MIN_VALUE;
@@ -57,16 +53,16 @@ public final class DynamicFilter
             min = Math.min(min, value);
             max = Math.max(max, value);
         }
-        return fromValues(column, values, min, max);
+        return fromValues(column, values, min, max, policy);
     }
 
     /** Build from a collector that already maintained exact bounds while inserting the same values. */
-    static DynamicFilter fromValues(int column, LongSet values, long min, long max)
+    static DynamicFilter fromValues(int column, LongSet values, long min, long max, DynamicFilterPolicy policy)
     {
         boolean[] present = null;
         if (!values.isEmpty()) {
             long span = max - min + 1;
-            if (span > 0 && span <= MAX_BITSET_SPAN) {
+            if (span > 0 && span <= policy.maxDenseBitsetSpan()) {
                 present = new boolean[(int) span];
                 for (long value : values) {
                     present[(int) (value - min)] = true;
@@ -79,15 +75,22 @@ public final class DynamicFilter
     /**
      * Build from a bounded row-value collector. Duplicate removal is deferred until publication so the build loop
      * can append sequentially instead of probing a hash table for every row. The resulting filter uses the same
-     * dense-domain representation and exact sparse fallback as {@link #fromValues(int, LongSet, long, long)}.
+     * dense-domain representation and exact sparse fallback as
+     * {@link #fromValues(int, LongSet, long, long, DynamicFilterPolicy)}.
      */
-    static DynamicFilter fromCollectedValues(int column, long[] collectedValues, int valueCount, long min, long max)
+    static DynamicFilter fromCollectedValues(
+            int column,
+            long[] collectedValues,
+            int valueCount,
+            long min,
+            long max,
+            DynamicFilterPolicy policy)
     {
         if (valueCount == 0) {
             return new DynamicFilter(column, LongSet.of(), 0, Long.MAX_VALUE, Long.MIN_VALUE, null, null);
         }
         long span = max - min + 1;
-        if (span > 0 && span <= MAX_BITSET_SPAN) {
+        if (span > 0 && span <= policy.maxDenseBitsetSpan()) {
             boolean[] present = new boolean[(int) span];
             int distinctSize = 0;
             for (int index = 0; index < valueCount; index++) {
