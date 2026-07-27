@@ -76,6 +76,9 @@ class TestHashJoinOperatorResources
         assertThat(indexPolicy.compactCompletedDirectRangeMinSize()).isEqualTo(256);
         assertThat(indexPolicy.denseUnusedBuildMembershipMinKeys()).isEqualTo(1 << 12);
         assertThat(indexPolicy.maxArrayRange()).isEqualTo(1 << 26);
+        assertThat(indexPolicy.rangeAdmissionSampleRows()).isEqualTo(4096);
+        assertThat(indexPolicy.rangeAdmissionMinSampleRows()).isEqualTo(16);
+        assertThat(indexPolicy.directRangeMaxCardinalityRatio()).isEqualTo(2);
         assertThat(first.bufferPoolCompatibilityGroup(firstLocal))
                 .isSameAs(first.bufferPoolCompatibilityGroup(secondLocal));
         assertThat(second.bufferPoolCompatibilityGroup(new Object()))

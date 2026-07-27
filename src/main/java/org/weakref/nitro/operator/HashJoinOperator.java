@@ -1874,8 +1874,8 @@ public class HashJoinOperator
         if (expectedInnerRowCount() < joinIndexPolicy.sparseAwareScalarMinRows()) {
             return true;
         }
-        int sampleSize = Math.min(batch.length(), 4096);
-        if (sampleSize < 16) {
+        int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
+        if (sampleSize < joinIndexPolicy.rangeAdmissionMinSampleRows()) {
             return true;
         }
         long sampleMin = Long.MAX_VALUE;
@@ -1906,8 +1906,8 @@ public class HashJoinOperator
         if (expectedRows < joinIndexPolicy.keyOnlyDirectRangeMinRows()) {
             return false;
         }
-        int sampleSize = Math.min(batch.length(), 4096);
-        if (sampleSize < 16) {
+        int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
+        if (sampleSize < joinIndexPolicy.rangeAdmissionMinSampleRows()) {
             return false;
         }
         long sampleMin = Long.MAX_VALUE;
@@ -1924,7 +1924,7 @@ public class HashJoinOperator
         return sampleMin >= 0 &&
                 sampleMax < joinIndexPolicy.maxDirectBuildKey() &&
                 sampleRange > 0 &&
-                sampleRange <= 2L * expectedRows;
+                sampleRange <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows;
     }
 
     private void cacheOuterJoinInputs()
@@ -6268,7 +6268,9 @@ public class HashJoinOperator
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > policy.maxArrayRange() || range > 2L * size) {
+            if (range <= 0 ||
+                    range > policy.maxArrayRange() ||
+                    range > (long) policy.directRangeMaxCardinalityRatio() * size) {
                 return;
             }
             if (denseBuildCandidate && range == size && denseSingleBatchRowReferenceCandidate) {
@@ -6333,7 +6335,9 @@ public class HashJoinOperator
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > policy.maxArrayRange() || range > 2L * size) {
+            if (range <= 0 ||
+                    range > policy.maxArrayRange() ||
+                    range > (long) policy.directRangeMaxCardinalityRatio() * size) {
                 return;
             }
 

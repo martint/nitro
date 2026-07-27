@@ -45,6 +45,9 @@ public record HashJoinIndexPolicy(
         int compressedDirectRangeMaxRatio,
         boolean sparseLongRangeMembership,
         int sparseLongRangeMinRatio,
+        int rangeAdmissionSampleRows,
+        int rangeAdmissionMinSampleRows,
+        int directRangeMaxCardinalityRatio,
         boolean keyOnlyDirectRangeBuild,
         int keyOnlyDirectRangeMinRows,
         int maxDirectBuildKey,
@@ -102,6 +105,9 @@ public record HashJoinIndexPolicy(
                 6,
                 true,
                 4,
+                4096,
+                16,
+                2,
                 true,
                 1 << 20,
                 1 << 26,
@@ -181,6 +187,13 @@ public record HashJoinIndexPolicy(
                         defaults.compressedDirectRangeMaxRatio()),
                 booleanProperty("nitro.join.sparseLongRangeMembership", defaults.sparseLongRangeMembership()),
                 Integer.getInteger("nitro.join.sparseLongRangeMinRatio", defaults.sparseLongRangeMinRatio()),
+                Integer.getInteger("nitro.join.rangeAdmissionSampleRows", defaults.rangeAdmissionSampleRows()),
+                Integer.getInteger(
+                        "nitro.join.rangeAdmissionMinSampleRows",
+                        defaults.rangeAdmissionMinSampleRows()),
+                Integer.getInteger(
+                        "nitro.join.directRangeMaxCardinalityRatio",
+                        defaults.directRangeMaxCardinalityRatio()),
                 booleanProperty("nitro.join.keyOnlyDirectRangeBuild", defaults.keyOnlyDirectRangeBuild()),
                 Integer.getInteger(
                         "nitro.join.keyOnlyDirectRangeMinRows",
