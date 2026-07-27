@@ -31,6 +31,7 @@ final class DirectLongBuildIndex
 
     private int[] heads;
     private int rowCount;
+    private boolean duplicates;
 
     DirectLongBuildIndex(
             PrimitiveArrayPool arrayPool,
@@ -78,6 +79,11 @@ final class DirectLongBuildIndex
         return rowCount;
     }
 
+    boolean hasDuplicates()
+    {
+        return duplicates;
+    }
+
     int entry(int key)
     {
         return heads[key];
@@ -96,12 +102,14 @@ final class DirectLongBuildIndex
 
     void incrementDenseDuplicate(int key)
     {
+        duplicates = true;
         denseDuplicates.allocate(heads.length);
         denseDuplicates.increment(key);
     }
 
     int appendDenseDuplicate(int key, int entry, int ordinal)
     {
+        duplicates = true;
         denseDuplicates.allocate(heads.length);
         return denseDuplicates.append(key, entry, ordinal);
     }
@@ -113,6 +121,7 @@ final class DirectLongBuildIndex
 
     int promoteSparseDuplicate(int key, int entry)
     {
+        duplicates = true;
         int groupEntry = sparseDuplicates.groupEntry(entry);
         heads[key] = groupEntry;
         return groupEntry;
@@ -175,6 +184,7 @@ final class DirectLongBuildIndex
         arrayPool.release(heads);
         heads = null;
         rowCount = 0;
+        duplicates = false;
         denseDuplicates.release();
         sparseDuplicates.release();
     }

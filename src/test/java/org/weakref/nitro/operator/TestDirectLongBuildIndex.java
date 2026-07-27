@@ -31,12 +31,14 @@ class TestDirectLongBuildIndex
         assertThat(index.rowCount()).isEqualTo(2);
 
         index.initializeKey(3, 11);
+        assertThat(index.hasDuplicates()).isFalse();
         assertThat(index.entry(3)).isEqualTo(11);
         assertThat(index.entryHead(index.entry(3))).isEqualTo(11);
         assertThat(index.entryCount(3, index.entry(3))).isEqualTo(1);
 
         assertThat(index.admitSparseDuplicates(4)).isTrue();
         int sparseEntry = index.promoteSparseDuplicate(3, index.entry(3));
+        assertThat(index.hasDuplicates()).isTrue();
         index.incrementSparseDuplicate(sparseEntry);
         assertThat(index.entryHead(sparseEntry)).isEqualTo(11);
         assertThat(index.entryCount(3, sparseEntry)).isEqualTo(2);
@@ -51,6 +53,7 @@ class TestDirectLongBuildIndex
         index.release();
         assertThat(index.isActive()).isFalse();
         assertThat(index.rowCount()).isZero();
+        assertThat(index.hasDuplicates()).isFalse();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
 }

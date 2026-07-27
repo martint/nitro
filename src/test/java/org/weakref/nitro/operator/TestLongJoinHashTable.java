@@ -41,16 +41,19 @@ class TestLongJoinHashTable
         assertThat(table.key(slot)).isEqualTo(7);
         assertThat(table.head(slot)).isEqualTo(107);
         assertThat(table.count(slot)).isEqualTo(1);
+        assertThat(table.hasDuplicates()).isFalse();
 
         table.ensureDuplicateState();
         assertThat(table.hasDuplicateState()).isTrue();
         assertThat(table.append(slot, 200)).isEqualTo(107);
+        assertThat(table.hasDuplicates()).isTrue();
         assertThat(table.tail(slot)).isEqualTo(200);
         assertThat(table.count(slot)).isEqualTo(2);
         assertThat(table.incrementCount(slot)).isEqualTo(3);
 
         table.release();
         assertThat(table.isAllocated()).isFalse();
+        assertThat(table.hasDuplicates()).isTrue();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
 }

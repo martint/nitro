@@ -44,6 +44,7 @@ final class LongJoinHashTable
     private int[] counts;
     private int mask;
     private int maximumFill;
+    private boolean duplicates;
 
     LongJoinHashTable(
             PrimitiveArrayPool arrayPool,
@@ -99,6 +100,11 @@ final class LongJoinHashTable
         return tails != null;
     }
 
+    boolean hasDuplicates()
+    {
+        return duplicates;
+    }
+
     int findSlot(long key)
     {
         ensureAllocated();
@@ -152,6 +158,7 @@ final class LongJoinHashTable
             tails[slot] = tail;
             counts[slot] = count;
         }
+        duplicates |= count > 1;
     }
 
     void ensureDuplicateState()
@@ -175,11 +182,13 @@ final class LongJoinHashTable
 
     int incrementCount(int slot)
     {
+        duplicates = true;
         return ++counts[slot];
     }
 
     int append(int slot, int ordinal)
     {
+        duplicates = true;
         int previousTail = tails[slot];
         tails[slot] = ordinal;
         counts[slot]++;

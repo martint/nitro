@@ -3553,7 +3553,6 @@ public class HashJoinOperator
         // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
         private long minKey = Long.MAX_VALUE;
         private long maxKey = Long.MIN_VALUE;
-        private boolean hasDuplicates;
         private boolean finalized;
         private final DirectLongJoinLookup directLookup;
         // Exact membership filter for a sparse but bounded integer domain.  One bit per possible key lets a
@@ -3832,7 +3831,6 @@ public class HashJoinOperator
             ensureDirectBuildCapacity(intKey + 1);
             int head = directBuild.entry(intKey);
             if (head != EMPTY) {
-                hasDuplicates = true;
                 directBuild.incrementDenseDuplicate(intKey);
                 return;
             }
@@ -4028,7 +4026,7 @@ public class HashJoinOperator
         @Override
         public boolean supportsSingleMatchRefs()
         {
-            return !hasDuplicates;
+            return !hasDuplicates();
         }
 
         @Override
@@ -5291,7 +5289,6 @@ public class HashJoinOperator
             int slot = hashTable.findSlot(key);
             boolean newKey = !hashTable.isOccupied(slot);
             if (!newKey) {
-                hasDuplicates = true;
                 hashTable.ensureDuplicateState();
                 if (compressDuplicateReferences) {
                     hashTable.incrementCount(slot);
@@ -5329,7 +5326,6 @@ public class HashJoinOperator
 
         private void addDirectRangeDuplicate(int key, int entry, long rowReference)
         {
-            hasDuplicates = true;
             if (useSparseDirectDuplicateState()) {
                 addSparseDirectRangeDuplicate(key, entry, rowReference);
                 return;
@@ -5384,7 +5380,7 @@ public class HashJoinOperator
 
         private void materializeDirectRangeBuildAsHash()
         {
-            if (hasDuplicates) {
+            if (hasDuplicates()) {
                 hashTable.ensureDuplicateState();
             }
             size = 0;
@@ -5486,7 +5482,7 @@ public class HashJoinOperator
                         maxKey,
                         denseSequence.keyCandidate(),
                         directBuild.isActive(),
-                        hasDuplicates,
+                        hasDuplicates(),
                         rows.implicitSequentialReferences(),
                         compressDuplicateReferences);
             }
@@ -5497,7 +5493,7 @@ public class HashJoinOperator
                 if (policy.compactCompletedDirectRangeBuild()) {
                     compactCompletedDirectRangeBuild();
                 }
-                if (policy.debugDirectDuplicateState() && hasDuplicates) {
+                if (policy.debugDirectDuplicateState() && hasDuplicates()) {
                     System.err.printf(
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
                             directBuild.sparseDuplicateGroupCount() > 0 ? "sparse" : "dense",
@@ -5510,7 +5506,7 @@ public class HashJoinOperator
                 return;
             }
             buildSparseRangeMembership();
-            if (hasDuplicates) {
+            if (hasDuplicates()) {
                 // No direct array mode with duplicate keys; compact the multi-row chains so the probe reads a
                 // contiguous range instead of chasing chainNext (the one-to-many output loop's dominant cost).
                 if (compactChains && initialProbeRows >= policy.compactChainsMinProbeRows()) {
@@ -5574,7 +5570,7 @@ public class HashJoinOperator
          */
         private void compactCompletedDirectRangeBuild()
         {
-            if (hasDuplicates || size < policy.compactCompletedDirectRangeMinSize()) {
+            if (hasDuplicates() || size < policy.compactCompletedDirectRangeMinSize()) {
                 return;
             }
             long range = maxKey - minKey + 1;
@@ -5693,6 +5689,11 @@ public class HashJoinOperator
         private boolean sparseRangeContains(long key)
         {
             return sparseMembership.contains(key);
+        }
+
+        private boolean hasDuplicates()
+        {
+            return directBuild.isActive() ? directBuild.hasDuplicates() : hashTable.hasDuplicates();
         }
 
         @Override
