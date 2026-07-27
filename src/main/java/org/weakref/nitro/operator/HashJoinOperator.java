@@ -3613,11 +3613,7 @@ public class HashJoinOperator
         private int[] directBuildHead;
         private int[] directBuildTail;
         private int[] directBuildCount;
-        private int[] directDuplicateHead;
-        private int[] directDuplicateTail;
-        private int[] directDuplicateCount;
-        private int directDuplicateGroups;
-        private boolean sparseDirectDuplicateStateAdmitted;
+        private final SparseDirectLongDuplicateState sparseDirectDuplicates;
         private long[] orderedRows;
         private int[] rangeStart;
         // A completed duplicate build may have invariant bits inside an otherwise sparse physical key domain.
@@ -3656,6 +3652,13 @@ public class HashJoinOperator
                     policy.compressedDirectRangeMaxEntries(),
                     policy.compressedDirectRangeMaxRatio(),
                     policy.debugCompressedDirectRange());
+            this.sparseDirectDuplicates = new SparseDirectLongDuplicateState(
+                    arrayPool,
+                    policy.sparseDirectDuplicateState(),
+                    policy.sparseDirectDuplicateMinExpectedRows(),
+                    policy.sparseDirectDuplicateMinExpectedDomainRatio(),
+                    policy.directDuplicateGroupInitialCapacity(),
+                    EMPTY);
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
@@ -5595,19 +5598,15 @@ public class HashJoinOperator
 
         private boolean useSparseDirectDuplicateState()
         {
-            return directBuildTail == null &&
-                    (sparseDirectDuplicateStateAdmitted ||
-                            (policy.sparseDirectDuplicateState() &&
-                                    expectedBuildRows >= policy.sparseDirectDuplicateMinExpectedRows() &&
-                                    (long) directBuildHead.length >= (long) expectedBuildRows * policy.sparseDirectDuplicateMinExpectedDomainRatio()));
+            return sparseDirectDuplicates.admit(directBuildTail != null, directBuildHead.length, expectedBuildRows);
         }
 
         private void addSparseDirectRangeDuplicate(int key, int entry, long rowReference)
         {
-            sparseDirectDuplicateStateAdmitted = true;
-            int group = entry < EMPTY ? decodeDirectDuplicateGroup(entry) : createDirectDuplicateGroup(key, entry);
+            int groupEntry = sparseDirectDuplicates.groupEntry(entry);
+            directBuildHead[key] = groupEntry;
             if (compressDuplicateReferences) {
-                directDuplicateCount[group]++;
+                sparseDirectDuplicates.increment(groupEntry);
                 return;
             }
             ensureChainState();
@@ -5615,81 +5614,32 @@ public class HashJoinOperator
             int ordinal = rowCount++;
             storeRowReference(ordinal, rowReference);
             chainNext[ordinal] = EMPTY;
-            chainNext[directDuplicateTail[group]] = ordinal;
-            directDuplicateTail[group] = ordinal;
-            directDuplicateCount[group]++;
-        }
-
-        private int createDirectDuplicateGroup(int key, int head)
-        {
-            ensureDirectDuplicateGroupCapacity(directDuplicateGroups + 1);
-            int group = directDuplicateGroups++;
-            directDuplicateHead[group] = head;
-            directDuplicateTail[group] = head;
-            directDuplicateCount[group] = 1;
-            directBuildHead[key] = encodeDirectDuplicateGroup(group);
-            return group;
-        }
-
-        private void ensureDirectDuplicateGroupCapacity(int required)
-        {
-            if (directDuplicateHead != null && required <= directDuplicateHead.length) {
-                return;
-            }
-            int oldLength = directDuplicateHead == null ? 0 : directDuplicateHead.length;
-            int newLength = Math.max(policy.directDuplicateGroupInitialCapacity(), oldLength * 2);
-            while (newLength < required) {
-                newLength *= 2;
-            }
-            int[] previousHead = directDuplicateHead;
-            int[] previousTail = directDuplicateTail;
-            int[] previousCount = directDuplicateCount;
-            directDuplicateHead = arrayPool.borrowInts(newLength);
-            directDuplicateTail = arrayPool.borrowInts(newLength);
-            directDuplicateCount = arrayPool.borrowInts(newLength);
-            if (oldLength > 0) {
-                System.arraycopy(previousHead, 0, directDuplicateHead, 0, directDuplicateGroups);
-                System.arraycopy(previousTail, 0, directDuplicateTail, 0, directDuplicateGroups);
-                System.arraycopy(previousCount, 0, directDuplicateCount, 0, directDuplicateGroups);
-            }
-            arrayPool.release(previousHead);
-            arrayPool.release(previousTail);
-            arrayPool.release(previousCount);
+            chainNext[sparseDirectDuplicates.append(groupEntry, ordinal)] = ordinal;
         }
 
         private int directEntryHead(int entry)
         {
-            return policy.sparseDirectDuplicateState() && entry < EMPTY
-                    ? directDuplicateHead[decodeDirectDuplicateGroup(entry)]
+            return sparseDirectDuplicates.isGroupEntry(entry)
+                    ? sparseDirectDuplicates.head(entry)
                     : entry;
         }
 
         private int directEntryTail(int key, int entry)
         {
-            return policy.sparseDirectDuplicateState() && entry < EMPTY
-                    ? directDuplicateTail[decodeDirectDuplicateGroup(entry)]
+            return sparseDirectDuplicates.isGroupEntry(entry)
+                    ? sparseDirectDuplicates.tail(entry)
                     : directBuildTail == null ? directEntryHead(entry) : directBuildTail[key];
         }
 
         private int directEntryCount(int key, int entry)
         {
-            if (policy.sparseDirectDuplicateState() && entry < EMPTY) {
-                return directDuplicateCount[decodeDirectDuplicateGroup(entry)];
+            if (sparseDirectDuplicates.isGroupEntry(entry)) {
+                return sparseDirectDuplicates.count(entry);
             }
             if (directBuildCount == null || directBuildCount[key] == 0) {
                 return 1;
             }
             return directBuildCount[key];
-        }
-
-        private static int encodeDirectDuplicateGroup(int group)
-        {
-            return -group - 2;
-        }
-
-        private static int decodeDirectDuplicateGroup(int entry)
-        {
-            return -entry - 2;
         }
 
         private void ensureDirectDuplicateArrays()
@@ -5947,11 +5897,11 @@ public class HashJoinOperator
                 if (policy.debugDirectDuplicateState() && hasDuplicates) {
                     System.err.printf(
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
-                            directDuplicateGroups > 0 ? "sparse" : "dense",
+                            sparseDirectDuplicates.groupCount() > 0 ? "sparse" : "dense",
                             directBuildRows,
                             size,
                             directBuildHead.length,
-                            directDuplicateGroups,
+                            sparseDirectDuplicates.groupCount(),
                             expectedBuildRows);
                 }
                 return;
@@ -6344,14 +6294,7 @@ public class HashJoinOperator
             directBuildTail = null;
             arrayPool.release(directBuildCount);
             directBuildCount = null;
-            arrayPool.release(directDuplicateHead);
-            directDuplicateHead = null;
-            arrayPool.release(directDuplicateTail);
-            directDuplicateTail = null;
-            arrayPool.release(directDuplicateCount);
-            directDuplicateCount = null;
-            directDuplicateGroups = 0;
-            sparseDirectDuplicateStateAdmitted = false;
+            sparseDirectDuplicates.release();
         }
 
         private static int mix(long key)
