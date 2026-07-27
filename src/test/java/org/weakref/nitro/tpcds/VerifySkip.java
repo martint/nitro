@@ -13,8 +13,8 @@
  */
 package org.weakref.nitro.tpcds;
 
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetReaderPolicy;

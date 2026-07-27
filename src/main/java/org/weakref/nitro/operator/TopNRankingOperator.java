@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -89,7 +90,7 @@ public class TopNRankingOperator
                 source,
                 rankingSchema,
                 policy,
-                allocator.engineResources().operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
     public TopNRankingOperator(
@@ -131,7 +132,7 @@ public class TopNRankingOperator
                 source,
                 rankingSchema,
                 policy,
-                allocator.engineResources().operatorResources().codeGeneration().structuralTypes());
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
     public TopNRankingOperator(

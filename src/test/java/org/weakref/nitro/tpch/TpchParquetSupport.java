@@ -17,6 +17,7 @@ import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.DynamicFilter;
@@ -1800,7 +1801,7 @@ final class TpchParquetSupport
                 primitiveRegistry,
                 filterSpec.predicate(),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
     }
 
     record FilterSpec(EvaluationPlan plan, MaskExpression predicate, Reference materializedValue)

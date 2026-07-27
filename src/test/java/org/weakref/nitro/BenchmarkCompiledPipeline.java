@@ -24,11 +24,11 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
 import org.weakref.nitro.legacy.pipeline.CompilerResources;
 import org.weakref.nitro.legacy.pipeline.PipelineCompiler;
@@ -163,7 +163,7 @@ public class BenchmarkCompiledPipeline
                 primitiveRegistry,
                 new ReferenceMask(new Reference(predicate, Stream.VALUES)),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
 
         Variable product = new Variable(0);
         EvaluationPlan projectPlan = new EvaluationPlan(

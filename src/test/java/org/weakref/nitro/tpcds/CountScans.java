@@ -16,7 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Operator;
 
 import java.lang.reflect.Method;

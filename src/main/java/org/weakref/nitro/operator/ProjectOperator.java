@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.jit.FusedProjectionCompiler.CompiledMultiProjection;
 import org.weakref.nitro.operator.evaluator.PlanEvaluator;
@@ -75,7 +76,7 @@ public class ProjectOperator
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, Schema outputSchema)
     {
-        this(allocator, evaluationPlan, primitiveRegistry, source, outputSchema, allocator.engineResources().operatorResources());
+        this(allocator, evaluationPlan, primitiveRegistry, source, outputSchema, EngineResources.from(allocator).operatorResources());
     }
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, OperatorResources operatorResources)

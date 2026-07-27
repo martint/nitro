@@ -14,10 +14,10 @@
 package org.weakref.nitro.tpcds;
 
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.Operator;

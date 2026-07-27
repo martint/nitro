@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,7 +52,7 @@ public class GroupOperator
 
     public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source)
     {
-        this(allocator, groupByColumns, source, allocator.engineResources().operatorResources());
+        this(allocator, groupByColumns, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupOperator(Allocator allocator, int groupByColumn, Operator source, OperatorResources operatorResources)

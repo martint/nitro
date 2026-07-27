@@ -34,7 +34,6 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -44,6 +43,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
@@ -207,7 +207,7 @@ public class TestOperators
                                                 primitiveRegistry,
                                                 values(predicate),
                                                 allocator,
-                                                allocator.engineResources().operatorResources().filter()))))))
+                                                EngineResources.from(allocator).operatorResources().filter()))))))
                 .matchesExactly(List.of(row(200L, 208L, 1020L, 5L)));
     }
 
@@ -1435,7 +1435,7 @@ public class TestOperators
                 new int[] {0},
                 typedTable(sourceSchema),
                 groupIdField,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(group.outputSchema().field(0)).isSameAs(groupIdField);
             assertThat(group.outputSchema().field(1)).isSameAs(first);
             assertThat(group.outputSchema().field(2)).isSameAs(second);
@@ -1458,7 +1458,7 @@ public class TestOperators
                         {-1, 1},
                         {0, 1}},
                 groupIdField,
-                allocator.engineResources().operatorResources().groupIdPolicy())) {
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
             assertThat(groupId.outputSchema().field(0).name()).isEqualTo(rollup.name());
             assertThat(groupId.outputSchema().field(0).type()).isSameAs(i32Only);
             assertThat(groupId.outputSchema().field(0).nullable()).isTrue();
@@ -1521,7 +1521,7 @@ public class TestOperators
                 new int[] {0},
                 typedTable(innerSchema),
                 new int[] {0},
-                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
             assertThat(join.outputSchema().fields()).extracting(Field::name)
                     .containsExactly(outerKey.name(), outerValue.name(), innerKey.name());
             assertThat(join.outputSchema().fields()).extracting(Field::type)
@@ -1572,7 +1572,7 @@ public class TestOperators
                 new boolean[] {false},
                 typedTable(sourceSchema),
                 rankSchema,
-                allocator.engineResources().operatorResources().topNRankingPolicy());
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy());
                 Operator window = new WindowOperator(
                         allocator,
                         typedTable(sourceSchema),
@@ -1659,7 +1659,7 @@ public class TestOperators
                 new boolean[] {false},
                 source,
                 Schema.unspecified(1),
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(ranking))
                     .matchesExactly(List.of(
                             row(1L, 1L),
@@ -1679,7 +1679,7 @@ public class TestOperators
                 new int[] {0},
                 new boolean[] {false},
                 sortSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(sort))
                     .matchesExactly(List.of(
                             row(1L),
@@ -1702,7 +1702,7 @@ public class TestOperators
                 new boolean[0],
                 List.of(new PartitionSumI64WindowFunction(0)),
                 Schema.unspecified(1),
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(window))
                     .matchesExactly(List.of(
                             row(-1L, 0L),
@@ -1729,7 +1729,7 @@ public class TestOperators
                 new int[] {0},
                 hashInner,
                 new int[] {0},
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(join))
                     .matchesExactly(List.of(
                             row(1L, -1L),
@@ -1754,7 +1754,7 @@ public class TestOperators
                 new int[] {0},
                 sortedInner,
                 new int[] {0},
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(join))
                     .matchesExactly(List.of(
                             row(1L, -1L),
@@ -1774,7 +1774,7 @@ public class TestOperators
                         new Vector[] {new I64Vector(new long[] {-1, -2})},
                         Mask.all(2)));
         try (Operator join = new NestedLoopJoinOperator(
-                allocator.engineResources().operatorResources(),
+                EngineResources.from(allocator).operatorResources(),
                 allocator,
                 nestedOuter,
                 0,
@@ -1807,7 +1807,7 @@ public class TestOperators
                         new Vector[] {new I64Vector(new long[] {-2})},
                         Mask.all(1)));
         try (Operator join = new HashJoinOperator(
-                allocator.engineResources().operatorResources(),
+                EngineResources.from(allocator).operatorResources(),
                 allocator,
                 hashJoinOuter,
                 0,
@@ -1843,7 +1843,7 @@ public class TestOperators
                 0,
                 true,
                 false,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(join))
                     .matchesExactly(List.of(
                             row(1L),
@@ -1864,7 +1864,7 @@ public class TestOperators
                 allocator,
                 0,
                 distinctSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(distinct))
                     .matchesExactly(List.of(
                             row(1L),
@@ -1886,7 +1886,7 @@ public class TestOperators
                 new int[] {0},
                 nullableDistinctSource,
                 true,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(distinct))
                     .matchesExactly(List.of(
                             row((Object) null),
@@ -1907,7 +1907,7 @@ public class TestOperators
                 allocator,
                 List.of(new DistinctCount(0)),
                 distinctCountSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(aggregation))
                     .matchesExactly(List.of(row(3L)));
         }
@@ -1928,7 +1928,7 @@ public class TestOperators
                 List.of(0),
                 List.of(new DistinctCount(1)),
                 groupedDistinctSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(aggregation))
                     .matchesExactly(List.of(row(7L, 2L)));
         }
@@ -1947,7 +1947,7 @@ public class TestOperators
                 allocator,
                 0,
                 groupingSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(group))
                     .matchesExactly(List.of(
                             row(0L, 1L),
@@ -1976,7 +1976,7 @@ public class TestOperators
                 List.of(0),
                 List.of(new CountAll()),
                 groupedAggregationSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(aggregation))
                     .matchesExactly(List.of(
                             row(1L, 2L),
@@ -2000,7 +2000,7 @@ public class TestOperators
                 List.of(0, 1),
                 List.of(new CountAll()),
                 compositeGroupingSource,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(operator(aggregation))
                     .matchesExactly(List.of(
                             row(1L, 10L, 2L),
@@ -2116,7 +2116,7 @@ public class TestOperators
                 typedTable(sourceSchema),
                 false,
                 marker,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
                 Operator filteringSemiJoin = new SemiJoinOperator(
                         allocator,
                         typedTable(sourceSchema),
@@ -2133,7 +2133,7 @@ public class TestOperators
                         0,
                         true,
                         marker,
-                        allocator.engineResources().operatorResources())) {
+                        EngineResources.from(allocator).operatorResources())) {
             assertThat(filteringSemiJoin.outputSchema()).isSameAs(sourceSchema);
             assertMarkerSchema(distinct.outputSchema(), key, payload, marker);
             assertMarkerSchema(markingSemiJoin.outputSchema(), key, payload, marker);
@@ -2240,7 +2240,7 @@ public class TestOperators
                         allocator,
                         2,
                         List.of(row(10L, 3L), row(20L, 11L), row(10L, 5L))),
-                allocator.engineResources().operatorResources())))
+                EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(row(10L, 2L, 8L), row(20L, 1L, 11L)));
         assertThat(unit.accumulationCalls).isZero();
     }
@@ -3155,7 +3155,7 @@ public class TestOperators
                         primitiveRegistry,
                         new Reference(predicate, Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter())))
+                        EngineResources.from(allocator).operatorResources().filter())))
                 .matchesExactly(List.of(
                         row(1L, 10L),
                         row(2L, 20L)));
@@ -3195,7 +3195,7 @@ public class TestOperators
                         primitiveRegistry,
                         predicateValues,
                         allocator,
-                        allocator.engineResources().operatorResources().filter())))
+                        EngineResources.from(allocator).operatorResources().filter())))
                 .matchesExactly(List.of(
                         row(3L, 30L),
                         row(4L, 40L)));
@@ -3263,7 +3263,7 @@ public class TestOperators
                         new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
                         new ReferenceMask(new Reference(new Input(1), Stream.VALUES)))),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             try (Batch batch = filter.next()) {
                 assertThat(batch.borrowMask()).containsExactly(0, 1, 2, 3);
             }
@@ -3826,7 +3826,7 @@ public class TestOperators
                                         row(2L, "alpha"),
                                         row((Object) null, "alpha"),
                                         row(2L, (Object) null))),
-                        allocator.engineResources().operatorResources())))
+                        EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, "alpha"),
                         row(1L, "beta"),
@@ -3847,7 +3847,7 @@ public class TestOperators
                 allocator,
                 0,
                 source,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             assertThat(distinct.outputSchema()).isEqualTo(schema);
             distinct.next().close();
             assertThatThrownBy(distinct::next)
@@ -3874,7 +3874,7 @@ public class TestOperators
                                         row((Object) ""),
                                         row((Object) null),
                                         row((Object) "alpha"))),
-                        allocator.engineResources().operatorResources())))
+                        EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(
                         row((Object) "alpha"),
                         row((Object) ""),
@@ -3904,7 +3904,7 @@ public class TestOperators
                                         row(2L, (Object) null),
                                         row((Object) null, (Object) null))),
                         true,
-                        allocator.engineResources().operatorResources())))
+                        EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, "alpha"),
                         row(1L, "beta"),
@@ -3971,7 +3971,7 @@ public class TestOperators
                 new int[] {0, 1, 2, 3, 4, 5, 6},
                 source,
                 true,
-                allocator.engineResources().operatorResources())))
+                EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, 2L, 3L, 4L, 5L, 6L, 7L),
                         row(1L, 2L, 3L, 4L, 5L, 6L, 8L),
@@ -4017,7 +4017,7 @@ public class TestOperators
             public void close() {}
         };
 
-        try (MarkDistinctOperator operator = new MarkDistinctOperator(allocator, 0, source, allocator.engineResources().operatorResources());
+        try (MarkDistinctOperator operator = new MarkDistinctOperator(allocator, 0, source, EngineResources.from(allocator).operatorResources());
                 Batch batch = operator.next()) {
             assertThat(batch.borrowMask().all()).isTrue();
             assertThat(batch.output(0).borrow(Stream.VALUES)).isSameAs(dictionary);
@@ -4068,7 +4068,7 @@ public class TestOperators
                                         row(2L, 9L),
                                         row(2L, 9L))),
                         true,
-                        allocator.engineResources().operatorResources())))
+                        EngineResources.from(allocator).operatorResources())))
                 .matchesExactly(List.of(
                         row(1L, 7L, 1L),
                         row(1L, 7L, 0L),
@@ -4092,7 +4092,7 @@ public class TestOperators
                 new int[] {0},
                 source,
                 false,
-                allocator.engineResources().operatorResources())) {
+                EngineResources.from(allocator).operatorResources())) {
             try (Batch first = distinct.next()) {
                 first.output(1).borrow(Stream.VALUES);
             }
@@ -4122,7 +4122,7 @@ public class TestOperators
                                 row(2L, 50L, 200L, 3000L),
                                 row(2L, 60L, 300L, 4000L))),
                 true,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
 
         assertThat(operator(
                 new GroupedAggregationOperator(
@@ -5328,7 +5328,7 @@ public class TestOperators
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter()));
+                        EngineResources.from(allocator).operatorResources().filter()));
 
         try (Operator join = new HashJoinOperator(
                 allocator,
@@ -5497,7 +5497,7 @@ public class TestOperators
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter()));
+                        EngineResources.from(allocator).operatorResources().filter()));
 
         try (Operator join = new HashJoinOperator(
                 allocator,
@@ -5600,7 +5600,7 @@ public class TestOperators
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter()));
+                        EngineResources.from(allocator).operatorResources().filter()));
 
         try (Operator join = new NestedLoopJoinOperator(
                 allocator,
@@ -5728,7 +5728,7 @@ public class TestOperators
                 primitiveRegistry,
                 values(predicate),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
     }
 
     private FilterOperator filterLessThanOrGreaterThan(Operator source, int inputColumn, long lowerBound, long upperBound, PrimitiveRegistry primitiveRegistry)
@@ -5753,7 +5753,7 @@ public class TestOperators
                 primitiveRegistry,
                 values(predicate),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
     }
 
     private static EvaluationPlan plan(List<Assignment> assignments, Reference... outputs)

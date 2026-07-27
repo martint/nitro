@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -86,7 +87,7 @@ public class SemiJoinOperator
                 innerJoinColumn,
                 includeMatches,
                 outputMatches,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
     }
 
     public SemiJoinOperator(

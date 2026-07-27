@@ -27,7 +27,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Timeout;
 import org.openjdk.jmh.annotations.Warmup;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.legacy.pipeline.Column;
 import org.weakref.nitro.legacy.pipeline.CompilerResources;
 import org.weakref.nitro.legacy.pipeline.PipelineCompiler;

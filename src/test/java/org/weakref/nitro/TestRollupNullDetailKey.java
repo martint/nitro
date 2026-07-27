@@ -16,11 +16,11 @@ package org.weakref.nitro;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -86,7 +86,7 @@ public class TestRollupNullDetailKey
         Operator grouped = new GroupIdOperator(allocator, source, new int[][] {
                 {0, 1, 2},
                 {0, -1, 2}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         // Group by channel(0), id(1), group_id(3); sum value(2).
         Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0, 1, 3), List.of(new Sum(2)), grouped);
 

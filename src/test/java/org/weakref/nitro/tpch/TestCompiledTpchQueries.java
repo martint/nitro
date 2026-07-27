@@ -15,7 +15,7 @@ package org.weakref.nitro.tpch;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.legacy.pipeline.CompiledPipeline;
 import org.weakref.nitro.legacy.pipeline.Types;
 import org.weakref.nitro.tpcds.CompiledQuerySupport;

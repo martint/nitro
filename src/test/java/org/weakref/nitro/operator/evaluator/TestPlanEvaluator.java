@@ -20,7 +20,6 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -31,6 +30,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
@@ -3597,7 +3597,7 @@ public class TestPlanEvaluator
                 primitiveRegistry,
                 input,
                 allocator,
-                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                EngineResources.from(allocator).operatorCodeGeneration().projectionMask(),
                 EvaluationOperatorPolicy.defaults());
     }
 
@@ -3634,7 +3634,7 @@ public class TestPlanEvaluator
                 primitiveRegistry,
                 input,
                 allocator,
-                allocator.engineResources().operatorCodeGeneration().projectionMask(),
+                EngineResources.from(allocator).operatorCodeGeneration().projectionMask(),
                 EvaluationOperatorPolicy.defaults(),
                 poolGroup,
                 requireProjectedCompanionStreams);

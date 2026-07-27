@@ -20,7 +20,6 @@ import org.weakref.nitro.data.AllocatorPolicy;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -30,6 +29,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;

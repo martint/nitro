@@ -26,6 +26,7 @@ import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -287,7 +288,7 @@ public final class ClickBenchHitsSupport
     static Operator query05(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
         Operator scan = profiled(profile, "q05.scan", clickBenchScan(allocator, file, "UserID"));
-        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan, allocator.engineResources().operatorResources()));
+        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan, EngineResources.from(allocator).operatorResources()));
         return profiled(profile, "q05.aggregate", new AggregationOperator(allocator, List.of(new CountAll()), distinct));
     }
 
@@ -306,7 +307,7 @@ public final class ClickBenchHitsSupport
                 primitiveRegistry,
                 predicate.predicate(),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -322,7 +323,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 1},
                 clickBenchScan(allocator, file, "RegionID", "UserID"),
                 true,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -344,7 +345,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 3},
                 scan,
                 true,
-                allocator.engineResources().operatorResources()));
+                EngineResources.from(allocator).operatorResources()));
         List<Accumulator> aggregations = List.of(new Sum(1), new CountAll(), new Avg(2), new FilteredAccumulator(new CountAll(), 4));
         Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(0), aggregations, distinct);
         aggregated = profiled(profile, "q10.aggregate", aggregated);
@@ -359,7 +360,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 1},
                 filtered,
                 true,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -382,7 +383,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 1, 2},
                 filtered,
                 true,
-                allocator.engineResources().operatorResources()));
+                EngineResources.from(allocator).operatorResources()));
         Operator aggregated = profiled(profile, "q12.group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1),
@@ -434,7 +435,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 3},
                 filtered,
                 true,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -456,7 +457,7 @@ public final class ClickBenchHitsSupport
                 new int[] {0, 1},
                 filtered,
                 true,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
         Operator aggregated = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
@@ -817,7 +818,7 @@ public final class ClickBenchHitsSupport
                 primitiveRegistry,
                 filterSpec.predicate(),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
     }
 
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
@@ -896,7 +897,7 @@ public final class ClickBenchHitsSupport
 
     private static Operator countDistinct(Allocator allocator, Operator source)
     {
-        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source, allocator.engineResources().operatorResources()));
+        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)
@@ -937,7 +938,7 @@ public final class ClickBenchHitsSupport
                     primitiveRegistry,
                     notEqualUtf8(0, "").predicate(),
                     allocator,
-                    allocator.engineResources().operatorResources().filter()));
+                    EngineResources.from(allocator).operatorResources().filter()));
         }
         Operator grouped = new GroupOperator(allocator, 0, source);
         Operator aggregated = profiled(profile, "topUtf8.aggregate", new GroupedAggregationOperator(

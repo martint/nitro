@@ -37,12 +37,12 @@ import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.DriverResult;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.execution.OperatorExecutionDriver;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
@@ -162,7 +162,7 @@ class TestCoreIntegrationSlice
                         new PrimitiveRegistry(),
                         new Reference(predicate, Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter()),
+                        EngineResources.from(allocator).operatorResources().filter()),
                 outputSchema);
 
         assertThat(ingress.outputSchema()).isEqualTo(inputSchema);

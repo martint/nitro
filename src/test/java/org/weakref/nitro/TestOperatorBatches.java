@@ -19,7 +19,6 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -29,6 +28,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.BatchSliceOperator;
@@ -172,7 +172,7 @@ public class TestOperatorBatches
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
 
         Batch batch = operator.next();
         assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(0L, 1L, 2L, 3L, 4L);
@@ -208,7 +208,7 @@ public class TestOperatorBatches
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
 
         Batch batch = operator.next();
         Mask mask = batch.borrowMask();
@@ -362,7 +362,7 @@ public class TestOperatorBatches
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
         Operator projected = new ProjectOperator(
                 allocator,
                 new EvaluationPlan(List.of(), List.of(new Reference(new Input(0), Stream.VALUES))),
@@ -383,10 +383,10 @@ public class TestOperatorBatches
                 new AggregationExecutionContext(
                         allocator,
                         new Allocator.Context("test"),
-                        allocator.engineResources().operatorCodeGeneration(),
-                        allocator.engineResources().operatorResources().distinctKeySetPolicy(),
-                        allocator.engineResources().operatorResources().adaptiveLongGroupingPolicy(),
-                        allocator.engineResources().operatorResources().flatKeyTablePolicy(),
+                        EngineResources.from(allocator).operatorCodeGeneration(),
+                        EngineResources.from(allocator).operatorResources().distinctKeySetPolicy(),
+                        EngineResources.from(allocator).operatorResources().adaptiveLongGroupingPolicy(),
+                        EngineResources.from(allocator).operatorResources().flatKeyTablePolicy(),
                         org.weakref.nitro.core.type.Schema.unspecified(1)),
                 1);
         accumulator.initialize(state, 0, 1);
@@ -555,7 +555,7 @@ public class TestOperatorBatches
                 new int[] {0, 1},
                 new ConstantTableOperator(allocator, 2, List.of(row(2L, 20), row(3L, 30))),
                 new int[] {0, 1},
-                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10, null, null),
@@ -579,7 +579,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new ConstantTableOperator(allocator, 2, List.of(row(65_536L, 7L), row(70_000L, 8L))),
                 new int[] {0},
-                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
             List<Row> rows = OperatorAssertions.OperatorAssert.toRows(operator);
             assertThat(rows).hasSize(65_538);
             assertThat(rows.get(65_535)).isEqualTo(row(65_535L, 65_536L, null, null));
@@ -607,7 +607,7 @@ public class TestOperatorBatches
                         row(3L, 40L),
                         row(null, 91L))),
                 new int[] {0},
-                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10L, 1L, 30L),
@@ -638,7 +638,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 inner,
                 new int[] {0},
-                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(1L, 10L, 1L, 30L),
@@ -937,7 +937,7 @@ public class TestOperatorBatches
                 new int[] {0},
                 new boolean[] {false},
                 new ConstantTableOperator(allocator, 1, rows),
-                allocator.engineResources().operatorResources().topNRankingPolicy())) {
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
             int batchCount = 0;
             int rowCount = 0;
             long firstRank = Long.MIN_VALUE;
@@ -1079,7 +1079,7 @@ public class TestOperatorBatches
                         row("alpha", 1L),
                         row("beta", 2L),
                         row("beta", 1L))),
-                allocator.engineResources().operatorResources().topNRankingPolicy())) {
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
             assertThat(operator(operator)).matchesExactly(List.of(
                     row("alpha", 1L, 1L),
                     row("alpha", 2L, 2L),
@@ -1119,7 +1119,7 @@ public class TestOperatorBatches
                         allocator,
                         257,
                         new ConstantTableOperator(allocator, 6, rows)),
-                allocator.engineResources().operatorResources().topNRankingPolicy())) {
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
             assertThat(operator(operator)).matchesExactly(expected);
         }
     }
@@ -1157,7 +1157,7 @@ public class TestOperatorBatches
                                 allocator,
                                 257,
                                 new ConstantTableOperator(allocator, 6, rows)),
-                        allocator.engineResources().operatorResources().topNRankingPolicy()),
+                        EngineResources.from(allocator).operatorResources().topNRankingPolicy()),
                 new int[] {0, 1, 2, 3},
                 new int[0],
                 new boolean[0],
@@ -1201,7 +1201,7 @@ public class TestOperatorBatches
                                         allocator,
                                         257,
                                         new ConstantTableOperator(allocator, 6, rows)),
-                                allocator.engineResources().operatorResources().topNRankingPolicy()),
+                                EngineResources.from(allocator).operatorResources().topNRankingPolicy()),
                         new int[] {0, 1, 2, 3},
                         new int[0],
                         new boolean[0],
@@ -2112,7 +2112,7 @@ public class TestOperatorBatches
                         {-1, -1, 2},
                         {0, -1, 2},
                         {0, 1, 2}},
-                allocator.engineResources().operatorResources().groupIdPolicy())) {
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
                     .containsExactly(
                             row(null, null, 10L, 0L),

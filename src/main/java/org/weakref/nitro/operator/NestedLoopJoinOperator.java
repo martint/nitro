@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -77,7 +78,7 @@ public class NestedLoopJoinOperator
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
         this(
-                allocator.engineResources().operatorResources(),
+                EngineResources.from(allocator).operatorResources(),
                 allocator,
                 outer,
                 outerJoinColumn,
@@ -103,7 +104,7 @@ public class NestedLoopJoinOperator
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
     {
         this(
-                allocator.engineResources().operatorResources(),
+                EngineResources.from(allocator).operatorResources(),
                 allocator,
                 outer,
                 outerJoinColumns,
@@ -141,9 +142,9 @@ public class NestedLoopJoinOperator
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
     {
         this(
-                allocator.engineResources().operatorResources().nestedLoopJoinPolicy(),
-                allocator.engineResources().operatorResources().bufferedJoinInputPolicy(),
-                allocator.engineResources().operatorResources().joinBufferPolicy(),
+                EngineResources.from(allocator).operatorResources().nestedLoopJoinPolicy(),
+                EngineResources.from(allocator).operatorResources().bufferedJoinInputPolicy(),
+                EngineResources.from(allocator).operatorResources().joinBufferPolicy(),
                 allocator,
                 outer,
                 inner,

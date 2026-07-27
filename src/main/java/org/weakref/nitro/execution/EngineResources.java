@@ -11,8 +11,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.data;
+package org.weakref.nitro.execution;
 
+import org.weakref.nitro.data.AllocationResources;
+import org.weakref.nitro.data.AllocationResourcesOwner;
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.operator.AdaptiveLongGroupingPolicy;
 import org.weakref.nitro.operator.AggregationOperatorResources;
 import org.weakref.nitro.operator.BufferedJoinInputPolicy;
@@ -44,7 +48,7 @@ import static java.util.Objects.requireNonNull;
  * and an integration can bind retention to a worker, task, query, or test fixture as appropriate.
  */
 public final class EngineResources
-        implements AutoCloseable
+        implements AllocationResourcesOwner, AutoCloseable
 {
     private final AllocationResources allocationResources;
     private final OperatorResources operatorResources;
@@ -133,6 +137,15 @@ public final class EngineResources
                 OperatorResources.createDefault());
     }
 
+    public static EngineResources from(Allocator allocator)
+    {
+        requireNonNull(allocator, "allocator is null");
+        if (allocator.resourcesOwner() instanceof EngineResources resources) {
+            return resources;
+        }
+        throw new IllegalStateException("Engine resources are not configured for this allocator");
+    }
+
     public PrimitiveArrayPool primitiveArrays()
     {
         checkOpen();
@@ -145,6 +158,7 @@ public final class EngineResources
         return allocationResources.nativeBuffers();
     }
 
+    @Override
     public AllocationResources allocationResources()
     {
         checkOpen();

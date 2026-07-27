@@ -41,7 +41,6 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.MapVector;
@@ -52,6 +51,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.operator.Batch;
@@ -336,7 +336,7 @@ public class TestParquetOperator
                         primitiveRegistry,
                         AllMask.ALL,
                         allocator,
-                        allocator.engineResources().operatorResources().filter()),
+                        EngineResources.from(allocator).operatorResources().filter()),
                 outputSchema)) {
             assertThat(operator.outputSchema()).isEqualTo(outputSchema);
             assertThat(operator(operator))
@@ -645,7 +645,7 @@ public class TestParquetOperator
                         primitiveRegistry,
                         new Reference(new Input(1), Stream.VALUES),
                         allocator,
-                        allocator.engineResources().operatorResources().filter()))) {
+                        EngineResources.from(allocator).operatorResources().filter()))) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 2, 3);
             I64Vector values = (I64Vector) batch.output(0).borrow(Stream.VALUES);
@@ -1370,7 +1370,7 @@ public class TestParquetOperator
                 primitiveRegistry,
                 new ReferenceMask(new Reference(contains, Stream.VALUES)),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row("alpha"),
@@ -1589,7 +1589,7 @@ public class TestParquetOperator
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
             var leftValues = batch.output(0).borrow(Stream.VALUES);
@@ -1980,7 +1980,7 @@ public class TestParquetOperator
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 
@@ -2206,7 +2206,7 @@ public class TestParquetOperator
                 primitiveRegistry,
                 new Reference(active, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 3);
 
@@ -2260,7 +2260,7 @@ public class TestParquetOperator
                                                 primitiveRegistry,
                                                 new NotMask(new ReferenceMask(new Reference(new Input(0), Stream.NULLS))),
                                                 allocator,
-                                                allocator.engineResources().operatorResources().filter()))))))
+                                                EngineResources.from(allocator).operatorResources().filter()))))))
                 .matchesExactly(List.of(
                         Row.row(51L, 2L),
                         Row.row(52L, 2L)));
@@ -2663,7 +2663,7 @@ public class TestParquetOperator
                 primitiveRegistry,
                 new Reference(predicate, Stream.VALUES),
                 allocator,
-                allocator.engineResources().operatorResources().filter())) {
+                EngineResources.from(allocator).operatorResources().filter())) {
             Batch batch = operator.next();
             assertThat(batch.borrowMask()).containsExactly(0, 4);
 

@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
@@ -52,7 +53,7 @@ public class AggregationOperator
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, PhysicalAggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
+        this(allocator, PhysicalAggregationProgram.independent(aggregations), source, EngineResources.from(allocator).operatorResources());
     }
 
     public AggregationOperator(Allocator allocator, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
@@ -62,7 +63,7 @@ public class AggregationOperator
 
     public AggregationOperator(Allocator allocator, PhysicalAggregationProgram program, Operator source)
     {
-        this(allocator, program, source, allocator.engineResources().operatorResources());
+        this(allocator, program, source, EngineResources.from(allocator).operatorResources());
     }
 
     public AggregationOperator(Allocator allocator, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)

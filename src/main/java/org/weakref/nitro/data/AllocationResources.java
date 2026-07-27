@@ -22,7 +22,7 @@ import static java.util.Objects.requireNonNull;
  * storage while remaining independent of operators, function registries, and code-generation services.
  */
 public final class AllocationResources
-        implements AutoCloseable
+        implements AllocationResourcesOwner, AutoCloseable
 {
     private static final long MIN_DEFAULT_MAX_RETAINED_BYTES = 512L << 20;
     private static final long MAX_DEFAULT_MAX_RETAINED_BYTES = 1L << 30;
@@ -100,6 +100,13 @@ public final class AllocationResources
     {
         checkOpen();
         return nativeBufferAdvice;
+    }
+
+    @Override
+    public AllocationResources allocationResources()
+    {
+        checkOpen();
+        return this;
     }
 
     @Override

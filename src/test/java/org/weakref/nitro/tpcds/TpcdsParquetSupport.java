@@ -18,6 +18,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.DistinctCount;
@@ -639,7 +640,7 @@ final class TpcdsParquetSupport
                         {0, 1, -1, -1, 4, 5, 6, 7, 8, 9, 10},
                         {0, 1, 2, -1, 4, 5, 6, 7, 8, 9, 10},
                         {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 11),
@@ -684,7 +685,7 @@ final class TpcdsParquetSupport
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
                         {0, 1, 2, 3, 4, 5}},
-                context.allocator().engineResources().operatorResources().groupIdPolicy()));
+                EngineResources.from(context.allocator()).operatorResources().groupIdPolicy()));
         return context.profiled("q22.group.rollup", new GroupedAggregationOperator(
                 context.allocator(),
                 List.of(0, 1, 2, 3, 6),
@@ -912,7 +913,7 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {0, -1, 2, 3, 4, 5},
                         {0, 1, 2, 3, 4, 5}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         sales = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 6),
@@ -1603,7 +1604,7 @@ final class TpcdsParquetSupport
                 allocator,
                 0,
                 context.profiled("q82.scan.sales_items", scannedTable(allocator, tables, "store_sales", "ss_item_sk")),
-                allocator.engineResources().operatorResources()));
+                EngineResources.from(allocator).operatorResources()));
 
         Operator joined = context.profiled("q82.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
         joined = context.profiled("q82.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
@@ -1660,7 +1661,7 @@ final class TpcdsParquetSupport
                 allocator,
                 0,
                 context.profiled("q37.scan.sales_items", scannedTable(allocator, tables, "catalog_sales", "cs_item_sk")),
-                allocator.engineResources().operatorResources()));
+                EngineResources.from(allocator).operatorResources()));
 
         Operator joined = context.profiled("q37.join.inventory", new HashJoinOperator(allocator, items, 0, inventory, 0));
         joined = context.profiled("q37.join.date_dim", new HashJoinOperator(allocator, joined, 5, dates, 0));
@@ -2332,14 +2333,14 @@ final class TpcdsParquetSupport
                         {-1, -1, 2},
                         {0, -1, 2},
                         {0, 1, 2}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 3),
                 List.of(new Sum(2)),
                 grouped);
         grouped = projectQuery86Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -2353,14 +2354,14 @@ final class TpcdsParquetSupport
                         {-1, -1, 2, 3},
                         {0, -1, 2, 3},
                         {0, 1, 2, 3}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 4),
                 List.of(new Sum(2), new Sum(3)),
                 grouped);
         grouped = projectQuery36Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {false}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {false}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5, 0, 1}, new boolean[] {true, false, false, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -2436,7 +2437,7 @@ final class TpcdsParquetSupport
                         {0, 1, -1, -1, 4, 5},
                         {0, 1, 2, -1, 4, 5},
                         {0, 1, 2, 3, 4, 5}},
-                allocator.engineResources().operatorResources().groupIdPolicy()));
+                EngineResources.from(allocator).operatorResources().groupIdPolicy()));
         grouped = profiled("q14.group.rollup", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 6),
@@ -2501,7 +2502,7 @@ final class TpcdsParquetSupport
                         lessThan(1, 779)));
         Operator matched = new SemiJoinOperator(allocator, probe, 2, eligibleManufacturers, 0);
         Operator productNames = projectInputs(allocator, primitiveRegistry, matched, 0);
-        Operator distinct = new MarkDistinctOperator(allocator, 0, productNames, allocator.engineResources().operatorResources());
+        Operator distinct = new MarkDistinctOperator(allocator, 0, productNames, EngineResources.from(allocator).operatorResources());
         return new TopNOperator(allocator, 100, 0, false, distinct);
     }
 
@@ -2595,7 +2596,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 1},
                 query51Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_sales_price"),
                 new int[] {0, 1},
-                allocator.engineResources().operatorResources().fullJoinPolicy()));
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy()));
 
         Variable item = new Variable(0);
         Variable date = new Variable(1);
@@ -2968,14 +2969,14 @@ final class TpcdsParquetSupport
                         {0, 1, 2, 3, 4, 5, -1, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, 7, 8}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
                 List.of(new Sum(8)),
                 grouped);
         grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped);
     }
 
@@ -2993,14 +2994,14 @@ final class TpcdsParquetSupport
                         {-1, -1, 2},
                         {0, -1, 2},
                         {0, 1, 2}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 3),
                 List.of(new Sum(2)),
                 grouped);
         grouped = projectQuery70Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, allocator.engineResources().operatorResources().topNRankingPolicy());
+        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }
@@ -3050,7 +3051,7 @@ final class TpcdsParquetSupport
                         {-1, -1, 2, 3, 4},
                         {0, -1, 2, 3, 4},
                         {0, 1, 2, 3, 4}},
-                allocator.engineResources().operatorResources().groupIdPolicy()));
+                EngineResources.from(allocator).operatorResources().groupIdPolicy()));
         grouped = profiled("q80.group.final", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 5),
@@ -3123,7 +3124,7 @@ final class TpcdsParquetSupport
                         {-1, -1, 2, 3, 4},
                         {0, -1, 2, 3, 4},
                         {0, 1, 2, 3, 4}},
-                allocator.engineResources().operatorResources().groupIdPolicy()));
+                EngineResources.from(allocator).operatorResources().groupIdPolicy()));
         grouped = profiled("q77.group.final", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 5),
@@ -3211,7 +3212,7 @@ final class TpcdsParquetSupport
                 new int[][] {
                         {-1, 1, 2},
                         {0, -1, -1}},
-                allocator.engineResources().operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy());
         grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 3),
@@ -4180,7 +4181,7 @@ final class TpcdsParquetSupport
         Operator joined = query44AverageRows(allocator, primitiveRegistry, tables);
         joined = filter(allocator, primitiveRegistry, joined, query44ThresholdPredicate(1, 2));
         joined = projectInputs(allocator, primitiveRegistry, joined, 0, 1);
-        joined = new TopNRankingOperator(allocator, 10, new int[] {1}, new boolean[] {descending}, joined, allocator.engineResources().operatorResources().topNRankingPolicy());
+        joined = new TopNRankingOperator(allocator, 10, new int[] {1}, new boolean[] {descending}, joined, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         return projectInputs(allocator, primitiveRegistry, joined, 0, 2);
     }
 
@@ -4250,7 +4251,7 @@ final class TpcdsParquetSupport
                 and(equal(1, 2001), equal(2, 1)),
                 new String[] {"d_month_seq", "d_year", "d_moy"},
                 0);
-        monthSequence = new MarkDistinctOperator(allocator, 0, monthSequence, allocator.engineResources().operatorResources());
+        monthSequence = new MarkDistinctOperator(allocator, 0, monthSequence, EngineResources.from(allocator).operatorResources());
         return new EnforceSingleRowOperator(allocator, monthSequence);
     }
 
@@ -4461,7 +4462,7 @@ final class TpcdsParquetSupport
                 primitiveRegistry,
                 filterSpec.predicate(),
                 allocator,
-                allocator.engineResources().operatorResources().filter());
+                EngineResources.from(allocator).operatorResources().filter());
     }
 
     private static Operator filteredProjectedScan(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String tableName, FilterSpec filterSpec, String[] columns, int... inputIndexes)
@@ -4979,7 +4980,7 @@ final class TpcdsParquetSupport
         Operator joined = new HashJoinOperator(allocator, left, 1, right, 1);
         joined = filter(allocator, primitiveRegistry, joined, notEqualColumns(0, 2));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
-        return new MarkDistinctOperator(allocator, 0, joined, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, joined, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query16ReturnedEligibleOrders(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -4987,7 +4988,7 @@ final class TpcdsParquetSupport
         Operator returns = scannedTable(allocator, tables, "catalog_returns", "cr_order_number");
         returns = new HashJoinOperator(allocator, returns, 0, query16MultiWarehouseOrders(allocator, primitiveRegistry, tables), 0);
         returns = projectInputs(allocator, primitiveRegistry, returns, 0);
-        return new MarkDistinctOperator(allocator, 0, returns, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, returns, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query05ChannelBranch(
@@ -5131,7 +5132,7 @@ final class TpcdsParquetSupport
                 1,
                 HashJoinOperator.JoinFilter.longNotEqual(0, 0));
         joined = projectInputs(allocator, primitiveRegistry, joined, 1);
-        return new MarkDistinctOperator(allocator, 0, joined, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, joined, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query95ReturnedEligibleOrders(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5141,7 +5142,7 @@ final class TpcdsParquetSupport
         // the result to multi-warehouse orders. Joining returns to the multi-warehouse set here would
         // be redundant, so this is a plain distinct of returned order numbers (matching Trino).
         Operator returns = scannedTable(allocator, tables, "web_returns", "wr_order_number");
-        return new MarkDistinctOperator(allocator, 0, returns, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, returns, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query95IllinoisAddressKeys(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5305,7 +5306,7 @@ final class TpcdsParquetSupport
                 query14ChannelTriples(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk"),
                 new int[] {0, 1, 2}));
         sharedTriples = profiled("q14.cross.project.web", projectInputs(allocator, primitiveRegistry, sharedTriples, 0, 1, 2));
-        sharedTriples = profiled("q14.cross.distinct.triples", new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, sharedTriples, allocator.engineResources().operatorResources()));
+        sharedTriples = profiled("q14.cross.distinct.triples", new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, sharedTriples, EngineResources.from(allocator).operatorResources()));
 
         Operator crossItems = profiled("q14.cross.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand_id", "i_class_id", "i_category_id"));
         crossItems = profiled("q14.cross.join.item", new HashJoinOperator(
@@ -5315,7 +5316,7 @@ final class TpcdsParquetSupport
                 sharedTriples,
                 new int[] {0, 1, 2}));
         crossItems = profiled("q14.cross.project.item", projectInputs(allocator, primitiveRegistry, crossItems, 0));
-        return profiled("q14.cross.distinct.item", new MarkDistinctOperator(allocator, 0, crossItems, allocator.engineResources().operatorResources()));
+        return profiled("q14.cross.distinct.item", new MarkDistinctOperator(allocator, 0, crossItems, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator query14ChannelTriples(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn)
@@ -5341,7 +5342,7 @@ final class TpcdsParquetSupport
                         0),
                 0));
         triples = profiled("q14.triples.project." + salesTable, projectInputs(allocator, primitiveRegistry, triples, 3, 4, 5));
-        return profiled("q14.triples.distinct." + salesTable, new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, triples, allocator.engineResources().operatorResources()));
+        return profiled("q14.triples.distinct." + salesTable, new MarkDistinctOperator(allocator, new int[] {0, 1, 2}, triples, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator query14AverageSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -5387,7 +5388,7 @@ final class TpcdsParquetSupport
                 qualifiedZipValues);
         qualifiedZipValues = filter(allocator, primitiveRegistry, qualifiedZipValues, greaterThan(1, 10));
         qualifiedZipValues = projectUtf8Prefix(allocator, primitiveRegistry, qualifiedZipValues, 0, 2);
-        qualifiedZipValues = new MarkDistinctOperator(allocator, 0, qualifiedZipValues, allocator.engineResources().operatorResources());
+        qualifiedZipValues = new MarkDistinctOperator(allocator, 0, qualifiedZipValues, EngineResources.from(allocator).operatorResources());
         return qualifiedZipValues;
     }
 
@@ -5787,7 +5788,7 @@ final class TpcdsParquetSupport
                 frequentItems));
         frequentItems = context.profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(2, 4)));
         frequentItems = context.profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
-        return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems, allocator.engineResources().operatorResources()));
+        return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator query23CustomerSales(TpcdsQueryContext context, boolean filterYears)
@@ -7141,7 +7142,7 @@ final class TpcdsParquetSupport
                 profiled("q54.scan.customer", scannedTable(allocator, tables, "customer", "c_customer_sk", "c_current_addr_sk")),
                 0));
         customerSales = projectInputs(allocator, primitiveRegistry, customerSales, 1, 6);
-        return profiled("q54.distinct.customer_address", new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales, allocator.engineResources().operatorResources()));
+        return profiled("q54.distinct.customer_address", new MarkDistinctOperator(allocator, new int[] {0, 1}, customerSales, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator query54ScalarMonthBoundary(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, int offset)
@@ -7155,7 +7156,7 @@ final class TpcdsParquetSupport
                 new String[] {"d_month_seq", "d_year", "d_moy"},
                 0);
         boundary = projectQuery54ScalarMonthBoundary(allocator, primitiveRegistry, boundary, offset);
-        boundary = new MarkDistinctOperator(allocator, 0, boundary, allocator.engineResources().operatorResources());
+        boundary = new MarkDistinctOperator(allocator, 0, boundary, EngineResources.from(allocator).operatorResources());
         return new EnforceSingleRowOperator(allocator, boundary);
     }
 
@@ -7526,7 +7527,7 @@ final class TpcdsParquetSupport
         allowedDates = new NestedLoopJoinOperator(allocator, allowedDates, query58ScalarWeekSequence(allocator, primitiveRegistry, tables));
         allowedDates = filter(allocator, primitiveRegistry, allowedDates, equalColumns(1, 2));
         allowedDates = projectInputs(allocator, primitiveRegistry, allowedDates, 0);
-        return new MarkDistinctOperator(allocator, 0, allowedDates, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, allowedDates, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query83AllowedDates(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -7543,11 +7544,11 @@ final class TpcdsParquetSupport
                         LocalDate.of(2000, 11, 17).toEpochDay()),
                 new String[] {"d_date", "d_week_seq"},
                 1);
-        targetWeekSequences = new MarkDistinctOperator(allocator, 0, targetWeekSequences, allocator.engineResources().operatorResources());
+        targetWeekSequences = new MarkDistinctOperator(allocator, 0, targetWeekSequences, EngineResources.from(allocator).operatorResources());
         Operator allowedDates = scannedTable(allocator, tables, "date_dim", "d_date_sk", "d_week_seq");
         allowedDates = new HashJoinOperator(allocator, allowedDates, 1, targetWeekSequences, 0);
         allowedDates = projectInputs(allocator, primitiveRegistry, allowedDates, 0);
-        return new MarkDistinctOperator(allocator, 0, allowedDates, allocator.engineResources().operatorResources());
+        return new MarkDistinctOperator(allocator, 0, allowedDates, EngineResources.from(allocator).operatorResources());
     }
 
     private static Operator query58ScalarWeekSequence(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -7560,7 +7561,7 @@ final class TpcdsParquetSupport
                 equal(1, 10_959L),
                 new String[] {"d_week_seq", "d_date"},
                 0);
-        weekSequence = new MarkDistinctOperator(allocator, 0, weekSequence, allocator.engineResources().operatorResources());
+        weekSequence = new MarkDistinctOperator(allocator, 0, weekSequence, EngineResources.from(allocator).operatorResources());
         return new EnforceSingleRowOperator(allocator, weekSequence);
     }
 
@@ -8834,7 +8835,7 @@ final class TpcdsParquetSupport
                 new int[] {3, 4},
                 new boolean[] {false, false},
                 facts,
-                context.allocator().engineResources().operatorResources().topNRankingPolicy()));
+                EngineResources.from(context.allocator()).operatorResources().topNRankingPolicy()));
         return context.profiled("q57.project.ranked_sales", projectInputs(context.allocator(), context.primitiveRegistry(), facts, 0, 1, 2, 3, 4, 5, 6));
     }
 
@@ -9400,7 +9401,7 @@ final class TpcdsParquetSupport
                 new int[] {4, 5},
                 new boolean[] {false, false},
                 facts,
-                allocator.engineResources().operatorResources().topNRankingPolicy()));
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy()));
     }
 
     private static Operator projectQuery31Output(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int countyIndex, int storeQuarterOneIndex, int storeQuarterTwoIndex, int storeQuarterThreeIndex, int webQuarterOneIndex, int webQuarterTwoIndex, int webQuarterThreeIndex)
@@ -10388,7 +10389,7 @@ final class TpcdsParquetSupport
                         query75Channel(allocator, primitiveRegistry, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_ticket_number", "ss_quantity", "ss_ext_sales_price", "store_returns", "sr_item_sk", "sr_ticket_number", "sr_return_quantity", "sr_return_amt", profilePrefix + ".store"),
                         query75Channel(allocator, primitiveRegistry, tables, "web_sales", "ws_sold_date_sk", "ws_item_sk", "ws_order_number", "ws_quantity", "ws_ext_sales_price", "web_returns", "wr_item_sk", "wr_order_number", "wr_return_quantity", "wr_return_amt", profilePrefix + ".web"))),
                         true,
-                        allocator.engineResources().operatorResources()))));
+                        EngineResources.from(allocator).operatorResources()))));
     }
 
     private static Operator query78Channel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn, String profilePrefix)
@@ -10778,7 +10779,7 @@ final class TpcdsParquetSupport
         // Trino plan. This keeps both harnesses pushing the same row count through the distinct.
         facts = profiled(profilePrefix + ".filter.non_null_customer", filter(allocator, primitiveRegistry, facts, isNotNullI64(0)));
         facts = profiled(profilePrefix + ".project.keys", projectInputs(allocator, primitiveRegistry, facts, 0, 1));
-        return profiled(profilePrefix + ".distinct.mark_distinct", new MarkDistinctOperator(allocator, new int[] {0, 1}, facts, allocator.engineResources().operatorResources()));
+        return profiled(profilePrefix + ".distinct.mark_distinct", new MarkDistinctOperator(allocator, new int[] {0, 1}, facts, EngineResources.from(allocator).operatorResources()));
     }
 
     private static Operator query97PresenceChannel(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String profilePrefix, String salesTable, String customerColumn, String itemColumn, String soldDateColumn, boolean storeChannel)

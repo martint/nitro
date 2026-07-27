@@ -18,6 +18,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.execution.EngineResources;
 
 import static java.util.Objects.requireNonNull;
 
@@ -45,7 +46,7 @@ public class SortOperator
                 columns,
                 descending,
                 source,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
     }
 
     public SortOperator(

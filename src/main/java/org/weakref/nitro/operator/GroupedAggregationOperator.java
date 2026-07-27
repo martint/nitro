@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAggregationUnit;
@@ -117,7 +118,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, PhysicalAggregationProgram.independent(aggregations), source, allocator.engineResources().operatorResources());
+        this(allocator, groupColumn, PhysicalAggregationProgram.independent(aggregations), source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
@@ -127,7 +128,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, PhysicalAggregationProgram program, Operator source)
     {
-        this(allocator, groupColumn, program, source, allocator.engineResources().operatorResources());
+        this(allocator, groupColumn, program, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)
@@ -137,7 +138,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupColumn, groupedColumns, aggregations, source, allocator.engineResources().operatorResources());
+        this(allocator, groupColumn, groupedColumns, aggregations, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source, OperatorResources operatorResources)
@@ -157,7 +158,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, PhysicalAggregationProgram program, Operator source)
     {
-        this(allocator, groupByColumns, groupByColumns, program, source, allocator.engineResources().operatorResources());
+        this(allocator, groupByColumns, groupByColumns, program, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, PhysicalAggregationProgram program, Operator source, OperatorResources operatorResources)
@@ -167,7 +168,7 @@ public class GroupedAggregationOperator
 
     public GroupedAggregationOperator(Allocator allocator, List<Integer> groupByColumns, List<Integer> groupedColumns, List<Accumulator> aggregations, Operator source)
     {
-        this(allocator, groupByColumns, groupedColumns, aggregations, source, allocator.engineResources().operatorResources());
+        this(allocator, groupByColumns, groupedColumns, aggregations, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(
@@ -188,7 +189,7 @@ public class GroupedAggregationOperator
             PhysicalAggregationProgram program,
             Operator source)
     {
-        this(allocator, groupByColumns, groupedColumns, program, source, allocator.engineResources().operatorResources());
+        this(allocator, groupByColumns, groupedColumns, program, source, EngineResources.from(allocator).operatorResources());
     }
 
     public GroupedAggregationOperator(

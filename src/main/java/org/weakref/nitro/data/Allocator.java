@@ -42,7 +42,7 @@ public class Allocator
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
     private final AllocationResources allocationResources;
-    private final EngineResources engineResources;
+    private final AllocationResourcesOwner resourcesOwner;
     private final PrimitiveArrayPool primitiveArrays;
     private final AllocatorPolicy policy;
     private final MemoryReservation memoryReservation;
@@ -52,15 +52,15 @@ public class Allocator
     private long residentBytes;
     private boolean closed;
 
-    public Allocator(EngineResources engineResources)
+    public Allocator(AllocationResourcesOwner resourcesOwner)
     {
-        this(engineResources, null);
+        this(resourcesOwner, null);
     }
 
-    public Allocator(EngineResources engineResources, MemoryReservation memoryReservation)
+    public Allocator(AllocationResourcesOwner resourcesOwner, MemoryReservation memoryReservation)
     {
-        this.engineResources = requireNonNull(engineResources, "engineResources is null");
-        this.allocationResources = engineResources.allocationResources();
+        this.resourcesOwner = requireNonNull(resourcesOwner, "resourcesOwner is null");
+        this.allocationResources = resourcesOwner.allocationResources();
         this.primitiveArrays = allocationResources.primitiveArrays();
         this.policy = allocationResources.allocatorPolicy();
         this.memoryReservation = memoryReservation;
@@ -68,24 +68,17 @@ public class Allocator
 
     public Allocator(AllocationResources allocationResources)
     {
-        this(allocationResources, null);
+        this((AllocationResourcesOwner) allocationResources, null);
     }
 
     public Allocator(AllocationResources allocationResources, MemoryReservation memoryReservation)
     {
-        this.engineResources = null;
-        this.allocationResources = requireNonNull(allocationResources, "allocationResources is null");
-        this.primitiveArrays = allocationResources.primitiveArrays();
-        this.policy = allocationResources.allocatorPolicy();
-        this.memoryReservation = memoryReservation;
+        this((AllocationResourcesOwner) allocationResources, memoryReservation);
     }
 
-    public EngineResources engineResources()
+    public AllocationResourcesOwner resourcesOwner()
     {
-        if (engineResources == null) {
-            throw new IllegalStateException("Engine resources are not configured for this allocator");
-        }
-        return engineResources;
+        return resourcesOwner;
     }
 
     public PrimitiveArrayPool primitiveArrays()

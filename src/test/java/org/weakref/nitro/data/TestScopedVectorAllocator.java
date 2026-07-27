@@ -27,9 +27,7 @@ class TestScopedVectorAllocator
         try (AllocationResources resources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
             VectorAllocator vectors = allocator.vectorAllocator(context);
-            assertThatIllegalStateException()
-                    .isThrownBy(allocator::engineResources)
-                    .withMessage("Engine resources are not configured for this allocator");
+            assertThat(allocator.resourcesOwner()).isSameAs(resources);
             assertThat(allocator.nativeBuffers()).isSameAs(resources.nativeBuffers());
 
             I64Vector released = vectors.allocate(I64Vector.class, 4, I64Vector::new);

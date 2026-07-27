@@ -16,7 +16,7 @@ package org.weakref.nitro.tpch;
 import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.TestPrimitiveFunctions;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 

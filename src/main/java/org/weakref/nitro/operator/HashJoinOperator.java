@@ -33,6 +33,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -344,7 +345,7 @@ public class HashJoinOperator
     private HashJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns, boolean probeOuterJoin, JoinFilter[] joinFilters)
     {
         this(
-                allocator.engineResources().operatorResources(),
+                EngineResources.from(allocator).operatorResources(),
                 allocator,
                 outer,
                 outerJoinColumns,

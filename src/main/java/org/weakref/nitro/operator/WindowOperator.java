@@ -28,6 +28,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -78,7 +79,7 @@ public final class WindowOperator
                 descendingByColumn,
                 windowFunctions,
                 Schema.unspecified(windowFunctions.size()),
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
     }
 
     public WindowOperator(
@@ -98,7 +99,7 @@ public final class WindowOperator
                 descendingByColumn,
                 windowFunctions,
                 windowSchema,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
     }
 
     public WindowOperator(

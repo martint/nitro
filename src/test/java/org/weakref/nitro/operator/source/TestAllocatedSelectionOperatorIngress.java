@@ -16,8 +16,8 @@ package org.weakref.nitro.operator.source;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.data.Allocator;
-import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.execution.EngineResources;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;

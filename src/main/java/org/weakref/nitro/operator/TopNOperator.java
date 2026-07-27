@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -53,7 +54,7 @@ public class TopNOperator
                 columns,
                 descending,
                 source,
-                allocator.engineResources().operatorResources());
+                EngineResources.from(allocator).operatorResources());
     }
 
     public TopNOperator(
