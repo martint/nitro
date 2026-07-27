@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -22,6 +23,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -35,6 +37,7 @@ public class GroupOperator
 
     private final int[] groupByColumns;
     private final Operator source;
+    private final Schema outputSchema;
     private final Vector[] groupValues;
     private final Vector[] groupNulls;
     private final GroupingState groupingState;
@@ -72,6 +75,7 @@ public class GroupOperator
                 groupingTypes(source.outputSchema(), groupByColumns));
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
+        this.outputSchema = outputSchema(source.outputSchema());
         this.groupValues = new Vector[groupByColumns.length];
         this.groupNulls = new Vector[groupByColumns.length];
     }
@@ -92,6 +96,20 @@ public class GroupOperator
     public int outputCount()
     {
         return source.outputCount() + 1;
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema sourceSchema)
+    {
+        List<Field> fields = new ArrayList<>(sourceSchema.size() + 1);
+        fields.add(Schema.unspecified(1).field(0));
+        fields.addAll(sourceSchema.fields());
+        return new Schema(fields);
     }
 
     @Override

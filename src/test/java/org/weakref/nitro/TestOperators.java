@@ -1408,6 +1408,24 @@ public class TestOperators
     }
 
     @Test
+    void testGroupOperatorPreservesSourceSchemaAfterGroupId()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field first = new Field("first", i32Only, false);
+        Field second = new Field("second", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(first, second));
+
+        try (GroupOperator group = new GroupOperator(
+                allocator,
+                0,
+                typedTable(sourceSchema))) {
+            assertThat(group.outputSchema().field(0).type().isSpecified()).isFalse();
+            assertThat(group.outputSchema().field(1)).isSameAs(first);
+            assertThat(group.outputSchema().field(2)).isSameAs(second);
+        }
+    }
+
+    @Test
     void testGroupedConditionalProductSumPreservesSqlNullAndZeroSemantics()
     {
         assertThat(operator(new GroupedAggregationOperator(
