@@ -13,100 +13,23 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BatchBufferOwner;
-import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorColumnGeneration;
 
-import java.util.Collections;
-import java.util.EnumSet;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import static java.util.Objects.requireNonNull;
-
 /**
- * Lazily-resolved set of streams for one logical output column.
- * <p>
- * Streams can be borrowed multiple times, or taken exactly once. Borrowed-but-not-taken streams
- * are released on {@link #close()}.
+ * Execution facade over a source-neutral lazy vector-column generation.
  */
 public final class Output
-        implements AutoCloseable
+        extends VectorColumnGeneration
 {
-    @FunctionalInterface
-    public interface SinglePositionResolver
-    {
-        Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size);
-    }
-
-    @FunctionalInterface
-    public interface PositionsResolver
-    {
-        Streams copyPositions(Set<Stream> streams, Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange);
-    }
-
-    @FunctionalInterface
-    public interface MaskedResolver
-    {
-        Vector resolve(Stream stream, Mask mask);
-    }
-
-    @FunctionalInterface
-    public interface MaskResolver
-    {
-        Mask resolve(Stream stream, Mask mask, boolean selectTrue, Allocator allocator, Allocator.Context allocationContext);
-    }
-
-    private static final int VALUES_FLAG = 1;
-    private static final int NULLS_FLAG = 1 << 1;
-    private static final int ERRORS_FLAG = 1 << 2;
-
-    @SuppressWarnings("unchecked")
-    private static final Set<Stream>[] STREAM_SETS = new Set[8];
-
-    static {
-        for (int flags = 0; flags < STREAM_SETS.length; flags++) {
-            EnumSet<Stream> streams = EnumSet.noneOf(Stream.class);
-            if ((flags & VALUES_FLAG) != 0) {
-                streams.add(Stream.VALUES);
-            }
-            if ((flags & NULLS_FLAG) != 0) {
-                streams.add(Stream.NULLS);
-            }
-            if ((flags & ERRORS_FLAG) != 0) {
-                streams.add(Stream.ERRORS);
-            }
-            STREAM_SETS[flags] = Collections.unmodifiableSet(streams);
-        }
-    }
-
-    static Set<Stream> streamSet(int flags)
-    {
-        return STREAM_SETS[flags];
-    }
-
-    private final int exposedFlags;
-    private final Function<Stream, Vector> resolver;
-    private final MaskedResolver maskedResolver;
-    private final MaskResolver maskResolver;
-    private final BiFunction<Stream, Vector, Vector> takeResolver;
-    private final BiConsumer<Stream, Vector> releaseResolver;
-    private final PositionsResolver positionsResolver;
-    private final SinglePositionResolver singlePositionResolver;
-    private final int knownAllFalseFlags;
-    private Vector resolvedValues;
-    private Vector resolvedNulls;
-    private Vector resolvedErrors;
-    private int resolvedFlags;
-    private int takenFlags;
-    private boolean constraintSensitiveResolution;
-    private boolean closed;
-
     public static Output of(Streams streams)
     {
         return new Output(streams.streams(), streams::get);
@@ -114,26 +37,24 @@ public final class Output
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver)
     {
-        this(exposedStreams, resolver, (_, vector) -> vector, (_, _) -> {}, null, null);
+        super(exposedStreams, resolver);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver)
     {
-        this(exposedStreams, resolver, takeResolver, (_, _) -> {}, null, null);
+        super(exposedStreams, resolver, takeResolver);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, null, null);
+        super(exposedStreams, resolver, takeResolver, releaseResolver);
     }
 
-    /** Creates an output whose resolved buffers participate in the supplied reusable batch scope. */
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BatchBufferOwner bufferOwner)
     {
-        this(exposedStreams, resolver, null, null, requireNonNull(bufferOwner, "bufferOwner is null"), bufferOwner, null, null, 0);
+        super(exposedStreams, resolver, bufferOwner);
     }
 
-    /** Full lazy-resolution form for scoped outputs that support masked resolution and direct copy operations. */
     public Output(
             Set<Stream> exposedStreams,
             Function<Stream, Vector> resolver,
@@ -143,52 +64,42 @@ public final class Output
             SinglePositionResolver singlePositionResolver,
             BatchBufferOwner bufferOwner)
     {
-        this(exposedStreams, resolver, maskedResolver, maskResolver, requireNonNull(bufferOwner, "bufferOwner is null"), bufferOwner, positionsResolver, singlePositionResolver, 0);
+        super(exposedStreams, resolver, maskedResolver, maskResolver, positionsResolver, singlePositionResolver, bufferOwner);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, takeResolver, releaseResolver, null, singlePositionResolver);
+        super(exposedStreams, resolver, takeResolver, releaseResolver, singlePositionResolver);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, null, null, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, 0);
+        super(exposedStreams, resolver, takeResolver, releaseResolver, positionsResolver, singlePositionResolver);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, MaskedResolver maskedResolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, maskedResolver, null, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, 0);
+        super(exposedStreams, resolver, maskedResolver, takeResolver, releaseResolver, positionsResolver, singlePositionResolver);
     }
 
     public Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, MaskedResolver maskedResolver, MaskResolver maskResolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver)
     {
-        this(exposedStreams, resolver, maskedResolver, maskResolver, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, 0);
+        super(exposedStreams, resolver, maskedResolver, maskResolver, takeResolver, releaseResolver, positionsResolver, singlePositionResolver);
     }
 
-    private Output(Set<Stream> exposedStreams, Function<Stream, Vector> resolver, MaskedResolver maskedResolver, MaskResolver maskResolver, BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver, PositionsResolver positionsResolver, SinglePositionResolver singlePositionResolver, int knownAllFalseFlags)
+    private Output(
+            Set<Stream> exposedStreams,
+            Function<Stream, Vector> resolver,
+            MaskedResolver maskedResolver,
+            MaskResolver maskResolver,
+            BiFunction<Stream, Vector, Vector> takeResolver,
+            BiConsumer<Stream, Vector> releaseResolver,
+            PositionsResolver positionsResolver,
+            SinglePositionResolver singlePositionResolver,
+            int knownAllFalseFlags)
     {
-        requireNonNull(exposedStreams, "exposedStreams is null");
-        this.exposedFlags = streamFlags(exposedStreams);
-        this.resolver = requireNonNull(resolver, "resolver is null");
-        this.maskedResolver = maskedResolver;
-        this.maskResolver = maskResolver;
-        this.takeResolver = requireNonNull(takeResolver, "takeResolver is null");
-        this.releaseResolver = requireNonNull(releaseResolver, "releaseResolver is null");
-        this.positionsResolver = positionsResolver;
-        this.singlePositionResolver = singlePositionResolver;
-        this.knownAllFalseFlags = knownAllFalseFlags & this.exposedFlags;
-    }
-
-    public Output withKnownAllFalse(Set<Stream> knownAllFalseStreams)
-    {
-        requireNonNull(knownAllFalseStreams, "knownAllFalseStreams is null");
-        int additionalFlags = streamFlags(knownAllFalseStreams) & exposedFlags;
-        if (additionalFlags == 0 || (knownAllFalseFlags | additionalFlags) == knownAllFalseFlags) {
-            return this;
-        }
-        Output output = new Output(
-                streams(),
+        super(
+                exposedStreams,
                 resolver,
                 maskedResolver,
                 maskResolver,
@@ -196,349 +107,61 @@ public final class Output
                 releaseResolver,
                 positionsResolver,
                 singlePositionResolver,
-                knownAllFalseFlags | additionalFlags);
-        return output;
-    }
-
-    public Vector borrow(Stream stream)
-    {
-        checkOpen();
-        requireNonNull(stream, "stream is null");
-        int flag = streamFlag(stream);
-        int index = streamIndex(stream);
-        if ((takenFlags & flag) != 0) {
-            throw new IllegalStateException("Stream already taken: " + stream);
-        }
-        if ((exposedFlags & flag) == 0) {
-            throw new IllegalArgumentException("Output does not expose stream: " + stream);
-        }
-        if (maskedResolver != null) {
-            return resolveMasked(stream, null, flag, index);
-        }
-        Vector resolved = resolvedStream(index);
-        if (resolved != null) {
-            return resolved;
-        }
-        resolved = requireNonNull(resolver.apply(stream), "resolver returned null");
-        resolvedStream(index, resolved);
-        resolvedFlags |= flag;
-        return resolved;
-    }
-
-    public Vector borrow(Stream stream, Mask mask)
-    {
-        checkOpen();
-        requireNonNull(stream, "stream is null");
-        requireNonNull(mask, "mask is null");
-        int flag = streamFlag(stream);
-        int index = streamIndex(stream);
-        if ((takenFlags & flag) != 0) {
-            throw new IllegalStateException("Stream already taken: " + stream);
-        }
-        if ((exposedFlags & flag) == 0) {
-            throw new IllegalArgumentException("Output does not expose stream: " + stream);
-        }
-        if (maskedResolver == null) {
-            return borrow(stream);
-        }
-        return resolveMasked(stream, mask, flag, index);
-    }
-
-    private Vector resolveMasked(Stream stream, Mask mask, int flag, int index)
-    {
-        Vector previous = resolvedStream(index);
-        Vector resolved = requireNonNull(maskedResolver.resolve(stream, mask), "maskedResolver returned null");
-        if (previous != null && previous != resolved) {
-            release(stream, previous);
-        }
-        resolvedStream(index, resolved);
-        resolvedFlags |= flag;
-        return resolved;
-    }
-
-    public Vector borrowOrNull(Stream stream)
-    {
-        checkOpen();
-        requireNonNull(stream, "stream is null");
-        if ((exposedFlags & streamFlag(stream)) == 0) {
-            return null;
-        }
-        return borrow(stream);
-    }
-
-    public Vector borrowOrNull(Stream stream, Mask mask)
-    {
-        checkOpen();
-        requireNonNull(stream, "stream is null");
-        requireNonNull(mask, "mask is null");
-        if ((exposedFlags & streamFlag(stream)) == 0) {
-            return null;
-        }
-        return borrow(stream, mask);
-    }
-
-    public Mask tryBorrowMask(Stream stream, Mask mask, boolean selectTrue, Allocator allocator, Allocator.Context allocationContext)
-    {
-        checkOpen();
-        requireNonNull(stream, "stream is null");
-        requireNonNull(mask, "mask is null");
-        requireNonNull(allocator, "allocator is null");
-        requireNonNull(allocationContext, "allocationContext is null");
-        if ((exposedFlags & streamFlag(stream)) == 0 || maskResolver == null) {
-            return null;
-        }
-        if ((takenFlags & streamFlag(stream)) != 0) {
-            throw new IllegalStateException("Stream already taken: " + stream);
-        }
-        return maskResolver.resolve(stream, mask, selectTrue, allocator, allocationContext);
-    }
-
-    public boolean has(Stream stream)
-    {
-        requireNonNull(stream, "stream is null");
-        return (exposedFlags & streamFlag(stream)) != 0;
-    }
-
-    public boolean hasValues()
-    {
-        return (exposedFlags & VALUES_FLAG) != 0;
-    }
-
-    public boolean hasNulls()
-    {
-        return (exposedFlags & NULLS_FLAG) != 0;
-    }
-
-    public boolean hasErrors()
-    {
-        return (exposedFlags & ERRORS_FLAG) != 0;
-    }
-
-    public boolean isKnownAllFalse(Stream stream)
-    {
-        requireNonNull(stream, "stream is null");
-        return (knownAllFalseFlags & streamFlag(stream)) != 0;
-    }
-
-    public Set<Stream> knownAllFalseStreams()
-    {
-        return STREAM_SETS[knownAllFalseFlags];
-    }
-
-    public boolean isValuesOnly()
-    {
-        return exposedFlags == VALUES_FLAG;
-    }
-
-    public Vector take(Stream stream)
-    {
-        checkOpen();
-        Vector vector = requireNonNull(takeResolver.apply(stream, borrow(stream)), "takeResolver returned null");
-        takenFlags |= streamFlag(stream);
-        return vector;
-    }
-
-    public Set<Stream> streams()
-    {
-        return STREAM_SETS[exposedFlags];
-    }
-
-    int flags()
-    {
-        return exposedFlags;
-    }
-
-    public Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size)
-    {
-        checkOpen();
-        if (singlePositionResolver != null) {
-            return singlePositionResolver.copySinglePosition(existing, sourcePosition, outputPosition, size);
-        }
-        if (positionsResolver == null) {
-            return null;
-        }
-        return positionsResolver.copyPositions(streams(), existing, new int[] {sourcePosition}, 0, 1, outputPosition, size, false);
-    }
-
-    public Streams copyPositions(Streams existing, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange)
-    {
-        checkOpen();
-        if (sourceCount == 1 && singlePositionResolver != null) {
-            return singlePositionResolver.copySinglePosition(existing, sourcePositions[sourceStart], outputStart, size);
-        }
-        boolean hit = positionsResolver != null;
-        return hit ? positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange) : null;
-    }
-
-    public Output select(Set<Stream> selectedStreams)
-    {
-        requireNonNull(selectedStreams, "selectedStreams is null");
-        int selectedFlags = streamFlags(selectedStreams);
-        if ((selectedFlags & ~exposedFlags) != 0) {
-            throw new IllegalArgumentException("Selected streams are not exposed by output");
-        }
-        if (selectedFlags == exposedFlags) {
-            return this;
-        }
-        return new Output(selectedStreams, this::borrow, this::borrowMaybeMasked, this::tryBorrowMask, (stream, vector) -> take(stream), (_, _) -> {}, positionsResolver, null, knownAllFalseFlags & selectedFlags);
-    }
-
-    public Output forward(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
-    {
-        requireNonNull(takeResolver, "takeResolver is null");
-        requireNonNull(releaseResolver, "releaseResolver is null");
-        return new Output(streams(), this::borrow, this::borrowMaybeMasked, this::tryBorrowMask, takeResolver, releaseResolver, positionsResolver, singlePositionResolver, knownAllFalseFlags);
-    }
-
-    public Output forwardSinglePositionOnly(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
-    {
-        requireNonNull(takeResolver, "takeResolver is null");
-        requireNonNull(releaseResolver, "releaseResolver is null");
-        return new Output(streams(), this::borrow, this::borrowMaybeMasked, this::tryBorrowMask, takeResolver, releaseResolver, null, singlePositionResolver, knownAllFalseFlags);
-    }
-
-    /** Marks cached streams as mask-sensitive so {@link Batch#constrain(Mask)} releases them before re-borrow. */
-    public Output withConstraintSensitiveResolution()
-    {
-        constraintSensitiveResolution = true;
-        return this;
-    }
-
-    boolean hasConstraintSensitiveTakenStreams()
-    {
-        return constraintSensitiveResolution && takenFlags != 0;
-    }
-
-    /**
-     * Drops mask-sensitive cached streams before a constrained re-borrow. A taken stream belongs to the caller and
-     * cannot be invalidated safely; {@link Batch} checks that invariant for every output before invalidating any of
-     * them. Untaken streams remain owned here and are released through their normal resolver contract.
-     */
-    void invalidateResolvedForConstraint()
-    {
-        if (!constraintSensitiveResolution) {
-            return;
-        }
-        checkOpen();
-        if (takenFlags != 0) {
-            throw new IllegalStateException("Cannot constrain batch after an output stream was taken");
-        }
-        int flags = resolvedFlags;
-        while (flags != 0) {
-            int flag = Integer.lowestOneBit(flags);
-            Stream stream = stream(flag);
-            release(stream, resolvedStream(streamIndex(stream)));
-            flags &= ~flag;
-        }
-        resolvedValues = null;
-        resolvedNulls = null;
-        resolvedErrors = null;
-        resolvedFlags = 0;
+                knownAllFalseFlags);
     }
 
     @Override
-    public void close()
+    protected VectorColumnGeneration newGeneration(
+            Set<Stream> exposedStreams,
+            Function<Stream, Vector> resolver,
+            MaskedResolver maskedResolver,
+            MaskResolver maskResolver,
+            BiFunction<Stream, Vector, Vector> takeResolver,
+            BiConsumer<Stream, Vector> releaseResolver,
+            PositionsResolver positionsResolver,
+            SinglePositionResolver singlePositionResolver,
+            int knownAllFalseFlags)
     {
-        if (closed) {
-            return;
-        }
-        closed = true;
-        int flags = resolvedFlags & ~takenFlags;
-        while (flags != 0) {
-            int flag = Integer.lowestOneBit(flags);
-            Stream stream = stream(flag);
-            release(stream, resolvedStream(streamIndex(stream)));
-            flags &= ~flag;
-        }
-        resolvedValues = null;
-        resolvedNulls = null;
-        resolvedErrors = null;
-        resolvedFlags = 0;
-        takenFlags = 0;
+        return new Output(
+                exposedStreams,
+                resolver,
+                maskedResolver,
+                maskResolver,
+                takeResolver,
+                releaseResolver,
+                positionsResolver,
+                singlePositionResolver,
+                knownAllFalseFlags);
     }
 
-    private static int streamFlags(Set<Stream> streams)
+    @Override
+    public Output withKnownAllFalse(Set<Stream> knownAllFalseStreams)
     {
-        int flags = 0;
-        if (streams.contains(Stream.VALUES)) {
-            flags |= VALUES_FLAG;
-        }
-        if (streams.contains(Stream.NULLS)) {
-            flags |= NULLS_FLAG;
-        }
-        if (streams.contains(Stream.ERRORS)) {
-            flags |= ERRORS_FLAG;
-        }
-        return flags;
+        return (Output) super.withKnownAllFalse(knownAllFalseStreams);
     }
 
-    private Vector borrowMaybeMasked(Stream stream, Mask mask)
+    @Override
+    public Output select(Set<Stream> selectedStreams)
     {
-        return mask == null ? borrow(stream) : borrow(stream, mask);
+        return (Output) super.select(selectedStreams);
     }
 
-    private static int streamFlag(Stream stream)
+    @Override
+    public Output forward(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
-        return switch (stream) {
-            case VALUES -> VALUES_FLAG;
-            case NULLS -> NULLS_FLAG;
-            case ERRORS -> ERRORS_FLAG;
-        };
+        return (Output) super.forward(takeResolver, releaseResolver);
     }
 
-    private static int streamIndex(Stream stream)
+    @Override
+    public Output forwardSinglePositionOnly(BiFunction<Stream, Vector, Vector> takeResolver, BiConsumer<Stream, Vector> releaseResolver)
     {
-        return switch (stream) {
-            case VALUES -> 0;
-            case NULLS -> 1;
-            case ERRORS -> 2;
-        };
+        return (Output) super.forwardSinglePositionOnly(takeResolver, releaseResolver);
     }
 
-    private static Stream stream(int flag)
+    @Override
+    public Output withConstraintSensitiveResolution()
     {
-        return switch (flag) {
-            case VALUES_FLAG -> Stream.VALUES;
-            case NULLS_FLAG -> Stream.NULLS;
-            case ERRORS_FLAG -> Stream.ERRORS;
-            default -> throw new IllegalArgumentException("Unknown stream flag: " + flag);
-        };
-    }
-
-    private Vector resolvedStream(int index)
-    {
-        return switch (index) {
-            case 0 -> resolvedValues;
-            case 1 -> resolvedNulls;
-            case 2 -> resolvedErrors;
-            default -> throw new IllegalArgumentException("Unknown stream index: " + index);
-        };
-    }
-
-    private void release(Stream stream, Vector vector)
-    {
-        try {
-            releaseResolver.accept(stream, vector);
-        }
-        finally {
-            vector.releaseTransferredBuffers();
-        }
-    }
-
-    private void resolvedStream(int index, Vector vector)
-    {
-        switch (index) {
-            case 0 -> resolvedValues = vector;
-            case 1 -> resolvedNulls = vector;
-            case 2 -> resolvedErrors = vector;
-            default -> throw new IllegalArgumentException("Unknown stream index: " + index);
-        }
-    }
-
-    private void checkOpen()
-    {
-        if (closed) {
-            throw new IllegalStateException("Output already closed");
-        }
+        super.withConstraintSensitiveResolution();
+        return this;
     }
 }
