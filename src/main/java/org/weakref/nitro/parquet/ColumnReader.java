@@ -72,11 +72,9 @@ public final class ColumnReader
     // re-read idBuffer to filter". Fusing keeps the unpacked ids in L1 between produce and consume, removing the
     // page-sized array round-trip to memory (the dominant cost on the 130M-row lead scan is that re-read, not the
     // filter arithmetic). Opt-out for A/B. TILE fits alongside accept[] + dict in L1 (2048 ints = 8KB).
-    private static final boolean FUSED_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.fusedDictFilter", "true"));
     // SIMD the fused dict-filter tile compaction via jdk.incubator.vector gather+compress (the Java equivalent of
     // Velox's vpgatherdd processRun). On this JVM/hardware the Vector API gather/compress path loses to the scalar
     // branchless loop for q20/q45, so keep it opt-in for future JDK/hardware experiments.
-    private static final boolean VECTOR_DICT_FILTER = Boolean.parseBoolean(System.getProperty("nitro.parquet.vectorDictFilter", "false")) && VectorDictFilter.supported();
     // The direct binary reader already needs an allocator-owned ID vector when a batch remains dictionary encoded.
     // Stage page IDs in that vector immediately instead of copying them through reader scratch and then copying the
     // completed batch a second time. A batch that encounters a plain page returns the speculative ID vector to the
@@ -104,40 +102,14 @@ public final class ColumnReader
     // The crossover sits between the measured branchy-favoring queries (accepted fraction <= 0.09) and q20 (0.144);
     // 1/9 puts the boundary at ~0.111 with symmetric margin. Below the threshold a query keeps the branchy path, so a
     // misestimate near the boundary only trades ~equal costs.
-    private static final int BRANCHLESS_COMPACTION_DENOMINATOR =
-            Integer.getInteger("nitro.parquet.branchlessCompactionDenominator", 9);
-    private static final boolean BITMASK_DICTIONARY_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.bitmaskDictionaryCompaction", "true"));
-    private static final int BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR =
-            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionLowerDenominator", 16);
-    private static final int BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR =
-            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionUpperDenominator", 12);
-    private static final int BITMASK_DICTIONARY_COMPACTION_MIN_DICTIONARY_SIZE =
-            Integer.getInteger("nitro.parquet.bitmaskDictionaryCompactionMinDictionarySize", 256);
-    private static final boolean ADAPTIVE_BRANCHLESS_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.adaptiveBranchlessCompaction", "true"));
-    private static final long ADAPTIVE_BRANCHLESS_COMPACTION_MIN_ROWS =
-            Long.getLong("nitro.parquet.adaptiveBranchlessCompactionMinRows", 1L << 16);
     private static final int VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR = 12;
-    private static final boolean STREAM_NULLABLE_DICTIONARY_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.streamNullableDictionaryFilter", "true"));
-    private static final boolean DIRECT_NULLABLE_DICTIONARY_FILTER =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryFilter", "true"));
     // The fused definition/ID cursor pays only for a durable, physically narrow regime: sparse nulls make almost
     // every ordinary definition tile mixed, wide IDs make the avoided scratch pass expensive, and a small but
     // nonzero acceptance set rules out the cheaper zero-acceptance cursor. Broader admission wins wall time while
     // regressing aggregate cache/TLB work, so delay the decision until the reader has observed a stable row horizon.
     private static final long DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_OBSERVED_ROWS = 1L << 20;
     private static final int DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_PRESENT_PERCENT = 99;
-    private static final int DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_ACCEPTED_DENOMINATOR =
-            Integer.getInteger("nitro.parquet.directNullableDictionaryFilterMinAcceptedDenominator", 100);
     private static final int DIRECT_NULLABLE_DICTIONARY_FILTER_MAX_ACCEPTED_DENOMINATOR = 50;
-    private static final int DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_ID_BIT_WIDTH =
-            Integer.getInteger("nitro.parquet.directNullableDictionaryFilterMinIdBitWidth", 10);
-    private static final boolean ZERO_ACCEPTED_DICTIONARY_PAGE_SKIP =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.zeroAcceptedDictionaryPageSkip", "true"));
-    private static final long ZERO_ACCEPTED_DICTIONARY_MIN_OBSERVED_ROWS =
-            Long.getLong("nitro.parquet.zeroAcceptedDictionaryMinObservedRows", 1L << 20);
     // A null-free fixed-width page does not need a page-sized value array between the encoded page and the caller's
     // batch array. Keep dictionary IDs (or the plain body) live across batch slices and materialize each slice
     // directly into its final array. Nullable pages retain the row-aligned page representation because their dense
@@ -165,6 +137,7 @@ public final class ColumnReader
     private final ParquetReaderDiagnostics diagnostics;
     private final ParquetMaterializationPolicy materializationPolicy;
     private final ParquetNumericDecodePolicy numericDecodePolicy;
+    private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -323,7 +296,8 @@ public final class ColumnReader
             ParquetPageNavigationPolicy pageNavigationPolicy,
             ParquetReaderDiagnostics diagnostics,
             ParquetMaterializationPolicy materializationPolicy,
-            ParquetNumericDecodePolicy numericDecodePolicy)
+            ParquetNumericDecodePolicy numericDecodePolicy,
+            ParquetDictionaryFilterPolicy dictionaryFilterPolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
@@ -331,6 +305,7 @@ public final class ColumnReader
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
         this.numericDecodePolicy = requireNonNull(numericDecodePolicy, "numericDecodePolicy is null");
+        this.dictionaryFilterPolicy = requireNonNull(dictionaryFilterPolicy, "dictionaryFilterPolicy is null");
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -386,7 +361,8 @@ public final class ColumnReader
                 pageNavigationPolicy,
                 diagnostics,
                 materializationPolicy,
-                numericDecodePolicy);
+                numericDecodePolicy,
+                dictionaryFilterPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -1015,13 +991,13 @@ public final class ColumnReader
                                     int tileRows = Math.min(FILTER_TILE, packed - offset);
                                     rle.read(tile, 0, tileRows);
                                     // Compact this heterogeneous tile branchlessly or branchily depending on the
-                                    // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
+                                    // accepted-entry fraction selected by the dictionary-filter policy.
                                     int positionBase = windowPos + base + offset;
                                     if (bitmaskCompaction) {
                                         sc = compactLongDictionaryTileByMask(tile, tileRows, positionBase,
                                                 filterAcceptBytes(accept), dict, survivorsOut, valuesOut, sc);
                                     }
-                                    else if (VECTOR_DICT_FILTER && branchlessCompaction) {
+                                    else if (dictionaryFilterPolicy.vectorFilter() && branchlessCompaction) {
                                         sc = VectorDictFilter.compactTile(tile, tileRows, positionBase,
                                                 filterAcceptInts(accept), dict, survivorsOut, valuesOut, sc);
                                     }
@@ -1102,13 +1078,14 @@ public final class ColumnReader
 
     private boolean shouldUseDirectNullableDictionaryFilter()
     {
-        return DIRECT_NULLABLE_DICTIONARY_FILTER &&
+        ParquetDictionaryFilterPolicy.NullableFilter nullableFilter = dictionaryFilterPolicy.nullableFilter();
+        return nullableFilter.direct() &&
                 nullableDictionaryFilterRowsObserved >= DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_OBSERVED_ROWS &&
                 nullableDictionaryFilterNonNullRowsObserved * 100 >=
                         nullableDictionaryFilterRowsObserved * DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_PRESENT_PERCENT &&
-                rle.bitWidth() >= DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_ID_BIT_WIDTH &&
+                rle.bitWidth() >= nullableFilter.directMinIdBitWidth() &&
                 acceptedCount > 0 &&
-                (long) acceptedCount * DIRECT_NULLABLE_DICTIONARY_FILTER_MIN_ACCEPTED_DENOMINATOR >= dictionarySize &&
+                (long) acceptedCount * nullableFilter.directMinAcceptedDenominator() >= dictionarySize &&
                 (long) acceptedCount * DIRECT_NULLABLE_DICTIONARY_FILTER_MAX_ACCEPTED_DENOMINATOR <= dictionarySize;
     }
 
@@ -1245,7 +1222,7 @@ public final class ColumnReader
                                     int tileRows = Math.min(FILTER_TILE, packed - offset);
                                     rle.read(tile, 0, tileRows);
                                     // Compact this heterogeneous tile branchlessly or branchily depending on the
-                                    // accepted-entry fraction (see BRANCHLESS_COMPACTION_DENOMINATOR).
+                                    // accepted-entry fraction selected by the dictionary-filter policy.
                                     int positionBase = windowPos + base + offset;
                                     if (bitmaskCompaction) {
                                         sc = compactIntDictionaryTileByMask(tile, tileRows, positionBase,
@@ -1325,31 +1302,32 @@ public final class ColumnReader
 
     private boolean shouldUseBranchlessCompaction()
     {
-        if (BRANCHLESS_COMPACTION_DENOMINATOR <= 0) {
+        ParquetDictionaryFilterPolicy.Compaction compaction = dictionaryFilterPolicy.compaction();
+        if (compaction.branchlessDenominator() <= 0) {
             return false;
         }
-        boolean dictionaryBranchless = (long) acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionarySize;
+        boolean dictionaryBranchless = (long) acceptedCount * compaction.branchlessDenominator() >= dictionarySize;
         // Observed row frequency may demote a dictionary-cardinality branchless choice, but it must not promote a
         // chunk that was already classified branchy. Promotion made clustered large dictionaries oscillate with
         // scan order even though the inexpensive branchy choice was already correct (TPC-DS q45).
         if (!dictionaryBranchless) {
             return false;
         }
-        if (ADAPTIVE_BRANCHLESS_COMPACTION &&
-                dictionaryFilterRowsObserved >= ADAPTIVE_BRANCHLESS_COMPACTION_MIN_ROWS) {
-            return dictionaryFilterRowsAccepted * BRANCHLESS_COMPACTION_DENOMINATOR >= dictionaryFilterRowsObserved;
+        if (compaction.adaptiveBranchless() &&
+                dictionaryFilterRowsObserved >= compaction.adaptiveBranchlessMinRows()) {
+            return dictionaryFilterRowsAccepted * compaction.branchlessDenominator() >= dictionaryFilterRowsObserved;
         }
         return true;
     }
 
     private boolean shouldUseBitmaskCompaction()
     {
-        return BITMASK_DICTIONARY_COMPACTION &&
-                dictionarySize >= BITMASK_DICTIONARY_COMPACTION_MIN_DICTIONARY_SIZE &&
-                BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR >
-                        BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR &&
-                (long) acceptedCount * BITMASK_DICTIONARY_COMPACTION_LOWER_DENOMINATOR >= dictionarySize &&
-                (long) acceptedCount * BITMASK_DICTIONARY_COMPACTION_UPPER_DENOMINATOR < dictionarySize;
+        ParquetDictionaryFilterPolicy.Compaction compaction = dictionaryFilterPolicy.compaction();
+        return compaction.bitmask() &&
+                dictionarySize >= compaction.bitmaskMinDictionarySize() &&
+                compaction.bitmaskLowerDenominator() > compaction.bitmaskUpperDenominator() &&
+                (long) acceptedCount * compaction.bitmaskLowerDenominator() >= dictionarySize &&
+                (long) acceptedCount * compaction.bitmaskUpperDenominator() < dictionarySize;
     }
 
     private static int compactLongDictionaryTileByMask(int[] ids, int count, int positionBase, byte[] accept,
@@ -1414,11 +1392,12 @@ public final class ColumnReader
 
     private boolean shouldSkipRejectedDictionaryPage(int pageRows)
     {
-        if (!ZERO_ACCEPTED_DICTIONARY_PAGE_SKIP || acceptedCount != 0) {
+        ParquetDictionaryFilterPolicy.ZeroAcceptedPageSkip pageSkip = dictionaryFilterPolicy.zeroAcceptedPageSkip();
+        if (!pageSkip.enabled() || acceptedCount != 0) {
             return false;
         }
         zeroAcceptedDictionaryRowsObserved += pageRows;
-        return zeroAcceptedDictionaryRowsObserved >= ZERO_ACCEPTED_DICTIONARY_MIN_OBSERVED_ROWS;
+        return zeroAcceptedDictionaryRowsObserved >= pageSkip.minObservedRows();
     }
 
     private boolean[] acceptByIdLong(java.util.function.LongPredicate predicate)
@@ -1452,7 +1431,7 @@ public final class ColumnReader
         // outside the narrow 1/12..1/9 acceptance band.
         boolean warmBranchyTable = sameChunk &&
                 (long) acceptedCount * VERSIONED_PREDICATE_WARM_BRANCHY_DENOMINATOR >= dictionarySize &&
-                (long) acceptedCount * BRANCHLESS_COMPACTION_DENOMINATOR < dictionarySize;
+                (long) acceptedCount * dictionaryFilterPolicy.compaction().branchlessDenominator() < dictionarySize;
         if (diagnostics.versionedDictionaryPredicates() &&
                 !versionedDictionaryPredicateReuseReported &&
                 sameChunk &&
@@ -3160,7 +3139,7 @@ public final class ColumnReader
             // per-level materialization + sum. Only pages that actually contain nulls pay the full decode.
             if (!rle.consumeIfAllOnes(valueCount)) {
                 rle.init(body, offset, 1);
-                if (STREAM_NULLABLE_DICTIONARY_FILTER && filterScan && dictionary && kind != Kind.BINARY) {
+                if (dictionaryFilterPolicy.nullableFilter().stream() && filterScan && dictionary && kind != Kind.BINARY) {
                     defRle.init(body, offset, 1);
                     streamNullableFilter = true;
                 }
@@ -3199,7 +3178,7 @@ public final class ColumnReader
                 pageFilterNullableFused = true;
                 return;
             }
-            if (filterDict && FUSED_DICT_FILTER && nullFreePage) {
+            if (filterDict && dictionaryFilterPolicy.fusedFilter() && nullFreePage) {
                 // Fused path: leave the ids unpacked. The RleReader stays positioned at the id stream; the filter loop
                 // unpacks and consumes them one L1 tile at a time. No page-sized idBuffer round-trip to memory.
                 pageFilterDict = true;
