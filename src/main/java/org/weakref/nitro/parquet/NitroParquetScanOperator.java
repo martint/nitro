@@ -14,6 +14,8 @@
 package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
@@ -122,8 +124,8 @@ public final class NitroParquetScanOperator
     private boolean filterWindowBounded;
     private final boolean adaptiveNarrowFilterWindowCandidate;
     private boolean adaptiveNarrowFilterWindowDecided;
-    private final DynamicFilter[] filtersByColumn;
-    private final org.weakref.nitro.function.VersionedLongPredicate[] filterVersionsByColumn;
+    private final LongDomain[] filtersByColumn;
+    private final VersionedLongPredicate[] filterVersionsByColumn;
     private boolean hasFilters;
     private boolean filtersPruned;
     // Per-column decode scratch (grows to high-water mark; reused across batches). A column is decoded into
@@ -356,8 +358,8 @@ public final class NitroParquetScanOperator
         ParquetFilterWindowPolicy.AdaptiveNarrow adaptiveNarrowPolicy = filterWindowPolicy.adaptiveNarrow();
         this.adaptiveNarrowFilterWindowCandidate =
                 adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
-        this.filtersByColumn = new DynamicFilter[columnCount];
-        this.filterVersionsByColumn = new org.weakref.nitro.function.VersionedLongPredicate[columnCount];
+        this.filtersByColumn = new LongDomain[columnCount];
+        this.filterVersionsByColumn = new VersionedLongPredicate[columnCount];
         this.colLong = new long[columnCount][];
         this.colInt = new int[columnCount][];
         this.colNull = new boolean[columnCount][];
@@ -375,12 +377,16 @@ public final class NitroParquetScanOperator
     @Override
     public void pushDynamicFilter(DynamicFilter filter)
     {
+        pushLongDomain(filter.column(), filter);
+    }
+
+    private void pushLongDomain(int column, LongDomain filter)
+    {
         // Only all-numeric scans take the skip-decode DF path (mirrors SkipDecodeScanOperator's eligibility):
         // the survivor payload is then guaranteed INT/LONG, so readSelectedInts/Longs cover it.
         if (!allNumeric) {
             return;
         }
-        int column = filter.column();
         if (column < 0 || column >= readers.length) {
             return;
         }
@@ -388,7 +394,7 @@ public final class NitroParquetScanOperator
         // downstream join whose key survives through an aggregation). Each is an independent necessary condition, so
         // keeping the more selective one (fewer distinct values) is correct and prunes hardest; a blind overwrite
         // could otherwise replace a tight filter with an all-values one.
-        DynamicFilter existing = filtersByColumn[column];
+        LongDomain existing = filtersByColumn[column];
         if (existing != null && existing.size() <= filter.size()) {
             return;
         }
@@ -522,12 +528,12 @@ public final class NitroParquetScanOperator
     private boolean allFiltersNonSelective()
     {
         for (int c = 0; c < filtersByColumn.length; c++) {
-            DynamicFilter filter = filtersByColumn[c];
+            LongDomain filter = filtersByColumn[c];
             if (filter == null) {
                 continue;
             }
             if (filterEvaluationPolicy.nonSelectiveElision().exactDictionaryCoverage()) {
-                if (!readers[c].dictionaryValuesCovered(filter::accepts)) {
+                if (!readers[c].dictionaryValuesCovered(filter)) {
                     return false;
                 }
                 continue;
@@ -1068,7 +1074,7 @@ public final class NitroParquetScanOperator
         int applied = 0;
         for (; applied < order.length && survivorCount > 0; applied++) {
             int column = order[applied];
-            DynamicFilter filter = filtersByColumn[column];
+            LongDomain filter = filtersByColumn[column];
             int kept;
             if (survivors == null) {
                 ensureColumnScratch(column, count);
@@ -1076,8 +1082,8 @@ public final class NitroParquetScanOperator
                 // materializing the column; only survivors get a value. Output is dense, aligned to the survivors
                 // (readPositions records that), so the later gather two-pointers it to the final survivor set.
                 boolean[] cn = nullable[column] ? colNull[column] : null;
-                java.util.function.LongPredicate predicate = filter::accepts;
-                org.weakref.nitro.function.VersionedLongPredicate predicateVersion = filterVersionsByColumn[column];
+                java.util.function.LongPredicate predicate = filter;
+                VersionedLongPredicate predicateVersion = filterVersionsByColumn[column];
                 if (readers[column].kind() == ColumnReader.Kind.LONG) {
                     kept = readers[column].filterDictLongs(predicate, predicateVersion, count, nextSurvivors, colLong[column], cn);
                 }
@@ -1148,7 +1154,7 @@ public final class NitroParquetScanOperator
                     if (nulls != null && nulls[i]) {
                         continue;
                     }
-                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                    if (filter.test(isLong ? longValues[i] : intValues[i])) {
                         compactAlignedFilterRow(order, applied, survivors, i, kept);
                         next[kept++] = survivors[i];
                     }
@@ -1161,7 +1167,7 @@ public final class NitroParquetScanOperator
                     if (nulls != null && nulls[i]) {
                         continue;
                     }
-                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                    if (filter.test(isLong ? longValues[i] : intValues[i])) {
                         next[kept++] = i;
                     }
                 }
@@ -1171,7 +1177,7 @@ public final class NitroParquetScanOperator
                     if (nulls != null && nulls[i]) {
                         continue;
                     }
-                    if (filter.accepts(isLong ? longValues[i] : intValues[i])) {
+                    if (filter.test(isLong ? longValues[i] : intValues[i])) {
                         next[kept++] = survivors[i];
                     }
                 }
@@ -1356,7 +1362,7 @@ public final class NitroParquetScanOperator
         return count;
     }
 
-    private boolean prospectiveProgressiveFilterCompaction(int[] order, int applied, DynamicFilter filter, long intermediateRows)
+    private boolean prospectiveProgressiveFilterCompaction(int[] order, int applied, LongDomain filter, long intermediateRows)
     {
         ParquetProgressiveFilterCompactionPolicy.Prospective prospectivePolicy =
                 progressiveFilterCompactionPolicy.prospective();
@@ -1747,7 +1753,7 @@ public final class NitroParquetScanOperator
     {
         if (filterOrder == null) {
             int n = 0;
-            for (DynamicFilter filter : filtersByColumn) {
+            for (LongDomain filter : filtersByColumn) {
                 if (filter != null) {
                     n++;
                 }

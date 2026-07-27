@@ -18,6 +18,8 @@ import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.LongDomain;
+import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.OrdinalSourceColumnHandle;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
@@ -40,6 +42,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestOperatorBatchSource
 {
+    @Test
+    void testRuntimeFilterPublishesClassloaderNeutralLongDomain()
+    {
+        Schema schema = Schema.unspecified(List.of("probe_key"));
+        DynamicFilter filter = DynamicFilter.fromRange(0, 10, 20);
+
+        LongDomain domain = new NativeRuntimeFilterDomain(schema.field(0).type(), filter)
+                .capability(LongDomainCapability.LONG_DOMAIN)
+                .orElseThrow();
+
+        assertThat(domain.size()).isEqualTo(11);
+        assertThat(domain.isEmpty()).isFalse();
+        assertThat(domain.rangeDensity()).isEqualTo(1);
+        assertThat(domain.test(9)).isFalse();
+        assertThat(domain.test(10)).isTrue();
+        assertThat(domain.test(20)).isTrue();
+        assertThat(domain.test(21)).isFalse();
+    }
+
     @Test
     void testConstructedIngressOwnsArbitrarySourceBatchLifetime()
     {

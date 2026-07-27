@@ -15,7 +15,7 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
-import org.weakref.nitro.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.LongDomain;
 
 /**
  * A runtime (Velox-style) dynamic filter: the membership of a build side's join key, pushed down a probe operator
@@ -28,7 +28,7 @@ import org.weakref.nitro.function.VersionedLongPredicate;
  * downstream join still produces identical output. {@code min}/{@code max} gate the (cheaper) set membership test.
  */
 public final class DynamicFilter
-        implements VersionedLongPredicate
+        implements LongDomain
 {
     private final int column;
     private final LongSet values;
@@ -145,11 +145,13 @@ public final class DynamicFilter
     }
 
     /** The number of distinct build-side values; a proxy for selectivity used to order filter application. */
+    @Override
     public int size()
     {
         return distinctSize;
     }
 
+    @Override
     public boolean isEmpty()
     {
         return distinctSize == 0;
@@ -161,6 +163,7 @@ public final class DynamicFilter
      * domain should lead a multi-filter scan, while a clustered filter with a narrow range returns a value near one
      * and is not incorrectly assumed selective outside that observed range.
      */
+    @Override
     public double rangeDensity()
     {
         if (distinctSize == 0) {

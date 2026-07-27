@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.function;
+package org.weakref.nitro.core.function;
 
 import java.util.function.LongPredicate;
 

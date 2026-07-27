@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source.compatibility;
 
 import org.weakref.nitro.core.source.DomainCapability;
+import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.TypedDomain;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.operator.DynamicFilter;
@@ -62,6 +63,9 @@ final class NativeRuntimeFilterDomain
     @Override
     public <T> Optional<T> capability(DomainCapability<T> capability)
     {
+        if (capability == LongDomainCapability.LONG_DOMAIN) {
+            return Optional.of(capability.valueType().cast(filter));
+        }
         if (capability == NativeRuntimeFilterCapability.NATIVE_RUNTIME_FILTER) {
             return Optional.of(capability.valueType().cast((NativeRuntimeFilterAccess) filter::withColumn));
         }

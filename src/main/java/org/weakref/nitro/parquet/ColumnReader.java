@@ -22,11 +22,11 @@ import org.apache.parquet.format.PageHeader;
 import org.apache.parquet.format.PageType;
 import org.apache.parquet.format.Type;
 import org.apache.parquet.format.Util;
+import org.weakref.nitro.core.function.VersionedLongPredicate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
-import org.weakref.nitro.function.VersionedLongPredicate;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
