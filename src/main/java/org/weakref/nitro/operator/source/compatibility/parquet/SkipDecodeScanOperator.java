@@ -84,20 +84,6 @@ public final class SkipDecodeScanOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("SkipDecodeScanOperator", SkipDecodeScanOperator.class);
-    private static final String BATCH_SIZE_PROPERTY = System.getProperty("nitro.skipScan.batchSize");
-    private static final int BASE_BATCH_SIZE = Math.max(1, Integer.getInteger("nitro.skipScan.batchSize", 8192));
-    private static final int FILTERED_BATCH_SIZE = Math.max(1, Integer.getInteger(
-            "nitro.skipScan.filteredBatchSize",
-            BATCH_SIZE_PROPERTY == null ? 12288 : BASE_BATCH_SIZE));
-    private static final int SCRATCH_BATCH_SIZE = Math.max(BASE_BATCH_SIZE, FILTERED_BATCH_SIZE);
-
-    /**
-     * Selectivity guard: skip-decode the non-filter columns only when the surviving fraction of the batch is below
-     * this threshold; above it, bulk-decode them (and gather the survivors). Per-position skip-decode loses to bulk
-     * SIMD decode above ~8% selectivity, so this keeps the dynamic-filter scan no worse than an ordinary scan when a
-     * pushed filter is weakly selective (e.g. category filters), while still compacting the batch to the survivors.
-     */
-    private static final double SKIP_GUARD = Double.parseDouble(System.getProperty("nitro.skipScan.guard", "0.08"));
 
     // Raw-array accessors on LongArrayBlock (not public) for the full-decode fast path: copy the block's backing
     // long[]/null[] in bulk instead of a per-position getLong/isNull, matching TrinoParquetScanOperator's bridge.
@@ -166,6 +152,7 @@ public final class SkipDecodeScanOperator
     }
 
     private final Allocator allocator;
+    private final SkipDecodeScanPolicy policy;
     private final Profile profile;
     private final List<Path> files;
     private final List<String> columnNames;
@@ -189,8 +176,6 @@ public final class SkipDecodeScanOperator
     // Adaptive selectivity gate: a filter that does not prune is pure overhead (key decode + per-row membership test +
     // survivor gather). After a per-column warmup of filtered rows, a filter that keeps too large a fraction is
     // abandoned, so the scan reverts to the full-decode fast path for a non-selective dimension.
-    private static final long FILTER_WARMUP_ROWS = 256 * 1024;
-    private static final double FILTER_MIN_PRUNE_RATIO = 0.30;   // keep applying only if it removes >= 30% of its input
     private final long[] filterRowsSeen;
     private final long[] filterRowsKept;
     // A filter found non-selective is not dropped mid-row-group (the stateful column readers cannot switch between
@@ -228,13 +213,14 @@ public final class SkipDecodeScanOperator
     private Batch currentBatch;
 
     @SuppressWarnings("unchecked")
-    public SkipDecodeScanOperator(Allocator allocator, List<Path> files, List<String> columnNames)
+    public SkipDecodeScanOperator(SkipDecodeScanPolicy policy, Allocator allocator, List<Path> files, List<String> columnNames)
     {
-        this(allocator, files, columnNames, null);
+        this(policy, allocator, files, columnNames, null);
     }
 
-    public SkipDecodeScanOperator(Allocator allocator, List<Path> files, List<String> columnNames, Profile profile)
+    public SkipDecodeScanOperator(SkipDecodeScanPolicy policy, Allocator allocator, List<Path> files, List<String> columnNames, Profile profile)
     {
+        this.policy = requireNonNull(policy, "policy is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.profile = profile;
         this.files = List.copyOf(files);
@@ -358,9 +344,9 @@ public final class SkipDecodeScanOperator
             profile.rowsScanned += batchRows;
         }
         if (valueScratch == null) {
-            valueScratch = new long[columnCount][SCRATCH_BATCH_SIZE];
-            nullScratch = new boolean[columnCount][SCRATCH_BATCH_SIZE];
-            nextScratch = new int[SCRATCH_BATCH_SIZE];
+            valueScratch = new long[columnCount][policy.scratchBatchSize()];
+            nullScratch = new boolean[columnCount][policy.scratchBatchSize()];
+            nextScratch = new int[policy.scratchBatchSize()];
         }
         int[] survivors;     // batch-relative positions, sorted ascending; null means "all rows"
         long[][] values = new long[columnCount][];
@@ -398,8 +384,8 @@ public final class SkipDecodeScanOperator
             }
             filterRowsSeen[column] += count;
             filterRowsKept[column] += kept;
-            if (filtersByColumn[column] != null && filterRowsSeen[column] >= FILTER_WARMUP_ROWS
-                    && filterRowsKept[column] > filterRowsSeen[column] * (1.0 - FILTER_MIN_PRUNE_RATIO)) {
+            if (filtersByColumn[column] != null && filterRowsSeen[column] >= policy.filterWarmupRows()
+                    && filterRowsKept[column] > filterRowsSeen[column] * (1.0 - policy.filterMinPruneRatio())) {
                 // Not selective enough to pay for: flag it for drop at the next row group (cannot switch a reader's
                 // decode mode mid-row-group). Once every filter is gone the no-filter full-decode fast path resumes.
                 pendingAbandon[column] = true;
@@ -416,7 +402,7 @@ public final class SkipDecodeScanOperator
 
         // Decode the remaining (non-filter) columns for the final survivors. Skip-decode when the survivors are a small
         // fraction of the batch; otherwise bulk-decode the whole batch and gather (skip-decode loses above ~8%).
-        boolean bulkDecode = survivorCount > batchRows * SKIP_GUARD;
+        boolean bulkDecode = survivorCount > batchRows * policy.skipGuard();
         for (int c = 0; c < columnCount; c++) {
             if (filtersByColumn[c] != null) {
                 continue;
@@ -813,7 +799,7 @@ public final class SkipDecodeScanOperator
             }
             openRowGroup(rowGroupIndex);
         }
-        int targetBatchSize = hasFilters ? FILTERED_BATCH_SIZE : BASE_BATCH_SIZE;
+        int targetBatchSize = hasFilters ? policy.filteredBatchSize() : policy.baseBatchSize();
         batchRows = Math.min(targetBatchSize, rowsInRowGroup - batchStart);
         return batchRows > 0;
     }

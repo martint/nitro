@@ -37,6 +37,7 @@ import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 
@@ -61,7 +62,7 @@ public class MeasureDynamicFilter
         // Correctness: the skip-decode-scan tree must match the ordinary-scan tree exactly.
         long[] reference = run(() -> new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), files, COLUMNS, true));
         SkipDecodeScanOperator.Profile profile = new SkipDecodeScanOperator.Profile();
-        long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, profile));
+        long[] skip = run(() -> new SkipDecodeScanOperator(SkipDecodeScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), files, COLUMNS, profile));
         System.out.printf("reference rows=%d checksum=%d ; skipScan rows=%d checksum=%d ; match=%b ; %s%n",
                 reference[0], reference[1], skip[0], skip[1], reference[0] == skip[0] && reference[1] == skip[1],
                 profile.summary());
@@ -70,7 +71,7 @@ public class MeasureDynamicFilter
         long best = Long.MAX_VALUE;
         for (int i = 0; i < 7; i++) {
             long start = System.nanoTime();
-            run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS));
+            run(() -> new SkipDecodeScanOperator(SkipDecodeScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), files, COLUMNS));
             long elapsed = System.nanoTime() - start;
             if (i >= 2) {
                 best = Math.min(best, elapsed);
