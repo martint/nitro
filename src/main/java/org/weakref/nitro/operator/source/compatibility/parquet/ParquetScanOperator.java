@@ -38,6 +38,7 @@ import org.apache.parquet.schema.GroupType;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -83,6 +84,7 @@ public final class ParquetScanOperator
     private static final int MAX_BATCH_ROWS = 512;
 
     private final Allocator allocator;
+    private final Schema outputSchema;
     private final ParquetFileReader reader;
     private final MessageType schema;
     private final String createdBy;
@@ -101,6 +103,7 @@ public final class ParquetScanOperator
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(file, "file is null");
         requireNonNull(columns, "columns is null");
+        this.outputSchema = Schema.unspecified(columns);
 
         try {
             reader = ParquetFileReader.open(new LocalInputFile(file));
@@ -123,7 +126,13 @@ public final class ParquetScanOperator
     @Override
     public int outputCount()
     {
-        return columns.size();
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

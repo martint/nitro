@@ -22,6 +22,7 @@ import dev.hardwood.reader.MultiFileParquetReader;
 import dev.hardwood.reader.ParquetFileReader;
 import dev.hardwood.schema.ColumnProjection;
 import dev.hardwood.schema.SchemaNode;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -61,6 +62,7 @@ public final class HardwoodParquetScanOperator
 
     private final HardwoodParquetScanPolicy policy;
     private final Allocator allocator;
+    private final Schema outputSchema;
     private final AutoCloseable[] closeables;
     private final List<ColumnSpec> columns;
     private final ColumnCursor[] cursors;
@@ -82,6 +84,7 @@ public final class HardwoodParquetScanOperator
         requireNonNull(files, "files is null");
         requireNonNull(columns, "columns is null");
         checkArgument(!files.isEmpty(), "files is empty");
+        this.outputSchema = Schema.unspecified(columns);
 
         try {
             if (files.size() == 1 && Files.isRegularFile(files.getFirst())) {
@@ -123,7 +126,13 @@ public final class HardwoodParquetScanOperator
     @Override
     public int outputCount()
     {
-        return columns.size();
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

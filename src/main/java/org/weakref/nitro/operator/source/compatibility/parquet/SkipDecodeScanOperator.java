@@ -37,6 +37,7 @@ import io.trino.spi.type.Type;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.schema.MessageType;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -156,6 +157,7 @@ public final class SkipDecodeScanOperator
     private final Profile profile;
     private final List<Path> files;
     private final List<String> columnNames;
+    private final Schema outputSchema;
     private final int columnCount;
     private final AggregatedMemoryContext memoryContext = AggregatedMemoryContext.newSimpleAggregatedMemoryContext();
 
@@ -225,6 +227,7 @@ public final class SkipDecodeScanOperator
         this.profile = profile;
         this.files = List.copyOf(files);
         this.columnNames = List.copyOf(columnNames);
+        this.outputSchema = Schema.unspecified(this.columnNames);
         this.columnCount = this.columnNames.size();
         this.nullable = new boolean[columnCount];
         this.kinds = new int[columnCount];
@@ -247,7 +250,13 @@ public final class SkipDecodeScanOperator
     @Override
     public int outputCount()
     {
-        return columnCount;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

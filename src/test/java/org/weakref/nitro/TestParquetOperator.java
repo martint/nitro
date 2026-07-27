@@ -78,6 +78,8 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
+import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetFilterEvaluationPolicy;
@@ -89,6 +91,8 @@ import org.weakref.nitro.operator.source.compatibility.parquet.ParquetProgressiv
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanDiagnostics;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 import org.weakref.nitro.parquet.ColumnReader;
@@ -226,6 +230,30 @@ public class TestParquetOperator
                         List.of(file),
                         List.of("x"))) {
             assertThat(operator(scan)).matchesExactly(List.of(Row.row(10L), Row.row(20L)));
+        }
+    }
+
+    @Test
+    void testCompatibilityParquetScansExposeProjectedColumnNames()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("compatibility-scan-schema.parquet", true, List.of(
+                new ParquetRow(10, true, 100L)));
+        List<String> columns = List.of("x", "maybe");
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault());
+                Operator hardwood = new HardwoodParquetScanOperator(HardwoodParquetScanPolicy.defaults(), allocator, file, columns);
+                Operator nitro = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, List.of(file), columns);
+                Operator parquet = new ParquetScanOperator(allocator, file, columns);
+                Operator skip = new SkipDecodeScanOperator(SkipDecodeScanPolicy.defaults(), allocator, List.of(file), columns);
+                Operator trino = new TrinoParquetScanOperator(TrinoParquetScanPolicy.defaults(), allocator, file, columns)) {
+            for (Operator scan : List.of(hardwood, nitro, parquet, skip, trino)) {
+                assertThat(scan.outputSchema().fields())
+                        .extracting(field -> field.name().orElseThrow())
+                        .containsExactlyElementsOf(columns);
+                assertThat(scan.outputSchema().fields())
+                        .allSatisfy(field -> assertThat(field.type().isSpecified()).isFalse());
+            }
         }
     }
 

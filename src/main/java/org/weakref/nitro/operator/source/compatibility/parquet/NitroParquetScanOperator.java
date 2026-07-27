@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.apache.parquet.format.RowGroup;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -114,6 +115,7 @@ public final class NitroParquetScanOperator
     private final ParquetScanBatchPolicy batchPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
+    private final Schema outputSchema;
     private final ParquetFile[] files;
     private final ColumnReader[] readers;
     private final ColumnReader[] nullReaders;
@@ -290,6 +292,7 @@ public final class NitroParquetScanOperator
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
         this.directNumericBatchDecodeAdmission = directNumericBatchDecodeLease.value();
         this.columnNames = List.copyOf(columns);
+        this.outputSchema = Schema.unspecified(this.columnNames);
         checkArgument(!paths.isEmpty(), "paths is empty");
 
         this.files = paths.stream().map(ParquetFile::open).toArray(ParquetFile[]::new);
@@ -411,7 +414,13 @@ public final class NitroParquetScanOperator
     @Override
     public int outputCount()
     {
-        return columnNames.size();
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

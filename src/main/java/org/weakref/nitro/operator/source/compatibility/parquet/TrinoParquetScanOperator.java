@@ -42,6 +42,7 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
 import org.joda.time.DateTimeZone;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -106,6 +107,7 @@ public final class TrinoParquetScanOperator
     private final TrinoParquetScanPolicy policy;
     private final List<Path> files;
     private final List<String> columnNames;
+    private final Schema outputSchema;
     private final boolean rawDoubleBits;
 
     private int fileIndex;
@@ -161,13 +163,20 @@ public final class TrinoParquetScanOperator
         checkArgument(!files.isEmpty(), "files is empty");
         this.files = List.copyOf(files);
         this.columnNames = List.copyOf(columns);
+        this.outputSchema = Schema.unspecified(this.columnNames);
         this.rawDoubleBits = rawDoubleBits;
     }
 
     @Override
     public int outputCount()
     {
-        return columnNames.size();
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override
