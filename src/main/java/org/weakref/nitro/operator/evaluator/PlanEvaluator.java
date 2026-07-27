@@ -78,9 +78,9 @@ import static java.util.Objects.requireNonNull;
 public final class PlanEvaluator
 {
     private final Allocator.Context allocationContext;
-    private static final Set<Stream> VALUES_ONLY = java.util.EnumSet.of(Stream.VALUES);
-    private static final Set<Stream> NULLS_ONLY = java.util.EnumSet.of(Stream.NULLS);
-    private static final Set<Stream> ERRORS_ONLY = java.util.EnumSet.of(Stream.ERRORS);
+    private static final Set<Stream> VALUES_ONLY = Set.of(Stream.VALUES);
+    private static final Set<Stream> NULLS_ONLY = Set.of(Stream.NULLS);
+    private static final Set<Stream> ERRORS_ONLY = Set.of(Stream.ERRORS);
     private static final byte UNKNOWN_DICTIONARY_MATCH = 0;
     private static final byte DICTIONARY_MISMATCH = 1;
     private static final byte DICTIONARY_MATCH = 2;
