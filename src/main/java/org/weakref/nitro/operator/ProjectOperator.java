@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
@@ -69,7 +70,7 @@ public class ProjectOperator
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
     {
-        this(allocator, evaluationPlan, primitiveRegistry, source, Schema.unspecified(evaluationPlan.outputs().size()));
+        this(allocator, evaluationPlan, primitiveRegistry, source, projectedSchema(evaluationPlan, source.outputSchema()));
     }
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, Schema outputSchema)
@@ -79,7 +80,7 @@ public class ProjectOperator
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source, OperatorResources operatorResources)
     {
-        this(allocator, evaluationPlan, primitiveRegistry, source, Schema.unspecified(evaluationPlan.outputs().size()), operatorResources);
+        this(allocator, evaluationPlan, primitiveRegistry, source, projectedSchema(evaluationPlan, source.outputSchema()), operatorResources);
     }
 
     public ProjectOperator(
@@ -118,6 +119,27 @@ public class ProjectOperator
                 fusedOrdinal.put(compiled.outputs().get(ordinal).producer(), ordinal);
             }
         }
+    }
+
+    private static Schema projectedSchema(EvaluationPlan evaluationPlan, Schema sourceSchema)
+    {
+        requireNonNull(evaluationPlan, "evaluationPlan is null");
+        requireNonNull(sourceSchema, "sourceSchema is null");
+        Schema unspecified = Schema.unspecified(evaluationPlan.outputs().size());
+        List<Field> fields = new ArrayList<>(evaluationPlan.outputs().size());
+        for (int outputIndex = 0; outputIndex < evaluationPlan.outputs().size(); outputIndex++) {
+            Producer producer = evaluationPlan.outputs().get(outputIndex).producer();
+            if (producer instanceof Input input &&
+                    evaluationPlan.outputs().get(outputIndex).stream() == Stream.VALUES &&
+                    input.index() >= 0 &&
+                    input.index() < sourceSchema.size()) {
+                fields.add(sourceSchema.field(input.index()));
+            }
+            else {
+                fields.add(unspecified.field(outputIndex));
+            }
+        }
+        return new Schema(fields);
     }
 
     @Override

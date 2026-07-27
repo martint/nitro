@@ -3846,6 +3846,34 @@ public class TestOperators
                 .hasMessageContaining("testing:i32-only");
     }
 
+    @Test
+    void testDefaultProjectionPreservesDirectInputSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field first = new Field("first", i32Only, false);
+        Field second = new Field("second", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(first, second));
+        Variable computed = new Variable(1000);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(computed, new Literal(7L), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(1), Stream.VALUES),
+                        new Reference(computed, Stream.VALUES),
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(new Input(0), Stream.NULLS)));
+
+        try (ProjectOperator projection = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                typedTable(sourceSchema))) {
+            assertThat(projection.outputSchema().field(0)).isSameAs(second);
+            assertThat(projection.outputSchema().field(1).type().isSpecified()).isFalse();
+            assertThat(projection.outputSchema().field(2)).isSameAs(first);
+            assertThat(projection.outputSchema().field(3).type().isSpecified()).isFalse();
+        }
+    }
+
     private static Operator typedTable(Schema schema, TableOperator.Page... pages)
     {
         return new TableOperator(
