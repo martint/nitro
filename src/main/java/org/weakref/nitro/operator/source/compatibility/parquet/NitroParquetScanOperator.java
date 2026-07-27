@@ -70,36 +70,11 @@ public final class NitroParquetScanOperator
     // Late materialization (non-DF scans): defer per-column decode until the column is pulled, and once a filter
     // above the scan pushes a survivor mask via constrain(), decode the remaining columns only for survivor rows
     // (skip-decode + scatter to position) instead of every row. Mirrors TrinoParquetScanOperator's masked path.
-    private static final boolean LATE_MATERIALIZATION = Boolean.parseBoolean(System.getProperty("nitro.parquet.lateMaterialization", "true"));
-    // Skip-decode a constrained column only when at most this fraction of rows survive; above it the per-survivor-run
-    // skip path (re-walking the RLE id stream) costs more than a single bulk decode, so full-decode instead.
-    private static final int SKIP_DECODE_MAX_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.skipMaxSurvivorPercent", 20);
-    // A low survivor fraction can still be a bad skip-decode candidate when positions alternate densely. The
-    // selected reader advances once per contiguous run; require enough survivors per run to amortize that state
-    // transition. Clustered predicates retain page skipping, while fragmented masks fall back to one bulk decode.
-    private static final int SKIP_DECODE_MIN_AVERAGE_RUN = Integer.getInteger("nitro.parquet.skipMinAverageRun", 4);
-    private static final boolean LAZY_NUMERIC_SKIP_DECODE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.lazyNumericSkipDecode", "true"));
     // A very sparse numeric mask can profit even when survivors are isolated: decoding the compact page IDs once
     // and gathering only live values avoids materializing/copying every wide value. Require multiple payloads to
     // amortize the alternate scan lifecycle, but cap their count because page-ID setup repeated over a very wide
     // projection retires more work than it saves. Keep the ordinary run-length proof for binary and denser numeric
     // masks. This admission depends only on physical density, encoding, and live scan width.
-    private static final boolean LAZY_FRAGMENTED_NUMERIC_SKIP_DECODE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.lazyFragmentedNumericSkipDecode", "true"));
-    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT =
-            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxSurvivorPercent", 6);
-    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS =
-            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxScanColumns", 6);
-    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MIN_PAYLOAD_COLUMNS =
-            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMinPayloadColumns", 2);
-    private static final int LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS =
-            Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxPayloadColumns", 8);
-    private static final int LAZY_NUMERIC_SKIP_MIN_DICTIONARY_SIZE =
-            Integer.getInteger("nitro.parquet.lazyNumericSkipMinDictionarySize", 1);
-    private static final boolean DEBUG_LAZY_NUMERIC_SKIP = Boolean.getBoolean("nitro.debug.lazyNumericSkip");
-    private static final boolean DEFER_EMPTY_CONSTRAINED_DECODE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.deferEmptyConstrainedDecode", "true"));
     // A later dynamic filter can sharply narrow values already decoded at the running survivor set. Preserve the
     // accepted dense ranks long enough to compact every aligned filter column in place, instead of discarding those
     // ranks and recovering them later with a branch-heavy two-pointer search over the wider survivor array. The
@@ -137,8 +112,8 @@ public final class NitroParquetScanOperator
             Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMaxPercent", 60);
     private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_ALIGNED_COLUMNS =
             Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAlignedColumns", 2);
-    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN =
-            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAverageRun", SKIP_DECODE_MIN_AVERAGE_RUN);
+    private static final Integer FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN =
+            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAverageRun");
     private static final boolean DEBUG_PROGRESSIVE_FILTER_COMPACTION =
             Boolean.getBoolean("nitro.debug.progressiveFilterCompaction");
 
@@ -172,6 +147,8 @@ public final class NitroParquetScanOperator
     private final Allocator.SharedResource<DirectNumericBatchDecodeAdmission> directNumericBatchDecodeLease;
     private final DirectNumericBatchDecodeAdmission directNumericBatchDecodeAdmission;
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
+    private final ParquetLateMaterializationPolicy lateMaterializationPolicy;
+    private final ParquetLateMaterializationPolicy.SkipDecode skipDecodePolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -320,7 +297,8 @@ public final class NitroParquetScanOperator
                 resources.directNumericBatchDecodeAdmission(),
                 resources.decompressedPageCachePolicy(),
                 resources.readerPolicy(),
-                resources.numericDecodeAdmissionPolicy());
+                resources.numericDecodeAdmissionPolicy(),
+                resources.lateMaterializationPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -332,7 +310,8 @@ public final class NitroParquetScanOperator
             Object directNumericBatchDecodeAdmissionKey,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             ParquetReaderPolicy readerPolicy,
-            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy)
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
+            ParquetLateMaterializationPolicy lateMaterializationPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -348,6 +327,8 @@ public final class NitroParquetScanOperator
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
+        this.lateMaterializationPolicy = requireNonNull(lateMaterializationPolicy, "lateMaterializationPolicy is null");
+        this.skipDecodePolicy = lateMaterializationPolicy.skipDecode();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -500,7 +481,7 @@ public final class NitroParquetScanOperator
         }
         int count = toIntExact(Math.min(MAX_BATCH_ROWS, totalRows - nextRow));
         nextRow += count;
-        return LATE_MATERIALIZATION ? lazyBatch(count) : fullBatch(count);
+        return lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count);
     }
 
     private boolean directNumericBatchDecodeConfigured;
@@ -780,41 +761,40 @@ public final class NitroParquetScanOperator
             // guard). Decided once, on first touch, and fixed for the scan so a reader keeps one page path.
             boolean constrained = lazyConstrained && !lazyMask.all();
             boolean sparse = constrained &&
-                    (long) lazyMask.selectedCount() * 100 <= (long) lazyCount * SKIP_DECODE_MAX_SURVIVOR_PERCENT;
-            boolean amortizedRuns = sparse && hasAmortizedSurvivorRuns(lazyMask);
-            boolean fragmentedShape = sparse && LAZY_FRAGMENTED_NUMERIC_SKIP_DECODE &&
                     (long) lazyMask.selectedCount() * 100 <=
-                            (long) lazyCount * LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT &&
-                    readers.length <= LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS;
+                            (long) lazyCount * skipDecodePolicy.maxSurvivorPercent();
+            boolean amortizedRuns = sparse && hasAmortizedSurvivorRuns(lazyMask);
+            ParquetLateMaterializationPolicy.FragmentedNumeric fragmentedPolicy =
+                    skipDecodePolicy.fragmentedNumeric();
+            boolean fragmentedShape = sparse && fragmentedPolicy.enabled() &&
+                    (long) lazyMask.selectedCount() * 100 <=
+                            (long) lazyCount * fragmentedPolicy.maxSurvivorPercent() &&
+                    readers.length <= fragmentedPolicy.maxScanColumns();
             // Do not inspect page dictionaries merely to reject a candidate. Reader metadata inspection can commit
             // page state, so the ordinary bulk path must remain bit-for-bit untouched when density fails admission.
             int fragmentedPayloadColumns = fragmentedShape
                     ? fragmentedNumericPayloadColumns(column)
                     : 0;
             boolean fragmentedNumeric = fragmentedShape &&
-                    admitsFragmentedNumericSkip(
+                    fragmentedPolicy.admits(
                             lazyMask.selectedCount(),
                             lazyCount,
                             readers.length,
-                            fragmentedPayloadColumns,
-                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SURVIVOR_PERCENT,
-                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_SCAN_COLUMNS,
-                            LAZY_FRAGMENTED_NUMERIC_SKIP_MIN_PAYLOAD_COLUMNS,
-                            LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS);
+                            fragmentedPayloadColumns);
             // Wide BINARY columns always participate. Numeric columns use the same physical selectivity and
             // survivor-run proof: clustered sparse masks can then avoid decoding almost an entire payload column,
             // while fragmented masks retain the bulk decoder. The switch is an experimental reverse control and is
             // intentionally independent of SQL type, column identity, or query shape.
             int dictionarySize = (amortizedRuns || fragmentedNumeric) &&
-                    LAZY_NUMERIC_SKIP_DECODE &&
+                    skipDecodePolicy.numeric() &&
                     readers[column].kind() != ColumnReader.Kind.BINARY
                     ? readers[column].peekDictionarySize()
                     : -1;
-            boolean wideNumericDictionary = dictionarySize >= LAZY_NUMERIC_SKIP_MIN_DICTIONARY_SIZE;
+            boolean wideNumericDictionary = dictionarySize >= skipDecodePolicy.numericMinDictionarySize();
             lazySkipColumn[column] = readers[column].kind() == ColumnReader.Kind.BINARY
                     ? amortizedRuns
                     : wideNumericDictionary && (amortizedRuns || fragmentedNumeric);
-            if (DEBUG_LAZY_NUMERIC_SKIP && wideNumericDictionary) {
+            if (skipDecodePolicy.diagnostics() && wideNumericDictionary) {
                 System.err.printf("[lazy-numeric-skip] column=%s dictionary=%s survivors=%s/%s fragmented=%s%n",
                         columnNames.get(column), dictionarySize, lazyMask.selectedCount(), lazyCount,
                         fragmentedNumeric && !amortizedRuns);
@@ -823,10 +803,10 @@ public final class NitroParquetScanOperator
         return lazySkipColumn[column];
     }
 
-    private static boolean hasAmortizedSurvivorRuns(Mask mask)
+    private boolean hasAmortizedSurvivorRuns(Mask mask)
     {
         int selected = mask.selectedCount();
-        if (selected == 0 || SKIP_DECODE_MIN_AVERAGE_RUN <= 1) {
+        if (selected == 0 || skipDecodePolicy.minAverageRun() <= 1) {
             return true;
         }
         int[] positions = mask.selectedPositions();
@@ -836,24 +816,7 @@ public final class NitroParquetScanOperator
                 runs++;
             }
         }
-        return selected >= (long) runs * SKIP_DECODE_MIN_AVERAGE_RUN;
-    }
-
-    static boolean admitsFragmentedNumericSkip(
-            int selected,
-            int total,
-            int scanColumns,
-            int payloadColumns,
-            int maxSurvivorPercent,
-            int maxScanColumns,
-            int minPayloadColumns,
-            int maxPayloadColumns)
-    {
-        return total > 0 &&
-                (long) selected * 100 <= (long) total * maxSurvivorPercent &&
-                scanColumns <= maxScanColumns &&
-                payloadColumns >= minPayloadColumns &&
-                payloadColumns <= maxPayloadColumns;
+        return selected >= (long) runs * skipDecodePolicy.minAverageRun();
     }
 
     private int fragmentedNumericPayloadColumns(int currentColumn)
@@ -872,7 +835,7 @@ public final class NitroParquetScanOperator
             // The selected column's own dictionary eligibility is checked only after the width/density decision.
             if (readers[column].kind() != ColumnReader.Kind.BINARY) {
                 columns++;
-                if (columns > LAZY_FRAGMENTED_NUMERIC_SKIP_MAX_PAYLOAD_COLUMNS) {
+                if (columns > skipDecodePolicy.fragmentedNumeric().maxPayloadColumns()) {
                     break;
                 }
             }
@@ -903,7 +866,7 @@ public final class NitroParquetScanOperator
         // this batch into the same pending advance used by an entirely unborrowed column. The first batch with actual
         // survivors then chooses the physical path and drains all preceding rows in that path. This is a generic
         // lifecycle rule: empty evidence neither pays decode work nor fixes an irreversible decoder strategy.
-        if (DEFER_EMPTY_CONSTRAINED_DECODE && lazyConstrained && lazyMask.none()) {
+        if (lateMaterializationPolicy.deferEmptyConstrainedDecode() && lazyConstrained && lazyMask.none()) {
             lazyPendingAdvance[column] += count;
             currentValues[column] = allocateMaskedEmptyColumn(reader, count);
             currentNulls[column] = nullVector;
@@ -1197,7 +1160,12 @@ public final class NitroParquetScanOperator
                     observedRows >= PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS &&
                     observedKept * 100 > observedRows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
                     observedKept * 100 <= observedRows * FUSED_PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
-                    sampledAverageRunAtLeast(survivors, rows, FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN);
+                    sampledAverageRunAtLeast(
+                            survivors,
+                            rows,
+                            FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN == null
+                                    ? skipDecodePolicy.minAverageRun()
+                                    : FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN);
             if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && fusedCompaction && !debugFusedCompactionCandidatePrinted) {
                 debugFusedCompactionCandidatePrinted = true;
                 System.err.printf("[fused-progressive-filter-candidate] columns=%s aligned=%d observed=%d/%d sampledAverageRun=%.3f%n",

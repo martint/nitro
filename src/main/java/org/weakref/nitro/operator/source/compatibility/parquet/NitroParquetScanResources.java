@@ -34,15 +34,18 @@ public final class NitroParquetScanResources
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final ParquetReaderPolicy readerPolicy;
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
+    private final ParquetLateMaterializationPolicy lateMaterializationPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             ParquetReaderPolicy readerPolicy,
-            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy)
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
+            ParquetLateMaterializationPolicy lateMaterializationPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
+        this.lateMaterializationPolicy = requireNonNull(lateMaterializationPolicy, "lateMaterializationPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -50,7 +53,8 @@ public final class NitroParquetScanResources
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
                 ParquetReaderPolicy.fromSystemProperties(),
-                ParquetNumericDecodeAdmissionPolicy.fromSystemProperties());
+                ParquetNumericDecodeAdmissionPolicy.fromSystemProperties(),
+                ParquetLateMaterializationPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -81,5 +85,10 @@ public final class NitroParquetScanResources
     ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy()
     {
         return numericDecodeAdmissionPolicy;
+    }
+
+    ParquetLateMaterializationPolicy lateMaterializationPolicy()
+    {
+        return lateMaterializationPolicy;
     }
 }

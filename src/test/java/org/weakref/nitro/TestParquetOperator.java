@@ -80,6 +80,7 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
@@ -125,6 +126,22 @@ public class TestParquetOperator
                     new ParquetDictionaryFilterPolicy.Compaction(0, false, 0, 0, Integer.MAX_VALUE, false, Long.MAX_VALUE),
                     new ParquetDictionaryFilterPolicy.NullableFilter(false, false, Integer.MAX_VALUE, Integer.MAX_VALUE),
                     new ParquetDictionaryFilterPolicy.ZeroAcceptedPageSkip(false, Long.MAX_VALUE));
+    private static final ParquetLateMaterializationPolicy GENERIC_LATE_MATERIALIZATION =
+            new ParquetLateMaterializationPolicy(
+                    false,
+                    new ParquetLateMaterializationPolicy.SkipDecode(
+                            Integer.MAX_VALUE,
+                            Integer.MAX_VALUE,
+                            false,
+                            new ParquetLateMaterializationPolicy.FragmentedNumeric(
+                                    false,
+                                    Integer.MAX_VALUE,
+                                    Integer.MAX_VALUE,
+                                    Integer.MAX_VALUE,
+                                    Integer.MAX_VALUE),
+                            Integer.MAX_VALUE,
+                            false),
+                    false);
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
@@ -158,7 +175,8 @@ public class TestParquetOperator
                                         Integer.MAX_VALUE,
                                         Integer.MAX_VALUE,
                                         Long.MAX_VALUE,
-                                        false)),
+                                        false),
+                                GENERIC_LATE_MATERIALIZATION),
                         allocator,
                         List.of(file),
                         List.of("x"))) {

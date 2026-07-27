@@ -31,10 +31,15 @@ class TestNitroParquetScanOperator
         assertFalse(admits(600, 10_000, 6, 1));
         assertFalse(admits(600, 10_000, 6, 9));
         assertFalse(admits(0, 0, 6, 2));
+        assertFalse(new ParquetLateMaterializationPolicy.FragmentedNumeric(false, 6, 6, 2, 8)
+                .admits(600, 10_000, 6, 2));
     }
 
     private static boolean admits(int selected, int total, int scanColumns, int payloadColumns)
     {
-        return NitroParquetScanOperator.admitsFragmentedNumericSkip(selected, total, scanColumns, payloadColumns, 6, 6, 2, 8);
+        return ParquetLateMaterializationPolicy.defaults()
+                .skipDecode()
+                .fragmentedNumeric()
+                .admits(selected, total, scanColumns, payloadColumns);
     }
 }
