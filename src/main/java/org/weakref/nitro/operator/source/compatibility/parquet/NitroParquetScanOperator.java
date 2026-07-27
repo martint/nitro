@@ -97,22 +97,6 @@ public final class NitroParquetScanOperator
     // ~20x (a full window decode per survivor batch) while the reverse is bounded, only commit to bulk when the first
     // window is convincingly dense — a genuinely non-selective filter reads dense everywhere, so even a biased sample
     // clears this higher bar. A merely-front-loaded window (q39: 21.9% first vs 1.5% overall) stays on skip.
-    private static final int DF_PAYLOAD_BULK_MIN_SURVIVOR_PERCENT = Integer.getInteger("nitro.parquet.dfPayloadBulkPercent", 50);
-    private static final boolean DEFER_FILTERED_PAYLOAD =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.deferFilteredPayload", "true"));
-    private static final int DEFERRED_PAYLOAD_MAX_SURVIVOR_PERCENT =
-            Integer.getInteger("nitro.parquet.deferredPayloadMaxSurvivorPercent", 20);
-    private static final int DEFERRED_PAYLOAD_MIN_COLUMNS =
-            Integer.getInteger("nitro.parquet.deferredPayloadMinColumns", 4);
-    private static final boolean BOUNDED_DEFERRED_PAYLOAD_WINDOW =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.boundedDeferredPayloadWindow", "false"));
-    private static final int BOUNDED_DEFERRED_PAYLOAD_WINDOW_ROWS =
-            Integer.getInteger("nitro.parquet.boundedDeferredPayloadWindowRows", 163_840);
-    private static final int BOUNDED_DEFERRED_PAYLOAD_MAX_COLUMNS =
-            Integer.getInteger("nitro.parquet.boundedDeferredPayloadMaxColumns", 8);
-    private static final boolean DEBUG_BOUNDED_DEFERRED_PAYLOAD_WINDOW =
-            Boolean.getBoolean("nitro.debug.boundedDeferredPayloadWindow");
-
     private final Allocator allocator;
     private final BatchBufferScope batchBuffers;
     private final Allocator.Context allocationContext;
@@ -124,6 +108,7 @@ public final class NitroParquetScanOperator
     private final ParquetLateMaterializationPolicy lateMaterializationPolicy;
     private final ParquetLateMaterializationPolicy.SkipDecode skipDecodePolicy;
     private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
+    private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -274,7 +259,8 @@ public final class NitroParquetScanOperator
                 resources.readerPolicy(),
                 resources.numericDecodeAdmissionPolicy(),
                 resources.lateMaterializationPolicy(),
-                resources.progressiveFilterCompactionPolicy());
+                resources.progressiveFilterCompactionPolicy(),
+                resources.filteredPayloadPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -288,7 +274,8 @@ public final class NitroParquetScanOperator
             ParquetReaderPolicy readerPolicy,
             ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
             ParquetLateMaterializationPolicy lateMaterializationPolicy,
-            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy)
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
+            ParquetFilteredPayloadPolicy filteredPayloadPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -308,6 +295,7 @@ public final class NitroParquetScanOperator
         this.skipDecodePolicy = lateMaterializationPolicy.skipDecode();
         this.progressiveFilterCompactionPolicy = requireNonNull(
                 progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
+        this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -603,10 +591,15 @@ public final class NitroParquetScanOperator
         if (windowSurvivorCursor < windowSurvivorCount) {
             return true;
         }
-        if (BOUNDED_DEFERRED_PAYLOAD_WINDOW && !filterWindowBounded && readers.length <= BOUNDED_DEFERRED_PAYLOAD_MAX_COLUMNS && payloadColumnCount() >= DEFERRED_PAYLOAD_MIN_COLUMNS) {
-            filterWindow = Math.min(filterWindow, BOUNDED_DEFERRED_PAYLOAD_WINDOW_ROWS);
+        ParquetFilteredPayloadPolicy.Deferred deferredPolicy = filteredPayloadPolicy.deferred();
+        ParquetFilteredPayloadPolicy.BoundedWindow boundedWindowPolicy = deferredPolicy.boundedWindow();
+        if (boundedWindowPolicy.enabled() &&
+                !filterWindowBounded &&
+                readers.length <= boundedWindowPolicy.maxScanColumns() &&
+                payloadColumnCount() >= deferredPolicy.minColumns()) {
+            filterWindow = Math.min(filterWindow, boundedWindowPolicy.rows());
             filterWindowBounded = true;
-            if (DEBUG_BOUNDED_DEFERRED_PAYLOAD_WINDOW) {
+            if (boundedWindowPolicy.diagnostics()) {
                 System.err.printf("[bounded-filter-window] columns=%s payload=%s rows=%s%n", columnNames, payloadColumnCount(), filterWindow);
             }
         }
@@ -1256,14 +1249,20 @@ public final class NitroParquetScanOperator
         // when most survive (a weak/unclustered filter). A reader must never mix the two page paths across windows,
         // so the decision is frozen rather than recomputed per window.
         if (!dfPayloadDecided) {
-            dfPayloadBulk = survivorCount > (int) ((long) count * DF_PAYLOAD_BULK_MIN_SURVIVOR_PERCENT / 100);
+            dfPayloadBulk = survivorCount >
+                    (int) ((long) count * filteredPayloadPolicy.bulkMinSurvivorPercent() / 100);
             dfPayloadDecided = true;
         }
         // A whole filtered window that fits in one public batch can remain open across the first downstream
         // boundary. Filter/key columns are already materialized; payload readers stay at the window start until a
         // consumer borrows them after optionally constraining the batch. Larger windows retain eager slicing because
         // several output batches would otherwise share one irreversible reader position.
-        deferredFilteredPayload = DEFER_FILTERED_PAYLOAD && !dfPayloadBulk && survivorCount > 0 && survivorCount <= MAX_BATCH_ROWS && payloadColumnCount() >= DEFERRED_PAYLOAD_MIN_COLUMNS;
+        ParquetFilteredPayloadPolicy.Deferred deferredPolicy = filteredPayloadPolicy.deferred();
+        deferredFilteredPayload = deferredPolicy.enabled() &&
+                !dfPayloadBulk &&
+                survivorCount > 0 &&
+                survivorCount <= MAX_BATCH_ROWS &&
+                payloadColumnCount() >= deferredPolicy.minColumns();
         deferredWindowRows = count;
         deferredWindowSurvivors = survivors;
         if (deferredFilteredPayload) {
@@ -1652,7 +1651,8 @@ public final class NitroParquetScanOperator
         }
         lazyResolved[column] = true;
         int selected = lazyMask.selectedCount();
-        boolean weakConstraint = (long) selected * 100 > (long) lazyCount * DEFERRED_PAYLOAD_MAX_SURVIVOR_PERCENT;
+        boolean weakConstraint = (long) selected * 100 >
+                (long) lazyCount * filteredPayloadPolicy.deferred().maxSurvivorPercent();
         int decodeCount = weakConstraint ? lazyCount : selected;
         if (deferredRawSurvivors.length < decodeCount) {
             deferredRawSurvivors = replaceInts(deferredRawSurvivors, decodeCount);

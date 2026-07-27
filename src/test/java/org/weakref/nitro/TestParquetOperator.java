@@ -80,6 +80,7 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetFilteredPayloadPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetProgressiveFilterCompactionPolicy;
@@ -154,6 +155,15 @@ public class TestParquetOperator
                     new ParquetProgressiveFilterCompactionPolicy.Fused(
                             false, 0, Integer.MAX_VALUE, Integer.MAX_VALUE),
                     false);
+    private static final ParquetFilteredPayloadPolicy GENERIC_FILTERED_PAYLOAD =
+            new ParquetFilteredPayloadPolicy(
+                    0,
+                    new ParquetFilteredPayloadPolicy.Deferred(
+                            false,
+                            0,
+                            Integer.MAX_VALUE,
+                            new ParquetFilteredPayloadPolicy.BoundedWindow(
+                                    false, Integer.MAX_VALUE, 0, false)));
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
@@ -189,7 +199,8 @@ public class TestParquetOperator
                                         Long.MAX_VALUE,
                                         false),
                                 GENERIC_LATE_MATERIALIZATION,
-                                GENERIC_PROGRESSIVE_FILTER_COMPACTION),
+                                GENERIC_PROGRESSIVE_FILTER_COMPACTION,
+                                GENERIC_FILTERED_PAYLOAD),
                         allocator,
                         List.of(file),
                         List.of("x"))) {
