@@ -3608,11 +3608,8 @@ public class HashJoinOperator
         private final boolean lazyDuplicateSlotState;
         private final int expectedBuildRows;
         private boolean rangeCompacted;
-        private boolean directRangeBuild;
         private int directBuildRows;
-        private int[] directBuildHead;
-        private final DenseDirectLongDuplicateState denseDirectDuplicates;
-        private final SparseDirectLongDuplicateState sparseDirectDuplicates;
+        private final DirectLongBuildIndex directBuild;
         private long[] orderedRows;
         private int[] rangeStart;
         // A completed duplicate build may have invariant bits inside an otherwise sparse physical key domain.
@@ -3651,14 +3648,13 @@ public class HashJoinOperator
                     policy.compressedDirectRangeMaxEntries(),
                     policy.compressedDirectRangeMaxRatio(),
                     policy.debugCompressedDirectRange());
-            this.sparseDirectDuplicates = new SparseDirectLongDuplicateState(
+            this.directBuild = new DirectLongBuildIndex(
                     arrayPool,
                     policy.sparseDirectDuplicateState(),
                     policy.sparseDirectDuplicateMinExpectedRows(),
                     policy.sparseDirectDuplicateMinExpectedDomainRatio(),
                     policy.directDuplicateGroupInitialCapacity(),
                     EMPTY);
-            this.denseDirectDuplicates = new DenseDirectLongDuplicateState(arrayPool, EMPTY);
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
@@ -3702,7 +3698,6 @@ public class HashJoinOperator
                 System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
             }
             if (capInitialHash || keyOnlyDirectRangeBuild) {
-                directRangeBuild = true;
                 int directCapacity = policy.directRangeBuildInitialCapacity();
                 if (keyOnlyDirectRangeBuild) {
                     long required = Math.min((long) policy.maxDirectBuildKey(), (long) expectedSize + 1);
@@ -3710,8 +3705,7 @@ public class HashJoinOperator
                         directCapacity <<= 1;
                     }
                 }
-                directBuildHead = arrayPool.borrowInts(directCapacity);
-                Arrays.fill(directBuildHead, EMPTY);
+                directBuild.initialize(directCapacity);
                 denseBuildCandidate = false;
             }
         }
@@ -3819,7 +3813,7 @@ public class HashJoinOperator
             // Once the dense duplicate arrays exist, sparse state can no longer be admitted. Select the compact
             // key-only loop once per source batch instead of carrying generic and sparse representation branches
             // through every remaining build row.
-            return policy.compressedDirectBuildBatchLoop() && directRangeBuild && compressDuplicateReferences && denseDirectDuplicates.isAllocated();
+            return policy.compressedDirectBuildBatchLoop() && directBuild.isActive() && compressDuplicateReferences && directBuild.denseDuplicatesAllocated();
         }
 
         private void addCompressedDirectRangeRows(
@@ -3882,10 +3876,10 @@ public class HashJoinOperator
             directBuildRows++;
             int intKey = (int) key;
             ensureDirectBuildCapacity(intKey + 1);
-            int head = directBuildHead[intKey];
+            int head = directBuild.entry(intKey);
             if (head != EMPTY) {
                 hasDuplicates = true;
-                denseDirectDuplicates.increment(intKey);
+                directBuild.incrementDenseDuplicate(intKey);
                 return;
             }
             ensureRowCapacity();
@@ -3894,8 +3888,7 @@ public class HashJoinOperator
             if (chainNext != null) {
                 chainNext[ordinal] = EMPTY;
             }
-            directBuildHead[intKey] = ordinal;
-            denseDirectDuplicates.initializeKey(intKey, ordinal);
+            directBuild.initializeKey(intKey, ordinal);
             size++;
         }
 
@@ -5304,11 +5297,11 @@ public class HashJoinOperator
 
         private long singleRef(long key)
         {
-            if (directRangeBuild) {
-                if (key < 0 || key >= directBuildHead.length) {
+            if (directBuild.isActive()) {
+                if (key < 0 || key >= directBuild.capacity()) {
                     return NO_MATCH_ROW_REFERENCE;
                 }
-                int entry = directBuildHead[(int) key];
+                int entry = directBuild.entry((int) key);
                 return entry == EMPTY ? NO_MATCH_ROW_REFERENCE : rowReferenceAt(directEntryHead(entry));
             }
             if (arrayMode) {
@@ -5468,13 +5461,12 @@ public class HashJoinOperator
             if (key > maxKey) {
                 maxKey = key;
             }
-            if (directRangeBuild) {
+            if (directBuild.isActive()) {
                 if (key >= 0 && key < policy.maxDirectBuildKey()) {
                     addDirectRangeRow((int) key, rowReference);
                     return;
                 }
                 materializeDirectRangeBuildAsHash();
-                directRangeBuild = false;
             }
             if (denseBuildCandidate) {
                 if (rowCount == 0 || key == denseNextKey) {
@@ -5546,7 +5538,7 @@ public class HashJoinOperator
         {
             directBuildRows++;
             ensureDirectBuildCapacity(key + 1);
-            int entry = directBuildHead[key];
+            int entry = directBuild.entry(key);
             if (entry != EMPTY) {
                 addDirectRangeDuplicate(key, entry, rowReference);
                 return;
@@ -5557,8 +5549,7 @@ public class HashJoinOperator
             if (chainNext != null) {
                 chainNext[ordinal] = EMPTY;
             }
-            directBuildHead[key] = ordinal;
-            denseDirectDuplicates.initializeKey(key, ordinal);
+            directBuild.initializeKey(key, ordinal);
             size++;
         }
 
@@ -5570,8 +5561,7 @@ public class HashJoinOperator
                 return;
             }
             if (compressDuplicateReferences) {
-                denseDirectDuplicates.allocate(directBuildHead.length);
-                denseDirectDuplicates.increment(key);
+                directBuild.incrementDenseDuplicate(key);
                 return;
             }
             ensureChainState();
@@ -5579,21 +5569,19 @@ public class HashJoinOperator
             int ordinal = rowCount++;
             storeRowReference(ordinal, rowReference);
             chainNext[ordinal] = EMPTY;
-            denseDirectDuplicates.allocate(directBuildHead.length);
-            chainNext[denseDirectDuplicates.append(key, entry, ordinal)] = ordinal;
+            chainNext[directBuild.appendDenseDuplicate(key, entry, ordinal)] = ordinal;
         }
 
         private boolean useSparseDirectDuplicateState()
         {
-            return sparseDirectDuplicates.admit(denseDirectDuplicates.isAllocated(), directBuildHead.length, expectedBuildRows);
+            return directBuild.admitSparseDuplicates(expectedBuildRows);
         }
 
         private void addSparseDirectRangeDuplicate(int key, int entry, long rowReference)
         {
-            int groupEntry = sparseDirectDuplicates.groupEntry(entry);
-            directBuildHead[key] = groupEntry;
+            int groupEntry = directBuild.promoteSparseDuplicate(key, entry);
             if (compressDuplicateReferences) {
-                sparseDirectDuplicates.increment(groupEntry);
+                directBuild.incrementSparseDuplicate(groupEntry);
                 return;
             }
             ensureChainState();
@@ -5601,47 +5589,27 @@ public class HashJoinOperator
             int ordinal = rowCount++;
             storeRowReference(ordinal, rowReference);
             chainNext[ordinal] = EMPTY;
-            chainNext[sparseDirectDuplicates.append(groupEntry, ordinal)] = ordinal;
+            chainNext[directBuild.appendSparseDuplicate(groupEntry, ordinal)] = ordinal;
         }
 
         private int directEntryHead(int entry)
         {
-            return sparseDirectDuplicates.isGroupEntry(entry)
-                    ? sparseDirectDuplicates.head(entry)
-                    : entry;
+            return directBuild.entryHead(entry);
         }
 
         private int directEntryTail(int key, int entry)
         {
-            return sparseDirectDuplicates.isGroupEntry(entry)
-                    ? sparseDirectDuplicates.tail(entry)
-                    : denseDirectDuplicates.tail(key, directEntryHead(entry));
+            return directBuild.entryTail(key, entry);
         }
 
         private int directEntryCount(int key, int entry)
         {
-            if (sparseDirectDuplicates.isGroupEntry(entry)) {
-                return sparseDirectDuplicates.count(entry);
-            }
-            return denseDirectDuplicates.count(key);
+            return directBuild.entryCount(key, entry);
         }
 
         private void ensureDirectBuildCapacity(int required)
         {
-            if (required <= directBuildHead.length) {
-                return;
-            }
-            int oldLength = directBuildHead.length;
-            int newLength = oldLength;
-            while (newLength < required) {
-                newLength *= 2;
-            }
-            int[] previousHead = directBuildHead;
-            directBuildHead = arrayPool.borrowInts(newLength);
-            System.arraycopy(previousHead, 0, directBuildHead, 0, oldLength);
-            Arrays.fill(directBuildHead, oldLength, newLength, EMPTY);
-            denseDirectDuplicates.resize(oldLength, newLength);
-            arrayPool.release(previousHead);
+            directBuild.ensureCapacity(required);
         }
 
         private void materializeDirectRangeBuildAsHash()
@@ -5651,8 +5619,8 @@ public class HashJoinOperator
                 ensureDuplicateSlotState();
             }
             size = 0;
-            for (int key = 0; key < directBuildHead.length; key++) {
-                int entry = directBuildHead[key];
+            for (int key = 0; key < directBuild.capacity(); key++) {
+                int entry = directBuild.entry(key);
                 if (entry == EMPTY) {
                     continue;
                 }
@@ -5841,7 +5809,7 @@ public class HashJoinOperator
                         minKey,
                         maxKey,
                         denseBuildCandidate,
-                        directRangeBuild,
+                        directBuild.isActive(),
                         hasDuplicates,
                         implicitSequentialRowReferences,
                         compressDuplicateReferences);
@@ -5849,18 +5817,18 @@ public class HashJoinOperator
             if (size == 0) {
                 return;
             }
-            if (directRangeBuild) {
+            if (directBuild.isActive()) {
                 if (policy.compactCompletedDirectRangeBuild()) {
                     compactCompletedDirectRangeBuild();
                 }
                 if (policy.debugDirectDuplicateState() && hasDuplicates) {
                     System.err.printf(
                             "[direct-duplicate-state] representation=%s rows=%d keys=%d range=%d sparseGroups=%d expectedRows=%d%n",
-                            sparseDirectDuplicates.groupCount() > 0 ? "sparse" : "dense",
+                            directBuild.sparseDuplicateGroupCount() > 0 ? "sparse" : "dense",
                             directBuildRows,
                             size,
-                            directBuildHead.length,
-                            sparseDirectDuplicates.groupCount(),
+                            directBuild.capacity(),
+                            directBuild.sparseDuplicateGroupCount(),
                             expectedBuildRows);
                 }
                 return;
@@ -5956,7 +5924,6 @@ public class HashJoinOperator
                     buildRowReferencesUnused &&
                     size >= policy.denseUnusedBuildMembershipMinKeys() &&
                     range == size) {
-                directRangeBuild = false;
                 arrayMode = true;
                 denseSingleBatchRowReferenceMode = true;
                 denseRowReferenceBatchIndex = 0;
@@ -5976,7 +5943,7 @@ public class HashJoinOperator
             int firstBatchIndex = 0;
             int firstPosition = 0;
             for (int offset = 0; offset < range; offset++) {
-                int head = directBuildHead[(int) minKey + offset];
+                int head = directBuild.entry((int) minKey + offset);
                 if (head == EMPTY) {
                     sequentialReferences = false;
                     continue;
@@ -6000,7 +5967,6 @@ public class HashJoinOperator
             if (!sequentialReferences) {
                 return;
             }
-            directRangeBuild = false;
             arrayMode = true;
             denseSingleBatchRowReferenceMode = true;
             denseRowReferenceBatchIndex = firstBatchIndex;
@@ -6022,11 +5988,11 @@ public class HashJoinOperator
                 int count = CompressedLongRangeIndex.count(entry);
                 return count == 1 ? single.withValue(orderedRows[start]) : chain.resetRange(orderedRows, start, count);
             }
-            if (directRangeBuild) {
-                if (key < 0 || key >= directBuildHead.length) {
+            if (directBuild.isActive()) {
+                if (key < 0 || key >= directBuild.capacity()) {
                     return LongLists.emptyList();
                 }
-                int entry = directBuildHead[(int) key];
+                int entry = directBuild.entry((int) key);
                 if (entry == EMPTY) {
                     return LongLists.emptyList();
                 }
@@ -6247,10 +6213,7 @@ public class HashJoinOperator
 
         private void releaseDirectBuildArrays()
         {
-            arrayPool.release(directBuildHead);
-            directBuildHead = null;
-            denseDirectDuplicates.release();
-            sparseDirectDuplicates.release();
+            directBuild.release();
         }
 
         private static int mix(long key)
