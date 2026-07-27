@@ -2030,7 +2030,7 @@ public class TestPlanEvaluator
         Variable result = new Variable(0);
         Reference values = new Reference(result, Stream.VALUES);
         Reference errors = new Reference(result, Stream.ERRORS);
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(new EvaluationPlan(
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
                 List.of(new Assignment(result, new Call("predicate", List.of()), AllMask.ALL)),
                 List.of(),
                 Map.of(
@@ -2052,7 +2052,7 @@ public class TestPlanEvaluator
         Variable result = new Variable(0);
         Reference first = new Reference(new Input(0), Stream.VALUES);
         Reference second = new Reference(new Input(1), Stream.VALUES);
-        EvaluationPlan plan = IrNormalizer.normalize(new EvaluationPlan(
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(
@@ -2103,7 +2103,7 @@ public class TestPlanEvaluator
         Variable result = new Variable(0);
         Reference first = new Reference(new Input(0), Stream.VALUES);
         Reference second = new Reference(new Input(1), Stream.VALUES);
-        EvaluationPlan plan = IrNormalizer.normalize(new EvaluationPlan(
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
                 List.of(new Assignment(
                         result,
                         new org.weakref.nitro.operator.evaluator.ir.Merge(

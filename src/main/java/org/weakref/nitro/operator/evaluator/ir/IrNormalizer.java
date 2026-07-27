@@ -21,10 +21,6 @@ import java.util.Map;
 
 public final class IrNormalizer
 {
-    private static final IrNormalizer STANDARD = new IrNormalizer(List.of(
-            new ConditionalNormalizationRule(),
-            new CoalesceNormalizationRule()));
-
     private final List<IrNormalizationRule> rules;
 
     public IrNormalizer(List<IrNormalizationRule> rules)
@@ -32,9 +28,11 @@ public final class IrNormalizer
         this.rules = List.copyOf(rules);
     }
 
-    public static EvaluationPlan normalize(EvaluationPlan plan)
+    public static IrNormalizer standard()
     {
-        return STANDARD.normalizePlan(plan);
+        return new IrNormalizer(List.of(
+                new ConditionalNormalizationRule(),
+                new CoalesceNormalizationRule()));
     }
 
     public EvaluationPlan normalizePlan(EvaluationPlan plan)

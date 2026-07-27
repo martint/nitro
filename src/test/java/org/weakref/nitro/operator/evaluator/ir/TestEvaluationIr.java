@@ -89,7 +89,7 @@ public class TestEvaluationIr
                         AllMask.ALL)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
 
         assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
         assertThat(normalizedPlan.assignments()).hasSize(3);
@@ -114,7 +114,7 @@ public class TestEvaluationIr
                 List.of(new Reference(result, Stream.VALUES)),
                 Map.of(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
 
         assertThat(normalizedPlan.streamPlans()).containsEntry(new Reference(result, Stream.VALUES), StreamPlan.MATERIALIZED);
         assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
@@ -145,7 +145,7 @@ public class TestEvaluationIr
                         nestedAnd)),
                 List.of(new Reference(result, Stream.VALUES)));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
         Assignment assignment = normalizedPlan.assignments().getFirst();
 
         assertThat(assignment.mask()).isInstanceOf(AndMask.class);
@@ -181,7 +181,7 @@ public class TestEvaluationIr
                                 new ReferenceMask(new Reference(left, Stream.VALUES)),
                                 new ReferenceMask(new Reference(right, Stream.VALUES))))));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
         Merge merge = (Merge) normalizedPlan.assignments().getLast().operation();
 
         assertThat(merge.condition()).isInstanceOf(OrMask.class);
@@ -208,7 +208,7 @@ public class TestEvaluationIr
                         new ReferenceMask(new Reference(left, Stream.VALUES)),
                         new ReferenceMask(new Reference(right, Stream.VALUES))))));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
 
         assertThat(normalizedPlan.maskPlans()).containsKey(predicateValues);
         assertThat(normalizedPlan.maskPlans().get(predicateValues)).isInstanceOf(OrMask.class);
@@ -284,7 +284,7 @@ public class TestEvaluationIr
                         predicateErrors, StreamPlan.MATERIALIZED),
                 Map.of(predicateValues, new ReferenceMask(predicateValues)));
 
-        EvaluationPlan normalizedPlan = IrNormalizer.normalize(plan);
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
 
         assertThat(normalizedPlan.streamPlans()).containsEntry(predicateValues, StreamPlan.SCRATCH);
         assertThat(normalizedPlan.streamPlans()).containsEntry(predicateErrors, StreamPlan.SCRATCH);
