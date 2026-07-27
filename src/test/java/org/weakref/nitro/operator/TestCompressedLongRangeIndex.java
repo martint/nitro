@@ -27,7 +27,7 @@ class TestCompressedLongRangeIndex
         CompressedLongRangeIndex index = new CompressedLongRangeIndex(arrayPool, true, 2, 4, 2, false);
         LongJoinHashTable hashTable = hashTable(arrayPool);
 
-        assertThat(index.prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isTrue();
+        assertThat(index.prepare(hashTable, 2, 5, 3)).isTrue();
         index.build(
                 hashTable,
                 new int[] {hashTable.findSlot(0x10), hashTable.findSlot(0x12), 0, 2},
@@ -57,13 +57,13 @@ class TestCompressedLongRangeIndex
         LongJoinHashTable hashTable = hashTable(arrayPool);
 
         assertThat(new CompressedLongRangeIndex(arrayPool, false, 2, 4, 2, false)
-                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 3, 4, 2, false)
-                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 2, 1, 2, false)
-                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 2, 4, 2, false)
-                .prepare(hashTable, 2, 5, 256, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 256)).isFalse();
         hashTable.release();
     }
 

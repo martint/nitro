@@ -3548,8 +3548,6 @@ public class HashJoinOperator
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
         private int size;
-        private long buildKeyAnd = -1L;
-        private long buildKeyOr;
         private int maximumMatchCount;
         // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
         // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
@@ -3825,8 +3823,6 @@ public class HashJoinOperator
 
         private void addCompressedDirectRangeRow(long key, long rowReference)
         {
-            buildKeyAnd &= key;
-            buildKeyOr |= key;
             if (key < 0 || key >= policy.maxDirectBuildKey()) {
                 addRow(key, rowReference);
                 return;
@@ -5298,8 +5294,6 @@ public class HashJoinOperator
 
         private void addRow(long key, long rowReference)
         {
-            buildKeyAnd &= key;
-            buildKeyOr |= key;
             rows.observeReference(rowReference);
             if (key < minKey) {
                 minKey = key;
@@ -5495,9 +5489,7 @@ public class HashJoinOperator
                     compressedRanges,
                     size,
                     rowCount,
-                    maximumMatchCount,
-                    buildKeyAnd,
-                    buildKeyOr);
+                    maximumMatchCount);
             releaseRowArrays();
             if (compressedRanges.isBuilt()) {
                 releaseHashTable();

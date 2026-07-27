@@ -42,17 +42,13 @@ final class CompactedJoinRows
             CompressedLongRangeIndex compressedRanges,
             int distinctSize,
             int rowCount,
-            int maximumMatchCount,
-            long keyAnd,
-            long keyOr)
+            int maximumMatchCount)
     {
         boolean compressedCandidate = compressedRanges.prepare(
                 hashTable,
                 distinctSize,
                 rowCount,
-                maximumMatchCount,
-                keyAnd,
-                keyOr);
+                maximumMatchCount);
         long[] ordered = arrayPool.borrowLongs(rowCount);
         int[] starts = arrayPool.borrowInts(hashTable.capacity());
         int cursor = 0;
