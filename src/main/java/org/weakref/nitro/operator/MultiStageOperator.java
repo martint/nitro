@@ -13,15 +13,18 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 
 import java.util.List;
 import java.util.function.Function;
 
+import static java.util.Objects.requireNonNull;
+
 public final class MultiStageOperator
         implements Operator
 {
-    private final int outputCount;
+    private final Schema outputSchema;
     private final List<?> stages;
     private final Function<Object, Operator> operatorFactory;
 
@@ -34,7 +37,13 @@ public final class MultiStageOperator
     @SuppressWarnings("unchecked")
     public <T> MultiStageOperator(int outputCount, List<T> stages, Function<T, Operator> operatorFactory)
     {
-        this.outputCount = outputCount;
+        this(Schema.unspecified(outputCount), stages, operatorFactory);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> MultiStageOperator(Schema outputSchema, List<T> stages, Function<T, Operator> operatorFactory)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.stages = List.copyOf(stages);
         this.operatorFactory = stage -> operatorFactory.apply((T) stage);
     }
@@ -42,7 +51,13 @@ public final class MultiStageOperator
     @Override
     public int outputCount()
     {
-        return outputCount;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

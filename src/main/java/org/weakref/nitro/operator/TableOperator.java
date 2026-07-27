@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -20,24 +21,37 @@ import org.weakref.nitro.data.Vector;
 import java.util.Arrays;
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 public class TableOperator
         implements Operator
 {
-    private final int columns;
+    private final Schema outputSchema;
     private final List<Page> pages;
 
     private int currentPage = -1;
 
     public TableOperator(int columns, List<Page> pages)
     {
-        this.columns = columns;
+        this(Schema.unspecified(columns), pages);
+    }
+
+    public TableOperator(Schema outputSchema, List<Page> pages)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.pages = pages;
     }
 
     @Override
     public int outputCount()
     {
-        return columns;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

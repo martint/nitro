@@ -64,6 +64,7 @@ import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
 import org.weakref.nitro.operator.MaterializeOperator;
+import org.weakref.nitro.operator.MultiStageOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
@@ -1616,6 +1617,29 @@ public class TestOperators
                 List.of(typedTable(outputSchema), typedTable(outputSchema)))) {
             assertThat(union.outputSchema()).isSameAs(outputSchema);
             assertThat(union.outputCount()).isEqualTo(outputSchema.size());
+        }
+    }
+
+    @Test
+    void testTableAndMultiStageOperatorsUseExplicitOutputSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema outputSchema = new Schema(List.of(new Field("value", i32Only, true)));
+        AtomicInteger factoryCalls = new AtomicInteger();
+
+        try (Operator table = new TableOperator(outputSchema, List.of());
+                Operator stages = new MultiStageOperator(
+                        outputSchema,
+                        List.of(1),
+                        ignored -> {
+                            factoryCalls.incrementAndGet();
+                            return new TableOperator(outputSchema, List.of());
+                        })) {
+            assertThat(table.outputSchema()).isSameAs(outputSchema);
+            assertThat(table.outputCount()).isEqualTo(outputSchema.size());
+            assertThat(stages.outputSchema()).isSameAs(outputSchema);
+            assertThat(stages.outputCount()).isEqualTo(outputSchema.size());
+            assertThat(factoryCalls).hasValue(0);
         }
     }
 

@@ -123,7 +123,7 @@ public final class MaterializeOperator
             source.close();
             source = null;
         }
-        return new TableOperator(outputCount, pages);
+        return new TableOperator(outputSchema, pages);
     }
 
     private Streams copyOutputStreams(Output output)
