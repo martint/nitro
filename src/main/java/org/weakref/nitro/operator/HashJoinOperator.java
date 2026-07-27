@@ -1886,7 +1886,7 @@ public class HashJoinOperator
         // Compare with the known full build cardinality, not sample cardinality: a random prefix of a dense table
         // spans most of its domain and would otherwise be misclassified as sparse (TPC-H q7 customer/orders).
         long expectedRows = expectedInnerRowCount();
-        return range <= 0 || range > LongJoinIndex.MAX_ARRAY_RANGE || range < expectedRows * joinIndexPolicy.sparseLongRangeMinRatio();
+        return range <= 0 || range > joinIndexPolicy.maxArrayRange() || range < expectedRows * joinIndexPolicy.sparseLongRangeMinRatio();
     }
 
     private boolean shouldUseKeyOnlyDirectRangeBuild(BufferedJoinInput.InnerBatch batch, Vector[] joinValues)
@@ -3887,7 +3887,6 @@ public class HashJoinOperator
         // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
         // dense integer range, a probe is a bounds check plus one array index — no hash, no probe loop.
         // Built lazily on the first probe; the hash table is the fallback for sparse or duplicate keys.
-        private static final int MAX_ARRAY_RANGE = 1 << 26; // cap direct array at ~64M entries (512MB)
         private long minKey = Long.MAX_VALUE;
         private long maxKey = Long.MIN_VALUE;
         private boolean hasDuplicates;
@@ -6264,7 +6263,7 @@ public class HashJoinOperator
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > MAX_ARRAY_RANGE || range > 2L * size) {
+            if (range <= 0 || range > policy.maxArrayRange() || range > 2L * size) {
                 return;
             }
             if (denseBuildCandidate && range == size && denseSingleBatchRowReferenceCandidate) {
@@ -6329,7 +6328,7 @@ public class HashJoinOperator
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > MAX_ARRAY_RANGE || range > 2L * size) {
+            if (range <= 0 || range > policy.maxArrayRange() || range > 2L * size) {
                 return;
             }
 
@@ -6456,7 +6455,7 @@ public class HashJoinOperator
                 return;
             }
             long range = maxKey - minKey + 1;
-            if (range <= 0 || range > MAX_ARRAY_RANGE || range < (long) size * policy.sparseLongRangeMinRatio()) {
+            if (range <= 0 || range > policy.maxArrayRange() || range < (long) size * policy.sparseLongRangeMinRatio()) {
                 return;
             }
             sparseMembershipRange = (int) range;
