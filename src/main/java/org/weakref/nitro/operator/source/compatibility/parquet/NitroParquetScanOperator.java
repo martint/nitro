@@ -113,6 +113,7 @@ public final class NitroParquetScanOperator
     private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
+    private final ParquetScanDiagnostics diagnostics;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -239,7 +240,8 @@ public final class NitroParquetScanOperator
                 resources.progressiveFilterCompactionPolicy(),
                 resources.filteredPayloadPolicy(),
                 resources.filterWindowPolicy(),
-                resources.filterEvaluationPolicy());
+                resources.filterEvaluationPolicy(),
+                resources.diagnostics());
     }
 
     private NitroParquetScanOperator(
@@ -256,7 +258,8 @@ public final class NitroParquetScanOperator
             ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
             ParquetFilterWindowPolicy filterWindowPolicy,
-            ParquetFilterEvaluationPolicy filterEvaluationPolicy)
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy,
+            ParquetScanDiagnostics diagnostics)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -280,6 +283,7 @@ public final class NitroParquetScanOperator
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
         this.dictionaryFilterPolicy = requireNonNull(readerPolicy, "readerPolicy is null").dictionaryFilter();
+        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -531,8 +535,6 @@ public final class NitroParquetScanOperator
         return true;
     }
 
-    private static final boolean DEBUG_ROW_COUNTS = Boolean.getBoolean("nitro.debug.rowcounts");
-    private static final boolean DEBUG_DECOMPRESSION = Boolean.getBoolean("nitro.debug.decompression");
     private long debugRawRows;
     private long debugSurvivors;
     private final long[] debugFilterInputs;
@@ -582,7 +584,7 @@ public final class NitroParquetScanOperator
             nextRow += windowCount;
             decodeFilterWindow(windowCount);
             windowSurvivorCursor = 0;
-            if (DEBUG_ROW_COUNTS) {
+            if (diagnostics.rowCounts()) {
                 debugRawRows += windowCount;
                 debugSurvivors += windowSurvivorCount;
             }
@@ -1081,7 +1083,7 @@ public final class NitroParquetScanOperator
                         ? snapshotFilterSurvivors(column, nextSurvivors, kept)
                         : nextSurvivors;
                 readPositions[column] = survivors;
-                if (DEBUG_ROW_COUNTS) {
+                if (diagnostics.rowCounts()) {
                     debugFilterInputs[column] += count;
                     debugFilterOutputs[column] += kept;
                 }
@@ -1205,7 +1207,7 @@ public final class NitroParquetScanOperator
                     }
                 }
             }
-            if (DEBUG_ROW_COUNTS) {
+            if (diagnostics.rowCounts()) {
                 debugFilterInputs[column] += rows;
                 debugFilterOutputs[column] += kept;
             }
@@ -1966,7 +1968,7 @@ public final class NitroParquetScanOperator
             return;
         }
         closed = true;
-        if (DEBUG_ROW_COUNTS && hasFilters) {
+        if (diagnostics.rowCounts() && hasFilters) {
             System.err.println("[rowcounts] " + columnNames + " raw=" + debugRawRows + " survivors=" + debugSurvivors);
             StringBuilder stages = new StringBuilder("[rowcounts] filter-stages");
             for (int column : filterOrder()) {
@@ -1985,7 +1987,7 @@ public final class NitroParquetScanOperator
                     debugProgressiveCompactionRows,
                     debugProgressiveCompactionKept);
         }
-        if (DEBUG_DECOMPRESSION) {
+        if (diagnostics.decompression()) {
             for (int column = 0; column < readers.length; column++) {
                 System.err.println("[decompression] " + columnNames.get(column) + " " + readers[column].decompressionSummary());
             }
