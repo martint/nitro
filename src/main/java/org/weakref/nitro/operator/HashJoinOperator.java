@@ -4009,7 +4009,7 @@ public class HashJoinOperator
             }
             if (capInitialHash || keyOnlyDirectRangeBuild) {
                 directRangeBuild = true;
-                int directCapacity = 1024;
+                int directCapacity = policy.directRangeBuildInitialCapacity();
                 if (keyOnlyDirectRangeBuild) {
                     long required = Math.min((long) policy.maxDirectBuildKey(), (long) expectedSize + 1);
                     while (directCapacity < required) {
@@ -5927,7 +5927,7 @@ public class HashJoinOperator
                 return;
             }
             int oldLength = directDuplicateHead == null ? 0 : directDuplicateHead.length;
-            int newLength = Math.max(1024, oldLength * 2);
+            int newLength = Math.max(policy.directDuplicateGroupInitialCapacity(), oldLength * 2);
             while (newLength < required) {
                 newLength *= 2;
             }
@@ -6866,7 +6866,10 @@ public class HashJoinOperator
             this.arrayPool = layout.primitiveArrays();
             int initialSize = Math.max(16, expectedSize);
             this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
-            this.table = new FlatGroupingTable(layout, primitiveSingleRows ? initialSize : 1024, true);
+            this.table = new FlatGroupingTable(
+                    layout,
+                    primitiveSingleRows ? initialSize : policy.flatLegacyInitialCapacity(),
+                    true);
             if (primitiveSingleRows) {
                 this.singleRows = arrayPool.borrowLongs(initialSize);
             }

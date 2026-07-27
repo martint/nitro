@@ -48,6 +48,9 @@ public record HashJoinIndexPolicy(
         int rangeAdmissionSampleRows,
         int rangeAdmissionMinSampleRows,
         int directRangeMaxCardinalityRatio,
+        int directRangeBuildInitialCapacity,
+        int directDuplicateGroupInitialCapacity,
+        int flatLegacyInitialCapacity,
         boolean keyOnlyDirectRangeBuild,
         int keyOnlyDirectRangeMinRows,
         int maxDirectBuildKey,
@@ -108,6 +111,9 @@ public record HashJoinIndexPolicy(
                 4096,
                 16,
                 2,
+                1024,
+                1024,
+                1024,
                 true,
                 1 << 20,
                 1 << 26,
@@ -194,6 +200,15 @@ public record HashJoinIndexPolicy(
                 Integer.getInteger(
                         "nitro.join.directRangeMaxCardinalityRatio",
                         defaults.directRangeMaxCardinalityRatio()),
+                Integer.getInteger(
+                        "nitro.join.directRangeBuildInitialCapacity",
+                        defaults.directRangeBuildInitialCapacity()),
+                Integer.getInteger(
+                        "nitro.join.directDuplicateGroupInitialCapacity",
+                        defaults.directDuplicateGroupInitialCapacity()),
+                Integer.getInteger(
+                        "nitro.join.flatLegacyInitialCapacity",
+                        defaults.flatLegacyInitialCapacity()),
                 booleanProperty("nitro.join.keyOnlyDirectRangeBuild", defaults.keyOnlyDirectRangeBuild()),
                 Integer.getInteger(
                         "nitro.join.keyOnlyDirectRangeMinRows",
