@@ -85,9 +85,6 @@ public final class TrinoParquetScanOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("TrinoParquetScanOperator", TrinoParquetScanOperator.class);
-    private static final String MAX_BATCH_ROWS_PROPERTY = "nitro.trino.scan.maxBatchRows";
-    private static final int DEFAULT_MAX_BATCH_ROWS = 10_000;
-    private static final int MAX_BATCH_ROWS = Integer.getInteger(MAX_BATCH_ROWS_PROPERTY, DEFAULT_MAX_BATCH_ROWS);
     private static final DataSize MAX_READ_BLOCK_SIZE = DataSize.of(2, MEGABYTE);
     private static final DataSize MAX_MERGE_DISTANCE = DataSize.of(1, MEGABYTE);
     private static final DataSize MAX_BUFFER_SIZE = DataSize.of(2, MEGABYTE);
@@ -106,6 +103,7 @@ public final class TrinoParquetScanOperator
     // across those batches (identity-keyed consumers -- per-batch mask caches, global intern page remaps -- rely
     // on it) and skips the per-batch conversion.
     private final java.util.IdentityHashMap<Block, Vector> convertedDictionaries = new java.util.IdentityHashMap<>();
+    private final TrinoParquetScanPolicy policy;
     private final List<Path> files;
     private final List<String> columnNames;
     private final boolean rawDoubleBits;
@@ -120,30 +118,43 @@ public final class TrinoParquetScanOperator
     // Adaptive abandon: a filter that does not prune is pure per-row overhead. After a warmup of decoded key rows,
     // if too few were removed the filter is dropped (decode reverts to the full fast path), so a non-selective
     // dimension never taxes the scan.
-    private static final long DF_WARMUP_ROWS = 256 * 1024;
-    private static final double DF_MIN_PRUNE_RATIO = 0.30;   // keep applying only if it removes >= 30% of rows
     private long dfRowsSeen;
     private long dfRowsKept;
 
-    public TrinoParquetScanOperator(Allocator allocator, Path file, List<String> columns)
+    public TrinoParquetScanOperator(
+            TrinoParquetScanPolicy policy,
+            Allocator allocator,
+            Path file,
+            List<String> columns)
     {
-        this(allocator, List.of(file), columns);
+        this(policy, allocator, List.of(file), columns);
     }
 
-    public TrinoParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns)
+    public TrinoParquetScanOperator(
+            TrinoParquetScanPolicy policy,
+            Allocator allocator,
+            List<Path> files,
+            List<String> columns)
     {
-        this(allocator, files, columns, false);
+        this(policy, allocator, files, columns, false);
     }
 
     /**
-     * As {@link #TrinoParquetScanOperator(Allocator, List, List)}, but with {@code rawDoubleBits} set DOUBLE
+     * As {@link #TrinoParquetScanOperator(TrinoParquetScanPolicy, Allocator, List, List)}, but with
+     * {@code rawDoubleBits} set DOUBLE
      * columns surface as {@link I64Vector}s holding the raw double bits instead of widening into an
      * {@link F64Vector}. A Trino DOUBLE block already carries the bits in long lanes, so this copies (or
      * zero-copy adopts) them verbatim -- the lane representation a bits-consuming engine wants, sparing the
      * bits-to-double-to-bits round trip.
      */
-    public TrinoParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns, boolean rawDoubleBits)
+    public TrinoParquetScanOperator(
+            TrinoParquetScanPolicy policy,
+            Allocator allocator,
+            List<Path> files,
+            List<String> columns,
+            boolean rawDoubleBits)
     {
+        this.policy = requireNonNull(policy, "policy is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(files, "files is null");
         requireNonNull(columns, "columns is null");
@@ -253,7 +264,7 @@ public final class TrinoParquetScanOperator
             try {
                 ParquetReaderOptions options = ParquetReaderOptions.builder()
                         .withMaxReadBlockSize(MAX_READ_BLOCK_SIZE)
-                        .withMaxReadBlockRowCount(MAX_BATCH_ROWS)
+                        .withMaxReadBlockRowCount(policy.maxBatchRows())
                         .withMaxMergeDistance(MAX_MERGE_DISTANCE)
                         .withMaxBufferSize(MAX_BUFFER_SIZE)
                         .withMaxPageReadSize(MAX_PAGE_READ_SIZE)
@@ -379,7 +390,8 @@ public final class TrinoParquetScanOperator
             }
             dfRowsSeen += batchRows;
             dfRowsKept += count;
-            if (dfRowsSeen >= DF_WARMUP_ROWS && dfRowsKept > dfRowsSeen * (1.0 - DF_MIN_PRUNE_RATIO)) {
+            if (dfRowsSeen >= policy.dynamicFilterWarmupRows() &&
+                    dfRowsKept > dfRowsSeen * (1.0 - policy.minimumDynamicFilterPruneRatio())) {
                 // Not selective enough to pay for: stop applying it (subsequent batches decode at full speed).
                 dynamicFilter = null;
             }

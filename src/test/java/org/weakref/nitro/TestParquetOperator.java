@@ -90,6 +90,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanBatchP
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanDiagnostics;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
@@ -452,7 +453,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
@@ -462,12 +463,37 @@ public class TestParquetOperator
     }
 
     @Test
+    void testTrinoParquetScanUsesExplicitDynamicFilterPolicy()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("trino-dynamic-filter-policy.parquet", false, List.of(
+                new ParquetRow(11, true, 101L),
+                new ParquetRow(12, true, 102L),
+                new ParquetRow(13, true, 103L)));
+
+        TrinoParquetScanPolicy policy = new TrinoParquetScanPolicy(1, 1, 0.30);
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(
+                policy,
+                new Allocator(EngineResources.createDefault()),
+                file,
+                List.of("x"))) {
+            operator.pushDynamicFilter(DynamicFilter.fromRange(0, 11, 11));
+
+            assertThat(operator(operator))
+                    .matchesExactly(List.of(
+                            Row.row(11L),
+                            Row.row(12L),
+                            Row.row(13L)));
+        }
+    }
+
+    @Test
     void testTrinoParquetScanReadsClickBenchI32Columns()
             throws IOException
     {
         java.nio.file.Path file = ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("trino-clickbench.parquet"), 3);
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
             Batch batch = operator.next();
 
             assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I32Vector.class);
@@ -478,7 +504,7 @@ public class TestParquetOperator
             assertThat(((I64Vector) batch.output(2).borrow(Stream.VALUES)).values()[0]).isEqualTo(1L);
         }
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("AdvEngineID", "ResolutionWidth", "UserID"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(0, 1000, 1L),
@@ -772,7 +798,7 @@ public class TestParquetOperator
 
         assertDictionaryEncoding(file, "name");
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("name", "payload"))) {
             Batch batch = operator.next();
             BinaryVector names = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
             assertThat(names.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
@@ -1003,7 +1029,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, 102L),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             operator.next();
             Batch batch = operator.next();
             operator.constrain(Mask.sparse(new int[] {1}, 2));
@@ -1027,7 +1053,7 @@ public class TestParquetOperator
                 new ParquetRow(12, false, null),
                 new ParquetRow(13, true, 103L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), file, List.of("x", "maybe"))) {
             operator.next();
             Batch batch = operator.next();
 
@@ -1060,7 +1086,7 @@ public class TestParquetOperator
                 new ParquetRow(13, true, 103L),
                 new ParquetRow(14, false, 104L)));
 
-        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("x", "flag", "maybe"))) {
+        try (TrinoParquetScanOperator operator = new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("x", "flag", "maybe"))) {
             assertThat(operator(operator))
                     .matchesExactly(List.of(
                             Row.row(11L, 1L, 101L),
@@ -1110,7 +1136,7 @@ public class TestParquetOperator
                 allocator,
                 projectPlan,
                 primitiveRegistry,
-                new TrinoParquetScanOperator(allocator, List.of(first, second, third), List.of("x", "flag", "maybe")));
+                new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), allocator, List.of(first, second, third), List.of("x", "flag", "maybe")));
 
         try (Operator join = new HashJoinOperator(
                 allocator,

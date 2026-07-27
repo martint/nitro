@@ -34,6 +34,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -319,7 +320,7 @@ public final class CompiledQuerySupport
         return new MultiStageOperator(
                 columns.length,
                 tables.tableFiles(table),
-                path -> new TrinoParquetScanOperator(allocator, List.of(path), List.of(columns), true));
+                path -> new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), allocator, List.of(path), List.of(columns), true));
     }
 
     /**

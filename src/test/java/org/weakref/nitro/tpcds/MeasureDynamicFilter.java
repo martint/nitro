@@ -38,6 +38,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.SkipDecodeScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -58,7 +59,7 @@ public class MeasureDynamicFilter
         boolean dynamicFilter = Boolean.getBoolean("nitro.dynamicFilter");
 
         // Correctness: the skip-decode-scan tree must match the ordinary-scan tree exactly.
-        long[] reference = run(() -> new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, true));
+        long[] reference = run(() -> new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), files, COLUMNS, true));
         SkipDecodeScanOperator.Profile profile = new SkipDecodeScanOperator.Profile();
         long[] skip = run(() -> new SkipDecodeScanOperator(new Allocator(EngineResources.createDefault()), files, COLUMNS, profile));
         System.out.printf("reference rows=%d checksum=%d ; skipScan rows=%d checksum=%d ; match=%b ; %s%n",

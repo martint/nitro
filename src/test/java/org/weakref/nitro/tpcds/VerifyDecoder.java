@@ -28,6 +28,7 @@ import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanPolicy;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -50,7 +51,7 @@ public final class VerifyDecoder
         List<Path> files = tables.tableFiles(table);
 
         long[][] nitro = digest(new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), files, columns), columns.size());
-        long[][] trino = digest(new TrinoParquetScanOperator(new Allocator(EngineResources.createDefault()), files, columns), columns.size());
+        long[][] trino = digest(new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), new Allocator(EngineResources.createDefault()), files, columns), columns.size());
 
         if (nitro[0][0] != trino[0][0]) {
             throw new AssertionError("row count: nitro=" + nitro[0][0] + " trino=" + trino[0][0]);
