@@ -3565,17 +3565,14 @@ public class HashJoinOperator
         private final SparseLongRangeMembership sparseMembership;
         private final DenseJoinSequence denseSequence;
         private int[] denseDictionaryPositionScratch;
-        // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous slice of
-        // orderedRows[rangeStart[slot] .. +slotCount[slot]) in FIFO order, so a probe reads a sequential range instead
-        // of pointer-chasing chainNext (the one-to-many output loop's cost). Opt-out for A/B.
+        // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous FIFO slice, so a
+        // probe reads a sequential range instead of pointer-chasing the duplicate chain. Opt-out for A/B.
         private final boolean compactChains;
         private final boolean compressDuplicateReferences;
         private final int expectedBuildRows;
-        private boolean rangeCompacted;
         private int directBuildRows;
         private final DirectLongBuildIndex directBuild;
-        private long[] orderedRows;
-        private int[] rangeStart;
+        private final CompactedJoinRows compactedRows;
         // A completed duplicate build may have invariant bits inside an otherwise sparse physical key domain.
         // Removing those bits with Long.compress produces an exact dense ordinal without teaching the join about a
         // query, column, or logical type. Each nonzero entry packs an ordered-row start + 1 in 24 bits and the match
@@ -3623,6 +3620,7 @@ public class HashJoinOperator
                     policy.denseBuildFastPath(),
                     policy.computeDenseSingleBatchRowReferences());
             this.directLookup = new DirectLongJoinLookup(arrayPool, NO_MATCH_ROW_REFERENCE);
+            this.compactedRows = new CompactedJoinRows(arrayPool, EMPTY);
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
             this.expectedBuildRows = expectedSize;
@@ -3924,7 +3922,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(executionPolicy.maxBatchRows());
             }
-            return rangeCompacted;
+            return compactedRows.isBuilt();
         }
 
         @Override
@@ -3933,7 +3931,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            if (!rangeCompacted) {
+            if (!compactedRows.isBuilt()) {
                 return false;
             }
             VectorAccess.LongValues values = VectorAccess.longValues(valuesArray[0]);
@@ -3971,14 +3969,14 @@ public class HashJoinOperator
                 counts[index] = 0;
                 return;
             }
-            starts[index] = rangeStart[slot];
+            starts[index] = compactedRows.start(slot);
             counts[index] = hashTable.count(slot);
         }
 
         @Override
         public void copyRowRange(int start, long[] output, int outputOffset, int length)
         {
-            System.arraycopy(orderedRows, start, output, outputOffset, length);
+            compactedRows.copy(start, output, outputOffset, length);
         }
 
         private ChainLongList[] chainMatches()
@@ -5474,9 +5472,8 @@ public class HashJoinOperator
                 return LongLists.emptyList();
             }
             int count = hashTable.count(slot);
-            if (rangeCompacted) {
-                int base = rangeStart[slot];
-                return count == 1 ? single.withValue(orderedRows[base]) : chain.resetRange(orderedRows, base, count);
+            if (compactedRows.isBuilt()) {
+                return compactedRows.rows(compactedRows.start(slot), count, single, chain);
             }
             if (count == 1) {
                 return single.withValue(rows.referenceAt(head));
@@ -5488,54 +5485,19 @@ public class HashJoinOperator
         }
 
         /**
-         * Compact each key's insertion-ordered chain into a contiguous slice of {@code orderedRows}, recording the
-         * per-slot start in {@code rangeStart}. Walks every chain once (the pointer-chase paid here, at finalize,
-         * instead of on every probe), after which the one-to-many probe reads a sequential range.
+         * Compact each key's insertion-ordered chain once at finalize, so one-to-many probes read sequential ranges.
          */
         private void compactChains()
         {
-            boolean compressedCandidate = compressedRanges.prepare(
+            compactedRows.build(
                     hashTable,
+                    rows,
+                    compressedRanges,
                     size,
                     rowCount,
                     maximumMatchCount,
                     buildKeyAnd,
                     buildKeyOr);
-            long[] ordered = arrayPool.borrowLongs(rowCount);
-            int[] starts = arrayPool.borrowInts(hashTable.capacity());
-            int cursor = 0;
-            int group = 0;
-            long compressedMin = Long.MAX_VALUE;
-            long compressedMax = Long.MIN_VALUE;
-            for (int slot = 0; slot < hashTable.capacity(); slot++) {
-                int ordinal = hashTable.head(slot);
-                if (ordinal == EMPTY) {
-                    continue;
-                }
-                if (!compressedCandidate) {
-                    starts[slot] = cursor;
-                }
-                else {
-                    starts[group] = slot;
-                    starts[size + group] = cursor;
-                    long compressed = compressedRanges.compress(hashTable.key(slot));
-                    compressedMin = Math.min(compressedMin, compressed);
-                    compressedMax = Math.max(compressedMax, compressed);
-                    group++;
-                }
-                while (ordinal != EMPTY) {
-                    ordered[cursor++] = rows.referenceAt(ordinal);
-                    ordinal = rows.next(ordinal);
-                }
-            }
-            if (compressedCandidate) {
-                compressedRanges.build(hashTable, starts, size, rowCount, compressedMin, compressedMax);
-                arrayPool.release(starts);
-                starts = null;
-            }
-            orderedRows = ordered;
-            rangeStart = starts;
-            rangeCompacted = true;
             releaseRowArrays();
             if (compressedRanges.isBuilt()) {
                 releaseHashTable();
@@ -5545,21 +5507,7 @@ public class HashJoinOperator
         @Override
         int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)
         {
-            if (!rangeCompacted) {
-                return null;
-            }
-            int[] payload = arrayPool.borrowInts(rowCount);
-            for (int index = 0; index < rowCount; index++) {
-                int logicalPosition = JoinRowReference.position(orderedRows[index]);
-                int sourcePosition = sourcePositions == null ? logicalPosition : sourcePositions[logicalPosition];
-                long value = directValues == null ? values.value(sourcePosition) : directValues[sourcePosition];
-                if (value != (int) value) {
-                    arrayPool.release(payload);
-                    return null;
-                }
-                payload[index] = (int) value;
-            }
-            return payload;
+            return compactedRows.buildIntPayload(values, directValues, sourcePositions, rowCount);
         }
 
         // Chooses array mode when the build is unique and its keys form a dense integer range, so the
@@ -5739,7 +5687,7 @@ public class HashJoinOperator
                 }
                 int start = CompressedLongRangeIndex.start(entry);
                 int count = CompressedLongRangeIndex.count(entry);
-                return count == 1 ? single.withValue(orderedRows[start]) : chain.resetRange(orderedRows, start, count);
+                return compactedRows.rows(start, count, single, chain);
             }
             if (directBuild.isActive()) {
                 if (key < 0 || key >= directBuild.capacity()) {
@@ -5794,10 +5742,7 @@ public class HashJoinOperator
             releaseDirectBuildArrays();
             directLookup.release();
             sparseMembership.release();
-            arrayPool.release(orderedRows);
-            orderedRows = null;
-            arrayPool.release(rangeStart);
-            rangeStart = null;
+            compactedRows.release();
             compressedRanges.release();
             arrayPool.release(denseDictionaryPositionScratch);
             denseDictionaryPositionScratch = null;
