@@ -15,6 +15,9 @@ package org.weakref.nitro.operator;
 
 final class JoinRowReference
 {
+    static final int MAX_COMPACT_BATCH_INDEX = 0x7FFF;
+    static final int MAX_COMPACT_POSITION = 0xFFFF;
+
     private JoinRowReference() {}
 
     static long pack(int batchIndex, int position)
@@ -34,6 +37,11 @@ final class JoinRowReference
 
     static long unpackCompact(int rowReference)
     {
-        return pack(rowReference >>> Short.SIZE, rowReference & 0xFFFF);
+        return pack(rowReference >>> Short.SIZE, rowReference & MAX_COMPACT_POSITION);
+    }
+
+    static int packCompact(long rowReference)
+    {
+        return (batchIndex(rowReference) << Short.SIZE) | (position(rowReference) & MAX_COMPACT_POSITION);
     }
 }

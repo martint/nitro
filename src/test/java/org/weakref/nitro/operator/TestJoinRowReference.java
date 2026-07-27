@@ -36,5 +36,6 @@ class TestJoinRowReference
 
         assertThat(JoinRowReference.batchIndex(reference)).isEqualTo(123);
         assertThat(JoinRowReference.position(reference)).isEqualTo(0xFFFF);
+        assertThat(JoinRowReference.packCompact(reference)).isEqualTo(compactReference);
     }
 }

@@ -45,8 +45,24 @@ final class GenericJoinIndexFactory
         return new StructuralHashJoinIndex(kernels);
     }
 
-    JoinIndex create(Vector[] values, PrimitiveArrayPool arrayPool, int expectedSize)
+    JoinIndex create(
+            Vector[] values,
+            PrimitiveArrayPool arrayPool,
+            int expectedSize,
+            boolean pairKeyOnlyBuild,
+            boolean capInitialHash)
     {
+        if (values.length == 2 &&
+                isLong(values[0]) &&
+                isLong(values[1])) {
+            return new LongPairJoinIndex(
+                    joinIndexPolicy,
+                    executionPolicy,
+                    arrayPool,
+                    expectedSize,
+                    pairKeyOnlyBuild,
+                    capInitialHash);
+        }
         if (values.length == 3 &&
                 isLong(values[0]) &&
                 isLong(values[1]) &&
