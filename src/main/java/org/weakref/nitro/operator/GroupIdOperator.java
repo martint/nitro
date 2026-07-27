@@ -52,12 +52,27 @@ public final class GroupIdOperator
 
     public GroupIdOperator(Allocator allocator, Operator source, int[][] groupingSetInputs, GroupIdOperatorPolicy policy)
     {
+        this(
+                allocator,
+                source,
+                groupingSetInputs,
+                new Field(Schema.unspecified(1).field(0).type(), false),
+                policy);
+    }
+
+    public GroupIdOperator(
+            Allocator allocator,
+            Operator source,
+            int[][] groupingSetInputs,
+            Field groupIdField,
+            GroupIdOperatorPolicy policy)
+    {
         this.allocator = allocator;
         this.source = source;
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
         this.policy = requireNonNull(policy, "policy is null");
         this.outputCanBeNullExtended = computeOutputNullExtension(this.groupingSetInputs);
-        this.outputSchema = outputSchema(source.outputSchema(), this.groupingSetInputs, outputCanBeNullExtended);
+        this.outputSchema = outputSchema(source.outputSchema(), this.groupingSetInputs, outputCanBeNullExtended, groupIdField);
         this.currentDenseDictionaryMappings = new DictionaryVector[outputCanBeNullExtended.length];
     }
 
@@ -344,13 +359,17 @@ public final class GroupIdOperator
         return result;
     }
 
-    private static Schema outputSchema(Schema sourceSchema, int[][] groupingSetInputs, boolean[] outputCanBeNullExtended)
+    private static Schema outputSchema(
+            Schema sourceSchema,
+            int[][] groupingSetInputs,
+            boolean[] outputCanBeNullExtended,
+            Field groupIdField)
     {
         List<Field> fields = new ArrayList<>(outputCanBeNullExtended.length + 1);
         for (int outputIndex = 0; outputIndex < outputCanBeNullExtended.length; outputIndex++) {
             fields.add(outputField(sourceSchema, groupingSetInputs, outputIndex, outputCanBeNullExtended[outputIndex]));
         }
-        fields.add(unspecifiedField(false));
+        fields.add(requireNonNull(groupIdField, "groupIdField is null"));
         return new Schema(fields);
     }
 

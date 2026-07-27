@@ -1422,7 +1422,7 @@ public class TestOperators
     void testGroupOperatorPreservesSourceSchemaAfterGroupId()
     {
         TypeBinding i32Only = i32OnlyType();
-        Field groupId = new Field("group_id", i32Only, false);
+        Field groupIdField = new Field("group_id", i32Only, false);
         Field first = new Field("first", i32Only, false);
         Field second = new Field("second", i32Only, true);
         Schema sourceSchema = new Schema(List.of(first, second));
@@ -1431,9 +1431,9 @@ public class TestOperators
                 allocator,
                 new int[] {0},
                 typedTable(sourceSchema),
-                groupId,
+                groupIdField,
                 allocator.engineResources().operatorResources())) {
-            assertThat(group.outputSchema().field(0)).isSameAs(groupId);
+            assertThat(group.outputSchema().field(0)).isSameAs(groupIdField);
             assertThat(group.outputSchema().field(1)).isSameAs(first);
             assertThat(group.outputSchema().field(2)).isSameAs(second);
         }
@@ -1445,6 +1445,7 @@ public class TestOperators
         TypeBinding i32Only = i32OnlyType();
         Field rollup = new Field("rollup", i32Only, false);
         Field payload = new Field("payload", i32Only, true);
+        Field groupIdField = new Field("group_id", i32Only, false);
         Schema sourceSchema = new Schema(List.of(rollup, payload));
 
         try (Operator groupId = new GroupIdOperator(
@@ -1453,13 +1454,13 @@ public class TestOperators
                 new int[][] {
                         {-1, 1},
                         {0, 1}},
+                groupIdField,
                 allocator.engineResources().operatorResources().groupIdPolicy())) {
             assertThat(groupId.outputSchema().field(0).name()).isEqualTo(rollup.name());
             assertThat(groupId.outputSchema().field(0).type()).isSameAs(i32Only);
             assertThat(groupId.outputSchema().field(0).nullable()).isTrue();
             assertThat(groupId.outputSchema().field(1)).isSameAs(payload);
-            assertThat(groupId.outputSchema().field(2).type().isSpecified()).isFalse();
-            assertThat(groupId.outputSchema().field(2).nullable()).isFalse();
+            assertThat(groupId.outputSchema().field(2)).isSameAs(groupIdField);
         }
     }
 
