@@ -38,6 +38,7 @@ public final class NitroParquetScanResources
     private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final ParquetFilterWindowPolicy filterWindowPolicy;
+    private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
@@ -46,7 +47,8 @@ public final class NitroParquetScanResources
             ParquetLateMaterializationPolicy lateMaterializationPolicy,
             ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
-            ParquetFilterWindowPolicy filterWindowPolicy)
+            ParquetFilterWindowPolicy filterWindowPolicy,
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
@@ -56,6 +58,7 @@ public final class NitroParquetScanResources
                 progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
         this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
+        this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -69,7 +72,8 @@ public final class NitroParquetScanResources
                 lateMaterializationPolicy,
                 ParquetProgressiveFilterCompactionPolicy.fromSystemProperties(lateMaterializationPolicy),
                 ParquetFilteredPayloadPolicy.fromSystemProperties(),
-                ParquetFilterWindowPolicy.fromSystemProperties());
+                ParquetFilterWindowPolicy.fromSystemProperties(),
+                ParquetFilterEvaluationPolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -120,5 +124,10 @@ public final class NitroParquetScanResources
     ParquetFilterWindowPolicy filterWindowPolicy()
     {
         return filterWindowPolicy;
+    }
+
+    ParquetFilterEvaluationPolicy filterEvaluationPolicy()
+    {
+        return filterEvaluationPolicy;
     }
 }

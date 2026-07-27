@@ -110,6 +110,7 @@ public final class NitroParquetScanOperator
     private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final ParquetFilterWindowPolicy filterWindowPolicy;
+    private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -156,21 +157,6 @@ public final class NitroParquetScanOperator
     // so the aggregate scratch retained by a many-branch operator graph remains predictable under the benchmark's
     // 12 GiB process cap. Wider scans and scan-heavy executions retain the base window. This is a physical execution
     // policy; it does not add a query predicate or alter the operator tree.
-    // Order dynamic-filter columns by estimated pass fraction (filter values / column cardinality) rather than raw
-    // filter value count, so the genuinely selective filter leads the scan on the fused run-aware path. Opt-out.
-    private static final boolean SELECTIVITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.selectivityFilterOrder", "true"));
-    private static final boolean RANGE_DENSITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.rangeDensityFilterOrder", "true"));
-    // Drop a pushed dynamic filter whose build side admits every value in the probe column's dictionary: it prunes
-    // nothing, so activating the eager filter-window path for it would gather every payload column at full row count
-    // and defeat late materialization (a downstream operator's own predicate, e.g. an IS NULL, then drives the real
-    // narrowing). The join still enforces the condition, so dropping it is always semantically safe. Opt-out.
-    private static final boolean DROP_NON_SELECTIVE_FILTERS = Boolean.parseBoolean(System.getProperty("nitro.parquet.dropNonSelectiveFilters", "true"));
-    private static final boolean EXACT_DYNAMIC_FILTER_DICTIONARY_COVERAGE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.exactDynamicFilterDictionaryCoverage", "true"));
-    private static final boolean DIRECT_NULL_MASK_READER =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullMaskReader", "true"));
-    private static final boolean DIRECT_NULL_MASK_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullMaskCompaction", "true"));
     // Densely-packed surviving values for the current window, per column (grown to high-water mark); sliced out.
     private final long[][] windowLong;
     private final int[][] windowInt;
@@ -250,7 +236,8 @@ public final class NitroParquetScanOperator
                 resources.lateMaterializationPolicy(),
                 resources.progressiveFilterCompactionPolicy(),
                 resources.filteredPayloadPolicy(),
-                resources.filterWindowPolicy());
+                resources.filterWindowPolicy(),
+                resources.filterEvaluationPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -266,7 +253,8 @@ public final class NitroParquetScanOperator
             ParquetLateMaterializationPolicy lateMaterializationPolicy,
             ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
-            ParquetFilterWindowPolicy filterWindowPolicy)
+            ParquetFilterWindowPolicy filterWindowPolicy,
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -288,6 +276,7 @@ public final class NitroParquetScanOperator
                 progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
         this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
+        this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -318,7 +307,7 @@ public final class NitroParquetScanOperator
                     arrayPool,
                     readerPolicy);
             nullable[c] = first.optional();
-            if (DIRECT_NULL_MASK_READER && first.optional()) {
+            if (filterEvaluationPolicy.directNullMask().reader() && first.optional()) {
                 directNullScratch[c] = new boolean[0];
             }
             outputResolvers[c] = new ScanOutputResolver(c);
@@ -510,7 +499,7 @@ public final class NitroParquetScanOperator
     {
         if (hasFilters && !filtersPruned) {
             filtersPruned = true;
-            if (DROP_NON_SELECTIVE_FILTERS && allFiltersNonSelective()) {
+            if (filterEvaluationPolicy.nonSelectiveElision().enabled() && allFiltersNonSelective()) {
                 for (int c = 0; c < filtersByColumn.length; c++) {
                     filtersByColumn[c] = null;
                     filterVersionsByColumn[c] = null;
@@ -529,7 +518,7 @@ public final class NitroParquetScanOperator
             if (filter == null) {
                 continue;
             }
-            if (EXACT_DYNAMIC_FILTER_DICTIONARY_COVERAGE) {
+            if (filterEvaluationPolicy.nonSelectiveElision().exactDictionaryCoverage()) {
                 if (!readers[c].dictionaryValuesCovered(filter::accepts)) {
                     return false;
                 }
@@ -990,7 +979,7 @@ public final class NitroParquetScanOperator
             return;
         }
         for (int c = 0; c < readers.length; c++) {
-            if (DIRECT_NULL_MASK_READER && nullable[c] && !directNullResolved[c]) {
+            if (filterEvaluationPolicy.directNullMask().reader() && nullable[c] && !directNullResolved[c]) {
                 directNullPendingAdvance[c] += lazyCount;
             }
             if (lazyResolved[c]) {
@@ -1583,7 +1572,8 @@ public final class NitroParquetScanOperator
 
         private Mask resolveMask(Stream stream, Mask mask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultContext)
         {
-            if (!lazyOutputResolution || stream != Stream.NULLS || !DIRECT_NULL_MASK_READER || !nullable[column]) {
+            if (!lazyOutputResolution || stream != Stream.NULLS ||
+                    !filterEvaluationPolicy.directNullMask().reader() || !nullable[column]) {
                 return null;
             }
             ColumnReader reader = nullReaders[column];
@@ -1599,12 +1589,12 @@ public final class NitroParquetScanOperator
             // The direct compactor consumes the sibling null reader without materializing a reusable Boolean stream.
             // A second mask request in the same batch therefore falls back to ordinary lazy stream resolution, which
             // remains at the correct cursor on the primary reader and caches the full stream for subsequent callers.
-            if (DIRECT_NULL_MASK_COMPACTION && directNullResolved[column]) {
+            if (filterEvaluationPolicy.directNullMask().compaction() && directNullResolved[column]) {
                 return null;
             }
             if (!directNullResolved[column]) {
                 Mask result = resultAllocator.copyMask(resultContext, mask);
-                if (DIRECT_NULL_MASK_COMPACTION) {
+                if (filterEvaluationPolicy.directNullMask().compaction()) {
                     reader.retainNulls(result, selectTrue, lazyCount);
                     directNullResolved[column] = true;
                     return result;
@@ -1770,7 +1760,9 @@ public final class NitroParquetScanOperator
             for (int c = 0; c < filtersByColumn.length; c++) {
                 if (filtersByColumn[c] != null) {
                     columns[index] = c;
-                    selectivity[index] = SELECTIVITY_FILTER_ORDER ? estimateSelectivity(c) : filtersByColumn[c].size();
+                    selectivity[index] = filterEvaluationPolicy.ordering().selectivity()
+                            ? estimateSelectivity(c)
+                            : filtersByColumn[c].size();
                     index++;
                 }
             }
@@ -1810,7 +1802,9 @@ public final class NitroParquetScanOperator
             // count by one chunk's dictionary cardinality can badly overstate the pass fraction for a sparse key
             // spread across a broad domain. Use the tighter of that bound and the filter's exact range density.
             double dictionaryFraction = Math.min(1.0, filterValues / cardinality);
-            return RANGE_DENSITY_FILTER_ORDER ? Math.min(dictionaryFraction, filtersByColumn[column].rangeDensity()) : dictionaryFraction;
+            return filterEvaluationPolicy.ordering().rangeDensity()
+                    ? Math.min(dictionaryFraction, filtersByColumn[column].rangeDensity())
+                    : dictionaryFraction;
         }
         // With no dictionary we lack a probe-domain cardinality. The build filter's range alone is not safe here:
         // probe values may be concentrated inside that range (q39), making a seemingly sparse filter weak. Keep
