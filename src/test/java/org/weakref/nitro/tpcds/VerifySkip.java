@@ -18,6 +18,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
+import org.weakref.nitro.parquet.ParquetNumericDecodePolicy;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
 import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
@@ -159,7 +160,8 @@ public final class VerifySkip
                         RleReaderPolicy.defaults(),
                         ParquetPageNavigationPolicy.defaults(),
                         ParquetReaderDiagnostics.disabled(),
-                        ParquetMaterializationPolicy.defaults());
+                        ParquetMaterializationPolicy.defaults(),
+                        ParquetNumericDecodePolicy.defaults());
             }
             for (var rowGroup : file.rowGroups()) {
                 reader.addChunk(file.data(), file.columnChunk(rowGroup, col).meta_data, rowGroup.num_rows);

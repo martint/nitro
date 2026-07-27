@@ -142,12 +142,6 @@ public final class ColumnReader
     // batch array. Keep dictionary IDs (or the plain body) live across batch slices and materialize each slice
     // directly into its final array. Nullable pages retain the row-aligned page representation because their dense
     // value stream must still be scattered around null positions; selected readers retain their independent path.
-    private static final boolean DIRECT_NUMERIC_BATCH_DECODE =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.directNumericBatchDecode", "true"));
-    private static final boolean DIRECT_NUMERIC_DICTIONARY_BATCH_DECODE = Boolean.parseBoolean(System.getProperty(
-            "nitro.parquet.directNumericDictionaryBatchDecode", Boolean.toString(DIRECT_NUMERIC_BATCH_DECODE)));
-    private static final boolean DIRECT_NUMERIC_PLAIN_BATCH_DECODE = Boolean.parseBoolean(System.getProperty(
-            "nitro.parquet.directNumericPlainBatchDecode", Boolean.toString(DIRECT_NUMERIC_BATCH_DECODE)));
 
     private record Chunk(MemorySegment segment, ColumnMetaData metadata, long rowCount, DecompressedPageCache.Source source) {}
 
@@ -170,6 +164,7 @@ public final class ColumnReader
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final ParquetReaderDiagnostics diagnostics;
     private final ParquetMaterializationPolicy materializationPolicy;
+    private final ParquetNumericDecodePolicy numericDecodePolicy;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -327,13 +322,15 @@ public final class ColumnReader
             RleReaderPolicy rleReaderPolicy,
             ParquetPageNavigationPolicy pageNavigationPolicy,
             ParquetReaderDiagnostics diagnostics,
-            ParquetMaterializationPolicy materializationPolicy)
+            ParquetMaterializationPolicy materializationPolicy,
+            ParquetNumericDecodePolicy numericDecodePolicy)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
         this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
+        this.numericDecodePolicy = requireNonNull(numericDecodePolicy, "numericDecodePolicy is null");
         this.rle = new RleReader(rleReaderPolicy);
         this.defRle = new RleReader(rleReaderPolicy);
         this.physicalType = physicalType;
@@ -388,7 +385,8 @@ public final class ColumnReader
                 rleReaderPolicy,
                 pageNavigationPolicy,
                 diagnostics,
-                materializationPolicy);
+                materializationPolicy,
+                numericDecodePolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -565,7 +563,7 @@ public final class ColumnReader
         int produced = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
-                directFullDecodeRequested = DIRECT_NUMERIC_BATCH_DECODE && directNumericBatchDecodeEnabled;
+                directFullDecodeRequested = numericDecodePolicy.directBatchDecode() && directNumericBatchDecodeEnabled;
                 try {
                     if (!decodeNextDataPage()) {
                         throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
@@ -602,7 +600,7 @@ public final class ColumnReader
         int produced = 0;
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
-                directFullDecodeRequested = DIRECT_NUMERIC_BATCH_DECODE && directNumericBatchDecodeEnabled;
+                directFullDecodeRequested = numericDecodePolicy.directBatchDecode() && directNumericBatchDecodeEnabled;
                 try {
                     if (!decodeNextDataPage()) {
                         throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
@@ -3209,7 +3207,7 @@ public final class ColumnReader
                 pageFilterFused = true;
                 return;
             }
-            boolean directDictionary = directFullDecodeRequested && DIRECT_NUMERIC_DICTIONARY_BATCH_DECODE &&
+            boolean directDictionary = directFullDecodeRequested && numericDecodePolicy.directDictionaryBatchDecode() &&
                     nullFreePage && kind != Kind.BINARY;
             ensureIdCapacity(nonNullCount);
             rle.read(idBuffer, 0, nonNullCount);
@@ -3248,7 +3246,7 @@ public final class ColumnReader
                 decodePlainBinary(body, offset, nonNullCount);
                 pageBinaryDeferred = false;
             }
-            else if (directFullDecodeRequested && DIRECT_NUMERIC_PLAIN_BATCH_DECODE && nonNullCount == valueCount && !flbaDecimal) {
+            else if (directFullDecodeRequested && numericDecodePolicy.directPlainBatchDecode() && nonNullCount == valueCount && !flbaDecimal) {
                 pageDirectPlain = true;
                 pageDirectPlainBody = body;
                 pageDirectPlainOffset = offset;

@@ -15,6 +15,7 @@ package org.weakref.nitro.operator.source.compatibility.parquet;
 
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.ParquetMaterializationPolicy;
+import org.weakref.nitro.parquet.ParquetNumericDecodePolicy;
 import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
 import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
@@ -39,19 +40,22 @@ public final class NitroParquetScanResources
     private final ParquetPageNavigationPolicy pageNavigationPolicy;
     private final ParquetReaderDiagnostics readerDiagnostics;
     private final ParquetMaterializationPolicy materializationPolicy;
+    private final ParquetNumericDecodePolicy numericDecodePolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             RleReaderPolicy rleReaderPolicy,
             ParquetPageNavigationPolicy pageNavigationPolicy,
             ParquetReaderDiagnostics readerDiagnostics,
-            ParquetMaterializationPolicy materializationPolicy)
+            ParquetMaterializationPolicy materializationPolicy,
+            ParquetNumericDecodePolicy numericDecodePolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.rleReaderPolicy = requireNonNull(rleReaderPolicy, "rleReaderPolicy is null");
         this.pageNavigationPolicy = requireNonNull(pageNavigationPolicy, "pageNavigationPolicy is null");
         this.readerDiagnostics = requireNonNull(readerDiagnostics, "readerDiagnostics is null");
         this.materializationPolicy = requireNonNull(materializationPolicy, "materializationPolicy is null");
+        this.numericDecodePolicy = requireNonNull(numericDecodePolicy, "numericDecodePolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -61,7 +65,8 @@ public final class NitroParquetScanResources
                 RleReaderPolicy.fromSystemProperties(),
                 ParquetPageNavigationPolicy.fromSystemProperties(),
                 ParquetReaderDiagnostics.fromSystemProperties(),
-                ParquetMaterializationPolicy.fromSystemProperties());
+                ParquetMaterializationPolicy.fromSystemProperties(),
+                ParquetNumericDecodePolicy.fromSystemProperties());
     }
 
     Object batchBufferPool()
@@ -102,5 +107,10 @@ public final class NitroParquetScanResources
     ParquetMaterializationPolicy materializationPolicy()
     {
         return materializationPolicy;
+    }
+
+    ParquetNumericDecodePolicy numericDecodePolicy()
+    {
+        return numericDecodePolicy;
     }
 }
