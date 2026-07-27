@@ -53,7 +53,25 @@ public class TopNOperator
                 columns,
                 descending,
                 source,
-                allocator.engineResources().operatorResources().joinBufferPolicy());
+                allocator.engineResources().operatorResources());
+    }
+
+    public TopNOperator(
+            Allocator allocator,
+            int n,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                n,
+                columns,
+                descending,
+                source,
+                requireNonNull(resources, "resources is null").joinBufferPolicy(),
+                resources.codeGeneration().structuralTypes());
     }
 
     public TopNOperator(
@@ -63,6 +81,25 @@ public class TopNOperator
             boolean[] descending,
             Operator source,
             JoinBufferPolicy joinBufferPolicy)
+    {
+        this(
+                allocator,
+                n,
+                columns,
+                descending,
+                source,
+                joinBufferPolicy,
+                new StructuralTypeKernelFactory());
+    }
+
+    private TopNOperator(
+            Allocator allocator,
+            int n,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            JoinBufferPolicy joinBufferPolicy,
+            StructuralTypeKernelFactory structuralTypes)
     {
         if (columns.length == 0) {
             throw new IllegalArgumentException("TopN requires at least one ordering column");
@@ -79,7 +116,8 @@ public class TopNOperator
                 requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,
-                source.outputCount(),
+                source.outputSchema(),
+                requireNonNull(structuralTypes, "structuralTypes is null"),
                 n);
     }
 

@@ -1663,6 +1663,26 @@ public class TestOperators
                             row(-2L, 3L),
                             row(2L, 3L)));
         }
+
+        Operator sortSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
+                        Mask.all(4)));
+        try (Operator sort = new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                sortSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(sort))
+                    .matchesExactly(List.of(
+                            row(1L),
+                            row(-1L),
+                            row(-2L),
+                            row(2L)));
+        }
     }
 
     private static long readI64(Vector vector, int position)

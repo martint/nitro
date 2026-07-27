@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -40,6 +41,7 @@ final class TopNState
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final boolean[] orderingColumnFlags;
+    private final StructuralComparisonKernel[] comparisonKernels;
     private Streams[][] slotColumns;
     private final Streams[] comparisonColumns;
     private final Vector[] candidateNullVectors;
@@ -71,9 +73,11 @@ final class TopNState
             JoinBufferPolicy joinBufferPolicy,
             Allocator allocator,
             Allocator.Context allocationContext,
-            int outputCount,
+            Schema sourceSchema,
+            StructuralTypeKernelFactory structuralTypes,
             int capacity)
     {
+        int outputCount = sourceSchema.size();
         this.allocator = allocator;
         this.allocationContext = allocationContext;
         this.orderingColumns = orderingColumns.clone();
@@ -81,6 +85,11 @@ final class TopNState
         this.orderingColumnFlags = new boolean[outputCount];
         for (int orderingColumn : orderingColumns) {
             orderingColumnFlags[orderingColumn] = true;
+        }
+        this.comparisonKernels = new StructuralComparisonKernel[outputCount];
+        for (int orderingColumn : orderingColumns) {
+            comparisonKernels[orderingColumn] =
+                    structuralTypes.comparison(sourceSchema.field(orderingColumn).type());
         }
         this.slotColumns = new Streams[outputCount][capacity];
         this.comparisonColumns = new Streams[outputCount];
@@ -213,7 +222,7 @@ final class TopNState
                 return currentNull ? -1 : 1;
             }
             if (compactCandidate) {
-                comparison = OperatorOrderingSemantics.compare(
+                comparison = comparisonKernels[orderingColumn].compare(
                         currentOrdering.values(),
                         currentOrdering.getOrNull(Stream.NULLS),
                         0,
@@ -222,11 +231,13 @@ final class TopNState
                         0);
             }
             else {
-                comparison = tryCompareDirectOrderingValue(orderingColumn, output, position, slotOrdering);
+                comparison = comparisonKernels[orderingColumn].allowsLegacyPhysicalShortcuts()
+                        ? tryCompareDirectOrderingValue(orderingColumn, output, position, slotOrdering)
+                        : Integer.MIN_VALUE;
                 if (comparison == Integer.MIN_VALUE) {
                     comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
                     currentOrdering = comparisonColumns[orderingColumn];
-                    comparison = OperatorOrderingSemantics.compare(
+                    comparison = comparisonKernels[orderingColumn].compare(
                             currentOrdering.values(),
                             currentOrdering.getOrNull(Stream.NULLS),
                             0,
@@ -312,7 +323,7 @@ final class TopNState
                     }
                     return leftNull ? -1 : 1;
                 }
-                int comparison = OperatorOrderingSemantics.compare(
+                int comparison = comparisonKernels[orderingColumn].compare(
                         ordering.values(),
                         nulls,
                         leftSlot,
@@ -336,7 +347,7 @@ final class TopNState
                 }
                 return leftNull ? -1 : 1;
             }
-            int comparison = OperatorOrderingSemantics.compare(
+            int comparison = comparisonKernels[orderingColumn].compare(
                     leftOrdering.values(),
                     leftOrdering.getOrNull(Stream.NULLS),
                     0,
@@ -357,6 +368,9 @@ final class TopNState
             return false;
         }
         int orderingColumn = orderingColumns[0];
+        if (!comparisonKernels[orderingColumn].allowsLegacyPhysicalShortcuts()) {
+            return false;
+        }
         if (denseColumns != null) {
             Streams ordering = denseColumns[orderingColumn];
             if (!VectorAccess.isAllFalseNulls(ordering.getOrNull(Stream.NULLS))) {

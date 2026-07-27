@@ -168,6 +168,12 @@ public final class StructuralTypeKernelFactory
         INSTANCE;
 
         @Override
+        public boolean allowsLegacyPhysicalShortcuts()
+        {
+            return true;
+        }
+
+        @Override
         public int compare(
                 Vector leftValues,
                 Vector leftNulls,

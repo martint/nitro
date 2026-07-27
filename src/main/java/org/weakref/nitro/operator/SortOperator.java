@@ -45,8 +45,24 @@ public class SortOperator
                 columns,
                 descending,
                 source,
-                allocator.engineResources().operatorResources().sortPolicy(),
-                allocator.engineResources().operatorResources().joinBufferPolicy());
+                allocator.engineResources().operatorResources());
+    }
+
+    public SortOperator(
+            Allocator allocator,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                columns,
+                descending,
+                source,
+                requireNonNull(resources, "resources is null").sortPolicy(),
+                resources.joinBufferPolicy(),
+                resources.codeGeneration().structuralTypes());
     }
 
     public SortOperator(
@@ -56,6 +72,25 @@ public class SortOperator
             Operator source,
             SortOperatorPolicy policy,
             JoinBufferPolicy joinBufferPolicy)
+    {
+        this(
+                allocator,
+                columns,
+                descending,
+                source,
+                policy,
+                joinBufferPolicy,
+                new StructuralTypeKernelFactory());
+    }
+
+    private SortOperator(
+            Allocator allocator,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            SortOperatorPolicy policy,
+            JoinBufferPolicy joinBufferPolicy,
+            StructuralTypeKernelFactory structuralTypes)
     {
         if (columns.length == 0) {
             throw new IllegalArgumentException("Sort requires at least one ordering column");
@@ -73,7 +108,8 @@ public class SortOperator
                 requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,
-                source.outputCount(),
+                source.outputSchema(),
+                requireNonNull(structuralTypes, "structuralTypes is null"),
                 256);
     }
 

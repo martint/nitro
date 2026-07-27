@@ -17,6 +17,11 @@ import org.weakref.nitro.data.Vector;
 
 interface StructuralComparisonKernel
 {
+    default boolean allowsLegacyPhysicalShortcuts()
+    {
+        return false;
+    }
+
     int compare(
             Vector leftValues,
             Vector leftNulls,

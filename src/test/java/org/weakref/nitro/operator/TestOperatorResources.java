@@ -170,15 +170,14 @@ class TestOperatorResources
                         new int[] {0},
                         new boolean[] {false},
                         sortSource,
-                        operatorResources.sortPolicy(),
-                        operatorResources.joinBufferPolicy());
+                        operatorResources);
                 Operator topN = new TopNOperator(
                         allocator,
                         1,
                         new int[] {0},
                         new boolean[] {false},
                         topNSource,
-                        operatorResources.joinBufferPolicy());
+                        operatorResources);
                 Operator nestedLoopJoin = new NestedLoopJoinOperator(
                         operatorResources,
                         allocator,
