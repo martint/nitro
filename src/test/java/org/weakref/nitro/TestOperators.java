@@ -2972,6 +2972,30 @@ public class TestOperators
     }
 
     @Test
+    void testMarkDistinctRejectsLaterVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Operator source = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+
+        try (MarkDistinctOperator distinct = new MarkDistinctOperator(
+                allocator,
+                0,
+                source,
+                allocator.engineResources().operatorResources())) {
+            assertThat(distinct.outputSchema()).isEqualTo(schema);
+            distinct.next().close();
+            assertThatThrownBy(distinct::next)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Distinct key vector at index 0")
+                    .hasMessageContaining("testing:i32-only");
+        }
+    }
+
+    @Test
     void testMarkDistinctOperatorPreservesSingleBinarySentinelOrder()
     {
         assertThat(operator(
@@ -3189,6 +3213,34 @@ public class TestOperators
                         row(1L, 8L, 1L),
                         row(2L, 9L, 1L),
                         row(2L, 9L, 0L)));
+    }
+
+    @Test
+    void testMarkDistinctMarkerRejectsLaterVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Operator source = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+
+        try (MarkDistinctMarkerOperator distinct = new MarkDistinctMarkerOperator(
+                allocator,
+                new int[] {0},
+                source,
+                false,
+                allocator.engineResources().operatorResources())) {
+            try (Batch first = distinct.next()) {
+                first.output(1).borrow(Stream.VALUES);
+            }
+            try (Batch second = distinct.next()) {
+                assertThatThrownBy(() -> second.output(1).borrow(Stream.VALUES))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("Distinct key vector at index 0")
+                        .hasMessageContaining("testing:i32-only");
+            }
+        }
     }
 
     @Test

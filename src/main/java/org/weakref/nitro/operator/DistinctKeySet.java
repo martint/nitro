@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -25,16 +26,19 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
+import java.util.List;
 
 import static java.lang.Math.toIntExact;
 
 final class DistinctKeySet
 {
     private final DistinctIndex index;
+    private final List<TypeBinding> keyTypes;
 
-    private DistinctKeySet(DistinctIndex index)
+    private DistinctKeySet(DistinctIndex index, List<TypeBinding> keyTypes)
     {
         this.index = index;
+        this.keyTypes = List.copyOf(keyTypes);
     }
 
     /**
@@ -49,7 +53,19 @@ final class DistinctKeySet
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        return create(samples, false, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        return create(samples, false, List.of(), arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+    }
+
+    public static DistinctKeySet create(
+            Vector[] samples,
+            List<TypeBinding> keyTypes,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
+    {
+        return create(samples, false, keyTypes, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
     }
 
     /**
@@ -68,7 +84,7 @@ final class DistinctKeySet
         if (samples.length != 2 || !(samples[0] instanceof I64Vector) || !isIntegerVector(samples[1])) {
             return create(samples, arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
         }
-        return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy));
+        return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy), List.of());
     }
 
     /**
@@ -88,6 +104,20 @@ final class DistinctKeySet
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
+        return create(samples, retainNulls, List.of(), arrayPool, codeGeneration, policy, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+    }
+
+    public static DistinctKeySet create(
+            Vector[] samples,
+            boolean retainNulls,
+            List<TypeBinding> keyTypes,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            DistinctKeySetPolicy policy,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy)
+    {
+        validateKeyVectors(keyTypes, samples);
         DistinctIndex index = createIndex(
                 samples,
                 arrayPool,
@@ -98,7 +128,7 @@ final class DistinctKeySet
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
-        return new DistinctKeySet(index);
+        return new DistinctKeySet(index, keyTypes);
     }
 
     private static DistinctIndex createIndex(
@@ -192,13 +222,33 @@ final class DistinctKeySet
 
     public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
     {
+        validateKeyVectors(keyTypes, values);
         return index.addBatch(values, nulls, mask, distinctPositions);
     }
 
     /** Adds a grouped batch whose first key is a dense group id in {@code [0, groupCount)}. */
     public int addGroupedBatch(Vector[] values, Vector[] nulls, Mask mask, int groupCount, int[] distinctPositions)
     {
+        validateKeyVectors(keyTypes, values);
         return index.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
+    }
+
+    private static void validateKeyVectors(List<TypeBinding> keyTypes, Vector[] values)
+    {
+        if (keyTypes.isEmpty()) {
+            return;
+        }
+        if (keyTypes.size() != values.length) {
+            throw new IllegalArgumentException("Distinct key type count does not match vector count");
+        }
+        for (int index = 0; index < values.length; index++) {
+            TypeBinding type = keyTypes.get(index);
+            if (type.isSpecified() && !type.supportsVector(values[index])) {
+                throw new IllegalArgumentException(
+                        "Distinct key vector at index " + index +
+                                " is incompatible with plan-time type " + type.identity());
+            }
+        }
     }
 
     public void reserveAdditional(int additionalEntries)

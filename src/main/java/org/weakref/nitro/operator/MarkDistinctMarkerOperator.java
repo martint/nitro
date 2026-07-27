@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.Mask;
@@ -21,6 +23,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -38,6 +41,7 @@ public final class MarkDistinctMarkerOperator
     private final Allocator.Context allocationContext;
     private final PrimitiveArrayPool arrayPool;
     private final int[] distinctColumns;
+    private final List<TypeBinding> distinctTypes;
     private final boolean retainNulls;
     private final Operator source;
     private final OperatorCodeGenerationResources codeGeneration;
@@ -67,6 +71,7 @@ public final class MarkDistinctMarkerOperator
         this.adaptiveLongGroupingPolicy = operatorResources.adaptiveLongGroupingPolicy();
         this.flatKeyTablePolicy = operatorResources.flatKeyTablePolicy();
         this.distinctColumns = distinctColumns.clone();
+        this.distinctTypes = distinctTypes(source.outputSchema(), distinctColumns);
         this.retainNulls = retainNulls;
         this.source = source;
         this.values = new Vector[distinctColumns.length];
@@ -222,6 +227,7 @@ public final class MarkDistinctMarkerOperator
                 distinctKeySet = DistinctKeySet.create(
                         values,
                         retainNulls,
+                        distinctTypes,
                         arrayPool,
                         codeGeneration,
                         distinctKeySetPolicy,
@@ -235,6 +241,18 @@ public final class MarkDistinctMarkerOperator
             Arrays.fill(values, null);
             Arrays.fill(nulls, null);
         }
+    }
+
+    private static List<TypeBinding> distinctTypes(Schema schema, int[] distinctColumns)
+    {
+        for (int column : distinctColumns) {
+            if (column < 0 || column >= schema.size()) {
+                return List.of();
+            }
+        }
+        return Arrays.stream(distinctColumns)
+                .mapToObj(column -> schema.field(column).type())
+                .toList();
     }
 
     private final class BatchState
