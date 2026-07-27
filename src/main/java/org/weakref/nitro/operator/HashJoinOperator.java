@@ -21,6 +21,9 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -39,7 +42,9 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.lang.Math.toIntExact;
@@ -155,6 +160,7 @@ public class HashJoinOperator
     private final boolean probeOuterJoin;
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
+    private final List<Optional<TypeBinding>> joinKeyTypes;
     private final JoinFilter[] joinFilters;
     private final Vector[] currentOuterFilterValues;
     private final Vector[] currentOuterFilterNulls;
@@ -367,6 +373,11 @@ public class HashJoinOperator
         if (probeOuterJoin && joinFilters.length != 0) {
             throw new IllegalArgumentException("Join filters are not yet supported for probe outer joins");
         }
+        List<Optional<TypeBinding>> equiJoinKeyTypes = joinKeyTypes(
+                outer.outputSchema(),
+                outerJoinColumns,
+                inner.outputSchema(),
+                innerJoinColumns);
 
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
@@ -414,6 +425,18 @@ public class HashJoinOperator
         this.currentOuterFilterDictionaryDepths = new int[joinFilters.length];
         this.singleEncodedBinaryJoinFilter = joinFilters.length == 1 && joinFilters[0].encodedBinaryEquals();
         this.promotedBinaryEqualityFilter = filterPolicy.promoteBinaryEquality() && singleEncodedBinaryJoinFilter;
+        if (promotedBinaryEqualityFilter) {
+            java.util.ArrayList<Optional<TypeBinding>> effectiveJoinKeyTypes = new java.util.ArrayList<>(equiJoinKeyTypes);
+            effectiveJoinKeyTypes.addAll(joinKeyTypes(
+                    outer.outputSchema(),
+                    new int[] {joinFilters[0].outerColumn()},
+                    inner.outputSchema(),
+                    new int[] {joinFilters[0].innerColumn()}));
+            this.joinKeyTypes = List.copyOf(effectiveJoinKeyTypes);
+        }
+        else {
+            this.joinKeyTypes = equiJoinKeyTypes;
+        }
         this.singleLongNotEqualJoinFilter = joinFilters.length == 1 && joinFilters[0].longNotEqual();
         this.singleLongBitwiseOverlapJoinFilter = joinFilters.length == 1 && joinFilters[0].longBitwiseOverlap();
         for (JoinFilter filter : joinFilters) {
@@ -457,10 +480,79 @@ public class HashJoinOperator
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
 
+    private static List<Optional<TypeBinding>> joinKeyTypes(
+            Schema outerSchema,
+            int[] outerJoinColumns,
+            Schema innerSchema,
+            int[] innerJoinColumns)
+    {
+        java.util.ArrayList<Optional<TypeBinding>> types = new java.util.ArrayList<>(outerJoinColumns.length);
+        for (int keyIndex = 0; keyIndex < outerJoinColumns.length; keyIndex++) {
+            Optional<TypeBinding> outerType = typeAt(outerSchema, outerJoinColumns[keyIndex]);
+            Optional<TypeBinding> innerType = typeAt(innerSchema, innerJoinColumns[keyIndex]);
+            if (outerType.filter(TypeBinding::isSpecified).isPresent() &&
+                    innerType.filter(TypeBinding::isSpecified).isPresent() &&
+                    !outerType.orElseThrow().identity().equals(innerType.orElseThrow().identity())) {
+                throw new IllegalArgumentException("Hash-join key types do not match at index " + keyIndex);
+            }
+            types.add(innerType.filter(TypeBinding::isSpecified)
+                    .or(() -> outerType.filter(TypeBinding::isSpecified))
+                    .or(() -> innerType)
+                    .or(() -> outerType));
+        }
+        return List.copyOf(types);
+    }
+
+    private static Optional<TypeBinding> typeAt(Schema schema, int column)
+    {
+        if (column < 0 || column >= schema.size()) {
+            return Optional.empty();
+        }
+        return Optional.of(schema.field(column).type());
+    }
+
+    private void validateJoinKeyVectors(Vector[] values, String side)
+    {
+        for (int keyIndex = 0; keyIndex < joinKeyTypes.size(); keyIndex++) {
+            int index = keyIndex;
+            joinKeyTypes.get(keyIndex)
+                    .filter(TypeBinding::isSpecified)
+                    .filter(type -> !type.supportsVector(values[index]))
+                    .ifPresent(type -> {
+                        throw new IllegalArgumentException(
+                                "Hash-join " + side + " key vector at index " + index +
+                                        " is incompatible with plan-time type " + type.identity());
+                    });
+        }
+    }
+
     @Override
     public int outputCount()
     {
         return outputChannels.length;
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        Schema outerSchema = outer.outputSchema();
+        Schema innerSchema = inner.outputSchema();
+        java.util.ArrayList<Field> fields = new java.util.ArrayList<>(outputChannels.length);
+        for (int outputChannel : outputChannels) {
+            if (outputChannel < outerOutputCount) {
+                if (outputChannel >= outerSchema.size()) {
+                    return Schema.unspecified(outputChannels.length);
+                }
+                fields.add(outerSchema.field(outputChannel));
+                continue;
+            }
+            int innerChannel = outputChannel - outerOutputCount;
+            if (innerChannel >= innerSchema.size()) {
+                return Schema.unspecified(outputChannels.length);
+            }
+            fields.add(innerSchema.field(innerChannel));
+        }
+        return new Schema(fields);
     }
 
     @Override
@@ -1230,6 +1322,7 @@ public class HashJoinOperator
                     joinNulls[keyIndex] = output.borrowOrNull(Stream.NULLS);
                     hasNulls |= joinNulls[keyIndex] != null && !VectorAccess.isAllFalseNulls(joinNulls[keyIndex]);
                 }
+                validateJoinKeyVectors(joinValues, "build");
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
                         joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, executionPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
@@ -1592,6 +1685,7 @@ public class HashJoinOperator
             }
             hasNulls = hasNulls || (joinNulls[keyIndex] != null && !VectorAccess.isAllFalseNulls(joinNulls[keyIndex]));
         }
+        validateJoinKeyVectors(joinValues, "build");
         if (joinIndex == null) {
             boolean capInitialLongHash = shouldCapInitialLongHash(batch, joinValues);
             joinIndex = createJoinIndex(
@@ -1813,6 +1907,7 @@ public class HashJoinOperator
             currentOuterJoinNulls[keyIndex] = keyNulls;
             currentOuterJoinHasNulls = currentOuterJoinHasNulls || keyNulls != null;
         }
+        validateJoinKeyVectors(currentOuterJoinValues, "probe");
     }
 
     private void captureOuterSchemaIfAvailable()

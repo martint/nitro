@@ -24,6 +24,11 @@ import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -31,6 +36,7 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
@@ -3624,6 +3630,157 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(2L, 20L, 2L, 200L),
                         row(3L, 40L, 3L, 400L)));
+    }
+
+    @Test
+    void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Operator probe = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)));
+        Operator build = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+
+        assertThatThrownBy(() -> {
+            try (Operator join = new HashJoinOperator(allocator, probe, 0, build, 0)) {
+                join.next();
+            }
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Hash-join build key vector at index 0")
+                .hasMessageContaining("testing:i32-only");
+    }
+
+    @Test
+    void testHashJoinRejectsLaterProbeVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        Operator probe = typedTable(
+                schema,
+                TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1)),
+                TableOperator.Page.values(1, new Vector[] {new I64Vector(new long[] {2})}, Mask.all(1)));
+        Operator build = typedTable(
+                schema,
+                TableOperator.Page.values(2, new Vector[] {new I32Vector(new int[] {1, 2})}, Mask.all(2)));
+
+        assertThatThrownBy(() -> {
+            try (Operator join = new HashJoinOperator(allocator, probe, 0, build, 0)) {
+                while (join.hasNext()) {
+                    join.next().close();
+                }
+            }
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Hash-join probe key vector at index 0")
+                .hasMessageContaining("testing:i32-only");
+    }
+
+    @Test
+    void testHashJoinProjectsPlanTimeSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(new Field(i32Only, false)));
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                typedTable(schema, TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1))),
+                0,
+                typedTable(schema, TableOperator.Page.values(1, new Vector[] {new I32Vector(new int[] {1})}, Mask.all(1))),
+                0)
+                .withOutputs(1)) {
+            assertThat(join.outputSchema().fields())
+                    .singleElement()
+                    .extracting(Field::type)
+                    .isSameAs(i32Only);
+        }
+    }
+
+    @Test
+    void testHashJoinValidatesPromotedEqualityKeyBinding()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema schema = new Schema(List.of(
+                new Field(i32Only, false),
+                new Field(i32Only, false)));
+        Operator probe = typedTable(
+                schema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I32Vector(new int[] {1}), new I32Vector(new int[] {10})},
+                        Mask.all(1)));
+        Operator build = typedTable(
+                schema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I32Vector(new int[] {1}), new I32Vector(new int[] {10})},
+                        Mask.all(1)),
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I32Vector(new int[] {2}), new I64Vector(new long[] {20})},
+                        Mask.all(1)));
+
+        assertThatThrownBy(() -> {
+            try (Operator join = new HashJoinOperator(
+                    allocator,
+                    probe,
+                    new int[] {0},
+                    build,
+                    new int[] {0},
+                    HashJoinOperator.JoinFilter.binaryEquals(1, 1))) {
+                join.next();
+            }
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Hash-join build key vector at index 1")
+                .hasMessageContaining("testing:i32-only");
+    }
+
+    private static Operator typedTable(Schema schema, TableOperator.Page... pages)
+    {
+        return new TableOperator(
+                schema.size(),
+                List.of(pages))
+        {
+            @Override
+            public Schema outputSchema()
+            {
+                return schema;
+            }
+        };
+    }
+
+    private static TypeBinding i32OnlyType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:i32-only");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I32Vector.class);
+            }
+        };
     }
 
     @Test
