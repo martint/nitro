@@ -48,6 +48,8 @@ public final class WindowOperator
     private final List<RunningWindowFunction> windowFunctions;
     private final boolean lazyOutputs;
     private final Schema outputSchema;
+    private final StructuralComparisonKernel[] comparisonKernels;
+    private final boolean allowsLegacyOrderingShortcuts;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -76,7 +78,7 @@ public final class WindowOperator
                 descendingByColumn,
                 windowFunctions,
                 Schema.unspecified(windowFunctions.size()),
-                allocator.engineResources().operatorResources().windowPolicy());
+                allocator.engineResources().operatorResources());
     }
 
     public WindowOperator(
@@ -96,7 +98,29 @@ public final class WindowOperator
                 descendingByColumn,
                 windowFunctions,
                 windowSchema,
-                allocator.engineResources().operatorResources().windowPolicy());
+                allocator.engineResources().operatorResources());
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                windowFunctions,
+                windowSchema,
+                requireNonNull(resources, "resources is null").windowPolicy(),
+                resources.codeGeneration().structuralTypes());
     }
 
     public WindowOperator(
@@ -108,6 +132,29 @@ public final class WindowOperator
             List<RunningWindowFunction> windowFunctions,
             Schema windowSchema,
             WindowOperatorPolicy policy)
+    {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                windowFunctions,
+                windowSchema,
+                policy,
+                new StructuralTypeKernelFactory());
+    }
+
+    private WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            WindowOperatorPolicy policy,
+            StructuralTypeKernelFactory structuralTypes)
     {
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
@@ -128,10 +175,51 @@ public final class WindowOperator
         this.descendingByColumn = descendingByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
         this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
+        this.comparisonKernels = comparisonKernels(
+                source.outputSchema(),
+                this.partitionColumns,
+                this.orderingColumns,
+                requireNonNull(structuralTypes, "structuralTypes is null"));
+        this.allowsLegacyOrderingShortcuts = allowsLegacyOrderingShortcuts(
+                this.comparisonKernels, this.partitionColumns, this.orderingColumns);
         // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
         // nothing for lazy output to eliminate. Multiple cooperating functions create the wider filter/project
         // boundary where downstream operators can consume function results without gathering every source lane.
         this.lazyOutputs = policy.lazyOutputs() && windowFunctions.size() > 1;
+    }
+
+    private static StructuralComparisonKernel[] comparisonKernels(
+            Schema sourceSchema,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            StructuralTypeKernelFactory structuralTypes)
+    {
+        StructuralComparisonKernel[] kernels = new StructuralComparisonKernel[sourceSchema.size()];
+        for (int column : partitionColumns) {
+            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        }
+        for (int column : orderingColumns) {
+            kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        }
+        return kernels;
+    }
+
+    private static boolean allowsLegacyOrderingShortcuts(
+            StructuralComparisonKernel[] kernels,
+            int[] partitionColumns,
+            int[] orderingColumns)
+    {
+        for (int column : partitionColumns) {
+            if (!kernels[column].allowsLegacyPhysicalShortcuts()) {
+                return false;
+            }
+        }
+        for (int column : orderingColumns) {
+            if (!kernels[column].allowsLegacyPhysicalShortcuts()) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -478,7 +566,10 @@ public final class WindowOperator
     private boolean canReuseIdentityOrder(TableOperator.Page page)
     {
         int length = page.mask().count();
-        if (!policy.reuseOrderedInput() || !page.mask().all() || length < policy.reuseOrderedInputMinRows()) {
+        if (!allowsLegacyOrderingShortcuts ||
+                !policy.reuseOrderedInput() ||
+                !page.mask().all() ||
+                length < policy.reuseOrderedInputMinRows()) {
             return false;
         }
         FlatIntegerOrderKey[] keys = flatIntegerOrderKeys(page.columns());
@@ -580,6 +671,9 @@ public final class WindowOperator
      */
     private boolean tryStableRadixSortSinglePagePositions(int[] positions)
     {
+        if (!allowsLegacyOrderingShortcuts) {
+            return false;
+        }
         Streams[] columns = pages.getFirst().columns();
         if (policy.binaryHashPartitionSort() && orderingColumns.length == 0 && partitionColumns.length == 1 &&
                 isBinarySortKey(columns[partitionColumns[0]].values())) {
@@ -835,13 +929,14 @@ public final class WindowOperator
     {
         Streams[] columns = pages.getFirst().columns();
         for (int partitionColumn : partitionColumns) {
-            int comparison = compareColumn(columns[partitionColumn], leftPosition, rightPosition);
+            int comparison = compareColumn(partitionColumn, columns[partitionColumn], leftPosition, rightPosition);
             if (comparison != 0) {
                 return comparison;
             }
         }
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int comparison = compareColumn(columns[orderingColumns[orderingIndex]], leftPosition, rightPosition);
+            int column = orderingColumns[orderingIndex];
+            int comparison = compareColumn(column, columns[column], leftPosition, rightPosition);
             if (descendingByColumn[orderingIndex]) {
                 comparison = -comparison;
             }
@@ -889,7 +984,7 @@ public final class WindowOperator
                 }
                 continue;
             }
-            if (!OperatorEqualitySemantics.equal(
+            if (!comparisonKernels[partitionColumn].identical(
                     streams.values(), streams.getOrNull(Stream.NULLS), leftPosition,
                     streams.values(), streams.getOrNull(Stream.NULLS), rightPosition)) {
                 return false;
@@ -898,9 +993,9 @@ public final class WindowOperator
         return true;
     }
 
-    private static int compareColumn(Streams streams, int leftPosition, int rightPosition)
+    private int compareColumn(int column, Streams streams, int leftPosition, int rightPosition)
     {
-        return OperatorOrderingSemantics.compare(
+        return comparisonKernels[column].compare(
                 streams.values(), streams.getOrNull(Stream.NULLS), leftPosition,
                 streams.values(), streams.getOrNull(Stream.NULLS), rightPosition);
     }
@@ -962,7 +1057,7 @@ public final class WindowOperator
                 }
                 continue;
             }
-            if (!OperatorEqualitySemantics.equal(
+            if (!comparisonKernels[partitionColumn].identical(
                     leftStreams.values(),
                     leftStreams.getOrNull(Stream.NULLS),
                     left.position(),
@@ -979,20 +1074,7 @@ public final class WindowOperator
     {
         Streams leftStreams = left.page().columns()[column];
         Streams rightStreams = right.page().columns()[column];
-        return OperatorOrderingSemantics.compare(
-                leftStreams.values(),
-                leftStreams.getOrNull(Stream.NULLS),
-                left.position(),
-                rightStreams.values(),
-                rightStreams.getOrNull(Stream.NULLS),
-                right.position());
-    }
-
-    private boolean equalColumn(int column, RowReference left, RowReference right)
-    {
-        Streams leftStreams = left.page().columns()[column];
-        Streams rightStreams = right.page().columns()[column];
-        return OperatorEqualitySemantics.equal(
+        return comparisonKernels[column].compare(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
                 left.position(),

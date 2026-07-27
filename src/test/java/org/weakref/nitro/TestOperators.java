@@ -70,6 +70,7 @@ import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.PartitionSumI64WindowFunction;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
@@ -1682,6 +1683,29 @@ public class TestOperators
                             row(-1L),
                             row(-2L),
                             row(2L)));
+        }
+
+        Operator windowSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-1, 1, -2, 2})},
+                        Mask.all(4)));
+        try (Operator window = new WindowOperator(
+                allocator,
+                windowSource,
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(0)),
+                Schema.unspecified(1),
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(-1L, 0L),
+                            row(1L, 0L),
+                            row(-2L, 0L),
+                            row(2L, 0L)));
         }
     }
 

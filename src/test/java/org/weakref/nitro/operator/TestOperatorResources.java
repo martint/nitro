@@ -164,7 +164,7 @@ class TestOperatorResources
                         new boolean[0],
                         List.of(new PartitionSumI64WindowFunction(0)),
                         org.weakref.nitro.core.type.Schema.unspecified(1),
-                        operatorResources.windowPolicy());
+                        operatorResources);
                 Operator sort = new SortOperator(
                         allocator,
                         new int[] {0},
