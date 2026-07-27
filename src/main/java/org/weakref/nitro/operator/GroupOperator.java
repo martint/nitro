@@ -87,7 +87,9 @@ public class GroupOperator
                 operatorResources.grouping(),
                 operatorResources.adaptiveLongGroupingPolicy(),
                 operatorResources.flatKeyTablePolicy(),
-                groupingTypes(source.outputSchema(), groupByColumns));
+                groupingTypes(source.outputSchema(), groupByColumns),
+                allocator,
+                allocationContext);
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.outputSchema = outputSchema(source.outputSchema(), groupIdField);

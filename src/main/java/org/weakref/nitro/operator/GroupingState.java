@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Set;
 
 import static java.lang.Math.toIntExact;
+import static java.util.Objects.requireNonNull;
 
 final class GroupingState
 {
@@ -48,6 +49,10 @@ final class GroupingState
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final List<TypeBinding> keyTypes;
+    private final Allocator allocator;
+    private final Allocator.Context allocationContext;
+    private final StructuralKeyKernel[] structuralKeyKernels;
+    private final boolean allowsLegacyKeyShortcuts;
     private final LongGroupingPolicy longPolicy;
     private final CompositeGroupingPolicy compositePolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
@@ -121,6 +126,7 @@ final class GroupingState
     private boolean sharedDictionaryFlatBacking;
     private boolean initialized;
     private LongGroupingTable multiLongTable;
+    private StructuralGroupingIndex structuralGrouping;
 
     GroupingState(
             PrimitiveArrayPool arrayPool,
@@ -129,7 +135,7 @@ final class GroupingState
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
-        this(arrayPool, codeGeneration, resources, adaptiveLongGroupingPolicy, flatKeyTablePolicy, List.of());
+        this(arrayPool, codeGeneration, resources, adaptiveLongGroupingPolicy, flatKeyTablePolicy, List.of(), null, null);
     }
 
     GroupingState(
@@ -138,7 +144,9 @@ final class GroupingState
             GroupingStateResources resources,
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy,
-            List<TypeBinding> keyTypes)
+            List<TypeBinding> keyTypes,
+            Allocator allocator,
+            Allocator.Context allocationContext)
     {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
@@ -146,6 +154,10 @@ final class GroupingState
         this.adaptiveLongGroupingPolicy = adaptiveLongGroupingPolicy;
         this.flatKeyTablePolicy = flatKeyTablePolicy;
         this.keyTypes = List.copyOf(keyTypes);
+        this.allocator = allocator;
+        this.allocationContext = allocationContext;
+        this.structuralKeyKernels = structuralKeyKernels(this.keyTypes, codeGeneration);
+        this.allowsLegacyKeyShortcuts = allowsLegacyPhysicalShortcuts(structuralKeyKernels);
         this.longPolicy = resources.longGroupingPolicy();
         this.compositePolicy = resources.compositeGroupingPolicy();
         this.longDirectNextCheck = longPolicy.directMinGroups();
@@ -564,6 +576,9 @@ final class GroupingState
     public void beginContainsBatch(Vector values, Vector nulls)
     {
         initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
+        if (structuralGrouping != null) {
+            return;
+        }
         if (useFlatGrouping) {
             flatGroupingTable.beginBatch(new Vector[] {values}, new Vector[] {nulls});
         }
@@ -581,6 +596,9 @@ final class GroupingState
         initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return false;
+        }
+        if (structuralGrouping != null) {
+            return structuralGrouping.contains(new Vector[] {values}, new Vector[] {nulls}, position);
         }
         if (useLongGrouping) {
             return longGroupGet(OperatorVectorSupport.longValue(values, position)) != -1;
@@ -630,10 +648,14 @@ final class GroupingState
     {
         moreInputExpectedForCurrentBatch = moreInputExpected;
         blockingAggregationForCurrentBatch = blockingAggregation;
-        if (!initialized) {
+        if (!initialized && allowsLegacyKeyShortcuts) {
             useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
         }
         initializeIfNecessary(values, nulls);
+        if (structuralGrouping != null) {
+            nextGroupId = structuralGrouping.assignGroups(values, nulls, mask, result, nextGroupId);
+            return;
+        }
         if (nextGroupId == 0 && useMultiLongGrouping &&
                 admitsFullWidthPairPackedIdentity(values, nulls, mask)) {
             multiLongTable.releaseBuffers();
@@ -904,6 +926,14 @@ final class GroupingState
             return;
         }
         initialized = true;
+
+        if (!allowsLegacyKeyShortcuts) {
+            structuralGrouping = new StructuralGroupingIndex(
+                    requireNonNull(allocator, "allocator is null"),
+                    requireNonNull(allocationContext, "allocationContext is null"),
+                    structuralKeyKernels);
+            return;
+        }
 
         if (compositePolicy.debugGroupingShapes()) {
             StringBuilder shape = new StringBuilder("[grouping-shape]");
@@ -2255,6 +2285,9 @@ final class GroupingState
 
     public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
+        if (structuralGrouping != null) {
+            return structuralGrouping.groupedValues(groupedColumnIndex, mask, output, allocator, allocationContext);
+        }
         if (usePackedIntPairGrouping) {
             return Streams.ofValuesAndNulls(
                     materializePackedIntGroupedValues(groupedColumnIndex, mask, output == null ? null : output.values(), allocator, allocationContext),
@@ -2295,6 +2328,10 @@ final class GroupingState
      */
     public Streams copyGroupedValuePosition(int groupedColumnIndex, Streams output, int sourcePosition, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
     {
+        if (structuralGrouping != null) {
+            return structuralGrouping.copyGroupedValuePosition(
+                    groupedColumnIndex, output, sourcePosition, outputPosition, size, allocator, allocationContext);
+        }
         if (!useLongGrouping && !usePackedIntPairGrouping && !useMultiLongGrouping) {
             return null;
         }
@@ -2633,7 +2670,245 @@ final class GroupingState
             flatGroupingTable.releaseBuffers();
             flatGroupingTable = null;
         }
+        if (structuralGrouping != null) {
+            structuralGrouping.releaseBuffers();
+            structuralGrouping = null;
+        }
         flatGroupingLayout = null;
+    }
+
+    private static StructuralKeyKernel[] structuralKeyKernels(
+            List<TypeBinding> keyTypes,
+            OperatorCodeGenerationResources codeGeneration)
+    {
+        StructuralKeyKernel[] kernels = new StructuralKeyKernel[keyTypes.size()];
+        StructuralTypeKernelFactory structuralTypes = codeGeneration.structuralTypes();
+        for (int keyIndex = 0; keyIndex < keyTypes.size(); keyIndex++) {
+            kernels[keyIndex] = structuralTypes.key(keyTypes.get(keyIndex));
+        }
+        return kernels;
+    }
+
+    private static boolean allowsLegacyPhysicalShortcuts(StructuralKeyKernel[] kernels)
+    {
+        for (StructuralKeyKernel kernel : kernels) {
+            if (!kernel.allowsLegacyPhysicalShortcuts()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static final class StructuralGroupingIndex
+    {
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private final StructuralKeyKernel[] kernels;
+        private final Object2LongOpenHashMap<StructuralGroupingKey> groups = new Object2LongOpenHashMap<>();
+        private final ArrayList<StructuralGroupingKey> representatives = new ArrayList<>();
+
+        private StructuralGroupingIndex(
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                StructuralKeyKernel[] kernels)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            this.kernels = kernels.clone();
+            groups.defaultReturnValue(-1);
+        }
+
+        private long assignGroups(
+                Vector[] values,
+                Vector[] nulls,
+                Mask mask,
+                I64Vector result,
+                long nextGroupId)
+        {
+            groups.ensureCapacity(groups.size() + mask.count());
+            Object2LongOpenHashMap<StructuralGroupingKey> newGroups = new Object2LongOpenHashMap<>();
+            newGroups.defaultReturnValue(-1);
+            int[] newGroupPositions = new int[mask.count()];
+            int newGroupCount = 0;
+            long[] output = result.values();
+            for (int position : mask) {
+                StructuralGroupingKey probe = new StructuralGroupingKey(kernels, values, nulls, position);
+                long groupId = groups.getLong(probe);
+                if (groupId == -1) {
+                    groupId = newGroups.getLong(probe);
+                    if (groupId == -1) {
+                        groupId = nextGroupId + newGroupCount;
+                        newGroups.put(probe, groupId);
+                        newGroupPositions[newGroupCount++] = position;
+                    }
+                }
+                output[position] = groupId;
+            }
+            if (newGroupCount == 0) {
+                return nextGroupId;
+            }
+
+            int[] positions = Arrays.copyOf(newGroupPositions, newGroupCount);
+            Vector[] ownedValues = copyVectors(values, positions);
+            Vector[] ownedNulls = copyNullableVectors(nulls, positions);
+            for (int position = 0; position < newGroupCount; position++) {
+                StructuralGroupingKey key = new StructuralGroupingKey(kernels, ownedValues, ownedNulls, position);
+                groups.put(key, nextGroupId + position);
+                representatives.add(key);
+            }
+            return nextGroupId + newGroupCount;
+        }
+
+        private boolean contains(Vector[] values, Vector[] nulls, int position)
+        {
+            return groups.getLong(new StructuralGroupingKey(kernels, values, nulls, position)) != -1;
+        }
+
+        private Streams groupedValues(
+                int groupedColumnIndex,
+                Mask mask,
+                Streams output,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            int size = mask.none() ? 0 : mask.maxPosition() + 1;
+            Vector outputValues = output == null ? null : output.values();
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.getOrNull(Stream.NULLS),
+                    size);
+            Arrays.fill(outputNulls.values(), 0, size, true);
+            for (int groupId : mask) {
+                StructuralGroupingKey representative = representatives.get(groupId);
+                outputValues = representative.values[groupedColumnIndex].copySinglePositionInto(
+                        allocator,
+                        allocationContext,
+                        outputValues,
+                        representative.position,
+                        groupId,
+                        size);
+                outputNulls.values()[groupId] =
+                        OperatorVectorSupport.isNull(representative.nulls[groupedColumnIndex], representative.position);
+            }
+            return Streams.ofValuesAndNulls(outputValues, outputNulls);
+        }
+
+        private Streams copyGroupedValuePosition(
+                int groupedColumnIndex,
+                Streams output,
+                int sourcePosition,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            StructuralGroupingKey representative = representatives.get(sourcePosition);
+            Vector outputValues = representative.values[groupedColumnIndex].copySinglePositionInto(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.values(),
+                    representative.position,
+                    outputPosition,
+                    size);
+            BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                    allocator,
+                    allocationContext,
+                    output == null ? null : output.getOrNull(Stream.NULLS),
+                    size);
+            outputNulls.values()[outputPosition] =
+                    OperatorVectorSupport.isNull(representative.nulls[groupedColumnIndex], representative.position);
+            return Streams.ofValuesAndNulls(outputValues, outputNulls);
+        }
+
+        private Vector[] copyVectors(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
+            }
+            return copies;
+        }
+
+        private Vector[] copyNullableVectors(Vector[] vectors, int[] positions)
+        {
+            Vector[] copies = new Vector[vectors.length];
+            for (int index = 0; index < vectors.length; index++) {
+                if (vectors[index] != null) {
+                    copies[index] = allocator.copyVector(allocationContext, vectors[index], positions);
+                }
+            }
+            return copies;
+        }
+
+        private void releaseBuffers()
+        {
+            groups.clear();
+            representatives.clear();
+        }
+    }
+
+    private static final class StructuralGroupingKey
+    {
+        private static final int NULL_HASH = 0x9E3779B9;
+
+        private final StructuralKeyKernel[] kernels;
+        private final Vector[] values;
+        private final Vector[] nulls;
+        private final int position;
+
+        private StructuralGroupingKey(
+                StructuralKeyKernel[] kernels,
+                Vector[] values,
+                Vector[] nulls,
+                int position)
+        {
+            this.kernels = kernels;
+            this.values = values;
+            this.nulls = nulls;
+            this.position = position;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            int hash = 1;
+            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
+                int keyHash = OperatorVectorSupport.isNull(nulls[keyIndex], position)
+                        ? NULL_HASH
+                        : Long.hashCode(kernels[keyIndex].hash(values[keyIndex], nulls[keyIndex], position));
+                hash = 31 * hash + keyHash;
+            }
+            return hash;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (!(object instanceof StructuralGroupingKey other) || kernels != other.kernels) {
+                return false;
+            }
+            for (int keyIndex = 0; keyIndex < kernels.length; keyIndex++) {
+                boolean leftNull = OperatorVectorSupport.isNull(nulls[keyIndex], position);
+                boolean rightNull = OperatorVectorSupport.isNull(other.nulls[keyIndex], other.position);
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!kernels[keyIndex].identical(
+                        values[keyIndex],
+                        nulls[keyIndex],
+                        position,
+                        other.values[keyIndex],
+                        other.nulls[keyIndex],
+                        other.position)) {
+                    return false;
+                }
+            }
+            return true;
+        }
     }
 
     private static boolean isSingleLongGroupingCandidate(Vector values)

@@ -237,7 +237,9 @@ final class MembershipSet
                     operatorResources.grouping(),
                     operatorResources.adaptiveLongGroupingPolicy(),
                     operatorResources.flatKeyTablePolicy(),
-                    keyType.stream().toList());
+                    keyType.stream().toList(),
+                    allocator,
+                    allocationContext);
         }
 
         @Override

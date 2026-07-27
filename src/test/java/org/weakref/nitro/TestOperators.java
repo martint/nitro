@@ -1932,6 +1932,80 @@ public class TestOperators
             assertThat(operator(aggregation))
                     .matchesExactly(List.of(row(7L, 2L)));
         }
+
+        Operator groupingSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        2,
+                        new Vector[] {new I64Vector(new long[] {1, 2})},
+                        Mask.all(2)),
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {new I64Vector(new long[] {-1, -2, 3})},
+                        Mask.all(3)));
+        try (Operator group = new GroupOperator(
+                allocator,
+                0,
+                groupingSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(group))
+                    .matchesExactly(List.of(
+                            row(0L, 1L),
+                            row(1L, 2L),
+                            row(0L, -1L),
+                            row(1L, -2L),
+                            row(2L, 3L)));
+        }
+
+        Operator groupedAggregationSource = typedTable(
+                nullableAbsoluteSchema,
+                new TableOperator.Page(
+                        2,
+                        new Streams[] {Streams.ofValuesAndNulls(
+                                new I64Vector(new long[] {1, 0}),
+                                new BooleanVector(new boolean[] {false, true}))},
+                        Mask.all(2)),
+                new TableOperator.Page(
+                        3,
+                        new Streams[] {Streams.ofValuesAndNulls(
+                                new I64Vector(new long[] {-1, 0, 2}),
+                                new BooleanVector(new boolean[] {false, true, false}))},
+                        Mask.all(3)));
+        try (Operator aggregation = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                groupedAggregationSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(aggregation))
+                    .matchesExactly(List.of(
+                            row(1L, 2L),
+                            row(null, 2L),
+                            row(2L, 1L)));
+        }
+
+        Schema compositeGroupingSchema = new Schema(List.of(
+                new Field("absolute", absoluteLong, false),
+                new Field("ordinary", Schema.unspecified(1).field(0).type(), false)));
+        Operator compositeGroupingSource = typedTable(
+                compositeGroupingSchema,
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {
+                                new I64Vector(new long[] {1, -1, 1}),
+                                new I64Vector(new long[] {10, 10, 20})},
+                        Mask.all(3)));
+        try (Operator aggregation = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(new CountAll()),
+                compositeGroupingSource,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(aggregation))
+                    .matchesExactly(List.of(
+                            row(1L, 10L, 2L),
+                            row(1L, 20L, 1L)));
+        }
     }
 
     private static Operator rejectDynamicFilters(Operator delegate)

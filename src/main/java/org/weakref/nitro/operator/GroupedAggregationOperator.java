@@ -207,13 +207,7 @@ public class GroupedAggregationOperator
                 source,
                 toArray(groupByColumns),
                 mapGroupedKeyIndexes(groupByColumns, groupedColumns),
-                new GroupingState(
-                        allocator.primitiveArrays(),
-                        operatorResources.codeGeneration(),
-                        operatorResources.grouping(),
-                        operatorResources.adaptiveLongGroupingPolicy(),
-                        operatorResources.flatKeyTablePolicy(),
-                        groupingTypes(source.outputSchema(), groupByColumns)),
+                groupingTypes(source.outputSchema(), groupByColumns),
                 requireNonNull(operatorResources, "operatorResources is null"));
     }
 
@@ -235,7 +229,7 @@ public class GroupedAggregationOperator
             Operator source,
             int[] groupByColumns,
             int[] groupedKeyIndexes,
-            GroupingState inlineGroupingState,
+            List<TypeBinding> inlineGroupingTypes,
             OperatorResources operatorResources)
     {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
@@ -283,7 +277,17 @@ public class GroupedAggregationOperator
         this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
         this.distinctAggregationGroups = distinctAggregationPlan.distinctAggregationGroups();
         this.source = source;
-        this.inlineGroupingState = inlineGroupingState;
+        this.inlineGroupingState = groupByColumns == null
+                ? null
+                : new GroupingState(
+                        allocator.primitiveArrays(),
+                        operatorResources.codeGeneration(),
+                        operatorResources.grouping(),
+                        operatorResources.adaptiveLongGroupingPolicy(),
+                        operatorResources.flatKeyTablePolicy(),
+                        inlineGroupingTypes,
+                        allocator,
+                        allocationContext);
         this.inlineGroupValues = groupByColumns == null ? null : new Vector[groupByColumns.length];
         this.inlineGroupNulls = groupByColumns == null ? null : new Vector[groupByColumns.length];
 

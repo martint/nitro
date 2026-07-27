@@ -73,13 +73,17 @@ class TestFlatGroupingTable
                 return Set.of(BinaryVector.class);
             }
         };
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("testGroupingTypeBinding");
         GroupingState state = new GroupingState(
                 arrayPool,
                 codeGeneration,
                 groupingResources,
                 adaptiveLongGroupingPolicy,
                 flatKeyTablePolicy,
-                List.of(binaryOnly));
+                List.of(binaryOnly),
+                allocator,
+                allocationContext);
         state.assignGroups(
                 utf8("supported"),
                 null,
@@ -93,6 +97,8 @@ class TestFlatGroupingTable
                 new I64Vector(1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("testing:binary-only");
+        state.releaseBuffers();
+        allocator.release(allocationContext);
     }
 
     @Test
