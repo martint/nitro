@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 @ScalarFunction(name = "coalesce_i64")
 public final class CoalesceI64
@@ -38,10 +39,18 @@ public final class CoalesceI64
     // omit the output NULLS vector instead of walking the other (potentially nested dictionary) null mapping solely
     // to AND it with false. The evaluator's ordinary stream-completion contract supplies shared all-false metadata
     // when a downstream consumer explicitly requests NULLS.
-    private static final boolean OMIT_NULLS_FOR_NON_NULL_INPUT =
-            Boolean.parseBoolean(System.getProperty("nitro.coalesce.omitNullsForNonNullInput", "true"));
-    private static final boolean DEBUG_OMITTED_NULLS = Boolean.getBoolean("nitro.debug.coalesceOmittedNulls");
+    private final CoalesceI64Policy policy;
     private boolean omittedNullsReported;
+
+    public CoalesceI64()
+    {
+        this(CoalesceI64Policy.defaults());
+    }
+
+    public CoalesceI64(CoalesceI64Policy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
 
     @Override
     public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
@@ -71,9 +80,9 @@ public final class CoalesceI64
         int requiredLength = Math.max(mask.maxPosition() + 1, Math.max(primaryValueVector.length(), fallbackValueVector.length()));
 
         Streams result = Streams.empty();
-        boolean resultCannotBeNull = OMIT_NULLS_FOR_NON_NULL_INPUT &&
+        boolean resultCannotBeNull = policy.omitNullsForNonNullInput() &&
                 (VectorAccess.isAllFalseNulls(primaryNullVector) || VectorAccess.isAllFalseNulls(fallbackNullVector));
-        if (resultCannotBeNull && DEBUG_OMITTED_NULLS && !omittedNullsReported) {
+        if (resultCannotBeNull && policy.diagnostics() && !omittedNullsReported) {
             omittedNullsReported = true;
             System.err.printf(
                     "[coalesce-omitted-nulls] primary=%s fallback=%s rows=%d%n",

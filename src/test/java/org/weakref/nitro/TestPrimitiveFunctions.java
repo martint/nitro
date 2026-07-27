@@ -14,6 +14,7 @@
 package org.weakref.nitro;
 
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
+import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddExactI64;
 import org.weakref.nitro.function.scalar.builtin.AddF64;
@@ -28,6 +29,7 @@ import org.weakref.nitro.function.scalar.builtin.CastI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI32;
 import org.weakref.nitro.function.scalar.builtin.CastUtf8ToI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
+import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.ConcatUtf8;
 import org.weakref.nitro.function.scalar.builtin.ContainsUtf8;
 import org.weakref.nitro.function.scalar.builtin.DivideF64;
@@ -156,11 +158,21 @@ public final class TestPrimitiveFunctions
                 SubstringUtf8.class,
                 UpperUtf8.class,
                 YearOfDate.class)) {
-            primitiveRegistry.register(scalarRegistry.register(
-                    functionClass == LikeUtf8.class
-                            ? scalarLoader.load(new LikeUtf8(LikeUtf8Policy.fromSystemProperties()))
-                            : scalarLoader.load(functionClass)));
+            primitiveRegistry.register(scalarRegistry.register(load(scalarLoader, functionClass)));
         }
         return primitiveRegistry;
+    }
+
+    private static ScalarDescriptor load(
+            AnnotatedScalarLoader scalarLoader,
+            Class<?> functionClass)
+    {
+        if (functionClass == LikeUtf8.class) {
+            return scalarLoader.load(new LikeUtf8(LikeUtf8Policy.fromSystemProperties()));
+        }
+        if (functionClass == CoalesceI64.class) {
+            return scalarLoader.load(new CoalesceI64(CoalesceI64Policy.fromSystemProperties()));
+        }
+        return scalarLoader.load(functionClass);
     }
 }

@@ -36,6 +36,8 @@ import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
+import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
@@ -2333,6 +2335,27 @@ public class TestPlanEvaluator
         Streams valuesResult = evaluator.evaluate(new Reference(value, Stream.VALUES), Mask.all(3));
         assertThat(((I64Vector) valuesResult.get(Stream.VALUES)).values()).containsExactly(7L, 0L, 9L);
         assertThat(((BooleanVector) valuesResult.get(Stream.NULLS)).values()).containsExactly(false, false, false);
+    }
+
+    @Test
+    void testCoalesceI64UsesExplicitNullElisionPolicy()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            List<Streams> inputs = List.of(
+                    Streams.ofValues(new I64Vector(new long[] {7L, 8L})),
+                    Streams.ofValues(new I64Vector(new long[] {0L, 0L})));
+            PrimitiveExecutionContext context = new PrimitiveExecutionContext(allocator);
+
+            Streams retainedNulls = new CoalesceI64(new CoalesceI64Policy(false, false))
+                    .apply(inputs, Mask.all(2), Set.of(Stream.NULLS), null, context);
+            Streams omittedNulls = new CoalesceI64(new CoalesceI64Policy(true, false))
+                    .apply(inputs, Mask.all(2), Set.of(Stream.NULLS), null, context);
+
+            assertThat(retainedNulls.has(Stream.NULLS)).isTrue();
+            assertThat(((BooleanVector) retainedNulls.get(Stream.NULLS)).values())
+                    .containsExactly(false, false);
+            assertThat(omittedNulls.has(Stream.NULLS)).isFalse();
+        }
     }
 
     @Test
