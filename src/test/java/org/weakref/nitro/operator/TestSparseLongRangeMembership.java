@@ -26,8 +26,13 @@ class TestSparseLongRangeMembership
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
         SparseLongRangeMembership membership =
                 new SparseLongRangeMembership(HashJoinIndexPolicy.defaults(), arrayPool);
+        LongJoinHashTable hashTable = new LongJoinHashTable(arrayPool, 4, false, true, -1);
+        int first = hashTable.findSlot(10);
+        hashTable.initialize(first, 10, 0);
+        int second = hashTable.findSlot(17);
+        hashTable.initialize(second, 17, 1);
 
-        membership.build(new long[] {10, 17}, new int[] {0, 1}, -1, 10, 17, 2);
+        membership.build(hashTable, 10, 17, 2);
 
         assertThat(membership.contains(10)).isTrue();
         assertThat(membership.contains(11)).isFalse();
@@ -41,5 +46,6 @@ class TestSparseLongRangeMembership
 
         membership.release();
         assertThat(arrayPool.retainedBytes()).isEqualTo(Long.BYTES);
+        hashTable.release();
     }
 }

@@ -25,10 +25,16 @@ class TestCompressedLongRangeIndex
     {
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
         CompressedLongRangeIndex index = new CompressedLongRangeIndex(arrayPool, true, 2, 4, 2, false);
-        long[] keys = {0x10, 0x12, 0, 0};
+        LongJoinHashTable hashTable = hashTable(arrayPool);
 
-        assertThat(index.prepare(keys, 2, 5, 3, 0x10, 0x12)).isTrue();
-        index.build(keys, new int[] {2, 3, 0, 0}, new int[] {0, 1, 0, 2}, 2, 5, 0, 1);
+        assertThat(index.prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isTrue();
+        index.build(
+                hashTable,
+                new int[] {hashTable.findSlot(0x10), hashTable.findSlot(0x12), 0, 2},
+                2,
+                5,
+                0,
+                1);
 
         int first = index.entry(0x10);
         assertThat(CompressedLongRangeIndex.start(first)).isEqualTo(0);
@@ -41,21 +47,33 @@ class TestCompressedLongRangeIndex
 
         index.release();
         assertThat(arrayPool.retainedBytes()).isEqualTo(2L * Integer.BYTES);
+        hashTable.release();
     }
 
     @Test
     void rejectsBuildShapesOutsideItsImmutablePolicy()
     {
         PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
-        long[] keys = {0x10, 0x12, 0, 0};
+        LongJoinHashTable hashTable = hashTable(arrayPool);
 
         assertThat(new CompressedLongRangeIndex(arrayPool, false, 2, 4, 2, false)
-                .prepare(keys, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 3, 4, 2, false)
-                .prepare(keys, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 2, 1, 2, false)
-                .prepare(keys, 2, 5, 3, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 3, 0x10, 0x12)).isFalse();
         assertThat(new CompressedLongRangeIndex(arrayPool, true, 2, 4, 2, false)
-                .prepare(keys, 2, 5, 256, 0x10, 0x12)).isFalse();
+                .prepare(hashTable, 2, 5, 256, 0x10, 0x12)).isFalse();
+        hashTable.release();
+    }
+
+    private static LongJoinHashTable hashTable(PrimitiveArrayPool arrayPool)
+    {
+        LongJoinHashTable hashTable = new LongJoinHashTable(arrayPool, 4, false, false, -1);
+        int first = hashTable.findSlot(0x10);
+        hashTable.initialize(first, 0x10, 0, 0, 2);
+        int second = hashTable.findSlot(0x12);
+        hashTable.initialize(second, 0x12, 1, 1, 3);
+        return hashTable;
     }
 }

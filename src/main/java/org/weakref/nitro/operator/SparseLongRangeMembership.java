@@ -39,9 +39,9 @@ final class SparseLongRangeMembership
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
     }
 
-    void build(long[] keys, int[] slotHeads, int empty, long min, long max, int distinctSize)
+    void build(LongJoinHashTable hashTable, long min, long max, int distinctSize)
     {
-        if (!policy.sparseLongRangeMembership() || keys == null || words != null) {
+        if (!policy.sparseLongRangeMembership() || !hashTable.isAllocated() || words != null) {
             return;
         }
         long range = max - min + 1;
@@ -56,11 +56,11 @@ final class SparseLongRangeMembership
         this.range = (int) range;
         words = arrayPool.borrowLongs((this.range + Long.SIZE - 1) / Long.SIZE);
         Arrays.fill(words, 0L);
-        for (int slot = 0; slot < keys.length; slot++) {
-            if (slotHeads[slot] == empty) {
+        for (int slot = 0; slot < hashTable.capacity(); slot++) {
+            if (!hashTable.isOccupied(slot)) {
                 continue;
             }
-            int ordinal = (int) (keys[slot] - min);
+            int ordinal = (int) (hashTable.key(slot) - min);
             words[ordinal >>> 6] |= 1L << ordinal;
         }
     }

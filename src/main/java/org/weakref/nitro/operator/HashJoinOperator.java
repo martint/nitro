@@ -16,9 +16,6 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import jdk.incubator.vector.ByteVector;
-import jdk.incubator.vector.VectorOperators;
-import jdk.incubator.vector.VectorSpecies;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -3533,8 +3530,6 @@ public class HashJoinOperator
     {
         private static final float LOAD_FACTOR = 0.75f;
         private static final int EMPTY = -1;
-        private static final VectorSpecies<Byte> HASH_TAG_SPECIES = ByteVector.SPECIES_128;
-        private static final int HASH_TAG_GROUP = HASH_TAG_SPECIES.length();
         private static final int NO_MATCH_ROW_REFERENCE32 = -1;
         // A large key-only build does not need payload columns, and an exact non-negative range map can be built
         // without first paying for an open-addressed hash table. Keys outside the bounded domain fall back to the
@@ -3546,26 +3541,13 @@ public class HashJoinOperator
         private final HashJoinExecutionPolicy executionPolicy;
         private final PrimitiveArrayPool arrayPool;
 
-        // Open-addressing table of distinct keys; a slot is occupied iff slotHead[slot] != EMPTY.
-        private long[] keys;
-        private byte[] tags;
-        private int[] slotHead;
-        private int[] slotTail;
-        private int[] slotCount;
+        private final LongJoinHashTable hashTable;
         // Build rows are indexed by a dense ordinal. The row store owns both their adaptive reference
         // representation and the flat insertion-ordered duplicate chain.
         private final JoinRowStore rows;
         private int rowCount;
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
-        // A capped build was classified from its observed shape as bounded or duplicate-heavy. Those tables either
-        // remain in direct-range form or acquire an exact membership filter, so hash probes that survive are
-        // predominantly hits. A scalar linear table is cheaper for that shape and avoids allocating control tags;
-        // retain grouped tags for ordinary sparse tables where rejecting negative probes is their strength.
-        private final boolean groupedHashTable;
-        private final int initialHashCapacity;
-        private int mask;
-        private int maxFill;
         private int size;
         private long buildKeyAnd = -1L;
         private long buildKeyOr;
@@ -3598,7 +3580,6 @@ public class HashJoinOperator
         // of pointer-chasing chainNext (the one-to-many output loop's cost). Opt-out for A/B.
         private final boolean compactChains;
         private final boolean compressDuplicateReferences;
-        private final boolean lazyDuplicateSlotState;
         private final int expectedBuildRows;
         private boolean rangeCompacted;
         private int directBuildRows;
@@ -3652,14 +3633,18 @@ public class HashJoinOperator
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
             this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
-            this.lazyDuplicateSlotState = lazyDuplicateSlotState;
             this.expectedBuildRows = expectedSize;
             int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             int capacity = 16;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {
                 capacity <<= 1;
             }
-            initialHashCapacity = capacity;
+            hashTable = new LongJoinHashTable(
+                    arrayPool,
+                    capacity,
+                    policy.groupedLongHashTable() && groupedHashTable,
+                    lazyDuplicateSlotState,
+                    EMPTY);
             // Capping the hash table protects sparse/duplicate builds from speculative over-allocation, but a
             // payload-bearing build stores one row reference and one chain link for every buffered row regardless
             // of key cardinality. Its exact row count is already known, so sizing these append-only arrays from the
@@ -3679,7 +3664,6 @@ public class HashJoinOperator
                     EMPTY);
             this.buildRowReferencesUnused = buildRowReferencesUnused;
             this.batchBuild = batchBuild;
-            this.groupedHashTable = policy.groupedLongHashTable() && groupedHashTable;
             if (policy.debugJoinIndex() && keyOnlyDirectRangeBuild) {
                 System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
             }
@@ -3988,15 +3972,15 @@ public class HashJoinOperator
                 counts[index] = 0;
                 return;
             }
-            int slot = findSlot(key);
-            int head = slotHead[slot];
+            int slot = hashTable.findSlot(key);
+            int head = hashTable.head(slot);
             if (head == EMPTY) {
                 starts[index] = 0;
                 counts[index] = 0;
                 return;
             }
             starts[index] = rangeStart[slot];
-            counts[index] = slotCount[slot];
+            counts[index] = hashTable.count(slot);
         }
 
         @Override
@@ -5302,8 +5286,8 @@ public class HashJoinOperator
             if (!sparseRangeContains(key)) {
                 return NO_MATCH_ROW_REFERENCE;
             }
-            int slot = findSlot(key);
-            int head = slotHead[slot];
+            int slot = hashTable.findSlot(key);
+            int head = hashTable.head(slot);
             return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rows.referenceAt(head);
         }
 
@@ -5337,101 +5321,6 @@ public class HashJoinOperator
             return (batchIndex << Short.SIZE) | (rowPosition & JoinRowReference.MAX_COMPACT_POSITION);
         }
 
-        private int findSlot(long key)
-        {
-            ensureHashTable();
-            if (groupedHashTable) {
-                long hash = hash64(key);
-                byte tag = hashTag(hash);
-                int group = ((int) hash) & mask & ~(HASH_TAG_GROUP - 1);
-                while (true) {
-                    ByteVector groupTags = ByteVector.fromArray(HASH_TAG_SPECIES, tags, group);
-                    long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
-                    while (matchBits != 0) {
-                        int slot = group + Long.numberOfTrailingZeros(matchBits);
-                        if (keys[slot] == key) {
-                            return slot;
-                        }
-                        matchBits &= matchBits - 1;
-                    }
-                    long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
-                    if (emptyBits != 0) {
-                        return group + Long.numberOfTrailingZeros(emptyBits);
-                    }
-                    group = (group + HASH_TAG_GROUP) & mask;
-                }
-            }
-            int index = mix(key) & mask;
-            while (true) {
-                if (slotHead[index] == EMPTY || keys[index] == key) {
-                    return index;
-                }
-                index = (index + 1) & mask;
-            }
-        }
-
-        private void ensureHashTable()
-        {
-            if (keys != null) {
-                return;
-            }
-            keys = arrayPool.borrowLongs(initialHashCapacity);
-            if (groupedHashTable) {
-                tags = arrayPool.borrowBytes(initialHashCapacity);
-                Arrays.fill(tags, (byte) 0);
-            }
-            slotHead = arrayPool.borrowInts(initialHashCapacity);
-            Arrays.fill(slotHead, EMPTY);
-            if (!lazyDuplicateSlotState) {
-                slotTail = arrayPool.borrowInts(initialHashCapacity);
-                slotCount = arrayPool.borrowInts(initialHashCapacity);
-            }
-            mask = initialHashCapacity - 1;
-            maxFill = (int) (initialHashCapacity * LOAD_FACTOR);
-        }
-
-        private void rehash()
-        {
-            long[] previousKeys = keys;
-            byte[] previousTags = tags;
-            int[] previousHead = slotHead;
-            int[] previousTail = slotTail;
-            int[] previousCount = slotCount;
-            int capacity = previousKeys.length * 2;
-
-            keys = arrayPool.borrowLongs(capacity);
-            if (groupedHashTable) {
-                tags = arrayPool.borrowBytes(capacity);
-                Arrays.fill(tags, (byte) 0);
-            }
-            slotHead = arrayPool.borrowInts(capacity);
-            Arrays.fill(slotHead, EMPTY);
-            if (previousTail != null) {
-                slotTail = arrayPool.borrowInts(capacity);
-                slotCount = arrayPool.borrowInts(capacity);
-            }
-            mask = capacity - 1;
-            maxFill = (int) (capacity * LOAD_FACTOR);
-            for (int index = 0; index < previousKeys.length; index++) {
-                if (previousHead[index] == EMPTY) {
-                    continue;
-                }
-                int newIndex = findSlot(previousKeys[index]);
-                keys[newIndex] = previousKeys[index];
-                occupySlot(newIndex, previousKeys[index]);
-                slotHead[newIndex] = previousHead[index];
-                if (previousTail != null) {
-                    slotTail[newIndex] = previousTail[index];
-                    slotCount[newIndex] = previousCount[index];
-                }
-            }
-            arrayPool.release(previousKeys);
-            arrayPool.release(previousTags);
-            arrayPool.release(previousHead);
-            arrayPool.release(previousTail);
-            arrayPool.release(previousCount);
-        }
-
         private void addRow(long key, long rowReference)
         {
             buildKeyAnd &= key;
@@ -5459,13 +5348,13 @@ public class HashJoinOperator
                 denseBuildCandidate = false;
                 denseSingleBatchRowReferenceCandidate = false;
             }
-            int slot = findSlot(key);
-            boolean newKey = slotHead[slot] == EMPTY;
+            int slot = hashTable.findSlot(key);
+            boolean newKey = !hashTable.isOccupied(slot);
             if (!newKey) {
                 hasDuplicates = true;
-                ensureDuplicateSlotState();
+                hashTable.ensureDuplicateState();
                 if (compressDuplicateReferences) {
-                    maximumMatchCount = Math.max(maximumMatchCount, ++slotCount[slot]);
+                    maximumMatchCount = Math.max(maximumMatchCount, hashTable.incrementCount(slot));
                     return;
                 }
                 rows.ensureChainState(rowCount);
@@ -5473,43 +5362,16 @@ public class HashJoinOperator
             int ordinal = rowCount++;
             rows.append(ordinal, rowReference);
             if (newKey) {
-                keys[slot] = key;
-                occupySlot(slot, key);
-                slotHead[slot] = ordinal;
-                if (slotTail != null) {
-                    slotTail[slot] = ordinal;
-                    slotCount[slot] = 1;
-                }
+                hashTable.initialize(slot, key, ordinal);
                 maximumMatchCount = Math.max(maximumMatchCount, 1);
                 size++;
                 // Rehash after the slot is populated so it carries a non-empty head into the new table.
-                if (size >= maxFill) {
-                    rehash();
-                }
+                hashTable.growIfNeeded(size);
                 return;
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
-            rows.link(slotTail[slot], ordinal);
-            slotTail[slot] = ordinal;
-            maximumMatchCount = Math.max(maximumMatchCount, ++slotCount[slot]);
-        }
-
-        private void ensureDuplicateSlotState()
-        {
-            if (slotTail != null) {
-                return;
-            }
-            slotTail = arrayPool.borrowInts(slotHead.length);
-            slotCount = arrayPool.borrowInts(slotHead.length);
-            Arrays.fill(slotTail, EMPTY);
-            Arrays.fill(slotCount, 0);
-            for (int slot = 0; slot < slotHead.length; slot++) {
-                int head = slotHead[slot];
-                if (head != EMPTY) {
-                    slotTail[slot] = head;
-                    slotCount[slot] = 1;
-                }
-            }
+            rows.link(hashTable.append(slot, ordinal), ordinal);
+            maximumMatchCount = Math.max(maximumMatchCount, hashTable.count(slot));
         }
 
         private void addDirectRangeRow(int key, long rowReference)
@@ -5585,8 +5447,7 @@ public class HashJoinOperator
         private void materializeDirectRangeBuildAsHash()
         {
             if (hasDuplicates) {
-                ensureHashTable();
-                ensureDuplicateSlotState();
+                hashTable.ensureDuplicateState();
             }
             size = 0;
             for (int key = 0; key < directBuild.capacity(); key++) {
@@ -5595,19 +5456,16 @@ public class HashJoinOperator
                     continue;
                 }
                 int head = directEntryHead(entry);
-                int slot = findSlot(key);
-                keys[slot] = key;
-                occupySlot(slot, key);
-                slotHead[slot] = head;
+                int slot = hashTable.findSlot(key);
                 int count = directEntryCount(key, entry);
-                if (slotTail != null) {
-                    slotTail[slot] = compressDuplicateReferences ? head : directEntryTail(key, entry);
-                    slotCount[slot] = count;
-                }
+                hashTable.initialize(
+                        slot,
+                        key,
+                        head,
+                        compressDuplicateReferences ? head : directEntryTail(key, entry),
+                        count);
                 size++;
-                if (size >= maxFill) {
-                    rehash();
-                }
+                hashTable.growIfNeeded(size);
             }
             releaseDirectBuildArrays();
         }
@@ -5649,28 +5507,20 @@ public class HashJoinOperator
             long key = denseFirstKey;
             size = 0;
             for (int ordinal = 0; ordinal < previousRows; ordinal++) {
-                int slot = findSlot(key++);
-                keys[slot] = key - 1;
-                occupySlot(slot, key - 1);
-                slotHead[slot] = ordinal;
-                if (slotTail != null) {
-                    slotTail[slot] = ordinal;
-                    slotCount[slot] = 1;
-                }
+                int slot = hashTable.findSlot(key++);
+                hashTable.initialize(slot, key - 1, ordinal);
                 size++;
-                if (size >= maxFill) {
-                    rehash();
-                }
+                hashTable.growIfNeeded(size);
             }
         }
 
         private LongList rowsForSlot(int slot, SingleLongList single, ChainLongList chain)
         {
-            int head = slotHead[slot];
+            int head = hashTable.head(slot);
             if (head == EMPTY) {
                 return LongLists.emptyList();
             }
-            int count = slotCount == null ? 1 : slotCount[slot];
+            int count = hashTable.count(slot);
             if (rangeCompacted) {
                 int base = rangeStart[slot];
                 return count == 1 ? single.withValue(orderedRows[base]) : chain.resetRange(orderedRows, base, count);
@@ -5692,20 +5542,20 @@ public class HashJoinOperator
         private void compactChains()
         {
             boolean compressedCandidate = compressedRanges.prepare(
-                    keys,
+                    hashTable,
                     size,
                     rowCount,
                     maximumMatchCount,
                     buildKeyAnd,
                     buildKeyOr);
             long[] ordered = arrayPool.borrowLongs(rowCount);
-            int[] starts = arrayPool.borrowInts(keys.length);
+            int[] starts = arrayPool.borrowInts(hashTable.capacity());
             int cursor = 0;
             int group = 0;
             long compressedMin = Long.MAX_VALUE;
             long compressedMax = Long.MIN_VALUE;
-            for (int slot = 0; slot < keys.length; slot++) {
-                int ordinal = slotHead[slot];
+            for (int slot = 0; slot < hashTable.capacity(); slot++) {
+                int ordinal = hashTable.head(slot);
                 if (ordinal == EMPTY) {
                     continue;
                 }
@@ -5715,7 +5565,7 @@ public class HashJoinOperator
                 else {
                     starts[group] = slot;
                     starts[size + group] = cursor;
-                    long compressed = compressedRanges.compress(keys[slot]);
+                    long compressed = compressedRanges.compress(hashTable.key(slot));
                     compressedMin = Math.min(compressedMin, compressed);
                     compressedMax = Math.max(compressedMax, compressed);
                     group++;
@@ -5726,7 +5576,7 @@ public class HashJoinOperator
                 }
             }
             if (compressedCandidate) {
-                compressedRanges.build(keys, slotCount, starts, size, rowCount, compressedMin, compressedMax);
+                compressedRanges.build(hashTable, starts, size, rowCount, compressedMin, compressedMax);
                 arrayPool.release(starts);
                 starts = null;
             }
@@ -5826,10 +5676,10 @@ public class HashJoinOperator
                 else {
                     int[] direct = arrayPool.borrowInts((int) range);
                     Arrays.fill(direct, NO_MATCH_ROW_REFERENCE32);
-                    for (int slot = 0; slot < keys.length; slot++) {
-                        int head = slotHead[slot];
+                    for (int slot = 0; slot < hashTable.capacity(); slot++) {
+                        int head = hashTable.head(slot);
                         if (head != EMPTY) {
-                            direct[(int) (keys[slot] - minKey)] = JoinRowReference.packCompact(rows.referenceAt(head));
+                            direct[(int) (hashTable.key(slot) - minKey)] = JoinRowReference.packCompact(rows.referenceAt(head));
                         }
                     }
                     directRows32 = direct;
@@ -5848,10 +5698,10 @@ public class HashJoinOperator
             }
             long[] direct = arrayPool.borrowLongs((int) range);
             Arrays.fill(direct, NO_MATCH_ROW_REFERENCE);
-            for (int slot = 0; slot < keys.length; slot++) {
-                int head = slotHead[slot];
+            for (int slot = 0; slot < hashTable.capacity(); slot++) {
+                int head = hashTable.head(slot);
                 if (head != EMPTY) {
-                    direct[(int) (keys[slot] - minKey)] = rows.referenceAt(head);
+                    direct[(int) (hashTable.key(slot) - minKey)] = rows.referenceAt(head);
                 }
             }
             directRows = direct;
@@ -5989,12 +5839,12 @@ public class HashJoinOperator
             if (!sparseRangeContains(key)) {
                 return LongLists.emptyList();
             }
-            return rowsForSlot(findSlot(key), single, chain);
+            return rowsForSlot(hashTable.findSlot(key), single, chain);
         }
 
         private void buildSparseRangeMembership()
         {
-            sparseMembership.build(keys, slotHead, EMPTY, minKey, maxKey, size);
+            sparseMembership.build(hashTable, minKey, maxKey, size);
         }
 
         @Override
@@ -6031,16 +5881,7 @@ public class HashJoinOperator
 
         private void releaseHashTable()
         {
-            arrayPool.release(keys);
-            keys = null;
-            arrayPool.release(tags);
-            tags = null;
-            arrayPool.release(slotHead);
-            slotHead = null;
-            arrayPool.release(slotTail);
-            slotTail = null;
-            arrayPool.release(slotCount);
-            slotCount = null;
+            hashTable.release();
         }
 
         private void releaseRowArrays()
@@ -6051,33 +5892,6 @@ public class HashJoinOperator
         private void releaseDirectBuildArrays()
         {
             directBuild.release();
-        }
-
-        private static int mix(long key)
-        {
-            return (int) hash64(key);
-        }
-
-        private static long hash64(long key)
-        {
-            long hash = key ^ (key >>> 33);
-            hash *= 0xFF51AFD7ED558CCDL;
-            hash ^= (hash >>> 33);
-            hash *= 0xC4CEB9FE1A85EC53L;
-            hash ^= (hash >>> 33);
-            return hash;
-        }
-
-        private static byte hashTag(long hash)
-        {
-            return (byte) ((hash >>> 56) | 0x80L);
-        }
-
-        private void occupySlot(int slot, long key)
-        {
-            if (groupedHashTable) {
-                tags[slot] = hashTag(hash64(key));
-            }
         }
 
         private void matchLongRows(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)

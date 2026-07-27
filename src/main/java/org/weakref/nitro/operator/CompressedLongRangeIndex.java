@@ -56,7 +56,7 @@ final class CompressedLongRangeIndex
     }
 
     boolean prepare(
-            long[] keys,
+            LongJoinHashTable hashTable,
             int distinctSize,
             int rowCount,
             int maximumMatchCount,
@@ -64,11 +64,11 @@ final class CompressedLongRangeIndex
             long keyOr)
     {
         if (!enabled ||
-                keys == null ||
+                !hashTable.isAllocated() ||
                 distinctSize < minimumKeys ||
                 rowCount > START_MASK ||
                 maximumMatchCount > MAX_COUNT ||
-                (long) distinctSize * 2 > keys.length) {
+                (long) distinctSize * 2 > hashTable.capacity()) {
             return false;
         }
         long candidateVariableMask = keyAnd ^ keyOr;
@@ -93,8 +93,7 @@ final class CompressedLongRangeIndex
     }
 
     void build(
-            long[] keys,
-            int[] matchCounts,
+            LongJoinHashTable hashTable,
             int[] slotsAndStarts,
             int distinctSize,
             int rowCount,
@@ -106,8 +105,8 @@ final class CompressedLongRangeIndex
         Arrays.fill(direct, 0);
         for (int index = 0; index < distinctSize; index++) {
             int slot = slotsAndStarts[index];
-            int ordinal = (int) (compress(keys[slot]) - minimumOrdinal);
-            direct[ordinal] = matchCounts[slot] << 24 | (slotsAndStarts[distinctSize + index] + 1);
+            int ordinal = (int) (compress(hashTable.key(slot)) - minimumOrdinal);
+            direct[ordinal] = hashTable.count(slot) << 24 | (slotsAndStarts[distinctSize + index] + 1);
         }
         entries = direct;
         this.minimumOrdinal = minimumOrdinal;
