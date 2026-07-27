@@ -3589,8 +3589,7 @@ public class HashJoinOperator
         // Exact membership filter for a sparse but bounded integer domain.  One bit per possible key lets a
         // predominantly-negative probe avoid the larger tag/key hash table entirely.  Unlike a Bloom filter this
         // has no false positives; the hash table is consulted only for keys whose bit is present.
-        private long[] sparseMembership;
-        private int sparseMembershipRange;
+        private final SparseLongRangeMembership sparseMembership;
         private boolean rowReferencesFit32;
         private boolean denseBuildCandidate;
         private long denseFirstKey;
@@ -3654,6 +3653,7 @@ public class HashJoinOperator
             this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
             this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
+            this.sparseMembership = new SparseLongRangeMembership(policy, arrayPool);
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
@@ -6169,23 +6169,7 @@ public class HashJoinOperator
 
         private void buildSparseRangeMembership()
         {
-            if (!policy.sparseLongRangeMembership() || keys == null || sparseMembership != null) {
-                return;
-            }
-            long range = maxKey - minKey + 1;
-            if (range <= 0 || range > policy.maxArrayRange() || range < (long) size * policy.sparseLongRangeMinRatio()) {
-                return;
-            }
-            sparseMembershipRange = (int) range;
-            sparseMembership = arrayPool.borrowLongs((sparseMembershipRange + Long.SIZE - 1) / Long.SIZE);
-            Arrays.fill(sparseMembership, 0L);
-            for (int slot = 0; slot < keys.length; slot++) {
-                if (slotHead[slot] == EMPTY) {
-                    continue;
-                }
-                int ordinal = (int) (keys[slot] - minKey);
-                sparseMembership[ordinal >>> 6] |= 1L << ordinal;
-            }
+            sparseMembership.build(keys, slotHead, EMPTY, minKey, maxKey, size);
         }
 
         private boolean prepareCompressedDirectRanges()
@@ -6230,20 +6214,12 @@ public class HashJoinOperator
         DynamicFilter buildDynamicFilter(int probeColumn)
         {
             buildSparseRangeMembership();
-            if (sparseMembership == null) {
-                return null;
-            }
-            return DynamicFilter.fromExactBitset(probeColumn, minKey, maxKey, sparseMembership, size);
+            return sparseMembership.dynamicFilter(probeColumn);
         }
 
         private boolean sparseRangeContains(long key)
         {
-            if (sparseMembership == null) {
-                return true;
-            }
-            long ordinal = key - minKey;
-            return ordinal >= 0 && ordinal < sparseMembershipRange &&
-                    (sparseMembership[(int) ordinal >>> 6] & (1L << (int) ordinal)) != 0;
+            return sparseMembership.contains(key);
         }
 
         private void observeRowReference(long rowReference)
@@ -6375,8 +6351,7 @@ public class HashJoinOperator
             directRows = null;
             arrayPool.release(directRows32);
             directRows32 = null;
-            arrayPool.release(sparseMembership);
-            sparseMembership = null;
+            sparseMembership.release();
             arrayPool.release(orderedRows);
             orderedRows = null;
             arrayPool.release(rangeStart);
