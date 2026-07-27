@@ -16,7 +16,6 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
-import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
@@ -33,6 +32,7 @@ final class FlatJoinIndex
     private final HashJoinIndexPolicy policy;
     private final PrimitiveArrayPool arrayPool;
     private final FlatGroupingTable table;
+    private final FlatJoinDictionaryProbeCache dictionaryProbeCache;
     private final boolean primitiveSingleRows;
     private long[] singleRows;
     private LongArrayList[] duplicateRows;
@@ -41,16 +41,12 @@ final class FlatJoinIndex
     private boolean hasDuplicates;
     private long nextGroupId;
     private boolean debugProbeShapePrinted;
-    private Vector dictionaryProbeIdentity;
-    private long dictionaryProbeGeneration = -1;
-    private int[] dictionaryProbeGroups;
-    private final Vector[] dictionaryProbeValues = new Vector[1];
-    private boolean debugDictionaryProbeCachePrinted;
 
     FlatJoinIndex(HashJoinIndexPolicy policy, FlatKeyLayout layout, int expectedSize)
     {
         this.policy = requireNonNull(policy, "policy is null");
         this.arrayPool = layout.primitiveArrays();
+        this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
         int initialSize = Math.max(16, expectedSize);
         this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
         this.table = new FlatGroupingTable(
@@ -167,7 +163,7 @@ final class FlatJoinIndex
             LongList[] matches,
             SingleLongList[] singleMatches)
     {
-        int[] dictionaryGroups = prepareDictionaryProbeCache(values, positionCount);
+        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -218,7 +214,7 @@ final class FlatJoinIndex
                     values.length,
                     Arrays.stream(values).map(FlatJoinIndex::probeShape).toList());
         }
-        int[] dictionaryGroups = prepareDictionaryProbeCache(values, positionCount);
+        int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
@@ -243,57 +239,6 @@ final class FlatJoinIndex
         }
     }
 
-    /**
-     * Resolves a small encoded domain once, then maps probe rows through dictionary ids. The exact flat table
-     * remains authoritative for each base entry's first lookup. Identity alone is insufficient because pooled
-     * binary vectors are reused; a cache generation is valid only while both identity and content generation
-     * match. Large or weakly reused dictionaries retain the ordinary row-at-a-time probe path.
-     */
-    private int[] prepareDictionaryProbeCache(Vector[] values, int positionCount)
-    {
-        if (!policy.flatDictionaryProbeCache() ||
-                values.length != 1 ||
-                !(values[0] instanceof DictionaryVector dictionary)) {
-            return null;
-        }
-        Vector base = dictionary.baseValues();
-        if (!(base instanceof BinaryVector)) {
-            return null;
-        }
-        int cardinality = base.length();
-        long generation = base.contentGeneration();
-        if (generation < 0 ||
-                cardinality == 0 ||
-                cardinality > policy.flatDictionaryProbeCacheMaxCardinality() ||
-                (long) cardinality * policy.flatDictionaryProbeCacheMinRowsPerEntry() > positionCount) {
-            return null;
-        }
-        if (dictionaryProbeGroups == null || dictionaryProbeGroups.length < cardinality) {
-            int[] previous = dictionaryProbeGroups;
-            dictionaryProbeGroups = arrayPool.borrowInts(cardinality);
-            arrayPool.release(previous);
-            dictionaryProbeIdentity = null;
-            dictionaryProbeGeneration = -1;
-        }
-        if (base != dictionaryProbeIdentity || generation != dictionaryProbeGeneration) {
-            dictionaryProbeValues[0] = base;
-            for (int dictionaryId = 0; dictionaryId < cardinality; dictionaryId++) {
-                dictionaryProbeGroups[dictionaryId] = (int) table.findGroup(dictionaryProbeValues, dictionaryId);
-            }
-            dictionaryProbeIdentity = base;
-            dictionaryProbeGeneration = generation;
-        }
-        if (policy.debugJoinIndex() && !debugDictionaryProbeCachePrinted) {
-            debugDictionaryProbeCachePrinted = true;
-            System.err.printf("[flat-join-dictionary-cache] groups=%d rows=%d cardinality=%d depth=%d%n",
-                    nextGroupId,
-                    positionCount,
-                    cardinality,
-                    dictionary.dictionaryDepth());
-        }
-        return dictionaryProbeGroups;
-    }
-
     private static String probeShape(Vector value)
     {
         if (value instanceof DictionaryVector dictionary) {
@@ -312,12 +257,8 @@ final class FlatJoinIndex
         if (singleRows != null) {
             arrayPool.release(singleRows);
         }
-        if (dictionaryProbeGroups != null) {
-            arrayPool.release(dictionaryProbeGroups);
-        }
+        dictionaryProbeCache.release();
         singleRows = null;
-        dictionaryProbeGroups = null;
-        dictionaryProbeIdentity = null;
         duplicateRows = null;
         legacyRowsByGroup = null;
     }
