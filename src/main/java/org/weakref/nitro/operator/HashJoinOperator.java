@@ -3624,12 +3624,7 @@ public class HashJoinOperator
         // Removing those bits with Long.compress produces an exact dense ordinal without teaching the join about a
         // query, column, or logical type. Each nonzero entry packs an ordered-row start + 1 in 24 bits and the match
         // count in 8 bits, preserving the same insertion-ordered slices as the ordinary compacted hash representation.
-        private static final int COMPRESSED_DIRECT_START_MASK = 0x00FF_FFFF;
-        private static final int COMPRESSED_DIRECT_MAX_COUNT = 0xFF;
-        private int[] compressedDirectRanges;
-        private long compressedDirectVariableMask;
-        private long compressedDirectInvariantBits;
-        private long compressedDirectMin;
+        private final CompressedLongRangeIndex compressedRanges;
         private final SingleLongList singleMatch = new SingleLongList();
         private final ChainLongList scalarChain = new ChainLongList();
         private ChainLongList[] chainMatches;
@@ -3654,6 +3649,13 @@ public class HashJoinOperator
             this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
             this.sparseMembership = new SparseLongRangeMembership(policy, arrayPool);
+            this.compressedRanges = new CompressedLongRangeIndex(
+                    arrayPool,
+                    policy.compressedDirectRange(),
+                    policy.compressedDirectRangeMinKeys(),
+                    policy.compressedDirectRangeMaxEntries(),
+                    policy.compressedDirectRangeMaxRatio(),
+                    policy.debugCompressedDirectRange());
             this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
@@ -3998,10 +4000,10 @@ public class HashJoinOperator
 
         private void setRowRange(long key, int index, int[] starts, int[] counts)
         {
-            if (compressedDirectRanges != null) {
-                int entry = compressedDirectRangeEntry(key);
-                starts[index] = entry == 0 ? 0 : (entry & COMPRESSED_DIRECT_START_MASK) - 1;
-                counts[index] = entry >>> 24;
+            if (compressedRanges.isBuilt()) {
+                int entry = compressedRanges.entry(key);
+                starts[index] = CompressedLongRangeIndex.start(entry);
+                counts[index] = CompressedLongRangeIndex.count(entry);
                 return;
             }
             if (!sparseRangeContains(key)) {
@@ -5848,7 +5850,13 @@ public class HashJoinOperator
          */
         private void compactChains()
         {
-            boolean compressedCandidate = prepareCompressedDirectRanges();
+            boolean compressedCandidate = compressedRanges.prepare(
+                    keys,
+                    size,
+                    rowCount,
+                    maximumMatchCount,
+                    buildKeyAnd,
+                    buildKeyOr);
             long[] ordered = arrayPool.borrowLongs(rowCount);
             int[] starts = arrayPool.borrowInts(keys.length);
             int cursor = 0;
@@ -5866,7 +5874,7 @@ public class HashJoinOperator
                 else {
                     starts[group] = slot;
                     starts[size + group] = cursor;
-                    long compressed = Long.compress(keys[slot], compressedDirectVariableMask);
+                    long compressed = compressedRanges.compress(keys[slot]);
                     compressedMin = Math.min(compressedMin, compressed);
                     compressedMax = Math.max(compressedMax, compressed);
                     group++;
@@ -5877,34 +5885,15 @@ public class HashJoinOperator
                 }
             }
             if (compressedCandidate) {
-                int range = (int) (compressedMax - compressedMin + 1);
-                int[] direct = arrayPool.borrowInts(range);
-                Arrays.fill(direct, 0);
-                for (int index = 0; index < size; index++) {
-                    int slot = starts[index];
-                    int directOrdinal = (int) (Long.compress(keys[slot], compressedDirectVariableMask) - compressedMin);
-                    direct[directOrdinal] = slotCount[slot] << 24 | (starts[size + index] + 1);
-                }
-                compressedDirectRanges = direct;
-                compressedDirectMin = compressedMin;
+                compressedRanges.build(keys, slotCount, starts, size, rowCount, compressedMin, compressedMax);
                 arrayPool.release(starts);
                 starts = null;
-                if (policy.debugCompressedDirectRange()) {
-                    System.err.printf(
-                            "[compressed-direct-range] admitted rows=%d keys=%d variableBits=%d range=%d ratio=%.3f bytes=%d%n",
-                            rowCount,
-                            size,
-                            Long.bitCount(compressedDirectVariableMask),
-                            range,
-                            (double) range / size,
-                            (long) range * Integer.BYTES);
-                }
             }
             orderedRows = ordered;
             rangeStart = starts;
             rangeCompacted = true;
             releaseRowArrays();
-            if (compressedDirectRanges != null) {
+            if (compressedRanges.isBuilt()) {
                 releaseHashTable();
             }
         }
@@ -6115,13 +6104,13 @@ public class HashJoinOperator
 
         private LongList rowsForKey(long key, SingleLongList single, ChainLongList chain)
         {
-            if (compressedDirectRanges != null) {
-                int entry = compressedDirectRangeEntry(key);
+            if (compressedRanges.isBuilt()) {
+                int entry = compressedRanges.entry(key);
                 if (entry == 0) {
                     return LongLists.emptyList();
                 }
-                int start = (entry & COMPRESSED_DIRECT_START_MASK) - 1;
-                int count = entry >>> 24;
+                int start = CompressedLongRangeIndex.start(entry);
+                int count = CompressedLongRangeIndex.count(entry);
                 return count == 1 ? single.withValue(orderedRows[start]) : chain.resetRange(orderedRows, start, count);
             }
             if (directRangeBuild) {
@@ -6170,44 +6159,6 @@ public class HashJoinOperator
         private void buildSparseRangeMembership()
         {
             sparseMembership.build(keys, slotHead, EMPTY, minKey, maxKey, size);
-        }
-
-        private boolean prepareCompressedDirectRanges()
-        {
-            if (!policy.compressedDirectRange() ||
-                    keys == null ||
-                    size < policy.compressedDirectRangeMinKeys() ||
-                    rowCount > COMPRESSED_DIRECT_START_MASK ||
-                    maximumMatchCount > COMPRESSED_DIRECT_MAX_COUNT ||
-                    (long) size * 2 > keys.length) {
-                return false;
-            }
-            long variableMask = buildKeyAnd ^ buildKeyOr;
-            int variableBits = Long.bitCount(variableMask);
-            if (variableBits >= Long.SIZE - 1) {
-                return false;
-            }
-            long range = 1L << variableBits;
-            if (range <= 0 ||
-                    range > policy.compressedDirectRangeMaxEntries() ||
-                    range > (long) size * policy.compressedDirectRangeMaxRatio()) {
-                return false;
-            }
-            compressedDirectVariableMask = variableMask;
-            compressedDirectInvariantBits = buildKeyAnd & ~variableMask;
-            return true;
-        }
-
-        private int compressedDirectRangeEntry(long key)
-        {
-            long variableMask = compressedDirectVariableMask;
-            if (((key ^ compressedDirectInvariantBits) & ~variableMask) != 0) {
-                return 0;
-            }
-            long ordinal = Long.compress(key, variableMask) - compressedDirectMin;
-            return ordinal >= 0 && ordinal < compressedDirectRanges.length
-                    ? compressedDirectRanges[(int) ordinal]
-                    : 0;
         }
 
         @Override
@@ -6356,8 +6307,7 @@ public class HashJoinOperator
             orderedRows = null;
             arrayPool.release(rangeStart);
             rangeStart = null;
-            arrayPool.release(compressedDirectRanges);
-            compressedDirectRanges = null;
+            compressedRanges.release();
             arrayPool.release(denseDictionaryPositionScratch);
             denseDictionaryPositionScratch = null;
         }
