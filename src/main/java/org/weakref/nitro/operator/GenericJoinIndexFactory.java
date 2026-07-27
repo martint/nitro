@@ -26,15 +26,18 @@ final class GenericJoinIndexFactory
     private final OperatorCodeGenerationResources codeGeneration;
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final HashJoinIndexPolicy joinIndexPolicy;
+    private final HashJoinExecutionPolicy executionPolicy;
 
     GenericJoinIndexFactory(
             OperatorCodeGenerationResources codeGeneration,
             FlatKeyTablePolicy flatKeyTablePolicy,
-            HashJoinIndexPolicy joinIndexPolicy)
+            HashJoinIndexPolicy joinIndexPolicy,
+            HashJoinExecutionPolicy executionPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.flatKeyTablePolicy = requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
         this.joinIndexPolicy = requireNonNull(joinIndexPolicy, "joinIndexPolicy is null");
+        this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
     }
 
     JoinIndex structural(StructuralKeyKernel[] kernels)
@@ -42,12 +45,24 @@ final class GenericJoinIndexFactory
         return new StructuralHashJoinIndex(kernels);
     }
 
-    JoinIndex flatOrObject(Vector[] values, PrimitiveArrayPool arrayPool, int expectedSize)
+    JoinIndex create(Vector[] values, PrimitiveArrayPool arrayPool, int expectedSize)
     {
+        if (values.length == 3 &&
+                isLong(values[0]) &&
+                isLong(values[1]) &&
+                isLong(values[2])) {
+            return new LongTripleJoinIndex(executionPolicy, arrayPool, expectedSize);
+        }
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration, flatKeyTablePolicy);
         if (layout != null) {
             return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
         }
         return new ObjectJoinIndex(values.length);
+    }
+
+    private static boolean isLong(Vector values)
+    {
+        FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
+        return handler != null && handler.kind() == FlatTypeHandler.Kind.LONG;
     }
 }

@@ -87,7 +87,8 @@ public final class OperatorResources
         this.genericJoinIndexes = new GenericJoinIndexFactory(
                 codeGeneration,
                 flatKeyTablePolicy,
-                hashJoin.indexPolicy());
+                hashJoin.indexPolicy(),
+                hashJoin.executionPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
