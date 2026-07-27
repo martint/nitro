@@ -25,6 +25,15 @@ import static java.util.Objects.requireNonNull;
 /// not branch on their identities or Java carrier classes.
 public interface TypeBinding
 {
+    /// Whether this binding contains plan-time logical type information.
+    ///
+    /// False is reserved for the temporary compatibility binding returned by
+    /// [Schema#unspecified(int)]. Registry-provided bindings are always specified.
+    default boolean isSpecified()
+    {
+        return true;
+    }
+
     TypeIdentity identity();
 
     Class<?> carrierType();

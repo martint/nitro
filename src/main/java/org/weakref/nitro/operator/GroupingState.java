@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -46,6 +47,7 @@ final class GroupingState
     private final GroupingStateResources resources;
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy;
     private final FlatKeyTablePolicy flatKeyTablePolicy;
+    private final List<TypeBinding> keyTypes;
     private final LongGroupingPolicy longPolicy;
     private final CompositeGroupingPolicy compositePolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
@@ -127,11 +129,23 @@ final class GroupingState
             AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
             FlatKeyTablePolicy flatKeyTablePolicy)
     {
+        this(arrayPool, codeGeneration, resources, adaptiveLongGroupingPolicy, flatKeyTablePolicy, List.of());
+    }
+
+    GroupingState(
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            GroupingStateResources resources,
+            AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
+            FlatKeyTablePolicy flatKeyTablePolicy,
+            List<TypeBinding> keyTypes)
+    {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
         this.resources = resources;
         this.adaptiveLongGroupingPolicy = adaptiveLongGroupingPolicy;
         this.flatKeyTablePolicy = flatKeyTablePolicy;
+        this.keyTypes = List.copyOf(keyTypes);
         this.longPolicy = resources.longGroupingPolicy();
         this.compositePolicy = resources.compositeGroupingPolicy();
         this.longDirectNextCheck = longPolicy.directMinGroups();
@@ -885,6 +899,7 @@ final class GroupingState
 
     private void initializeIfNecessary(Vector[] values, Vector[] nulls)
     {
+        validateKeyTypes(values);
         if (initialized) {
             return;
         }
@@ -1112,6 +1127,22 @@ final class GroupingState
         }
         finally {
             arrayPool.release(hashes);
+        }
+    }
+
+    private void validateKeyTypes(Vector[] values)
+    {
+        if (keyTypes.isEmpty()) {
+            return;
+        }
+        if (keyTypes.size() != values.length) {
+            throw new IllegalArgumentException("Grouping key type count does not match input arity");
+        }
+        for (int index = 0; index < values.length; index++) {
+            TypeBinding type = keyTypes.get(index);
+            if (type.isSpecified() && !type.supportsVector(values[index])) {
+                throw new IllegalArgumentException("Grouping key vector is not supported by type " + type.identity());
+            }
         }
     }
 

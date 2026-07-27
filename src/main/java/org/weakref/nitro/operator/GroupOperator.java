@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -21,6 +23,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -65,11 +68,24 @@ public class GroupOperator
                 operatorResources.codeGeneration(),
                 operatorResources.grouping(),
                 operatorResources.adaptiveLongGroupingPolicy(),
-                operatorResources.flatKeyTablePolicy());
+                operatorResources.flatKeyTablePolicy(),
+                groupingTypes(source.outputSchema(), groupByColumns));
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
         this.groupValues = new Vector[groupByColumns.length];
         this.groupNulls = new Vector[groupByColumns.length];
+    }
+
+    private static List<TypeBinding> groupingTypes(Schema sourceSchema, int[] groupByColumns)
+    {
+        for (int column : groupByColumns) {
+            if (column < 0 || column >= sourceSchema.size()) {
+                return List.of();
+            }
+        }
+        return Arrays.stream(groupByColumns)
+                .mapToObj(column -> sourceSchema.field(column).type())
+                .toList();
     }
 
     @Override

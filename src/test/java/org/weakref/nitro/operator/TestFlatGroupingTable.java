@@ -14,6 +14,9 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -26,8 +29,11 @@ import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestFlatGroupingTable
 {
@@ -37,6 +43,57 @@ class TestFlatGroupingTable
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testGroupingRejectsLaterVectorOutsidePlanTimeTypeBinding()
+    {
+        TypeBinding binaryOnly = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:binary-only");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return byte[].class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(BinaryVector.class);
+            }
+        };
+        GroupingState state = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(binaryOnly));
+        state.assignGroups(
+                utf8("supported"),
+                null,
+                Mask.all(1),
+                new I64Vector(1));
+
+        assertThatThrownBy(() -> state.assignGroups(
+                new I64Vector(new long[] {1}),
+                null,
+                Mask.all(1),
+                new I64Vector(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("testing:binary-only");
+    }
 
     @Test
     void testGeneratedDictionaryHashNullFreePairRequiresEnoughRows()

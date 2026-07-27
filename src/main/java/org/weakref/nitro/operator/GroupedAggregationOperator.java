@@ -15,6 +15,8 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
@@ -208,8 +210,19 @@ public class GroupedAggregationOperator
                         operatorResources.codeGeneration(),
                         operatorResources.grouping(),
                         operatorResources.adaptiveLongGroupingPolicy(),
-                        operatorResources.flatKeyTablePolicy()),
+                        operatorResources.flatKeyTablePolicy(),
+                        groupingTypes(source.outputSchema(), groupByColumns)),
                 requireNonNull(operatorResources, "operatorResources is null"));
+    }
+
+    private static List<TypeBinding> groupingTypes(Schema sourceSchema, List<Integer> groupByColumns)
+    {
+        if (groupByColumns.stream().anyMatch(column -> column < 0 || column >= sourceSchema.size())) {
+            return List.of();
+        }
+        return groupByColumns.stream()
+                .map(column -> sourceSchema.field(column).type())
+                .toList();
     }
 
     private GroupedAggregationOperator(

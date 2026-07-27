@@ -26,6 +26,12 @@ public record Schema(List<Field> fields)
         private static final TypeIdentity IDENTITY = new TypeIdentity("nitro:unspecified");
 
         @Override
+        public boolean isSpecified()
+        {
+            return false;
+        }
+
+        @Override
         public TypeIdentity identity()
         {
             return IDENTITY;
