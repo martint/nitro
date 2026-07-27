@@ -1422,15 +1422,18 @@ public class TestOperators
     void testGroupOperatorPreservesSourceSchemaAfterGroupId()
     {
         TypeBinding i32Only = i32OnlyType();
+        Field groupId = new Field("group_id", i32Only, false);
         Field first = new Field("first", i32Only, false);
         Field second = new Field("second", i32Only, true);
         Schema sourceSchema = new Schema(List.of(first, second));
 
         try (GroupOperator group = new GroupOperator(
                 allocator,
-                0,
-                typedTable(sourceSchema))) {
-            assertThat(group.outputSchema().field(0).type().isSpecified()).isFalse();
+                new int[] {0},
+                typedTable(sourceSchema),
+                groupId,
+                allocator.engineResources().operatorResources())) {
+            assertThat(group.outputSchema().field(0)).isSameAs(groupId);
             assertThat(group.outputSchema().field(1)).isSameAs(first);
             assertThat(group.outputSchema().field(2)).isSameAs(second);
         }
@@ -1590,6 +1593,7 @@ public class TestOperators
     void testMarkerOperatorsPreserveSourceSchema()
     {
         TypeBinding i32Only = i32OnlyType();
+        Field marker = new Field("marker", i32Only, false);
         Field key = new Field("key", i32Only, false);
         Field payload = new Field("payload", i32Only, true);
         Schema sourceSchema = new Schema(List.of(key, payload));
@@ -1600,6 +1604,7 @@ public class TestOperators
                 new int[] {0},
                 typedTable(sourceSchema),
                 false,
+                marker,
                 allocator.engineResources().operatorResources());
                 Operator filteringSemiJoin = new SemiJoinOperator(
                         allocator,
@@ -1616,19 +1621,19 @@ public class TestOperators
                         typedTable(keySchema),
                         0,
                         true,
-                        true)) {
+                        marker,
+                        allocator.engineResources().operatorResources())) {
             assertThat(filteringSemiJoin.outputSchema()).isSameAs(sourceSchema);
-            assertMarkerSchema(distinct.outputSchema(), key, payload);
-            assertMarkerSchema(markingSemiJoin.outputSchema(), key, payload);
+            assertMarkerSchema(distinct.outputSchema(), key, payload, marker);
+            assertMarkerSchema(markingSemiJoin.outputSchema(), key, payload, marker);
         }
     }
 
-    private static void assertMarkerSchema(Schema schema, Field key, Field payload)
+    private static void assertMarkerSchema(Schema schema, Field key, Field payload, Field marker)
     {
         assertThat(schema.field(0)).isSameAs(key);
         assertThat(schema.field(1)).isSameAs(payload);
-        assertThat(schema.field(2).type().isSpecified()).isFalse();
-        assertThat(schema.field(2).nullable()).isFalse();
+        assertThat(schema.field(2)).isSameAs(marker);
     }
 
     @Test

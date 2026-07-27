@@ -61,6 +61,21 @@ public class GroupOperator
 
     public GroupOperator(Allocator allocator, int[] groupByColumns, Operator source, OperatorResources operatorResources)
     {
+        this(
+                allocator,
+                groupByColumns,
+                source,
+                new Field(Schema.unspecified(1).field(0).type(), false),
+                operatorResources);
+    }
+
+    public GroupOperator(
+            Allocator allocator,
+            int[] groupByColumns,
+            Operator source,
+            Field groupIdField,
+            OperatorResources operatorResources)
+    {
         this.allocator = allocator;
         operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.allocationContext = new Allocator.Context(
@@ -75,7 +90,7 @@ public class GroupOperator
                 groupingTypes(source.outputSchema(), groupByColumns));
         this.groupByColumns = groupByColumns.clone();
         this.source = source;
-        this.outputSchema = outputSchema(source.outputSchema());
+        this.outputSchema = outputSchema(source.outputSchema(), groupIdField);
         this.groupValues = new Vector[groupByColumns.length];
         this.groupNulls = new Vector[groupByColumns.length];
     }
@@ -104,10 +119,10 @@ public class GroupOperator
         return outputSchema;
     }
 
-    private static Schema outputSchema(Schema sourceSchema)
+    private static Schema outputSchema(Schema sourceSchema, Field groupIdField)
     {
         List<Field> fields = new ArrayList<>(sourceSchema.size() + 1);
-        fields.add(Schema.unspecified(1).field(0));
+        fields.add(requireNonNull(groupIdField, "groupIdField is null"));
         fields.addAll(sourceSchema.fields());
         return new Schema(fields);
     }

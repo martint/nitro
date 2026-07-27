@@ -39,6 +39,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
+import static java.util.Objects.requireNonNull;
+
 public class SemiJoinOperator
         implements Operator
 {
@@ -53,6 +55,7 @@ public class SemiJoinOperator
     private final MembershipSet membership;
     private final PositionScratch selectionScratch;
     private final SemiJoinOperatorPolicy policy;
+    private final Schema outputSchema;
 
     private boolean loaded;
     private BatchState currentBatchState;
@@ -94,6 +97,51 @@ public class SemiJoinOperator
             boolean outputMatches,
             OperatorResources operatorResources)
     {
+        this(
+                allocator,
+                outer,
+                outerJoinColumn,
+                inner,
+                innerJoinColumn,
+                includeMatches,
+                outputMatches,
+                outputMatches ? new Field(Schema.unspecified(1).field(0).type(), false) : null,
+                operatorResources);
+    }
+
+    public SemiJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int outerJoinColumn,
+            Operator inner,
+            int innerJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            OperatorResources operatorResources)
+    {
+        this(
+                allocator,
+                outer,
+                outerJoinColumn,
+                inner,
+                innerJoinColumn,
+                includeMatches,
+                true,
+                matchField,
+                operatorResources);
+    }
+
+    private SemiJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int outerJoinColumn,
+            Operator inner,
+            int innerJoinColumn,
+            boolean includeMatches,
+            boolean outputMatches,
+            Field matchField,
+            OperatorResources operatorResources)
+    {
         this.outer = outer;
         this.inner = inner;
         this.outerJoinColumn = outerJoinColumn;
@@ -106,6 +154,10 @@ public class SemiJoinOperator
         this.policy = operatorResources.semiJoinPolicy();
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
+        if (outputMatches) {
+            requireNonNull(matchField, "matchField is null");
+        }
+        this.outputSchema = outputSchema(outer.outputSchema(), matchField);
         this.membership = new MembershipSet(
                 allocator,
                 allocationContext,
@@ -149,12 +201,16 @@ public class SemiJoinOperator
     @Override
     public Schema outputSchema()
     {
-        Schema outerSchema = outer.outputSchema();
-        if (!outputMatches) {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema outerSchema, Field matchField)
+    {
+        if (matchField == null) {
             return outerSchema;
         }
         List<Field> fields = new ArrayList<>(outerSchema.fields());
-        fields.add(new Field(Schema.unspecified(1).field(0).type(), false));
+        fields.add(matchField);
         return new Schema(fields);
     }
 

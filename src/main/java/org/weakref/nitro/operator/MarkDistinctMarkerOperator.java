@@ -28,6 +28,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Appends a non-null Boolean column that marks the first occurrence of each key while preserving
  * every source row. The marker exposes a direct mask resolver, allowing filtered aggregation to
@@ -52,6 +54,7 @@ public final class MarkDistinctMarkerOperator
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final Vector[] values;
     private final Vector[] nulls;
+    private final Schema outputSchema;
 
     private DistinctKeySet distinctKeySet;
     private int[] distinctPositions = EMPTY_POSITIONS;
@@ -59,6 +62,23 @@ public final class MarkDistinctMarkerOperator
     private BatchState currentBatchState;
 
     public MarkDistinctMarkerOperator(Allocator allocator, int[] distinctColumns, Operator source, boolean retainNulls, OperatorResources operatorResources)
+    {
+        this(
+                allocator,
+                distinctColumns,
+                source,
+                retainNulls,
+                new Field(Schema.unspecified(1).field(0).type(), false),
+                operatorResources);
+    }
+
+    public MarkDistinctMarkerOperator(
+            Allocator allocator,
+            int[] distinctColumns,
+            Operator source,
+            boolean retainNulls,
+            Field markerField,
+            OperatorResources operatorResources)
     {
         if (distinctColumns.length == 0) {
             throw new IllegalArgumentException("distinctColumns is empty");
@@ -76,6 +96,7 @@ public final class MarkDistinctMarkerOperator
         this.distinctTypes = distinctTypes(source.outputSchema(), distinctColumns);
         this.retainNulls = retainNulls;
         this.source = source;
+        this.outputSchema = outputSchema(source.outputSchema(), markerField);
         this.values = new Vector[distinctColumns.length];
         this.nulls = new Vector[distinctColumns.length];
     }
@@ -89,8 +110,13 @@ public final class MarkDistinctMarkerOperator
     @Override
     public Schema outputSchema()
     {
-        List<Field> fields = new ArrayList<>(source.outputSchema().fields());
-        fields.add(new Field(Schema.unspecified(1).field(0).type(), false));
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema sourceSchema, Field markerField)
+    {
+        List<Field> fields = new ArrayList<>(sourceSchema.fields());
+        fields.add(requireNonNull(markerField, "markerField is null"));
         return new Schema(fields);
     }
 
