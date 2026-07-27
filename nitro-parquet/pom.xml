@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.weakref</groupId>
+        <artifactId>nitro-parent</artifactId>
+        <version>1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>nitro-parquet</artifactId>
+    <name>nitro-parquet</name>
+    <description>Native Nitro Parquet batch source</description>
+
+    <dependencies>
+
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>aircompressor-v3</artifactId>
+            <version>3.4</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-format-structures</artifactId>
+            <version>1.16.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.weakref</groupId>
+            <artifactId>nitro-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <compilerArgs combine.self="merge">
+                        <arg>-sourcepath</arg>
+                        <arg>${project.basedir}/src/main/java</arg>
+                    </compilerArgs>
+                    <includes>
+                        <include>org/weakref/nitro/parquet/**/*.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-source-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>org/weakref/nitro/parquet/**/*.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+        </plugins>
+        <sourceDirectory>../src/main/java</sourceDirectory>
+    </build>
+</project>

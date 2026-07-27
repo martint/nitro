@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.weakref</groupId>
+        <artifactId>nitro-parent</artifactId>
+        <version>1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>nitro-engine</artifactId>
+    <name>nitro-engine</name>
+    <description>Nitro evaluation engine</description>
+
+    <dependencies>
+
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>joni</artifactId>
+            <version>2.1.5.3</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>slice</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>it.unimi.dsi</groupId>
+            <artifactId>fastutil</artifactId>
+            <version>8.5.18</version>
+        </dependency>
+        <dependency>
+            <groupId>org.weakref</groupId>
+            <artifactId>nitro-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <compilerArgs combine.self="merge">
+                        <arg>-sourcepath</arg>
+                        <arg>${project.basedir}/src/main/java</arg>
+                    </compilerArgs>
+                    <includes>
+                        <include>org/weakref/nitro/execution/**/*.java</include>
+                        <include>org/weakref/nitro/function/**/*.java</include>
+                        <include>org/weakref/nitro/jit/**/*.java</include>
+                        <include>org/weakref/nitro/legacy/**/*.java</include>
+                        <include>org/weakref/nitro/operator/**/*.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>org/weakref/nitro/operator/source/compatibility/parquet/**/*.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-source-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>org/weakref/nitro/execution/**/*.java</include>
+                        <include>org/weakref/nitro/function/**/*.java</include>
+                        <include>org/weakref/nitro/jit/**/*.java</include>
+                        <include>org/weakref/nitro/legacy/**/*.java</include>
+                        <include>org/weakref/nitro/operator/**/*.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>org/weakref/nitro/operator/source/compatibility/parquet/**/*.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+        <sourceDirectory>../src/main/java</sourceDirectory>
+    </build>
+</project>
