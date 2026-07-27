@@ -25,7 +25,15 @@ public record HashJoinBuildPolicy(
         boolean batchLongPairBuild,
         boolean streamUnusedPayload,
         boolean capDuplicatePairHash,
-        long maxInitialPairHashBytes)
+        long maxInitialPairHashBytes,
+        int initialHashAdmissionSampleRows,
+        int initialHashAdmissionMinSampleRows,
+        int pairHashCapMinExpectedRows,
+        int pairHashCapMaxDistinctPercent,
+        int pairHashCapMaxDomainPercent,
+        int payloadHashCapAlwaysExpectedRows,
+        int payloadHashCapMaxDistinctPercent,
+        int payloadHashCapBoundedExpectedRows)
 {
     public static HashJoinBuildPolicy defaults()
     {
@@ -37,7 +45,15 @@ public record HashJoinBuildPolicy(
                 true,
                 true,
                 true,
-                512L << 20);
+                512L << 20,
+                4096,
+                16,
+                1_000_000,
+                50,
+                25,
+                40_000_000,
+                25,
+                10_000_000);
     }
 
     public static HashJoinBuildPolicy fromSystemProperties()
@@ -51,7 +67,29 @@ public record HashJoinBuildPolicy(
                 booleanProperty("nitro.hash.join.batchLongPairBuild", defaults.batchLongPairBuild()),
                 booleanProperty("nitro.hash.join.streamUnusedBuildPayload", defaults.streamUnusedPayload()),
                 booleanProperty("nitro.join.capDuplicatePairHash", defaults.capDuplicatePairHash()),
-                Long.getLong("nitro.join.maxInitialPairHashBytes", defaults.maxInitialPairHashBytes()));
+                Long.getLong("nitro.join.maxInitialPairHashBytes", defaults.maxInitialPairHashBytes()),
+                Integer.getInteger(
+                        "nitro.join.initialHashAdmissionSampleRows",
+                        defaults.initialHashAdmissionSampleRows()),
+                Integer.getInteger(
+                        "nitro.join.initialHashAdmissionMinSampleRows",
+                        defaults.initialHashAdmissionMinSampleRows()),
+                Integer.getInteger("nitro.join.pairHashCapMinExpectedRows", defaults.pairHashCapMinExpectedRows()),
+                Integer.getInteger(
+                        "nitro.join.pairHashCapMaxDistinctPercent",
+                        defaults.pairHashCapMaxDistinctPercent()),
+                Integer.getInteger(
+                        "nitro.join.pairHashCapMaxDomainPercent",
+                        defaults.pairHashCapMaxDomainPercent()),
+                Integer.getInteger(
+                        "nitro.join.payloadHashCapAlwaysExpectedRows",
+                        defaults.payloadHashCapAlwaysExpectedRows()),
+                Integer.getInteger(
+                        "nitro.join.payloadHashCapMaxDistinctPercent",
+                        defaults.payloadHashCapMaxDistinctPercent()),
+                Integer.getInteger(
+                        "nitro.join.payloadHashCapBoundedExpectedRows",
+                        defaults.payloadHashCapBoundedExpectedRows()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

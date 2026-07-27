@@ -57,6 +57,14 @@ class TestHashJoinOperatorResources
         assertThat(executionPolicy.duplicateListInitialCapacity()).isEqualTo(2);
         assertThat(buildPolicy.maxBuildBatchRows()).isEqualTo(1 << 16);
         assertThat(buildPolicy.maxInitialPairHashBytes()).isEqualTo(512L << 20);
+        assertThat(buildPolicy.initialHashAdmissionSampleRows()).isEqualTo(4096);
+        assertThat(buildPolicy.initialHashAdmissionMinSampleRows()).isEqualTo(16);
+        assertThat(buildPolicy.pairHashCapMinExpectedRows()).isEqualTo(1_000_000);
+        assertThat(buildPolicy.pairHashCapMaxDistinctPercent()).isEqualTo(50);
+        assertThat(buildPolicy.pairHashCapMaxDomainPercent()).isEqualTo(25);
+        assertThat(buildPolicy.payloadHashCapAlwaysExpectedRows()).isEqualTo(40_000_000);
+        assertThat(buildPolicy.payloadHashCapMaxDistinctPercent()).isEqualTo(25);
+        assertThat(buildPolicy.payloadHashCapBoundedExpectedRows()).isEqualTo(10_000_000);
         assertThat(outputPolicy.buildDictionarySparseRatio()).isEqualTo(8);
         assertThat(outputPolicy.composeEncodedOuterDictionaryDepth()).isEqualTo(Integer.MAX_VALUE);
         assertThat(outputPolicy.adaptiveComposeMaxRows()).isEqualTo(1024);

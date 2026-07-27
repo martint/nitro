@@ -1791,7 +1791,7 @@ public class HashJoinOperator
                 joinValues.length == 2 &&
                 isSingleLongJoinCandidate(joinValues[0]) &&
                 isSingleLongJoinCandidate(joinValues[1]) &&
-                expectedInnerRowCount() >= 1_000_000) {
+                expectedInnerRowCount() >= buildPolicy.pairHashCapMinExpectedRows()) {
             long capacity = 16;
             while (capacity < expectedInnerRowCount() / 0.75) {
                 capacity <<= 1;
@@ -1799,7 +1799,7 @@ public class HashJoinOperator
             if (capacity * (2L * Long.BYTES + Byte.BYTES) <= buildPolicy.maxInitialPairHashBytes()) {
                 return false;
             }
-            int sampleSize = Math.min(batch.length(), 4096);
+            int sampleSize = Math.min(batch.length(), buildPolicy.initialHashAdmissionSampleRows());
             it.unimi.dsi.fastutil.longs.LongOpenHashSet distinct = new it.unimi.dsi.fastutil.longs.LongOpenHashSet(sampleSize);
             long firstMin = Long.MAX_VALUE;
             long firstMax = Long.MIN_VALUE;
@@ -1817,15 +1817,17 @@ public class HashJoinOperator
             }
             // The sample controls initial capacity only. Exact key equality and ordinary rehash growth preserve
             // correctness even in the vanishingly unlikely event of a sampled hash collision.
-            if (sampleSize < 16) {
+            if (sampleSize < buildPolicy.initialHashAdmissionMinSampleRows()) {
                 return false;
             }
-            if (distinct.size() <= sampleSize / 2) {
+            if ((long) distinct.size() * 100 <=
+                    (long) sampleSize * buildPolicy.pairHashCapMaxDistinctPercent()) {
                 return true;
             }
             long firstRange = firstMax - firstMin + 1;
             long secondRange = secondMax - secondMin + 1;
-            long boundedDomain = expectedInnerRowCount() / 4L;
+            long boundedDomain =
+                    (long) expectedInnerRowCount() * buildPolicy.pairHashCapMaxDomainPercent() / 100;
             boolean boundedPairDomain = firstRange > 0 && secondRange > 0 &&
                     firstRange <= boundedDomain / secondRange;
             // A large ordered prefix can look unique despite a bounded duplicate domain. Admit that case only when
@@ -1836,10 +1838,10 @@ public class HashJoinOperator
             return false;
         }
         int expectedRows = expectedInnerRowCount();
-        if (expectedRows >= 40_000_000) {
+        if (expectedRows >= buildPolicy.payloadHashCapAlwaysExpectedRows()) {
             return true;
         }
-        int sampleSize = Math.min(batch.length(), 4096);
+        int sampleSize = Math.min(batch.length(), buildPolicy.initialHashAdmissionSampleRows());
         it.unimi.dsi.fastutil.longs.LongOpenHashSet distinct = new it.unimi.dsi.fastutil.longs.LongOpenHashSet(sampleSize);
         long sampleMin = Long.MAX_VALUE;
         long sampleMax = Long.MIN_VALUE;
@@ -1849,13 +1851,16 @@ public class HashJoinOperator
             sampleMin = Math.min(sampleMin, key);
             sampleMax = Math.max(sampleMax, key);
         }
-        if (distinct.size() <= sampleSize / 4) {
+        if ((long) distinct.size() * 100 <=
+                (long) sampleSize * buildPolicy.payloadHashCapMaxDistinctPercent()) {
             return true;
         }
         // A random prefix of a bounded duplicate domain can look entirely unique. For a very large build, admit
         // bounded range state when the observed domain itself fits; exact fallback remains available if later keys
         // escape the ceiling. Wide-domain samples retain the ordinary pre-sized hash path.
-        return expectedRows >= 10_000_000 && sampleMin >= 0 && sampleMax < joinIndexPolicy.maxDirectBuildKey();
+        return expectedRows >= buildPolicy.payloadHashCapBoundedExpectedRows() &&
+                sampleMin >= 0 &&
+                sampleMax < joinIndexPolicy.maxDirectBuildKey();
     }
 
     private boolean shouldUseGroupedLongHash(BufferedJoinInput.InnerBatch batch, Vector[] joinValues)
