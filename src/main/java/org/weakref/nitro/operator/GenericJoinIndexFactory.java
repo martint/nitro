@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 
@@ -78,6 +79,154 @@ final class GenericJoinIndexFactory
             return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
         }
         return new ObjectJoinIndex(values.length);
+    }
+
+    boolean shouldCapInitialHash(
+            BufferedJoinInput.InnerBatch batch,
+            Vector[] values,
+            int expectedRows,
+            boolean keyOnlyBuild)
+    {
+        if (buildPolicy.capDuplicatePairHash() &&
+                values.length == 2 &&
+                isLong(values[0]) &&
+                isLong(values[1]) &&
+                expectedRows >= buildPolicy.pairHashCapMinExpectedRows()) {
+            long capacity = 16;
+            while (capacity < expectedRows / 0.75) {
+                capacity <<= 1;
+            }
+            if (capacity * (2L * Long.BYTES + Byte.BYTES) <= buildPolicy.maxInitialPairHashBytes()) {
+                return false;
+            }
+            int sampleSize = Math.min(batch.length(), buildPolicy.initialHashAdmissionSampleRows());
+            LongOpenHashSet distinct = new LongOpenHashSet(sampleSize);
+            long firstMin = Long.MAX_VALUE;
+            long firstMax = Long.MIN_VALUE;
+            long secondMin = Long.MAX_VALUE;
+            long secondMax = Long.MIN_VALUE;
+            for (int position = 0; position < sampleSize; position++) {
+                int sourcePosition = batch.sourcePosition(position);
+                long first = OperatorVectorSupport.longValue(values[0], sourcePosition);
+                long second = OperatorVectorSupport.longValue(values[1], sourcePosition);
+                distinct.add(LongPairJoinIndex.hash64(first, second));
+                firstMin = Math.min(firstMin, first);
+                firstMax = Math.max(firstMax, first);
+                secondMin = Math.min(secondMin, second);
+                secondMax = Math.max(secondMax, second);
+            }
+            // The sample controls initial capacity only. Exact key equality and ordinary rehash growth preserve
+            // correctness even in the vanishingly unlikely event of a sampled hash collision.
+            if (sampleSize < buildPolicy.initialHashAdmissionMinSampleRows()) {
+                return false;
+            }
+            if ((long) distinct.size() * 100 <=
+                    (long) sampleSize * buildPolicy.pairHashCapMaxDistinctPercent()) {
+                return true;
+            }
+            long firstRange = firstMax - firstMin + 1;
+            long secondRange = secondMax - secondMin + 1;
+            long boundedDomain =
+                    (long) expectedRows * buildPolicy.pairHashCapMaxDomainPercent() / 100;
+            // A large ordered prefix can look unique despite a bounded duplicate domain. Admit that case only when
+            // the sampled Cartesian range is small; a wide unique pair build keeps the one-allocation presized path.
+            return firstRange > 0 && secondRange > 0 &&
+                    firstRange <= boundedDomain / secondRange;
+        }
+        if (values.length != 1 || keyOnlyBuild || !isLong(values[0])) {
+            return false;
+        }
+        if (expectedRows >= buildPolicy.payloadHashCapAlwaysExpectedRows()) {
+            return true;
+        }
+        int sampleSize = Math.min(batch.length(), buildPolicy.initialHashAdmissionSampleRows());
+        LongOpenHashSet distinct = new LongOpenHashSet(sampleSize);
+        long sampleMin = Long.MAX_VALUE;
+        long sampleMax = Long.MIN_VALUE;
+        for (int position = 0; position < sampleSize; position++) {
+            long key = OperatorVectorSupport.longValue(values[0], batch.sourcePosition(position));
+            distinct.add(key);
+            sampleMin = Math.min(sampleMin, key);
+            sampleMax = Math.max(sampleMax, key);
+        }
+        if ((long) distinct.size() * 100 <=
+                (long) sampleSize * buildPolicy.payloadHashCapMaxDistinctPercent()) {
+            return true;
+        }
+        // A random prefix of a bounded duplicate domain can look entirely unique. For a very large build, admit
+        // bounded range state when the observed domain itself fits; exact fallback remains available if later keys
+        // escape the ceiling. Wide-domain samples retain the ordinary pre-sized hash path.
+        return expectedRows >= buildPolicy.payloadHashCapBoundedExpectedRows() &&
+                sampleMin >= 0 &&
+                sampleMax < joinIndexPolicy.maxDirectBuildKey();
+    }
+
+    boolean shouldUseGroupedLongHash(BufferedJoinInput.InnerBatch batch, Vector[] values, int expectedRows)
+    {
+        if (!joinIndexPolicy.groupedLongHashTable() || values.length != 1 || !isLong(values[0])) {
+            return false;
+        }
+        if (!joinIndexPolicy.sparseAwareLongHashLayout()) {
+            return true;
+        }
+        if (expectedRows < joinIndexPolicy.sparseAwareScalarMinRows()) {
+            return true;
+        }
+        int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
+        if (sampleSize < joinIndexPolicy.rangeAdmissionMinSampleRows()) {
+            return true;
+        }
+        long sampleMin = Long.MAX_VALUE;
+        long sampleMax = Long.MIN_VALUE;
+        for (int position = 0; position < sampleSize; position++) {
+            long key = OperatorVectorSupport.longValue(values[0], batch.sourcePosition(position));
+            sampleMin = Math.min(sampleMin, key);
+            sampleMax = Math.max(sampleMax, key);
+        }
+        long range = sampleMax - sampleMin + 1;
+        // A bounded sparse domain receives an exact membership filter before probing. Surviving hash lookups are
+        // consequently hits, where scalar linear probing is cheaper than loading and comparing a SIMD tag group.
+        // Compare with the known full build cardinality, not sample cardinality: a random prefix of a dense table
+        // spans most of its domain and would otherwise be misclassified as sparse (TPC-H q7 customer/orders).
+        return range <= 0 ||
+                range > joinIndexPolicy.maxArrayRange() ||
+                range < expectedRows * joinIndexPolicy.sparseLongRangeMinRatio();
+    }
+
+    boolean shouldUseKeyOnlyDirectRangeBuild(
+            BufferedJoinInput.InnerBatch batch,
+            Vector[] values,
+            int expectedRows,
+            boolean keyOnlyBuild)
+    {
+        if (!joinIndexPolicy.keyOnlyDirectRangeBuild() ||
+                values.length != 1 ||
+                !keyOnlyBuild ||
+                !isLong(values[0])) {
+            return false;
+        }
+        if (expectedRows < joinIndexPolicy.keyOnlyDirectRangeMinRows()) {
+            return false;
+        }
+        int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
+        if (sampleSize < joinIndexPolicy.rangeAdmissionMinSampleRows()) {
+            return false;
+        }
+        long sampleMin = Long.MAX_VALUE;
+        long sampleMax = Long.MIN_VALUE;
+        for (int position = 0; position < sampleSize; position++) {
+            long key = OperatorVectorSupport.longValue(values[0], batch.sourcePosition(position));
+            sampleMin = Math.min(sampleMin, key);
+            sampleMax = Math.max(sampleMax, key);
+        }
+        long sampleRange = sampleMax - sampleMin + 1;
+        // The range builder remains exact and can fall back, but a clearly sparse first batch would reserve and
+        // randomly probe a much larger map than the ordinary hash table. Compare the observed domain with the known
+        // full build cardinality so shuffled dense dimensions admit while wide sparse fact-key domains reject.
+        return sampleMin >= 0 &&
+                sampleMax < joinIndexPolicy.maxDirectBuildKey() &&
+                sampleRange > 0 &&
+                sampleRange <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows;
     }
 
     private static boolean isLong(Vector values)
