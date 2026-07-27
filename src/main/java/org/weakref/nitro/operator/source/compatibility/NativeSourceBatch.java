@@ -20,6 +20,7 @@ import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MaskSelection;
 import org.weakref.nitro.operator.Batch;
 
 import java.util.Optional;

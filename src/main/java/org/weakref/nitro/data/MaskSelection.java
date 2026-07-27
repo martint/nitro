@@ -11,27 +11,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source.compatibility;
+package org.weakref.nitro.data;
 
 import org.weakref.nitro.core.batch.Selection;
-import org.weakref.nitro.data.Mask;
 
+import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
-/// Zero-copy selection facade used by the legacy native-batch adapter.
-final class MaskSelection
+/// Read-only selection facade over a Nitro mask.
+public record MaskSelection(Mask mask)
         implements Selection
 {
-    private final Mask mask;
-
-    MaskSelection(Mask mask)
+    public MaskSelection
     {
-        this.mask = requireNonNull(mask, "mask is null");
-    }
-
-    Mask mask()
-    {
-        return mask;
+        requireNonNull(mask, "mask is null");
     }
 
     @Override
@@ -61,6 +54,6 @@ final class MaskSelection
     @Override
     public int position(int index)
     {
-        return mask.position(index);
+        return mask.position(checkIndex(index, count()));
     }
 }

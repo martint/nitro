@@ -16,8 +16,8 @@ package org.weakref.nitro.operator.source;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MaskSelection;
 
-import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
 /// Allocator-owned translation between source selections and native masks.
@@ -101,44 +101,5 @@ public final class AllocatedSelectionOperatorIngress
     public void releaseMask(Mask mask)
     {
         allocator.release(allocationContext, requireNonNull(mask, "mask is null"));
-    }
-
-    private record MaskSelection(Mask mask)
-            implements Selection
-    {
-        private MaskSelection
-        {
-            requireNonNull(mask, "mask is null");
-        }
-
-        @Override
-        public int positionCount()
-        {
-            return mask.size();
-        }
-
-        @Override
-        public int count()
-        {
-            return mask.count();
-        }
-
-        @Override
-        public int maxPosition()
-        {
-            return mask.none() ? -1 : mask.maxPosition();
-        }
-
-        @Override
-        public boolean isDense()
-        {
-            return mask.all();
-        }
-
-        @Override
-        public int position(int index)
-        {
-            return mask.position(checkIndex(index, count()));
-        }
     }
 }

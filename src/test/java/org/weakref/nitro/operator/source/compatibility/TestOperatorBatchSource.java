@@ -26,6 +26,7 @@ import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MaskSelection;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
