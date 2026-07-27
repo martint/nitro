@@ -746,7 +746,7 @@ public class HashJoinOperator
                 int matchIndex = currentMatchIndex;
                 long rowReference;
                 if (singleMatchPositionProbe) {
-                    rowReference = packRowReference(joinIndex.singleMatchPositionBatchIndex(), currentMatchPosition);
+                    rowReference = JoinRowReference.pack(joinIndex.singleMatchPositionBatchIndex(), currentMatchPosition);
                 }
                 else {
                     rowReference = singleMatchProbe ? currentMatchRef : currentMatches.getLong(currentMatchIndex);
@@ -1408,7 +1408,7 @@ public class HashJoinOperator
                 }
                 for (int logicalPosition = 0; logicalPosition < mask.count(); logicalPosition++) {
                     int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
-                    long rowReference = packRowReference(batchIndex, logicalPosition);
+                    long rowReference = JoinRowReference.pack(batchIndex, logicalPosition);
                     if (hasNulls) {
                         joinIndex.add(joinValues, joinNulls, sourcePosition, rowReference);
                     }
@@ -1532,12 +1532,12 @@ public class HashJoinOperator
                 }
             }
             return singleEncodedBinaryJoinFilter
-                    ? passesFastBinaryJoinFilter(outerPosition, rowPosition(rowReference))
-                    : passesFastLongJoinFilter(outerPosition, rowPosition(rowReference));
+                    ? passesFastBinaryJoinFilter(outerPosition, JoinRowReference.position(rowReference))
+                    : passesFastLongJoinFilter(outerPosition, JoinRowReference.position(rowReference));
         }
-        int batchIndex = batchIndex(rowReference);
+        int batchIndex = JoinRowReference.batchIndex(rowReference);
         BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
-        int innerPosition = innerBatch.sourcePosition(rowPosition(rowReference));
+        int innerPosition = innerBatch.sourcePosition(JoinRowReference.position(rowReference));
         if (joinFilters.length == 1 && joinFilters[0].encodedBinaryEquals()) {
             if ((currentOuterFilterNulls[0] != null && VectorAccess.isNull(currentOuterFilterNulls[0], outerPosition)) ||
                     (innerFilterNulls[0][batchIndex] != null && VectorAccess.isNull(innerFilterNulls[0][batchIndex], innerPosition))) {
@@ -1575,11 +1575,11 @@ public class HashJoinOperator
     private boolean passesBinaryJoinFilter(int outerPosition, long rowReference)
     {
         if (fastInnerFilterBatch != null) {
-            return passesFastBinaryJoinFilter(outerPosition, rowPosition(rowReference));
+            return passesFastBinaryJoinFilter(outerPosition, JoinRowReference.position(rowReference));
         }
-        int batchIndex = batchIndex(rowReference);
+        int batchIndex = JoinRowReference.batchIndex(rowReference);
         BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
-        int innerPosition = innerBatch.sourcePosition(rowPosition(rowReference));
+        int innerPosition = innerBatch.sourcePosition(JoinRowReference.position(rowReference));
         if ((currentOuterFilterNulls[0] != null && VectorAccess.isNull(currentOuterFilterNulls[0], outerPosition)) ||
                 (innerFilterNulls[0][batchIndex] != null && VectorAccess.isNull(innerFilterNulls[0][batchIndex], innerPosition))) {
             return false;
@@ -1774,10 +1774,10 @@ public class HashJoinOperator
         for (int position = startPosition; position < startPosition + length; position++) {
             int sourcePosition = batch.sourcePosition(position);
             if (hasNulls) {
-                joinIndex.add(joinValues, joinNulls, sourcePosition, packRowReference(batchIndex, position));
+                joinIndex.add(joinValues, joinNulls, sourcePosition, JoinRowReference.pack(batchIndex, position));
             }
             else {
-                joinIndex.addNoNulls(joinValues, sourcePosition, packRowReference(batchIndex, position));
+                joinIndex.addNoNulls(joinValues, sourcePosition, JoinRowReference.pack(batchIndex, position));
             }
             if (collectKeys) {
                 collectBuildKeys(buildKeyAccessors, joinNulls, hasNulls, sourcePosition);
@@ -2209,11 +2209,11 @@ public class HashJoinOperator
                     values[position] = true;
                     continue;
                 }
-                int innerBatchIndex = batchIndex(rowReference);
+                int innerBatchIndex = JoinRowReference.batchIndex(rowReference);
                 VectorAccess.BooleanValues sourceNulls = directInnerNullAccess(innerOutputIndex, innerBatchIndex);
                 if (sourceNulls != null) {
                     BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
-                    int logicalPosition = rowPosition(rowReference);
+                    int logicalPosition = JoinRowReference.position(rowReference);
                     int sourcePosition = innerBatch.retained() ? innerBatch.sourcePosition(logicalPosition) : logicalPosition;
                     values[position] = sourceNulls.value(sourcePosition);
                 }
@@ -2755,9 +2755,9 @@ public class HashJoinOperator
                 result = copyNullInnerPosition(result, nullInnerSchema, currentOutputCount, outputPosition);
                 continue;
             }
-            int innerBatchIndex = batchIndex(rowReference);
+            int innerBatchIndex = JoinRowReference.batchIndex(rowReference);
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
-            result = copyInnerSinglePosition(result, innerBatch, innerBatchIndex, innerOutputIndex, currentOutputCount, outputPosition, rowPosition(rowReference), exposeNulls);
+            result = copyInnerSinglePosition(result, innerBatch, innerBatchIndex, innerOutputIndex, currentOutputCount, outputPosition, JoinRowReference.position(rowReference), exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
     }
@@ -3385,14 +3385,14 @@ public class HashJoinOperator
         int uniquePositionStart = 0;
         while (runStart < currentOutputCount) {
             long rowReference = innerRows[runStart];
-            int batchIndex = batchIndex(rowReference);
+            int batchIndex = JoinRowReference.batchIndex(rowReference);
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
             boolean retained = innerBatch.retained();
             int[] innerSourcePositions = retained ? innerSourcePositions() : null;
 
             int runEnd = runStart;
-            while (runEnd < currentOutputCount && batchIndex(innerRows[runEnd]) == batchIndex) {
-                int logicalPosition = rowPosition(innerRows[runEnd]);
+            while (runEnd < currentOutputCount && JoinRowReference.batchIndex(innerRows[runEnd]) == batchIndex) {
+                int logicalPosition = JoinRowReference.position(innerRows[runEnd]);
                 outputInnerLogicalPositions[runEnd] = logicalPosition;
                 if (retained) {
                     innerSourcePositions[runEnd] = innerBatch.sourcePosition(logicalPosition);
@@ -3458,11 +3458,6 @@ public class HashJoinOperator
         retainedConstraintPositionsByBatch = Arrays.copyOf(retainedConstraintPositionsByBatch, batchCount);
     }
 
-    private static long packRowReference(int batchIndex, int position)
-    {
-        return ((long) batchIndex << Integer.SIZE) | (position & 0xFFFF_FFFFL);
-    }
-
     private int expectedInnerRowCount()
     {
         if (expectedIndexedInnerRows >= 0) {
@@ -3476,16 +3471,6 @@ public class HashJoinOperator
             return 16;
         }
         return (int) Math.max(16L, Math.min(Integer.MAX_VALUE, rowCount));
-    }
-
-    private static int batchIndex(long rowReference)
-    {
-        return (int) (rowReference >>> Integer.SIZE);
-    }
-
-    private static int rowPosition(long rowReference)
-    {
-        return (int) rowReference;
     }
 
     private boolean hasNoMatchRows()
@@ -3925,7 +3910,7 @@ public class HashJoinOperator
             if (sourcePositions == null) {
                 for (int position = startPosition; position < endPosition; position++) {
                     if (nullValues == null || !nullValues.value(position)) {
-                        addRow(longValues.value(position), packRowReference(batchIndex, position));
+                        addRow(longValues.value(position), JoinRowReference.pack(batchIndex, position));
                     }
                 }
                 return;
@@ -3933,7 +3918,7 @@ public class HashJoinOperator
             for (int position = startPosition; position < endPosition; position++) {
                 int sourcePosition = sourcePositions[position];
                 if (nullValues == null || !nullValues.value(sourcePosition)) {
-                    addRow(longValues.value(sourcePosition), packRowReference(batchIndex, position));
+                    addRow(longValues.value(sourcePosition), JoinRowReference.pack(batchIndex, position));
                 }
             }
         }
@@ -3951,7 +3936,7 @@ public class HashJoinOperator
             for (int logicalPosition = 0; logicalPosition < count; logicalPosition++) {
                 int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
                 if (nullValues == null || !nullValues.value(sourcePosition)) {
-                    addRow(longValues.value(sourcePosition), packRowReference(batchIndex, logicalPosition));
+                    addRow(longValues.value(sourcePosition), JoinRowReference.pack(batchIndex, logicalPosition));
                 }
             }
         }
@@ -4411,7 +4396,7 @@ public class HashJoinOperator
         @Override
         public long unpackCompactSingleMatchRef(int ref)
         {
-            return ref == NO_MATCH_COMPACT_ROW_REFERENCE ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(ref);
+            return ref == NO_MATCH_COMPACT_ROW_REFERENCE ? NO_MATCH_ROW_REFERENCE : JoinRowReference.unpackCompact(ref);
         }
 
         private void matchDenseSingleBatchRowsPositions(Vector values, Vector nulls, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
@@ -5463,7 +5448,7 @@ public class HashJoinOperator
                 }
                 if (directRows32 != null) {
                     int rowReference = directRows32[(int) (key - minKey)];
-                    return rowReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(rowReference);
+                    return rowReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : JoinRowReference.unpackCompact(rowReference);
                 }
                 return directRows[(int) (key - minKey)];
             }
@@ -5931,8 +5916,8 @@ public class HashJoinOperator
             if (!denseSingleBatchRowReferenceCandidate) {
                 return;
             }
-            int batchIndex = batchIndex(rowReference);
-            int rowPosition = rowPosition(rowReference);
+            int batchIndex = JoinRowReference.batchIndex(rowReference);
+            int rowPosition = JoinRowReference.position(rowReference);
             if (rowCount == 0) {
                 denseRowReferenceBatchIndex = batchIndex;
                 denseRowReferenceFirstPosition = rowPosition;
@@ -6063,7 +6048,7 @@ public class HashJoinOperator
             }
             int[] payload = arrayPool.borrowInts(rowCount);
             for (int index = 0; index < rowCount; index++) {
-                int logicalPosition = rowPosition(orderedRows[index]);
+                int logicalPosition = JoinRowReference.position(orderedRows[index]);
                 int sourcePosition = sourcePositions == null ? logicalPosition : sourcePositions[logicalPosition];
                 long value = directValues == null ? values.value(sourcePosition) : directValues[sourcePosition];
                 if (value != (int) value) {
@@ -6235,10 +6220,10 @@ public class HashJoinOperator
                 long reference = rowReferenceAt(head);
                 if (firstReference == NO_MATCH_ROW_REFERENCE) {
                     firstReference = reference;
-                    firstBatchIndex = batchIndex(reference);
-                    firstPosition = rowPosition(reference);
+                    firstBatchIndex = JoinRowReference.batchIndex(reference);
+                    firstPosition = JoinRowReference.position(reference);
                 }
-                else if (batchIndex(reference) != firstBatchIndex || rowPosition(reference) != firstPosition + offset) {
+                else if (JoinRowReference.batchIndex(reference) != firstBatchIndex || JoinRowReference.position(reference) != firstPosition + offset) {
                     sequentialReferences = false;
                 }
             }
@@ -6300,7 +6285,7 @@ public class HashJoinOperator
                 }
                 else if (directRows32 != null) {
                     int compactReference = directRows32[(int) (key - minKey)];
-                    rowReference = compactReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : unpackRowReference32(compactReference);
+                    rowReference = compactReference == NO_MATCH_ROW_REFERENCE32 ? NO_MATCH_ROW_REFERENCE : JoinRowReference.unpackCompact(compactReference);
                 }
                 else {
                     rowReference = directRows[(int) (key - minKey)];
@@ -6396,7 +6381,7 @@ public class HashJoinOperator
             if (!rowReferencesFit32) {
                 return;
             }
-            if (batchIndex(rowReference) > MAX_PACKED_BATCH_INDEX || rowPosition(rowReference) > MAX_PACKED_ROW_POSITION) {
+            if (JoinRowReference.batchIndex(rowReference) > MAX_PACKED_BATCH_INDEX || JoinRowReference.position(rowReference) > MAX_PACKED_ROW_POSITION) {
                 rowReferencesFit32 = false;
             }
         }
@@ -6469,7 +6454,7 @@ public class HashJoinOperator
             if (compactRowReferences != null) {
                 rowReferences = arrayPool.borrowLongs(compactRowReferences.length);
                 for (int index = 0; index < ordinal; index++) {
-                    rowReferences[index] = unpackRowReference32(compactRowReferences[index]);
+                    rowReferences[index] = JoinRowReference.unpackCompact(compactRowReferences[index]);
                 }
                 arrayPool.release(compactRowReferences);
                 compactRowReferences = null;
@@ -6498,7 +6483,7 @@ public class HashJoinOperator
             if (implicitSequentialRowReferences) {
                 return implicitRowReferenceBase + ordinal;
             }
-            return compactRowReferences != null ? unpackRowReference32(compactRowReferences[ordinal]) : rowReferences[ordinal];
+            return compactRowReferences != null ? JoinRowReference.unpackCompact(compactRowReferences[ordinal]) : rowReferences[ordinal];
         }
 
         private int[] packDenseDirectRows32(long[] rowReferences, int rowCount)
@@ -6576,12 +6561,7 @@ public class HashJoinOperator
 
         private static int packRowReference32(long rowReference)
         {
-            return (batchIndex(rowReference) << Short.SIZE) | (rowPosition(rowReference) & MAX_PACKED_ROW_POSITION);
-        }
-
-        private static long unpackRowReference32(int rowReference)
-        {
-            return packRowReference(rowReference >>> Short.SIZE, rowReference & MAX_PACKED_ROW_POSITION);
+            return (JoinRowReference.batchIndex(rowReference) << Short.SIZE) | (JoinRowReference.position(rowReference) & MAX_PACKED_ROW_POSITION);
         }
 
         private static int mix(long key)
@@ -6878,7 +6858,7 @@ public class HashJoinOperator
                 for (int position = startPosition; position < endPosition; position++) {
                     if ((firstNulls == null || !firstNulls.value(position)) &&
                             (secondNulls == null || !secondNulls.value(position))) {
-                        addRow(firstValues.value(position), secondValues.value(position), packRowReference(batchIndex, position));
+                        addRow(firstValues.value(position), secondValues.value(position), JoinRowReference.pack(batchIndex, position));
                     }
                 }
                 return;
@@ -6887,7 +6867,7 @@ public class HashJoinOperator
                 int sourcePosition = sourcePositions[position];
                 if ((firstNulls == null || !firstNulls.value(sourcePosition)) &&
                         (secondNulls == null || !secondNulls.value(sourcePosition))) {
-                    addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), packRowReference(batchIndex, position));
+                    addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, position));
                 }
             }
         }
@@ -6907,7 +6887,7 @@ public class HashJoinOperator
                 int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
                 if ((firstNulls == null || !firstNulls.value(sourcePosition)) &&
                         (secondNulls == null || !secondNulls.value(sourcePosition))) {
-                    addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), packRowReference(batchIndex, logicalPosition));
+                    addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, logicalPosition));
                 }
             }
         }
@@ -6931,7 +6911,7 @@ public class HashJoinOperator
                 for (int position = startPosition; position < endPosition; position++) {
                     if ((firstNulls == null || !firstNulls.value(position)) &&
                             (secondNulls == null || !secondNulls.value(position))) {
-                        addDenseRow(firstValues.value(position), secondValues.value(position), packRowReference(batchIndex, position));
+                        addDenseRow(firstValues.value(position), secondValues.value(position), JoinRowReference.pack(batchIndex, position));
                     }
                 }
                 return;
@@ -6940,7 +6920,7 @@ public class HashJoinOperator
                 int sourcePosition = sourcePositions[position];
                 if ((firstNulls == null || !firstNulls.value(sourcePosition)) &&
                         (secondNulls == null || !secondNulls.value(sourcePosition))) {
-                    addDenseRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), packRowReference(batchIndex, position));
+                    addDenseRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, position));
                 }
             }
         }
@@ -6956,7 +6936,7 @@ public class HashJoinOperator
                 int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
                 if ((firstNulls == null || !firstNulls.value(sourcePosition)) &&
                         (secondNulls == null || !secondNulls.value(sourcePosition))) {
-                    addDenseRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), packRowReference(batchIndex, logicalPosition));
+                    addDenseRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, logicalPosition));
                 }
             }
         }
@@ -7478,8 +7458,8 @@ public class HashJoinOperator
             prepareDenseRowReference(rowReference);
             if (denseRowsFit32 &&
                     !denseRowsSingleBatch &&
-                    (batchIndex(rowReference) > LongJoinIndex.MAX_PACKED_BATCH_INDEX ||
-                            rowPosition(rowReference) > LongJoinIndex.MAX_PACKED_ROW_POSITION)) {
+                    (JoinRowReference.batchIndex(rowReference) > LongJoinIndex.MAX_PACKED_BATCH_INDEX ||
+                            JoinRowReference.position(rowReference) > LongJoinIndex.MAX_PACKED_ROW_POSITION)) {
                 promoteDenseRowsToLong();
             }
             ensureDenseEntryCapacity();
@@ -7505,14 +7485,14 @@ public class HashJoinOperator
                 return state;
             }
             return denseRowsSingleBatch
-                    ? packRowReference(denseRowsBatchIndex, toIntExact(state))
-                    : LongJoinIndex.unpackRowReference32((int) state);
+                    ? JoinRowReference.pack(denseRowsBatchIndex, toIntExact(state))
+                    : JoinRowReference.unpackCompact((int) state);
         }
 
         private int encodeDenseRowReference32(long rowReference)
         {
             return denseRowsSingleBatch
-                    ? rowPosition(rowReference)
+                    ? JoinRowReference.position(rowReference)
                     : LongJoinIndex.packRowReference32(rowReference);
         }
 
@@ -7521,7 +7501,7 @@ public class HashJoinOperator
             if (!denseRowsSingleBatch) {
                 return;
             }
-            int batchIndex = batchIndex(rowReference);
+            int batchIndex = JoinRowReference.batchIndex(rowReference);
             if (denseRowsBatchIndex < 0) {
                 denseRowsBatchIndex = batchIndex;
                 return;
@@ -7696,8 +7676,8 @@ public class HashJoinOperator
                 return duplicateRows[ordinal];
             }
             return denseRowsSingleBatch
-                    ? packRowReference(denseRowsBatchIndex, duplicateRows32[ordinal])
-                    : LongJoinIndex.unpackRowReference32(duplicateRows32[ordinal]);
+                    ? JoinRowReference.pack(denseRowsBatchIndex, duplicateRows32[ordinal])
+                    : JoinRowReference.unpackCompact(duplicateRows32[ordinal]);
         }
 
         private int appendDuplicateReference(long rowReference)
@@ -7705,8 +7685,8 @@ public class HashJoinOperator
             prepareDenseRowReference(rowReference);
             if (duplicateRowsFit32 &&
                     !denseRowsSingleBatch &&
-                    (batchIndex(rowReference) > LongJoinIndex.MAX_PACKED_BATCH_INDEX ||
-                            rowPosition(rowReference) > LongJoinIndex.MAX_PACKED_ROW_POSITION)) {
+                    (JoinRowReference.batchIndex(rowReference) > LongJoinIndex.MAX_PACKED_BATCH_INDEX ||
+                            JoinRowReference.position(rowReference) > LongJoinIndex.MAX_PACKED_ROW_POSITION)) {
                 promoteDuplicateRowsToLong();
             }
             ensureDuplicateRowCapacity();
@@ -7783,8 +7763,8 @@ public class HashJoinOperator
             duplicateRows = arrayPool.borrowLongs(duplicateRowCapacity);
             for (int index = 0; index < duplicateRowCount; index++) {
                 duplicateRows[index] = denseRowsSingleBatch
-                        ? packRowReference(denseRowsBatchIndex, duplicateRows32[index])
-                        : LongJoinIndex.unpackRowReference32(duplicateRows32[index]);
+                        ? JoinRowReference.pack(denseRowsBatchIndex, duplicateRows32[index])
+                        : JoinRowReference.unpackCompact(duplicateRows32[index]);
             }
             arrayPool.release(duplicateRows32);
             duplicateRows32 = null;
@@ -7964,8 +7944,8 @@ public class HashJoinOperator
                 return rows[cursorOrdinal];
             }
             return compactBatchIndex >= 0
-                    ? packRowReference(compactBatchIndex, compactRows[cursorOrdinal])
-                    : LongJoinIndex.unpackRowReference32(compactRows[cursorOrdinal]);
+                    ? JoinRowReference.pack(compactBatchIndex, compactRows[cursorOrdinal])
+                    : JoinRowReference.unpackCompact(compactRows[cursorOrdinal]);
         }
 
         @Override
