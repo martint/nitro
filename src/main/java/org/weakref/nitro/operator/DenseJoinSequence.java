@@ -13,11 +13,18 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.PrimitiveArrayPool;
+
+import static java.util.Objects.requireNonNull;
+
 /**
  * Observed consecutive-key and single-batch row-reference state for a single-long join build.
  */
 final class DenseJoinSequence
 {
+    private static final int NO_MATCH = -1;
+
+    private final PrimitiveArrayPool arrayPool;
     private boolean keyCandidate;
     private boolean referenceCandidate;
 
@@ -27,9 +34,11 @@ final class DenseJoinSequence
     private int referenceBatchIndex;
     private int firstReferencePosition;
     private long referenceBase;
+    private int[] dictionaryPositionScratch;
 
-    DenseJoinSequence(boolean keyCandidate, boolean referenceCandidate)
+    DenseJoinSequence(PrimitiveArrayPool arrayPool, boolean keyCandidate, boolean referenceCandidate)
     {
+        this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.keyCandidate = keyCandidate;
         this.referenceCandidate = referenceCandidate;
     }
@@ -113,6 +122,47 @@ final class DenseJoinSequence
     long referenceAt(int ordinal)
     {
         return referenceBase + ordinal;
+    }
+
+    int[] dictionaryPositions(long[] dictionaryValues, long minimumKey, long maximumKey)
+    {
+        int[] positions = ensureDictionaryPositionScratch(dictionaryValues.length);
+        for (int id = 0; id < dictionaryValues.length; id++) {
+            positions[id] = rowPosition(dictionaryValues[id], minimumKey, maximumKey);
+        }
+        return positions;
+    }
+
+    int[] dictionaryPositions(int[] dictionaryValues, long minimumKey, long maximumKey)
+    {
+        int[] positions = ensureDictionaryPositionScratch(dictionaryValues.length);
+        for (int id = 0; id < dictionaryValues.length; id++) {
+            positions[id] = rowPosition(dictionaryValues[id], minimumKey, maximumKey);
+        }
+        return positions;
+    }
+
+    void release()
+    {
+        arrayPool.release(dictionaryPositionScratch);
+        dictionaryPositionScratch = null;
+    }
+
+    private int[] ensureDictionaryPositionScratch(int dictionarySize)
+    {
+        if (dictionaryPositionScratch == null || dictionaryPositionScratch.length < dictionarySize) {
+            arrayPool.release(dictionaryPositionScratch);
+            dictionaryPositionScratch = arrayPool.borrowInts(dictionarySize);
+        }
+        return dictionaryPositionScratch;
+    }
+
+    private int rowPosition(long key, long minimumKey, long maximumKey)
+    {
+        if (key < minimumKey || key > maximumKey) {
+            return NO_MATCH;
+        }
+        return (int) (firstReferencePosition + (key - minimumKey));
     }
 
     private void observeReference(long reference, int ordinal)

@@ -58,7 +58,7 @@ class TestDirectLongJoinLookup
         fullLookup.release();
 
         DirectLongJoinLookup arithmeticLookup = new DirectLongJoinLookup(arrayPool, NO_MATCH);
-        DenseJoinSequence sequence = new DenseJoinSequence(true, true);
+        DenseJoinSequence sequence = new DenseJoinSequence(arrayPool, true, true);
         long base = JoinRowReference.pack(4, 8);
         sequence.activateReferences(4, 8, base);
         arithmeticLookup.activateArithmetic(30, 31);
@@ -70,6 +70,6 @@ class TestDirectLongJoinLookup
 
     private static DenseJoinSequence inactiveSequence()
     {
-        return new DenseJoinSequence(false, false);
+        return new DenseJoinSequence(new PrimitiveArrayPool(1024, 0), false, false);
     }
 }

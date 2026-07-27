@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,7 +23,7 @@ class TestDenseJoinSequence
     @Test
     void observesConsecutiveKeysAndSingleBatchReferences()
     {
-        DenseJoinSequence sequence = new DenseJoinSequence(true, true);
+        DenseJoinSequence sequence = new DenseJoinSequence(new PrimitiveArrayPool(1024, 0), true, true);
         long base = JoinRowReference.pack(3, 7);
 
         assertThat(sequence.acceptsKey(11, 0)).isTrue();
@@ -43,7 +44,7 @@ class TestDenseJoinSequence
     @Test
     void rejectsBothCandidatesAfterDenseBuildDiverges()
     {
-        DenseJoinSequence sequence = new DenseJoinSequence(true, true);
+        DenseJoinSequence sequence = new DenseJoinSequence(new PrimitiveArrayPool(1024, 0), true, true);
         sequence.observeDenseRow(11, JoinRowReference.pack(3, 7), 0);
 
         assertThat(sequence.acceptsKey(13, 1)).isFalse();
@@ -56,7 +57,7 @@ class TestDenseJoinSequence
     @Test
     void rejectsOnlyReferenceCandidateWhenReferenceSequenceDiverges()
     {
-        DenseJoinSequence sequence = new DenseJoinSequence(true, true);
+        DenseJoinSequence sequence = new DenseJoinSequence(new PrimitiveArrayPool(1024, 0), true, true);
         sequence.observeDenseRow(11, JoinRowReference.pack(3, 7), 0);
         sequence.observeDenseRow(12, JoinRowReference.pack(4, 8), 1);
 
@@ -67,7 +68,7 @@ class TestDenseJoinSequence
     @Test
     void directBuildCanDisableKeyDetectionAndActivateExplicitReferences()
     {
-        DenseJoinSequence sequence = new DenseJoinSequence(true, true);
+        DenseJoinSequence sequence = new DenseJoinSequence(new PrimitiveArrayPool(1024, 0), true, true);
         long base = JoinRowReference.pack(5, 9);
 
         sequence.disableKeyCandidate();
@@ -77,5 +78,21 @@ class TestDenseJoinSequence
         assertThat(sequence.referenceCandidate()).isTrue();
         assertThat(sequence.referencesActive()).isTrue();
         assertThat(sequence.referenceBase()).isEqualTo(base);
+    }
+
+    @Test
+    void ownsDenseDictionaryPositionScratch()
+    {
+        PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(1024, 0);
+        DenseJoinSequence sequence = new DenseJoinSequence(arrayPool, true, true);
+        sequence.activateReferences(5, 7, JoinRowReference.pack(5, 7));
+
+        assertThat(sequence.dictionaryPositions(new long[] {10, 11, 13}, 10, 11))
+                .startsWith(7, 8, -1);
+        assertThat(sequence.dictionaryPositions(new int[] {11, 9}, 10, 11))
+                .startsWith(8, -1);
+
+        sequence.release();
+        assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
 }

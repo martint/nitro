@@ -3562,7 +3562,6 @@ public class HashJoinOperator
         // has no false positives; the hash table is consulted only for keys whose bit is present.
         private final SparseLongRangeMembership sparseMembership;
         private final DenseJoinSequence denseSequence;
-        private int[] denseDictionaryPositionScratch;
         // Range mode (multi-row keys): at finalize each key's chain is compacted into a contiguous FIFO slice, so a
         // probe reads a sequential range instead of pointer-chasing the duplicate chain. Opt-out for A/B.
         private final boolean compactChains;
@@ -3615,6 +3614,7 @@ public class HashJoinOperator
                     policy.directDuplicateGroupInitialCapacity(),
                     EMPTY);
             this.denseSequence = new DenseJoinSequence(
+                    arrayPool,
                     policy.denseBuildFastPath(),
                     policy.computeDenseSingleBatchRowReferences());
             this.directLookup = new DirectLongJoinLookup(arrayPool, NO_MATCH_ROW_REFERENCE);
@@ -4787,7 +4787,7 @@ public class HashJoinOperator
                     case org.weakref.nitro.data.I64Vector longValues -> {
                         long[] dictionaryValues = longValues.values();
                         if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
-                            int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                            int[] dictionaryPositions = denseSequence.dictionaryPositions(dictionaryValues, min, max);
                             for (int index = 0; index < positionCount; index++) {
                                 int position = startPosition + index;
                                 int logicalPosition = dictionaryPositions[ids[position]];
@@ -4813,7 +4813,7 @@ public class HashJoinOperator
                     case org.weakref.nitro.data.I32Vector intValues -> {
                         int[] dictionaryValues = intValues.values();
                         if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
-                            int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                            int[] dictionaryPositions = denseSequence.dictionaryPositions(dictionaryValues, min, max);
                             for (int index = 0; index < positionCount; index++) {
                                 int position = startPosition + index;
                                 int logicalPosition = dictionaryPositions[ids[position]];
@@ -4855,7 +4855,7 @@ public class HashJoinOperator
                 case org.weakref.nitro.data.I64Vector longValues -> {
                     long[] dictionaryValues = longValues.values();
                     if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
-                        int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                        int[] dictionaryPositions = denseSequence.dictionaryPositions(dictionaryValues, min, max);
                         for (int index = 0; index < positionCount; index++) {
                             int position = startPosition + index;
                             if (nullValues.value(position)) {
@@ -4887,7 +4887,7 @@ public class HashJoinOperator
                 case org.weakref.nitro.data.I32Vector intValues -> {
                     int[] dictionaryValues = intValues.values();
                     if (useDenseDictionaryProbeCache(dictionaryValues.length, positionCount)) {
-                        int[] dictionaryPositions = denseDictionaryPositions(dictionaryValues, min, max, firstPosition);
+                        int[] dictionaryPositions = denseSequence.dictionaryPositions(dictionaryValues, min, max);
                         for (int index = 0; index < positionCount; index++) {
                             int position = startPosition + index;
                             if (nullValues.value(position)) {
@@ -4938,32 +4938,6 @@ public class HashJoinOperator
         private boolean useDenseDictionaryProbeCache(int dictionarySize, int positionCount)
         {
             return policy.denseDictionaryProbeCache() && dictionarySize * 2 <= positionCount;
-        }
-
-        private int[] denseDictionaryPositions(long[] dictionaryValues, long min, long max, int firstPosition)
-        {
-            int[] positions = ensureDenseDictionaryPositionScratch(dictionaryValues.length);
-            for (int id = 0; id < dictionaryValues.length; id++) {
-                positions[id] = denseSingleBatchRowPositionForKey(dictionaryValues[id], min, max, firstPosition);
-            }
-            return positions;
-        }
-
-        private int[] denseDictionaryPositions(int[] dictionaryValues, long min, long max, int firstPosition)
-        {
-            int[] positions = ensureDenseDictionaryPositionScratch(dictionaryValues.length);
-            for (int id = 0; id < dictionaryValues.length; id++) {
-                positions[id] = denseSingleBatchRowPositionForKey(dictionaryValues[id], min, max, firstPosition);
-            }
-            return positions;
-        }
-
-        private int[] ensureDenseDictionaryPositionScratch(int dictionarySize)
-        {
-            if (denseDictionaryPositionScratch == null || denseDictionaryPositionScratch.length < dictionarySize) {
-                denseDictionaryPositionScratch = new int[dictionarySize];
-            }
-            return denseDictionaryPositionScratch;
         }
 
         private void matchDenseSingleBatchLongRowsPositions(long[] values, VectorAccess.BooleanValues nullValues, int[] positions, int positionCount, int[] logicalPositions)
@@ -5736,8 +5710,7 @@ public class HashJoinOperator
             sparseMembership.release();
             compactedRows.release();
             compressedRanges.release();
-            arrayPool.release(denseDictionaryPositionScratch);
-            denseDictionaryPositionScratch = null;
+            denseSequence.release();
         }
 
         private void releaseHashTable()
