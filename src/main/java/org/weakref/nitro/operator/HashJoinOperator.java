@@ -3552,14 +3552,10 @@ public class HashJoinOperator
         private int[] slotHead;
         private int[] slotTail;
         private int[] slotCount;
-        // Build rows, indexed by a dense ordinal: rowReferences[o] with chainNext[o] linking each key's
-        // rows in insertion (FIFO) order. One flat int[] chain replaces a per-key growable list.
-        private long[] rowReferences;
-        private int[] compactRowReferences;
-        private int[] chainNext;
+        // Build rows are indexed by a dense ordinal. The row store owns both their adaptive reference
+        // representation and the flat insertion-ordered duplicate chain.
+        private final JoinRowStore rows;
         private int rowCount;
-        private int rowCapacity;
-        private final boolean preferCompactRowReferences;
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
         // A capped build was classified from its observed shape as bounded or duplicate-heavy. Those tables either
@@ -3567,8 +3563,6 @@ public class HashJoinOperator
         // predominantly hits. A scalar linear table is cheaper for that shape and avoids allocating control tags;
         // retain grouped tags for ordinary sparse tables where rejecting negative probes is their strength.
         private final boolean groupedHashTable;
-        private boolean implicitSequentialRowReferences;
-        private long implicitRowReferenceBase;
         private final int initialHashCapacity;
         private int mask;
         private int maxFill;
@@ -3590,7 +3584,6 @@ public class HashJoinOperator
         // predominantly-negative probe avoid the larger tag/key hash table entirely.  Unlike a Bloom filter this
         // has no false positives; the hash table is consulted only for keys whose bit is present.
         private final SparseLongRangeMembership sparseMembership;
-        private boolean rowReferencesFit32;
         private boolean denseBuildCandidate;
         private long denseFirstKey;
         private long denseNextKey;
@@ -3655,7 +3648,6 @@ public class HashJoinOperator
                     policy.sparseDirectDuplicateMinExpectedDomainRatio(),
                     policy.directDuplicateGroupInitialCapacity(),
                     EMPTY);
-            this.rowReferencesFit32 = policy.compactDirectRowReferences();
             this.denseBuildCandidate = policy.denseBuildFastPath();
             this.denseSingleBatchRowReferenceCandidate = policy.computeDenseSingleBatchRowReferences();
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
@@ -3677,23 +3669,17 @@ public class HashJoinOperator
                     compressDuplicateReferences && policy.sizeCompressedRowsByDistinctKeys()
                             ? initialExpectedSize
                             : capInitialHash && policy.preSizeCappedRowStorage() ? expectedSize : initialExpectedSize);
-            rowCapacity = initialRows;
-            preferCompactRowReferences = capInitialHash && policy.compactChainRowReferences();
+            rows = new JoinRowStore(
+                    arrayPool,
+                    initialRows,
+                    capInitialHash && policy.compactChainRowReferences(),
+                    implicitSequentialRowReferences,
+                    policy.compactDirectRowReferences(),
+                    !lazyDuplicateSlotState || !policy.lazyUniqueChainState(),
+                    EMPTY);
             this.buildRowReferencesUnused = buildRowReferencesUnused;
             this.batchBuild = batchBuild;
             this.groupedHashTable = policy.groupedLongHashTable() && groupedHashTable;
-            this.implicitSequentialRowReferences = implicitSequentialRowReferences;
-            if (!implicitSequentialRowReferences) {
-                if (preferCompactRowReferences) {
-                    compactRowReferences = arrayPool.borrowInts(initialRows);
-                }
-                else {
-                    rowReferences = arrayPool.borrowLongs(initialRows);
-                }
-            }
-            if (!lazyDuplicateSlotState || !policy.lazyUniqueChainState()) {
-                chainNext = arrayPool.borrowInts(initialRows);
-            }
             if (policy.debugJoinIndex() && keyOnlyDirectRangeBuild) {
                 System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
             }
@@ -3751,7 +3737,7 @@ public class HashJoinOperator
             int endPosition = startPosition + length;
             int[] sourcePositions = batch.positions();
             if (useCompressedDirectBuildBatchLoop()) {
-                observeRowReferenceRange(batchIndex, endPosition - 1);
+                rows.observeReferenceRange(batchIndex, endPosition - 1);
                 addCompressedDirectRangeRows(
                         longValues,
                         nullValues,
@@ -3795,7 +3781,7 @@ public class HashJoinOperator
             VectorAccess.BooleanValues nullValues = hasNulls ? VectorAccess.booleanValues(nulls) : null;
             int count = mask.count();
             if (useCompressedDirectBuildBatchLoop()) {
-                observeRowReferenceRange(batchIndex, count - 1);
+                rows.observeReferenceRange(batchIndex, count - 1);
                 addCompressedDirectRangeRows(longValues, nullValues, mask, count, (long) batchIndex << Integer.SIZE);
                 return true;
             }
@@ -3882,12 +3868,8 @@ public class HashJoinOperator
                 directBuild.incrementDenseDuplicate(intKey);
                 return;
             }
-            ensureRowCapacity();
             int ordinal = rowCount++;
-            storeRowReference(ordinal, rowReference);
-            if (chainNext != null) {
-                chainNext[ordinal] = EMPTY;
-            }
+            rows.append(ordinal, rowReference);
             directBuild.initializeKey(intKey, ordinal);
             size++;
         }
@@ -4160,7 +4142,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return policy.compactDenseSingleMatchReferences() && denseSingleBatchRowReferenceMode && rowReferencesFit32;
+            return policy.compactDenseSingleMatchReferences() && denseSingleBatchRowReferenceMode && rows.referencesFit32();
         }
 
         @Override
@@ -4252,7 +4234,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            if (!denseSingleBatchRowReferenceMode || !rowReferencesFit32) {
+            if (!denseSingleBatchRowReferenceMode || !rows.referencesFit32()) {
                 throw new IllegalStateException("Compact single-match refs require dense single-batch row references that fit 32 bits");
             }
             matchDenseSingleBatchRowsCompact(valuesArray[0], nullsArray == null ? null : nullsArray[0], hasNulls, positions, positionCount, refs);
@@ -5302,7 +5284,7 @@ public class HashJoinOperator
                     return NO_MATCH_ROW_REFERENCE;
                 }
                 int entry = directBuild.entry((int) key);
-                return entry == EMPTY ? NO_MATCH_ROW_REFERENCE : rowReferenceAt(directEntryHead(entry));
+                return entry == EMPTY ? NO_MATCH_ROW_REFERENCE : rows.referenceAt(directEntryHead(entry));
             }
             if (arrayMode) {
                 if (key < minKey || key > maxKey) {
@@ -5322,7 +5304,7 @@ public class HashJoinOperator
             }
             int slot = findSlot(key);
             int head = slotHead[slot];
-            return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rowReferenceAt(head);
+            return head == EMPTY ? NO_MATCH_ROW_REFERENCE : rows.referenceAt(head);
         }
 
         private long denseSingleBatchRowReference(int ordinal)
@@ -5454,7 +5436,7 @@ public class HashJoinOperator
         {
             buildKeyAnd &= key;
             buildKeyOr |= key;
-            observeRowReference(rowReference);
+            rows.observeReference(rowReference);
             if (key < minKey) {
                 minKey = key;
             }
@@ -5486,14 +5468,10 @@ public class HashJoinOperator
                     maximumMatchCount = Math.max(maximumMatchCount, ++slotCount[slot]);
                     return;
                 }
-                ensureChainState();
+                rows.ensureChainState(rowCount);
             }
-            ensureRowCapacity();
             int ordinal = rowCount++;
-            storeRowReference(ordinal, rowReference);
-            if (chainNext != null) {
-                chainNext[ordinal] = EMPTY;
-            }
+            rows.append(ordinal, rowReference);
             if (newKey) {
                 keys[slot] = key;
                 occupySlot(slot, key);
@@ -5511,7 +5489,7 @@ public class HashJoinOperator
                 return;
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
-            chainNext[slotTail[slot]] = ordinal;
+            rows.link(slotTail[slot], ordinal);
             slotTail[slot] = ordinal;
             maximumMatchCount = Math.max(maximumMatchCount, ++slotCount[slot]);
         }
@@ -5543,12 +5521,8 @@ public class HashJoinOperator
                 addDirectRangeDuplicate(key, entry, rowReference);
                 return;
             }
-            ensureRowCapacity();
             int ordinal = rowCount++;
-            storeRowReference(ordinal, rowReference);
-            if (chainNext != null) {
-                chainNext[ordinal] = EMPTY;
-            }
+            rows.append(ordinal, rowReference);
             directBuild.initializeKey(key, ordinal);
             size++;
         }
@@ -5564,12 +5538,10 @@ public class HashJoinOperator
                 directBuild.incrementDenseDuplicate(key);
                 return;
             }
-            ensureChainState();
-            ensureRowCapacity();
+            rows.ensureChainState(rowCount);
             int ordinal = rowCount++;
-            storeRowReference(ordinal, rowReference);
-            chainNext[ordinal] = EMPTY;
-            chainNext[directBuild.appendDenseDuplicate(key, entry, ordinal)] = ordinal;
+            rows.append(ordinal, rowReference);
+            rows.link(directBuild.appendDenseDuplicate(key, entry, ordinal), ordinal);
         }
 
         private boolean useSparseDirectDuplicateState()
@@ -5584,12 +5556,10 @@ public class HashJoinOperator
                 directBuild.incrementSparseDuplicate(groupEntry);
                 return;
             }
-            ensureChainState();
-            ensureRowCapacity();
+            rows.ensureChainState(rowCount);
             int ordinal = rowCount++;
-            storeRowReference(ordinal, rowReference);
-            chainNext[ordinal] = EMPTY;
-            chainNext[directBuild.appendSparseDuplicate(groupEntry, ordinal)] = ordinal;
+            rows.append(ordinal, rowReference);
+            rows.link(directBuild.appendSparseDuplicate(groupEntry, ordinal), ordinal);
         }
 
         private int directEntryHead(int entry)
@@ -5645,14 +5615,10 @@ public class HashJoinOperator
         private void appendDenseRow(long key, long rowReference)
         {
             observeDenseSingleBatchRowReference(rowReference);
-            ensureRowCapacity();
             if (rowCount == 0) {
                 denseFirstKey = key;
             }
-            storeRowReference(rowCount, rowReference);
-            if (chainNext != null) {
-                chainNext[rowCount] = EMPTY;
-            }
+            rows.append(rowCount, rowReference);
             rowCount++;
             size++;
             denseNextKey = key + 1;
@@ -5710,14 +5676,12 @@ public class HashJoinOperator
                 return count == 1 ? single.withValue(orderedRows[base]) : chain.resetRange(orderedRows, base, count);
             }
             if (count == 1) {
-                return single.withValue(rowReferenceAt(head));
+                return single.withValue(rows.referenceAt(head));
             }
             if (compressDuplicateReferences) {
-                return chain.resetRepeated(rowReferenceAt(head), count);
+                return chain.resetRepeated(rows.referenceAt(head), count);
             }
-            return compactRowReferences != null
-                    ? chain.resetCompact(compactRowReferences, chainNext, head, count)
-                    : chain.reset(rowReferences, chainNext, head, count);
+            return rows.resetChain(chain, head, count);
         }
 
         /**
@@ -5757,8 +5721,8 @@ public class HashJoinOperator
                     group++;
                 }
                 while (ordinal != EMPTY) {
-                    ordered[cursor++] = rowReferenceAt(ordinal);
-                    ordinal = chainNext[ordinal];
+                    ordered[cursor++] = rows.referenceAt(ordinal);
+                    ordinal = rows.next(ordinal);
                 }
             }
             if (compressedCandidate) {
@@ -5811,7 +5775,7 @@ public class HashJoinOperator
                         denseBuildCandidate,
                         directBuild.isActive(),
                         hasDuplicates,
-                        implicitSequentialRowReferences,
+                        rows.implicitSequentialReferences(),
                         compressDuplicateReferences);
             }
             if (size == 0) {
@@ -5855,9 +5819,9 @@ public class HashJoinOperator
                 releaseRowArrays();
                 return;
             }
-            if (rowReferencesFit32) {
+            if (rows.referencesFit32()) {
                 if (denseBuildCandidate && range == size) {
-                    directRows32 = packDenseDirectRows32(rowReferences, rowCount);
+                    directRows32 = rows.packReferences32(rowCount);
                 }
                 else {
                     int[] direct = arrayPool.borrowInts((int) range);
@@ -5865,7 +5829,7 @@ public class HashJoinOperator
                     for (int slot = 0; slot < keys.length; slot++) {
                         int head = slotHead[slot];
                         if (head != EMPTY) {
-                            direct[(int) (keys[slot] - minKey)] = JoinRowReference.packCompact(rowReferenceAt(head));
+                            direct[(int) (keys[slot] - minKey)] = JoinRowReference.packCompact(rows.referenceAt(head));
                         }
                     }
                     directRows32 = direct;
@@ -5876,8 +5840,7 @@ public class HashJoinOperator
                 return;
             }
             if (denseBuildCandidate && range == size) {
-                directRows = rowReferences;
-                rowReferences = null;
+                directRows = rows.takeFullReferences();
                 arrayMode = true;
                 releaseHashTable();
                 releaseRowArrays();
@@ -5888,7 +5851,7 @@ public class HashJoinOperator
             for (int slot = 0; slot < keys.length; slot++) {
                 int head = slotHead[slot];
                 if (head != EMPTY) {
-                    direct[(int) (keys[slot] - minKey)] = rowReferenceAt(head);
+                    direct[(int) (keys[slot] - minKey)] = rows.referenceAt(head);
                 }
             }
             directRows = direct;
@@ -5951,7 +5914,7 @@ public class HashJoinOperator
                 if (!sequentialReferences) {
                     continue;
                 }
-                long reference = rowReferenceAt(head);
+                long reference = rows.referenceAt(head);
                 if (firstReference == NO_MATCH_ROW_REFERENCE) {
                     firstReference = reference;
                     firstBatchIndex = JoinRowReference.batchIndex(reference);
@@ -5999,14 +5962,12 @@ public class HashJoinOperator
                 int head = directEntryHead(entry);
                 int count = directEntryCount((int) key, entry);
                 if (count == 1) {
-                    return single.withValue(rowReferenceAt(head));
+                    return single.withValue(rows.referenceAt(head));
                 }
                 if (compressDuplicateReferences) {
-                    return chain.resetRepeated(rowReferenceAt(head), count);
+                    return chain.resetRepeated(rows.referenceAt(head), count);
                 }
-                return compactRowReferences != null
-                        ? chain.resetCompact(compactRowReferences, chainNext, head, count)
-                        : chain.reset(rowReferences, chainNext, head, count);
+                return rows.resetChain(chain, head, count);
             }
             if (arrayMode) {
                 if (key < minKey || key > maxKey) {
@@ -6048,125 +6009,6 @@ public class HashJoinOperator
             return sparseMembership.contains(key);
         }
 
-        private void observeRowReference(long rowReference)
-        {
-            if (!rowReferencesFit32) {
-                return;
-            }
-            if (JoinRowReference.batchIndex(rowReference) > JoinRowReference.MAX_COMPACT_BATCH_INDEX || JoinRowReference.position(rowReference) > JoinRowReference.MAX_COMPACT_POSITION) {
-                rowReferencesFit32 = false;
-            }
-        }
-
-        private void observeRowReferenceRange(int batchIndex, int maximumPosition)
-        {
-            if (rowReferencesFit32 &&
-                    (batchIndex > JoinRowReference.MAX_COMPACT_BATCH_INDEX || maximumPosition > JoinRowReference.MAX_COMPACT_POSITION)) {
-                rowReferencesFit32 = false;
-            }
-        }
-
-        private void ensureRowCapacity()
-        {
-            if (rowCount < rowCapacity) {
-                return;
-            }
-            growRowCapacity();
-        }
-
-        private void growRowCapacity()
-        {
-            int newCapacity = rowCapacity * 2;
-            if (compactRowReferences != null) {
-                int[] previous = compactRowReferences;
-                compactRowReferences = arrayPool.borrowInts(newCapacity);
-                System.arraycopy(previous, 0, compactRowReferences, 0, rowCount);
-                arrayPool.release(previous);
-            }
-            else if (!implicitSequentialRowReferences) {
-                long[] previous = rowReferences;
-                rowReferences = arrayPool.borrowLongs(newCapacity);
-                System.arraycopy(previous, 0, rowReferences, 0, rowCount);
-                arrayPool.release(previous);
-            }
-            if (chainNext != null) {
-                int[] previousChain = chainNext;
-                chainNext = arrayPool.borrowInts(newCapacity);
-                System.arraycopy(previousChain, 0, chainNext, 0, rowCount);
-                arrayPool.release(previousChain);
-            }
-            rowCapacity = newCapacity;
-        }
-
-        private void ensureChainState()
-        {
-            if (chainNext != null) {
-                return;
-            }
-            chainNext = arrayPool.borrowInts(rowCapacity);
-            Arrays.fill(chainNext, 0, rowCount, EMPTY);
-        }
-
-        private void storeRowReference(int ordinal, long rowReference)
-        {
-            if (implicitSequentialRowReferences) {
-                if (ordinal == 0) {
-                    implicitRowReferenceBase = rowReference;
-                    return;
-                }
-                if (rowReference == implicitRowReferenceBase + ordinal) {
-                    return;
-                }
-                materializeImplicitRowReferences(ordinal);
-            }
-            if (compactRowReferences != null && rowReferencesFit32) {
-                compactRowReferences[ordinal] = JoinRowReference.packCompact(rowReference);
-                return;
-            }
-            if (compactRowReferences != null) {
-                rowReferences = arrayPool.borrowLongs(compactRowReferences.length);
-                for (int index = 0; index < ordinal; index++) {
-                    rowReferences[index] = JoinRowReference.unpackCompact(compactRowReferences[index]);
-                }
-                arrayPool.release(compactRowReferences);
-                compactRowReferences = null;
-            }
-            rowReferences[ordinal] = rowReference;
-        }
-
-        private void materializeImplicitRowReferences(int count)
-        {
-            implicitSequentialRowReferences = false;
-            if (preferCompactRowReferences && rowReferencesFit32) {
-                compactRowReferences = arrayPool.borrowInts(rowCapacity);
-                for (int index = 0; index < count; index++) {
-                    compactRowReferences[index] = JoinRowReference.packCompact(implicitRowReferenceBase + index);
-                }
-                return;
-            }
-            rowReferences = arrayPool.borrowLongs(rowCapacity);
-            for (int index = 0; index < count; index++) {
-                rowReferences[index] = implicitRowReferenceBase + index;
-            }
-        }
-
-        private long rowReferenceAt(int ordinal)
-        {
-            if (implicitSequentialRowReferences) {
-                return implicitRowReferenceBase + ordinal;
-            }
-            return compactRowReferences != null ? JoinRowReference.unpackCompact(compactRowReferences[ordinal]) : rowReferences[ordinal];
-        }
-
-        private int[] packDenseDirectRows32(long[] rowReferences, int rowCount)
-        {
-            int[] packed = arrayPool.borrowInts(rowCount);
-            for (int index = 0; index < rowCount; index++) {
-                packed[index] = JoinRowReference.packCompact(rowReferences[index]);
-            }
-            return packed;
-        }
-
         @Override
         public void releaseBuffers()
         {
@@ -6203,12 +6045,7 @@ public class HashJoinOperator
 
         private void releaseRowArrays()
         {
-            arrayPool.release(rowReferences);
-            rowReferences = null;
-            arrayPool.release(compactRowReferences);
-            compactRowReferences = null;
-            arrayPool.release(chainNext);
-            chainNext = null;
+            rows.release();
         }
 
         private void releaseDirectBuildArrays()
