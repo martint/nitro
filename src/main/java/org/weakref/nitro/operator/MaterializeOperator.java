@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -24,6 +25,7 @@ public final class MaterializeOperator
     private final Allocator allocator;
     private final Allocator.Context allocationContext = new Allocator.Context("MaterializeOperator");
     private final int outputCount;
+    private final Schema outputSchema;
     private Operator source;
     private TableOperator materialized;
 
@@ -32,12 +34,19 @@ public final class MaterializeOperator
         this.allocator = allocator;
         this.source = source;
         this.outputCount = source.outputCount();
+        this.outputSchema = source.outputSchema();
     }
 
     @Override
     public int outputCount()
     {
         return outputCount;
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

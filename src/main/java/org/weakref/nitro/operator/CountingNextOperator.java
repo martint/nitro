@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Mask;
 
 public final class CountingNextOperator
@@ -30,6 +31,12 @@ public final class CountingNextOperator
     public int outputCount()
     {
         return delegate.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return delegate.outputSchema();
     }
 
     @Override

@@ -49,8 +49,11 @@ import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
+import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.DistinctCount;
+import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -59,7 +62,9 @@ import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
+import org.weakref.nitro.operator.MaterializeOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
+import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
@@ -1439,6 +1444,27 @@ public class TestOperators
             assertThat(limit.outputSchema()).isSameAs(sourceSchema);
             assertThat(sort.outputSchema()).isSameAs(sourceSchema);
             assertThat(topN.outputSchema()).isSameAs(sourceSchema);
+        }
+    }
+
+    @Test
+    void testTransparentOperatorsPreserveSourceSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema sourceSchema = new Schema(List.of(
+                new Field("first", i32Only, false),
+                new Field("second", i32Only, true)));
+
+        try (Operator batchSlice = new BatchSliceOperator(allocator, 10, typedTable(sourceSchema));
+                Operator counting = new CountingNextOperator(typedTable(sourceSchema));
+                Operator singleRow = new EnforceSingleRowOperator(allocator, typedTable(sourceSchema));
+                Operator materialize = new MaterializeOperator(allocator, typedTable(sourceSchema));
+                Operator offset = new OffsetOperator(allocator, 1, typedTable(sourceSchema))) {
+            assertThat(batchSlice.outputSchema()).isSameAs(sourceSchema);
+            assertThat(counting.outputSchema()).isSameAs(sourceSchema);
+            assertThat(singleRow.outputSchema()).isSameAs(sourceSchema);
+            assertThat(materialize.outputSchema()).isSameAs(sourceSchema);
+            assertThat(offset.outputSchema()).isSameAs(sourceSchema);
         }
     }
 
