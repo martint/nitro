@@ -91,6 +91,7 @@ final class LongPairJoinIndex
     // key does not fit, promote every live entry once to the full-width layout before inserting it.
     private boolean compactKeys;
     private final boolean keyOnlyBuild;
+    private final boolean batchBuild;
     private int[] keyOnlyCounts;
     // Duplicate rows live in one pooled append-only store. Per-slot head/tail/count metadata links each key's
     // rows without allocating a LongArrayList object and backing array for every duplicate key.
@@ -121,7 +122,8 @@ final class LongPairJoinIndex
             PrimitiveArrayPool arrayPool,
             int expectedSize,
             boolean keyOnlyBuild,
-            boolean capInitialHash)
+            boolean capInitialHash,
+            boolean batchBuild)
     {
         this.policy = requireNonNull(policy, "policy is null");
         this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
@@ -130,6 +132,7 @@ final class LongPairJoinIndex
         this.compactKeys = policy.compactLongPairKeys();
         this.denseRowsSingleBatch = policy.compactDensePairSingleBatchRowReferences();
         this.keyOnlyBuild = keyOnlyBuild && policy.compactKeyOnlyLongPairBuild();
+        this.batchBuild = batchBuild;
         this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, policy.initialHashExpectedCap());
         int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
         this.initialDenseEntryCapacity = Math.max(16, initialExpectedSize);
@@ -190,7 +193,8 @@ final class LongPairJoinIndex
                 rowReference);
     }
 
-    void addRows(
+    @Override
+    boolean addBuildRows(
             Vector[] values,
             Vector[] nulls,
             boolean hasNulls,
@@ -199,9 +203,12 @@ final class LongPairJoinIndex
             int length,
             int batchIndex)
     {
+        if (!batchBuild) {
+            return false;
+        }
         if (denseCompactEntries) {
             addDenseRows(values, nulls, hasNulls, batch, startPosition, length, batchIndex);
-            return;
+            return true;
         }
         VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
         VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
@@ -216,7 +223,7 @@ final class LongPairJoinIndex
                     addRow(firstValues.value(position), secondValues.value(position), JoinRowReference.pack(batchIndex, position));
                 }
             }
-            return;
+            return true;
         }
         for (int position = startPosition; position < endPosition; position++) {
             int sourcePosition = sourcePositions[position];
@@ -225,13 +232,23 @@ final class LongPairJoinIndex
                 addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, position));
             }
         }
+        return true;
     }
 
-    void addRows(Vector[] values, Vector[] nulls, boolean hasNulls, Mask mask, int batchIndex)
+    @Override
+    boolean addBuildRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            Mask mask,
+            int batchIndex)
     {
+        if (!batchBuild) {
+            return false;
+        }
         if (denseCompactEntries) {
             addDenseRows(values, nulls, hasNulls, mask, batchIndex);
-            return;
+            return true;
         }
         VectorAccess.LongValues firstValues = VectorAccess.longValues(values[0]);
         VectorAccess.LongValues secondValues = VectorAccess.longValues(values[1]);
@@ -245,6 +262,13 @@ final class LongPairJoinIndex
                 addRow(firstValues.value(sourcePosition), secondValues.value(sourcePosition), JoinRowReference.pack(batchIndex, logicalPosition));
             }
         }
+        return true;
+    }
+
+    @Override
+    String probeKind()
+    {
+        return "pair";
     }
 
     private void addDenseRows(

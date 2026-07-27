@@ -72,6 +72,12 @@ final class FlatJoinIndex
     }
 
     @Override
+    String probeKind()
+    {
+        return "flat";
+    }
+
+    @Override
     public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
     {
         if (JoinIndex.hasNull(nulls, position)) {

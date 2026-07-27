@@ -946,13 +946,7 @@ public class HashJoinOperator
 
     private String genericProbeKind()
     {
-        return switch (joinIndex) {
-            case FlatJoinIndex _ -> "flat";
-            case LongPairJoinIndex _ -> "pair";
-            case LongTripleJoinIndex _ -> "triple";
-            case ObjectJoinIndex _ -> "object";
-            case null, default -> "object";
-        };
+        return joinIndex == null ? "object" : joinIndex.probeKind();
     }
 
     private boolean loadNextOuterBatch()
@@ -1043,8 +1037,8 @@ public class HashJoinOperator
         if (buildKeysAbandoned) {
             // A large single-long build may still have an exact bounded-range membership bitset owned by its join
             // index. Share that immutable representation with the probe scan instead of rebuilding a huge hash set.
-            if (dynamicFilterPolicy.shareSparseLongRange() && innerJoinColumns.length == 1 && joinIndex instanceof LongJoinIndex longIndex) {
-                DynamicFilter filter = longIndex.sparseDynamicFilter(outerJoinColumns[0]);
+            if (dynamicFilterPolicy.shareSparseLongRange() && joinIndex != null) {
+                DynamicFilter filter = joinIndex.buildDynamicFilter(outerJoinColumns[0]);
                 if (filter != null) {
                     outer.pushDynamicFilter(filter);
                 }
@@ -1367,7 +1361,7 @@ public class HashJoinOperator
                 validateJoinKeyVectors(joinValues, "build");
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, executionPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true);
+                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, executionPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true, buildPolicy.batchSingleLongBuild());
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -1396,12 +1390,13 @@ public class HashJoinOperator
                         }
                     }
                 }
-                if (buildPolicy.batchSingleLongBuild() && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
-                    longJoinIndex.addRows(joinValues[0], joinNulls[0], hasNulls, mask, batchIndex++);
-                    continue;
-                }
-                if (buildPolicy.batchLongPairBuild() && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
-                    longPairJoinIndex.addRows(joinValues, joinNulls, hasNulls, mask, batchIndex++);
+                if (!collectKeys && joinIndex.addBuildRows(
+                        joinValues,
+                        joinNulls,
+                        hasNulls,
+                        mask,
+                        batchIndex)) {
+                    batchIndex++;
                     continue;
                 }
                 for (int logicalPosition = 0; logicalPosition < mask.count(); logicalPosition++) {
@@ -1665,11 +1660,11 @@ public class HashJoinOperator
                 (!singleLongNotEqualJoinFilter && !singleLongBitwiseOverlapJoinFilter) ||
                 fastInnerFilterBatch == null ||
                 fastInnerFilterNulls != null ||
-                !(joinIndex instanceof LongJoinIndex longJoinIndex)) {
+                joinIndex == null) {
             return;
         }
         fastInnerOrderedFilterAttempted = true;
-        fastInnerOrderedIntFilterValues = longJoinIndex.buildOrderedIntPayload(
+        fastInnerOrderedIntFilterValues = joinIndex.buildOrderedIntPayload(
                 fastInnerFilterLongs,
                 fastInnerFilterLongArray,
                 fastInnerFilterPositions);
@@ -1761,12 +1756,14 @@ public class HashJoinOperator
             }
             collectKeys = !buildKeysAbandoned;
         }
-        if (buildPolicy.batchSingleLongBuild() && !collectKeys && joinIndex instanceof LongJoinIndex longJoinIndex) {
-            longJoinIndex.addRows(joinValues[0], joinNulls[0], hasNulls, batch, startPosition, length, batchIndex);
-            return;
-        }
-        if (buildPolicy.batchLongPairBuild() && !collectKeys && joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
-            longPairJoinIndex.addRows(joinValues, joinNulls, hasNulls, batch, startPosition, length, batchIndex);
+        if (!collectKeys && joinIndex.addBuildRows(
+                joinValues,
+                joinNulls,
+                hasNulls,
+                batch,
+                startPosition,
+                length,
+                batchIndex)) {
             return;
         }
         for (int position = startPosition; position < startPosition + length; position++) {
@@ -1998,7 +1995,8 @@ public class HashJoinOperator
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
                     keyOnlyDirectRangeBuild,
-                    false);
+                    false,
+                    buildPolicy.batchSingleLongBuild());
         }
         return genericJoinIndexes.create(
                 joinValues,
@@ -3704,6 +3702,7 @@ public class HashJoinOperator
         private int rowCapacity;
         private final boolean preferCompactRowReferences;
         private final boolean buildRowReferencesUnused;
+        private final boolean batchBuild;
         // A capped build was classified from its observed shape as bounded or duplicate-heavy. Those tables either
         // remain in direct-range form or acquire an exact membership filter, so hash probes that survive are
         // predominantly hits. A scalar linear table is cheaper for that shape and avoids allocating control tags;
@@ -3789,7 +3788,8 @@ public class HashJoinOperator
                 boolean lazyDuplicateSlotState,
                 boolean implicitSequentialRowReferences,
                 boolean keyOnlyDirectRangeBuild,
-                boolean buildRowReferencesUnused)
+                boolean buildRowReferencesUnused,
+                boolean batchBuild)
         {
             this.policy = requireNonNull(policy, "policy is null");
             this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
@@ -3820,6 +3820,7 @@ public class HashJoinOperator
             rowCapacity = initialRows;
             preferCompactRowReferences = capInitialHash && policy.compactChainRowReferences();
             this.buildRowReferencesUnused = buildRowReferencesUnused;
+            this.batchBuild = batchBuild;
             this.groupedHashTable = policy.groupedLongHashTable() && groupedHashTable;
             this.implicitSequentialRowReferences = implicitSequentialRowReferences;
             if (!implicitSequentialRowReferences) {
@@ -3872,15 +3873,21 @@ public class HashJoinOperator
             addRow(OperatorVectorSupport.longValue(values[0], position), rowReference);
         }
 
-        private void addRows(
-                Vector values,
-                Vector nulls,
+        @Override
+        boolean addBuildRows(
+                Vector[] valuesArray,
+                Vector[] nullsArray,
                 boolean hasNulls,
                 BufferedJoinInput.InnerBatch batch,
                 int startPosition,
                 int length,
                 int batchIndex)
         {
+            if (!batchBuild) {
+                return false;
+            }
+            Vector values = valuesArray[0];
+            Vector nulls = nullsArray[0];
             VectorAccess.LongValues longValues = VectorAccess.longValues(values);
             VectorAccess.BooleanValues nullValues = hasNulls ? VectorAccess.booleanValues(nulls) : null;
             int endPosition = startPosition + length;
@@ -3894,7 +3901,7 @@ public class HashJoinOperator
                         startPosition,
                         endPosition,
                         (long) batchIndex << Integer.SIZE);
-                return;
+                return true;
             }
             if (sourcePositions == null) {
                 for (int position = startPosition; position < endPosition; position++) {
@@ -3902,7 +3909,7 @@ public class HashJoinOperator
                         addRow(longValues.value(position), JoinRowReference.pack(batchIndex, position));
                     }
                 }
-                return;
+                return true;
             }
             for (int position = startPosition; position < endPosition; position++) {
                 int sourcePosition = sourcePositions[position];
@@ -3910,17 +3917,29 @@ public class HashJoinOperator
                     addRow(longValues.value(sourcePosition), JoinRowReference.pack(batchIndex, position));
                 }
             }
+            return true;
         }
 
-        private void addRows(Vector values, Vector nulls, boolean hasNulls, Mask mask, int batchIndex)
+        @Override
+        boolean addBuildRows(
+                Vector[] valuesArray,
+                Vector[] nullsArray,
+                boolean hasNulls,
+                Mask mask,
+                int batchIndex)
         {
+            if (!batchBuild) {
+                return false;
+            }
+            Vector values = valuesArray[0];
+            Vector nulls = nullsArray[0];
             VectorAccess.LongValues longValues = VectorAccess.longValues(values);
             VectorAccess.BooleanValues nullValues = hasNulls ? VectorAccess.booleanValues(nulls) : null;
             int count = mask.count();
             if (useCompressedDirectBuildBatchLoop()) {
                 observeRowReferenceRange(batchIndex, count - 1);
                 addCompressedDirectRangeRows(longValues, nullValues, mask, count, (long) batchIndex << Integer.SIZE);
-                return;
+                return true;
             }
             for (int logicalPosition = 0; logicalPosition < count; logicalPosition++) {
                 int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
@@ -3928,6 +3947,7 @@ public class HashJoinOperator
                     addRow(longValues.value(sourcePosition), JoinRowReference.pack(batchIndex, logicalPosition));
                 }
             }
+            return true;
         }
 
         private boolean useCompressedDirectBuildBatchLoop()
@@ -6030,7 +6050,8 @@ public class HashJoinOperator
             }
         }
 
-        private int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)
+        @Override
+        int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)
         {
             if (!rangeCompacted) {
                 return null;
@@ -6346,7 +6367,8 @@ public class HashJoinOperator
                     : 0;
         }
 
-        private DynamicFilter sparseDynamicFilter(int probeColumn)
+        @Override
+        DynamicFilter buildDynamicFilter(int probeColumn)
         {
             buildSparseRangeMembership();
             if (sparseMembership == null) {

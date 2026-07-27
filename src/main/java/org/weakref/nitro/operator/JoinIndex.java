@@ -14,7 +14,9 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongList;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 
 abstract class JoinIndex
 {
@@ -34,6 +36,43 @@ abstract class JoinIndex
     LongList matchesNoNulls(Vector[] values, int position)
     {
         return matches(values, noNullStreams, position);
+    }
+
+    boolean addBuildRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            BufferedJoinInput.InnerBatch batch,
+            int startPosition,
+            int length,
+            int batchIndex)
+    {
+        return false;
+    }
+
+    boolean addBuildRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            Mask mask,
+            int batchIndex)
+    {
+        return false;
+    }
+
+    DynamicFilter buildDynamicFilter(int probeColumn)
+    {
+        return null;
+    }
+
+    int[] buildOrderedIntPayload(VectorAccess.LongValues values, long[] directValues, int[] sourcePositions)
+    {
+        return null;
+    }
+
+    String probeKind()
+    {
+        return "object";
     }
 
     void matchRows(
