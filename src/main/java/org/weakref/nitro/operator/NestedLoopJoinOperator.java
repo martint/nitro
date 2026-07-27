@@ -69,14 +69,41 @@ public class NestedLoopJoinOperator
         this(allocator, outer, inner, new CrossJoinMatcher());
     }
 
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner)
+    {
+        this(resources, allocator, outer, inner, new CrossJoinMatcher());
+    }
+
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
     {
         this(allocator, outer, inner, new EquiJoinMatcher(outerJoinColumn, innerJoinColumn));
     }
 
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, int outerJoinColumn, Operator inner, int innerJoinColumn)
+    {
+        this(resources, allocator, outer, inner, new EquiJoinMatcher(outerJoinColumn, innerJoinColumn));
+    }
+
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
     {
         this(allocator, outer, inner, new EquiJoinMatcher(outerJoinColumns, innerJoinColumns));
+    }
+
+    public NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, int[] outerJoinColumns, Operator inner, int[] innerJoinColumns)
+    {
+        this(resources, allocator, outer, inner, new EquiJoinMatcher(outerJoinColumns, innerJoinColumns));
+    }
+
+    private NestedLoopJoinOperator(OperatorResources resources, Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
+    {
+        this(
+                requireNonNull(resources, "resources is null").nestedLoopJoinPolicy(),
+                resources.bufferedJoinInputPolicy(),
+                resources.joinBufferPolicy(),
+                allocator,
+                outer,
+                inner,
+                matcher);
     }
 
     private NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner, JoinMatcher matcher)
