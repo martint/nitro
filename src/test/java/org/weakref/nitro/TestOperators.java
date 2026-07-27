@@ -55,6 +55,7 @@ import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.FilterOperator;
+import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -1465,6 +1466,33 @@ public class TestOperators
             assertThat(singleRow.outputSchema()).isSameAs(sourceSchema);
             assertThat(materialize.outputSchema()).isSameAs(sourceSchema);
             assertThat(offset.outputSchema()).isSameAs(sourceSchema);
+        }
+    }
+
+    @Test
+    void testFullJoinPreservesFieldsAndWidensNullability()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field outerKey = new Field("outer_key", i32Only, false);
+        Field outerValue = new Field("outer_value", i32Only, true);
+        Field innerKey = new Field("inner_key", i32Only, false);
+        Schema outerSchema = new Schema(List.of(outerKey, outerValue));
+        Schema innerSchema = new Schema(List.of(innerKey));
+
+        try (Operator join = new FullJoinOperator(
+                allocator,
+                typedTable(outerSchema),
+                new int[] {0},
+                typedTable(innerSchema),
+                new int[] {0},
+                allocator.engineResources().operatorResources().fullJoinPolicy())) {
+            assertThat(join.outputSchema().fields()).extracting(Field::name)
+                    .containsExactly(outerKey.name(), outerValue.name(), innerKey.name());
+            assertThat(join.outputSchema().fields()).extracting(Field::type)
+                    .containsExactly(i32Only, i32Only, i32Only);
+            assertThat(join.outputSchema().fields()).extracting(Field::nullable)
+                    .containsExactly(true, true, true);
+            assertThat(join.outputSchema().field(1)).isSameAs(outerValue);
         }
     }
 

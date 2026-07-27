@@ -14,6 +14,8 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.ints.IntArrayList;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -50,6 +52,7 @@ public final class FullJoinOperator
     private final int[] innerJoinColumns;
     private final boolean sortedInputs;
     private final FullJoinOperatorPolicy policy;
+    private final Schema outputSchema;
 
     private Streams[] materialized;
     private Mask outputMask;
@@ -106,12 +109,32 @@ public final class FullJoinOperator
         this.innerJoinColumns = innerJoinColumns.clone();
         this.sortedInputs = sortedInputs;
         this.policy = requireNonNull(policy, "policy is null");
+        this.outputSchema = outputSchema(outer.outputSchema(), inner.outputSchema());
     }
 
     @Override
     public int outputCount()
     {
         return outer.outputCount() + inner.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema outerSchema, Schema innerSchema)
+    {
+        List<Field> fields = new ArrayList<>(outerSchema.size() + innerSchema.size());
+        outerSchema.fields().forEach(field -> fields.add(nullable(field)));
+        innerSchema.fields().forEach(field -> fields.add(nullable(field)));
+        return new Schema(fields);
+    }
+
+    private static Field nullable(Field field)
+    {
+        return field.nullable() ? field : new Field(field.name(), field.type(), true);
     }
 
     @Override
