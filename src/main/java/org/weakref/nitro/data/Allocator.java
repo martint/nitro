@@ -1476,7 +1476,7 @@ public class Allocator
                 allocator.releaseResident(vector.retainedBytes());
                 return;
             }
-            addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
+            addVectorToPool(family, vector.poolCapacity(), maxRetained(vector), vector);
         }
 
         public void discardVector(Vector vector)
@@ -1511,7 +1511,7 @@ public class Allocator
         {
             Object family = vector.poolFamily();
             if (family != null) {
-                addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
+                addVectorToPool(family, vector.poolCapacity(), maxRetained(vector), vector);
             }
         }
 
@@ -1588,7 +1588,7 @@ public class Allocator
             for (Vector vector : inUseVectors) {
                 Object family = vector.poolFamily();
                 if (family != null) {
-                    addVectorToPool(family, vector.poolCapacity(), vector.poolMaxRetained(), vector);
+                    addVectorToPool(family, vector.poolCapacity(), maxRetained(vector), vector);
                 }
                 else {
                     allocator.releaseResident(vector.retainedBytes());
@@ -1696,6 +1696,15 @@ public class Allocator
             }
         }
 
+        private int maxRetained(Vector vector)
+        {
+            VectorPoolRetentionClass retentionClass = vector.poolRetentionClass();
+            if (retentionClass == VectorPoolRetentionClass.VECTOR_DEFAULT) {
+                return vector.poolMaxRetained();
+            }
+            return allocator.policy.aggregateStateVectorRetention().maxRetained(retentionClass, vector.retainedBytes());
+        }
+
         private void evictLocalVector(Vector vector)
         {
             Object family = requireNonNull(vector.poolFamily(), "discarded vector has no pool family");
@@ -1731,7 +1740,7 @@ public class Allocator
             compatibilityPool.vectorPoolBytes += vector.retainedBytes();
             int compatibilityRetentionLimit = (int) Math.min(
                     Integer.MAX_VALUE,
-                    (long) vector.poolMaxRetained() * Math.max(1, allocator.policy.compatibleVectorPoolRetentionMultiplier()));
+                    (long) maxRetained(vector) * Math.max(1, allocator.policy.compatibleVectorPoolRetentionMultiplier()));
             while (order.size() > compatibilityRetentionLimit) {
                 evictCompatibilityVector(order.getFirst());
             }

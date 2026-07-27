@@ -27,6 +27,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -318,6 +319,7 @@ class TestAllocator
                 true,
                 64L << 20,
                 64L << 20,
+                AllocatorPolicy.AggregateStateVectorRetention.defaults(),
                 1,
                 0,
                 3,
@@ -383,6 +385,28 @@ class TestAllocator
                     0,
                     3);
             assertThat(copiedPositions.values()).containsExactly(false, false, true);
+        }
+    }
+
+    @Test
+    void testAllocatorUsesOwnerSuppliedAggregateStateRetention()
+    {
+        AllocatorPolicy policy = AllocatorPolicy.defaults()
+                .withAggregateStateVectorRetention(new AllocatorPolicy.AggregateStateVectorRetention(1, 18, 18));
+        try (AllocationResources resources = new AllocationResources(
+                new PrimitiveArrayPool(1 << 20, 0),
+                new PrimitiveArrayPool(1 << 20, 0),
+                policy);
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("aggregate-state-retention");
+
+            SumStateVector retained = allocator.allocate(context, SumStateVector.class, 2, SumStateVector::new);
+            allocator.release(context, retained);
+            assertThat(allocator.allocate(context, SumStateVector.class, 2, SumStateVector::new)).isSameAs(retained);
+
+            SumStateVector discarded = allocator.allocate(context, SumStateVector.class, 3, SumStateVector::new);
+            allocator.release(context, discarded);
+            assertThat(allocator.allocate(context, SumStateVector.class, 3, SumStateVector::new)).isNotSameAs(discarded);
         }
     }
 

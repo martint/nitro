@@ -31,6 +31,7 @@ public record AllocatorPolicy(
         boolean adaptiveVectorPoolHighWater,
         long maxLocalVectorPoolBytes,
         long maxCompatibleVectorPoolBytes,
+        AggregateStateVectorRetention aggregateStateVectorRetention,
         int compatibleVectorPoolRetentionMultiplier,
         int compatiblePoolLocalReserve,
         int minCompatibilityDomainGroups,
@@ -44,6 +45,7 @@ public record AllocatorPolicy(
     {
         requireNonNull(booleanCopies, "booleanCopies is null");
         requireNonNull(maskFiltering, "maskFiltering is null");
+        requireNonNull(aggregateStateVectorRetention, "aggregateStateVectorRetention is null");
     }
 
     public static AllocatorPolicy defaults()
@@ -61,6 +63,7 @@ public record AllocatorPolicy(
                 true,
                 64L << 20,
                 64L << 20,
+                AggregateStateVectorRetention.defaults(),
                 1,
                 0,
                 3,
@@ -91,6 +94,7 @@ public record AllocatorPolicy(
                 booleanProperty("nitro.allocator.adaptiveVectorPoolHighWater", defaults.adaptiveVectorPoolHighWater()),
                 maxLocalVectorPoolBytes,
                 Long.getLong("nitro.allocator.maxCompatibleVectorPoolBytes", maxLocalVectorPoolBytes),
+                AggregateStateVectorRetention.fromSystemProperties(),
                 Integer.getInteger(
                         "nitro.allocator.compatibleVectorPoolRetentionMultiplier",
                         defaults.compatibleVectorPoolRetentionMultiplier()),
@@ -103,6 +107,32 @@ public record AllocatorPolicy(
                 booleanProperty("nitro.allocator.sharedAllFalseBoolean", defaults.sharedAllFalseBoolean()),
                 booleanProperty("nitro.allocator.directVectorFactory", defaults.directVectorFactory()),
                 booleanProperty("nitro.allocator.indexedVectorTreeTraversal", defaults.indexedVectorTreeTraversal()));
+    }
+
+    public AllocatorPolicy withAggregateStateVectorRetention(AggregateStateVectorRetention retention)
+    {
+        return new AllocatorPolicy(
+                directSingleRunRle,
+                reuseTransportTuples,
+                transferableBufferLeases,
+                booleanCopies,
+                maskFiltering,
+                maxPooledMasksPerBucket,
+                complementDifferenceMasks,
+                singleCopySparseMasks,
+                localVectorWorkingSet,
+                adaptiveVectorPoolHighWater,
+                maxLocalVectorPoolBytes,
+                maxCompatibleVectorPoolBytes,
+                requireNonNull(retention, "retention is null"),
+                compatibleVectorPoolRetentionMultiplier,
+                compatiblePoolLocalReserve,
+                minCompatibilityDomainGroups,
+                compatibleMaskPoolLocalReserve,
+                fastVectorPoolOrderRemove,
+                sharedAllFalseBoolean,
+                directVectorFactory,
+                indexedVectorTreeTraversal);
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)
@@ -153,6 +183,55 @@ public record AllocatorPolicy(
                     booleanProperty(
                             "nitro.mask.branchlessDenseDoubleLessThan",
                             defaults.branchlessDenseDoubleLessThan()));
+        }
+    }
+
+    public record AggregateStateVectorRetention(
+            int maxRetainedPerBucket,
+            long maxRetainedBytes,
+            long maxWideRetainedBytes)
+    {
+        public AggregateStateVectorRetention
+        {
+            if (maxRetainedPerBucket < 0) {
+                throw new IllegalArgumentException("maxRetainedPerBucket is negative");
+            }
+            if (maxRetainedBytes < 0) {
+                throw new IllegalArgumentException("maxRetainedBytes is negative");
+            }
+            if (maxWideRetainedBytes < 0) {
+                throw new IllegalArgumentException("maxWideRetainedBytes is negative");
+            }
+        }
+
+        public static AggregateStateVectorRetention defaults()
+        {
+            return new AggregateStateVectorRetention(2, 8L << 20, 16L << 20);
+        }
+
+        private static AggregateStateVectorRetention fromSystemProperties()
+        {
+            AggregateStateVectorRetention defaults = defaults();
+            return new AggregateStateVectorRetention(
+                    Integer.getInteger(
+                            "nitro.allocator.aggregateState.maxRetainedPerBucket",
+                            defaults.maxRetainedPerBucket()),
+                    Long.getLong(
+                            "nitro.allocator.aggregateState.maxRetainedBytes",
+                            defaults.maxRetainedBytes()),
+                    Long.getLong(
+                            "nitro.allocator.aggregateState.maxWideRetainedBytes",
+                            defaults.maxWideRetainedBytes()));
+        }
+
+        public int maxRetained(VectorPoolRetentionClass retentionClass, long retainedBytes)
+        {
+            long maxBytes = switch (retentionClass) {
+                case AGGREGATE_STATE -> maxRetainedBytes;
+                case WIDE_AGGREGATE_STATE -> maxWideRetainedBytes;
+                case VECTOR_DEFAULT -> throw new IllegalArgumentException("VECTOR_DEFAULT has no aggregate-state retention");
+            };
+            return retainedBytes <= maxBytes ? maxRetainedPerBucket : 0;
         }
     }
 }

@@ -20,8 +20,6 @@ import java.util.Arrays;
 public final class SumStateVector
         implements FlatVector, LongStateUpdate
 {
-    private static final long MAX_POOLED_RETAINED_BYTES = 8L * 1024 * 1024;
-
     private final int length;
     private final long[] sums;
     private final boolean[] nulls;
@@ -131,9 +129,9 @@ public final class SumStateVector
     }
 
     @Override
-    public int poolMaxRetained()
+    public VectorPoolRetentionClass poolRetentionClass()
     {
-        return retainedBytes <= MAX_POOLED_RETAINED_BYTES ? 2 : 0;
+        return VectorPoolRetentionClass.AGGREGATE_STATE;
     }
 
     public void increment(int index, long value)

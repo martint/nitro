@@ -194,6 +194,14 @@ public interface Vector
         return 0;
     }
 
+    /**
+     * Returns the allocator retention class for this vector.
+     */
+    default VectorPoolRetentionClass poolRetentionClass()
+    {
+        return VectorPoolRetentionClass.VECTOR_DEFAULT;
+    }
+
     /** Returns the number of directly owned child vectors without allocating a traversal callback. */
     default int childVectorCount()
     {
