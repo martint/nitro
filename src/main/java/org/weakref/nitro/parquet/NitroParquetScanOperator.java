@@ -11,7 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator.source.compatibility.parquet;
+package org.weakref.nitro.parquet;
 
 import org.apache.parquet.format.RowGroup;
 import org.weakref.nitro.core.type.Schema;
@@ -30,12 +30,7 @@ import org.weakref.nitro.operator.BatchBufferScope;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
-import org.weakref.nitro.parquet.ColumnReader;
-import org.weakref.nitro.parquet.DecompressedPageCache;
-import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
-import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
-import org.weakref.nitro.parquet.ParquetFile;
-import org.weakref.nitro.parquet.ParquetReaderPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 
 import java.nio.file.Path;
 import java.util.List;

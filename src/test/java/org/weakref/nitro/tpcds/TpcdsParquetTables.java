@@ -16,7 +16,7 @@ package org.weakref.nitro.tpcds;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.core.type.Schema;
-import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.parquet.NitroParquetScanResources;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

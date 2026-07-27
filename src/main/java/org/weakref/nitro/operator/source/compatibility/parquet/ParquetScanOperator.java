@@ -54,6 +54,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;

@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.tpch;
 
-import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.tpcds.ParquetTables;
 
 import java.io.IOException;

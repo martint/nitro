@@ -30,8 +30,8 @@ import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
-import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
-import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.parquet.NitroParquetScanResources;
 
 import java.util.List;
 
