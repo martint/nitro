@@ -80,6 +80,7 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetFilterWindowPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetFilteredPayloadPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
@@ -164,6 +165,12 @@ public class TestParquetOperator
                             Integer.MAX_VALUE,
                             new ParquetFilteredPayloadPolicy.BoundedWindow(
                                     false, Integer.MAX_VALUE, 0, false)));
+    private static final ParquetFilterWindowPolicy GENERIC_FILTER_WINDOW =
+            new ParquetFilterWindowPolicy(
+                    1 << 19,
+                    new ParquetFilterWindowPolicy.AdaptiveNarrow(
+                            false, 0, 1 << 19, 0, false),
+                    false);
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
@@ -200,7 +207,8 @@ public class TestParquetOperator
                                         false),
                                 GENERIC_LATE_MATERIALIZATION,
                                 GENERIC_PROGRESSIVE_FILTER_COMPACTION,
-                                GENERIC_FILTERED_PAYLOAD),
+                                GENERIC_FILTERED_PAYLOAD,
+                                GENERIC_FILTER_WINDOW),
                         allocator,
                         List.of(file),
                         List.of("x"))) {

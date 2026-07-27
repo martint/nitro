@@ -109,6 +109,7 @@ public final class NitroParquetScanOperator
     private final ParquetLateMaterializationPolicy.SkipDecode skipDecodePolicy;
     private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
+    private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -149,24 +150,12 @@ public final class NitroParquetScanOperator
     // batches. The window must comfortably exceed a Parquet page (~100K+ rows) for page-skip to be effective.
     // Keep the window large enough to span Parquet pages for page-skip, but not so large that every dynamic-filter
     // scan walks multi-megabyte scratch arrays. 512K keeps q20's page-skip behavior while improving q45 locality.
-    private static final int FILTER_WINDOW = Integer.getInteger("nitro.parquet.scan.filterWindow", 1 << 19);
     // Narrow numeric scans have a much smaller per-row scratch footprint and benefit from keeping a long selective
     // scan in one decoder window: this preserves RLE/page-reader state and avoids repeatedly compacting/gathering at
     // artificial window boundaries. Bound the policy by width and by the execution's total registered scan pressure
     // so the aggregate scratch retained by a many-branch operator graph remains predictable under the benchmark's
-    // 12 GiB process cap. Wider scans and scan-heavy executions retain FILTER_WINDOW. This is a physical execution
+    // 12 GiB process cap. Wider scans and scan-heavy executions retain the base window. This is a physical execution
     // policy; it does not add a query predicate or alter the operator tree.
-    private static final boolean ADAPTIVE_NARROW_FILTER_WINDOW =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.scan.adaptiveNarrowFilterWindow", "true"));
-    private static final int NARROW_FILTER_WINDOW_MAX_COLUMNS =
-            Integer.getInteger("nitro.parquet.scan.narrowFilterWindowMaxColumns", 3);
-    private static final int NARROW_FILTER_WINDOW =
-            Integer.getInteger("nitro.parquet.scan.narrowFilterWindow", 1 << 24);
-    private static final int NARROW_FILTER_WINDOW_MAX_EXECUTION_SCANS =
-            Integer.getInteger("nitro.parquet.scan.narrowFilterWindowMaxExecutionScans", 38);
-    private static final boolean DEBUG_NARROW_FILTER_WINDOW =
-            Boolean.getBoolean("nitro.debug.narrowFilterWindow");
-    private static final boolean EAGER_FILTER_WINDOW_SCRATCH = Boolean.parseBoolean(System.getProperty("nitro.parquet.scan.eagerFilterWindowScratch", "false"));
     // Order dynamic-filter columns by estimated pass fraction (filter values / column cardinality) rather than raw
     // filter value count, so the genuinely selective filter leads the scan on the fused run-aware path. Opt-out.
     private static final boolean SELECTIVITY_FILTER_ORDER = Boolean.parseBoolean(System.getProperty("nitro.parquet.selectivityFilterOrder", "true"));
@@ -260,7 +249,8 @@ public final class NitroParquetScanOperator
                 resources.numericDecodeAdmissionPolicy(),
                 resources.lateMaterializationPolicy(),
                 resources.progressiveFilterCompactionPolicy(),
-                resources.filteredPayloadPolicy());
+                resources.filteredPayloadPolicy(),
+                resources.filterWindowPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -275,7 +265,8 @@ public final class NitroParquetScanOperator
             ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
             ParquetLateMaterializationPolicy lateMaterializationPolicy,
             ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
-            ParquetFilteredPayloadPolicy filteredPayloadPolicy)
+            ParquetFilteredPayloadPolicy filteredPayloadPolicy,
+            ParquetFilterWindowPolicy filterWindowPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -296,6 +287,7 @@ public final class NitroParquetScanOperator
         this.progressiveFilterCompactionPolicy = requireNonNull(
                 progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
         this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
+        this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -365,9 +357,10 @@ public final class NitroParquetScanOperator
             }
         }
         this.allNumeric = numeric;
-        this.filterWindow = FILTER_WINDOW;
+        this.filterWindow = filterWindowPolicy.rows();
+        ParquetFilterWindowPolicy.AdaptiveNarrow adaptiveNarrowPolicy = filterWindowPolicy.adaptiveNarrow();
         this.adaptiveNarrowFilterWindowCandidate =
-                ADAPTIVE_NARROW_FILTER_WINDOW && numeric && columnCount <= NARROW_FILTER_WINDOW_MAX_COLUMNS;
+                adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
         this.filtersByColumn = new DynamicFilter[columnCount];
         this.filterVersionsByColumn = new org.weakref.nitro.function.VersionedLongPredicate[columnCount];
         this.colLong = new long[columnCount][];
@@ -575,11 +568,12 @@ public final class NitroParquetScanOperator
     {
         if (!adaptiveNarrowFilterWindowDecided) {
             adaptiveNarrowFilterWindowDecided = true;
+            ParquetFilterWindowPolicy.AdaptiveNarrow adaptiveNarrowPolicy = filterWindowPolicy.adaptiveNarrow();
             if (adaptiveNarrowFilterWindowCandidate &&
-                    directNumericBatchDecodeAdmission.scanCount() <= NARROW_FILTER_WINDOW_MAX_EXECUTION_SCANS) {
-                filterWindow = Math.max(filterWindow, NARROW_FILTER_WINDOW);
+                    directNumericBatchDecodeAdmission.scanCount() <= adaptiveNarrowPolicy.maxExecutionScans()) {
+                filterWindow = Math.max(filterWindow, adaptiveNarrowPolicy.rows());
             }
-            if (DEBUG_NARROW_FILTER_WINDOW && adaptiveNarrowFilterWindowCandidate) {
+            if (adaptiveNarrowPolicy.diagnostics() && adaptiveNarrowFilterWindowCandidate) {
                 System.err.printf(
                         "[narrow-filter-window] scans=%d columns=%d rows=%d window=%d%n",
                         directNumericBatchDecodeAdmission.scanCount(),
@@ -1847,7 +1841,7 @@ public final class NitroParquetScanOperator
         if (nextSurvivors.length < count) {
             nextSurvivors = replaceInts(nextSurvivors, count);
         }
-        if (EAGER_FILTER_WINDOW_SCRATCH) {
+        if (filterWindowPolicy.eagerScratch()) {
             for (int c = 0; c < readers.length; c++) {
                 ensureColumnScratch(c, count);
             }
