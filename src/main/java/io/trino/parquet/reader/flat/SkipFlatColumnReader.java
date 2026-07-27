@@ -452,7 +452,7 @@ public class SkipFlatColumnReader<BufferType>
             readFlatPageV2(dataPageV2);
         }
         // For a compressed data page, the memory used by the decompressed values data needs to be accounted
-        // for separately as ParquetCompressionUtils#decompress allocates a new byte array for the decompressed result.
+        // for separately because the compatibility reader allocates a new byte array for the decompressed result.
         // For an uncompressed data page, we read directly from input Slices whose memory usage is already accounted
         // for in AbstractParquetDataSource#ReferenceCountedReader.
         int dataPageSizeInBytes = pageReader.arePagesCompressed() ? page.getUncompressedSize() : 0;
