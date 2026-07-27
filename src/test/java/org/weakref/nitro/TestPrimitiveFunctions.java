@@ -58,6 +58,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
+import org.weakref.nitro.function.scalar.builtin.LikeUtf8Policy;
 import org.weakref.nitro.function.scalar.builtin.MapContainsKeyUtf8;
 import org.weakref.nitro.function.scalar.builtin.MapKeys;
 import org.weakref.nitro.function.scalar.builtin.MapValues;
@@ -155,7 +156,10 @@ public final class TestPrimitiveFunctions
                 SubstringUtf8.class,
                 UpperUtf8.class,
                 YearOfDate.class)) {
-            primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(functionClass)));
+            primitiveRegistry.register(scalarRegistry.register(
+                    functionClass == LikeUtf8.class
+                            ? scalarLoader.load(new LikeUtf8(LikeUtf8Policy.fromSystemProperties()))
+                            : scalarLoader.load(functionClass)));
         }
         return primitiveRegistry;
     }

@@ -22,8 +22,8 @@ import static java.util.Objects.requireNonNull;
 
 /// Compatibility loader for annotation-declared, no-argument scalar components.
 ///
-/// Dynamic providers may construct [ScalarDescriptor] instances directly with their own explicitly
-/// constructed resources and register them without using this loader.
+/// Dynamic providers may supply an explicitly constructed [PrimitiveFunction] to retain annotation-declared
+/// metadata, or construct [ScalarDescriptor] instances directly when they own all metadata.
 public final class AnnotatedScalarLoader
 {
     public ScalarDescriptor load(Class<?> functionClass)
@@ -34,10 +34,24 @@ public final class AnnotatedScalarLoader
         checkArgument(scalarFunction != null, "Function class is missing @ScalarFunction: %s", functionClass.getName());
         checkArgument(PrimitiveFunction.class.isAssignableFrom(functionClass), "Function class must implement PrimitiveFunction: %s", functionClass.getName());
 
+        return load(scalarFunction, instantiate(functionClass.asSubclass(PrimitiveFunction.class)));
+    }
+
+    public ScalarDescriptor load(PrimitiveFunction implementation)
+    {
+        requireNonNull(implementation, "implementation is null");
+        Class<?> functionClass = implementation.getClass();
+        ScalarFunction scalarFunction = functionClass.getAnnotation(ScalarFunction.class);
+        checkArgument(scalarFunction != null, "Function class is missing @ScalarFunction: %s", functionClass.getName());
+        return load(scalarFunction, implementation);
+    }
+
+    private static ScalarDescriptor load(ScalarFunction scalarFunction, PrimitiveFunction implementation)
+    {
         return new ScalarDescriptor(
                 scalarFunction.name(),
                 scalarFunction.deterministic(),
-                instantiate(functionClass.asSubclass(PrimitiveFunction.class)),
+                implementation,
                 java.util.Arrays.stream(scalarFunction.capabilities())
                         .map(AnnotatedScalarLoader::instantiateCapability)
                         .toList());

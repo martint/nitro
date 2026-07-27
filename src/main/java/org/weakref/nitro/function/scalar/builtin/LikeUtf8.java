@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 /**
  * SQL LIKE over a constant {@code %}-wildcard pattern (no {@code _} support -- TPC-H has none): the pattern
@@ -46,8 +47,17 @@ public final class LikeUtf8
 {
     private final Allocator.Context allocationContext = new Allocator.Context("LikeUtf8");
     private final ConcurrentHashMap<String, Pattern> patterns = new ConcurrentHashMap<>();
-    private final boolean boyerMooreHorspool =
-            Boolean.parseBoolean(System.getProperty("nitro.like.boyerMooreHorspool", "true"));
+    private final LikeUtf8Policy policy;
+
+    public LikeUtf8()
+    {
+        this(LikeUtf8Policy.defaults());
+    }
+
+    public LikeUtf8(LikeUtf8Policy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -162,7 +172,7 @@ public final class LikeUtf8
                 segments.add(new Segment(segment.getBytes(StandardCharsets.UTF_8)));
             }
         }
-        return new Pattern(anchoredStart, anchoredEnd, segments, boyerMooreHorspool);
+        return new Pattern(anchoredStart, anchoredEnd, segments, policy.boyerMooreHorspool());
     }
 
     private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments, boolean boyerMooreHorspool)

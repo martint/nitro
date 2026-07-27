@@ -33,6 +33,8 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullDirectMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.IsNullI64;
+import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
+import org.weakref.nitro.function.scalar.builtin.LikeUtf8Policy;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
 import java.util.Set;
@@ -65,6 +67,17 @@ public class TestScalarRegistry
 
         assertThat(descriptor.implementation()).isInstanceOf(AddI64.class);
         assertThat(primitiveRegistry.get("add")).isInstanceOf(AddI64.class);
+    }
+
+    @Test
+    void testRegistersExplicitlyConstructedScalarFunction()
+    {
+        LikeUtf8 function = new LikeUtf8(new LikeUtf8Policy(false));
+
+        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(function);
+
+        assertThat(descriptor.name()).isEqualTo("like_utf8");
+        assertThat(descriptor.implementation()).isSameAs(function);
     }
 
     @Test
