@@ -58,8 +58,8 @@ public final class HardwoodParquetScanOperator
         implements Operator
 {
     private final Allocator.Context allocationContext = new Allocator.Context("HardwoodParquetScanOperator", HardwoodParquetScanOperator.class);
-    private static final int MAX_BATCH_ROWS = 512;
 
+    private final HardwoodParquetScanPolicy policy;
     private final Allocator allocator;
     private final AutoCloseable[] closeables;
     private final List<ColumnSpec> columns;
@@ -70,13 +70,14 @@ public final class HardwoodParquetScanOperator
     private BatchState currentBatchState;
     private Batch currentBatch;
 
-    public HardwoodParquetScanOperator(Allocator allocator, Path file, List<String> columns)
+    public HardwoodParquetScanOperator(HardwoodParquetScanPolicy policy, Allocator allocator, Path file, List<String> columns)
     {
-        this(allocator, List.of(file), columns);
+        this(policy, allocator, List.of(file), columns);
     }
 
-    public HardwoodParquetScanOperator(Allocator allocator, List<Path> files, List<String> columns)
+    public HardwoodParquetScanOperator(HardwoodParquetScanPolicy policy, Allocator allocator, List<Path> files, List<String> columns)
     {
+        this.policy = requireNonNull(policy, "policy is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         requireNonNull(files, "files is null");
         requireNonNull(columns, "columns is null");
@@ -96,8 +97,7 @@ public final class HardwoodParquetScanOperator
                 return;
             }
 
-            String threadsProperty = System.getProperty("nitro.hardwood.threads");
-            Hardwood hardwood = threadsProperty != null ? Hardwood.create(Integer.parseInt(threadsProperty)) : Hardwood.create();
+            Hardwood hardwood = policy.workerThreads().isPresent() ? Hardwood.create(policy.workerThreads().getAsInt()) : Hardwood.create();
             MultiFileParquetReader parquet = hardwood.openAll(files);
             this.columns = columns.stream()
                     .map(name -> resolveColumn(parquet.getFileSchema().getField(name), name))
@@ -141,7 +141,7 @@ public final class HardwoodParquetScanOperator
         closeCurrentBatch();
 
         int batchStart = nextBatchStart;
-        int rowCount = Math.min(MAX_BATCH_ROWS, totalRows - batchStart);
+        int rowCount = Math.min(policy.maxBatchRows(), totalRows - batchStart);
         nextBatchStart += rowCount;
 
         BatchState batchState = new BatchState(batchStart, rowCount, allocator.allocateAllMask(allocationContext, rowCount));

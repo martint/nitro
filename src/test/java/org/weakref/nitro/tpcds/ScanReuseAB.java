@@ -23,6 +23,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanOperator;
+import org.weakref.nitro.operator.source.compatibility.parquet.HardwoodParquetScanPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
@@ -36,7 +37,7 @@ import java.util.List;
  * sides, so we can measure whether Hardwood's buffer reuse (pooled decode arrays + mmap input) closes the
  * decode gap vs the Trino-vendored reader. Drains all batches and sums values to force materialization.
  * Run single-thread under taskset -c 0 with mode arg "trino" or "hardwood", plus iters and warmup.
- * Hardwood worker threads via the nitro.hardwood.threads system property.
+ * Hardwood worker threads are resolved by the standalone scan-policy composition adapter.
  */
 public final class ScanReuseAB
 {
@@ -72,7 +73,8 @@ public final class ScanReuseAB
         Allocator allocator = new Allocator(EngineResources.createDefault());
         long sum = 0;
         try (Operator operator = switch (mode) {
-            case "hardwood" -> new HardwoodParquetScanOperator(allocator, files, COLUMNS);
+            case "hardwood" -> new HardwoodParquetScanOperator(
+                    HardwoodParquetScanPolicy.fromSystemProperties(), allocator, files, COLUMNS);
             case "nitro" -> new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, files, COLUMNS);
             default -> new TrinoParquetScanOperator(TrinoParquetScanPolicy.fromSystemProperties(), allocator, files, COLUMNS);
         }) {
