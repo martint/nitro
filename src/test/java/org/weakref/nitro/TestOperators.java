@@ -1497,6 +1497,28 @@ public class TestOperators
     }
 
     @Test
+    void testNestedLoopJoinConcatenatesInputSchemas()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field outerKey = new Field("outer_key", i32Only, false);
+        Field outerValue = new Field("outer_value", i32Only, true);
+        Field innerKey = new Field("inner_key", i32Only, false);
+        Schema outerSchema = new Schema(List.of(outerKey, outerValue));
+        Schema innerSchema = new Schema(List.of(innerKey));
+
+        try (Operator join = new NestedLoopJoinOperator(
+                allocator,
+                typedTable(outerSchema),
+                typedTable(innerSchema))) {
+            assertThat(join.outputSchema().fields())
+                    .containsExactly(outerKey, outerValue, innerKey);
+            assertThat(join.outputSchema().field(0)).isSameAs(outerKey);
+            assertThat(join.outputSchema().field(1)).isSameAs(outerValue);
+            assertThat(join.outputSchema().field(2)).isSameAs(innerKey);
+        }
+    }
+
+    @Test
     void testMarkerOperatorsPreserveSourceSchema()
     {
         TypeBinding i32Only = i32OnlyType();

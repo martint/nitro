@@ -13,13 +13,17 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -43,6 +47,7 @@ public class NestedLoopJoinOperator
     private final int[] retainedInnerPositionsScratch;
     private final int[] retainedInnerMaskPositionsScratch;
     private final Streams[] currentOutputs;
+    private final Schema outputSchema;
 
     private int currentInnerBatch;
     private int currentInnerPosition;
@@ -110,12 +115,27 @@ public class NestedLoopJoinOperator
         this.bufferedInner = new BufferedJoinInput(bufferedJoinInputPolicy, buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, maxBatchRows, outer.outputCount(), inner.outputCount());
         this.currentOutputs = new Streams[outputCount()];
+        this.outputSchema = outputSchema(outer.outputSchema(), inner.outputSchema());
     }
 
     @Override
     public int outputCount()
     {
         return outer.outputCount() + inner.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema outerSchema, Schema innerSchema)
+    {
+        List<Field> fields = new ArrayList<>(outerSchema.size() + innerSchema.size());
+        fields.addAll(outerSchema.fields());
+        fields.addAll(innerSchema.fields());
+        return new Schema(fields);
     }
 
     @Override
