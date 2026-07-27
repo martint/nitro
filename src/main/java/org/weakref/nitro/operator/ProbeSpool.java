@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -36,19 +37,19 @@ final class ProbeSpool
     private final Allocator.Context allocationContext = new Allocator.Context("ProbeSpool");
     private final PrimitiveArrayPool arrayPool;
     private final Operator source;
-    private final int outputCount;
+    private final Schema outputSchema;
     private final List<TableOperator.Page> pages = new ArrayList<>();
 
     private int nextPage;
     private int bufferedRows;
     private boolean prepared;
 
-    ProbeSpool(Allocator allocator, Operator source, int outputCount)
+    ProbeSpool(Allocator allocator, Operator source)
     {
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
-        this.outputCount = outputCount;
+        this.outputSchema = source.outputSchema();
     }
 
     /** Returns complete per-key sets, or null when the bounded prefix did not contain the whole input. */
@@ -127,8 +128,8 @@ final class ProbeSpool
             for (int position : mask) {
                 positions[index++] = position;
             }
-            Streams[] columns = new Streams[outputCount];
-            for (int outputIndex = 0; outputIndex < outputCount; outputIndex++) {
+            Streams[] columns = new Streams[outputCount()];
+            for (int outputIndex = 0; outputIndex < outputCount(); outputIndex++) {
                 Output output = batch.output(outputIndex);
                 Streams.Builder copy = Streams.builder();
                 for (Stream stream : output.streams()) {
@@ -146,7 +147,13 @@ final class ProbeSpool
     @Override
     public int outputCount()
     {
-        return outputCount;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override
@@ -160,7 +167,7 @@ final class ProbeSpool
     {
         if (nextPage < pages.size()) {
             TableOperator.Page page = pages.get(nextPage++);
-            Output[] outputs = new Output[outputCount];
+            Output[] outputs = new Output[outputCount()];
             for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
                 outputs[outputIndex] = Output.of(page.columns()[outputIndex]);
             }

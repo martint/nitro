@@ -1043,7 +1043,7 @@ public class HashJoinOperator
                 inner.exactOutputRows() < dynamicFilterPolicy.probeFirstMinBuildRows()) {
             return;
         }
-        ProbeSpool spool = new ProbeSpool(allocator, outer, outerOutputCount);
+        ProbeSpool spool = new ProbeSpool(allocator, outer);
         probeSource = spool;
         it.unimi.dsi.fastutil.longs.LongSet[] values = spool.prepare(
                 outerJoinColumns,

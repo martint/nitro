@@ -32,12 +32,14 @@ class TestProbeSpool
     void testCompleteInputCollectsKeysAndReplaysRows()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
-        ProbeSpool spool = new ProbeSpool(allocator, new TableOperator(2, List.of(
+        TableOperator source = new TableOperator(2, List.of(
                 page(new long[] {1, 2, 3}, new long[] {11, 12, 13}),
-                page(new long[] {4, 2}, new long[] {14, 12}))), 2);
+                page(new long[] {4, 2}, new long[] {14, 12})));
+        ProbeSpool spool = new ProbeSpool(allocator, source);
 
         var keys = spool.prepare(new int[] {0, 1}, 8);
 
+        assertThat(spool.outputSchema()).isSameAs(source.outputSchema());
         assertThat(keys).isNotNull();
         assertThat(keys[0]).containsExactlyInAnyOrder(1L, 2L, 3L, 4L);
         assertThat(keys[1]).containsExactlyInAnyOrder(11L, 12L, 13L, 14L);
@@ -56,7 +58,7 @@ class TestProbeSpool
         ProbeSpool spool = new ProbeSpool(allocator, new TableOperator(1, List.of(
                 page(new long[] {1, 2, 3}),
                 page(new long[] {4, 5, 6}),
-                page(new long[] {7, 8, 9}))), 1);
+                page(new long[] {7, 8, 9}))));
 
         assertThat(spool.prepare(new int[] {0}, 4)).isNull();
         assertThat(OperatorAssertions.OperatorAssert.toRows(spool)).containsExactly(
