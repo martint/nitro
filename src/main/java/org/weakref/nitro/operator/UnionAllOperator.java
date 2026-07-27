@@ -13,33 +13,47 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
+
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 public final class UnionAllOperator
         implements Operator
 {
-    private final int outputCount;
+    private final Schema outputSchema;
     private final List<Operator> sources;
 
     private int sourceIndex;
 
     public UnionAllOperator(int outputCount, List<Operator> sources)
     {
-        this.outputCount = outputCount;
+        this(Schema.unspecified(outputCount), sources);
+    }
+
+    public UnionAllOperator(Schema outputSchema, List<Operator> sources)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.sources = new ArrayList<>(sources);
         checkArgument(!sources.isEmpty(), "sources is empty");
         for (Operator source : sources) {
-            checkArgument(source.outputCount() == outputCount, "Mismatched output count");
+            checkArgument(source.outputCount() == outputSchema.size(), "Mismatched output count");
         }
     }
 
     @Override
     public int outputCount()
     {
-        return outputCount;
+        return outputSchema.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
     }
 
     @Override

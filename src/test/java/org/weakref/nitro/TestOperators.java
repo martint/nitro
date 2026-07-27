@@ -1488,6 +1488,20 @@ public class TestOperators
     }
 
     @Test
+    void testUnionAllUsesExplicitOutputSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema outputSchema = new Schema(List.of(new Field("value", i32Only, true)));
+
+        try (Operator union = new UnionAllOperator(
+                outputSchema,
+                List.of(typedTable(outputSchema), typedTable(outputSchema)))) {
+            assertThat(union.outputSchema()).isSameAs(outputSchema);
+            assertThat(union.outputCount()).isEqualTo(outputSchema.size());
+        }
+    }
+
+    @Test
     void testGroupedConditionalProductSumPreservesSqlNullAndZeroSemantics()
     {
         assertThat(operator(new GroupedAggregationOperator(
