@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import it.unimi.dsi.fastutil.longs.AbstractLongList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -4161,7 +4160,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches()
         {
             if (chainMatches == null) {
-                chainMatches = createChainLongLists(executionPolicy.maxBatchRows());
+                chainMatches = ChainLongList.createArray(executionPolicy.maxBatchRows());
             }
             return chainMatches;
         }
@@ -7033,7 +7032,7 @@ public class HashJoinOperator
         private ChainLongList[] chainMatches()
         {
             if (chainMatches == null) {
-                chainMatches = createChainLongLists(executionPolicy.maxBatchRows());
+                chainMatches = ChainLongList.createArray(executionPolicy.maxBatchRows());
             }
             return chainMatches;
         }
@@ -7838,147 +7837,6 @@ public class HashJoinOperator
         SingleLongList[] matches = new SingleLongList[size];
         for (int index = 0; index < size; index++) {
             matches[index] = new SingleLongList();
-        }
-        return matches;
-    }
-
-    /**
-     * Reusable view over one key's build rows, threaded through a shared chain ({@code next}) starting at
-     * {@code head}. Reading is cursor-cached so the sequential {@code getLong(0..size-1)} access the join
-     * output loop performs is O(1) per element; out-of-order access falls back to a walk from the head.
-     */
-    private static final class ChainLongList
-            extends AbstractLongList
-    {
-        private long[] rows;
-        private int[] compactRows;
-        private int[] next;
-        private int head;
-        private int length;
-        private int cursorIndex;
-        private int cursorOrdinal;
-        private int compactBatchIndex = -1;
-        // Range mode: the key's rows are a contiguous slice {@code rows[base .. base+length)} (compacted at finalize),
-        // so a read is one sequential array index — no {@code next[]} pointer-chase. {@code base} reuses {@code head}.
-        private boolean rangeMode;
-        private boolean repeatedMode;
-        private long repeatedValue;
-
-        public ChainLongList reset(long[] rows, int[] next, int head, int length)
-        {
-            this.rows = rows;
-            this.compactRows = null;
-            this.next = next;
-            this.head = head;
-            this.length = length;
-            this.cursorIndex = 0;
-            this.cursorOrdinal = head;
-            this.rangeMode = false;
-            this.repeatedMode = false;
-            return this;
-        }
-
-        public ChainLongList resetCompact(int[] rows, int[] next, int head, int length)
-        {
-            this.rows = null;
-            this.compactRows = rows;
-            this.next = next;
-            this.head = head;
-            this.length = length;
-            this.cursorIndex = 0;
-            this.cursorOrdinal = head;
-            this.rangeMode = false;
-            this.repeatedMode = false;
-            this.compactBatchIndex = -1;
-            return this;
-        }
-
-        public ChainLongList resetCompactSingleBatch(int[] rows, int[] next, int head, int length, int batchIndex)
-        {
-            resetCompact(rows, next, head, length);
-            this.compactBatchIndex = batchIndex;
-            return this;
-        }
-
-        public ChainLongList resetRange(long[] rows, int base, int length)
-        {
-            this.rows = rows;
-            this.compactRows = null;
-            this.head = base;
-            this.length = length;
-            this.rangeMode = true;
-            this.repeatedMode = false;
-            return this;
-        }
-
-        public ChainLongList resetRepeated(long value, int length)
-        {
-            this.repeatedValue = value;
-            this.length = length;
-            this.rangeMode = false;
-            this.repeatedMode = true;
-            return this;
-        }
-
-        @Override
-        public long getLong(int index)
-        {
-            if (index < 0 || index >= length) {
-                throw new IndexOutOfBoundsException("index " + index);
-            }
-            if (repeatedMode) {
-                return repeatedValue;
-            }
-            if (rangeMode) {
-                return rows[head + index];
-            }
-            if (index < cursorIndex) {
-                cursorIndex = 0;
-                cursorOrdinal = head;
-            }
-            while (cursorIndex < index) {
-                cursorOrdinal = next[cursorOrdinal];
-                cursorIndex++;
-            }
-            if (compactRows == null) {
-                return rows[cursorOrdinal];
-            }
-            return compactBatchIndex >= 0
-                    ? JoinRowReference.pack(compactBatchIndex, compactRows[cursorOrdinal])
-                    : JoinRowReference.unpackCompact(compactRows[cursorOrdinal]);
-        }
-
-        @Override
-        public int size()
-        {
-            return length;
-        }
-
-        public int storageIndex(int index)
-        {
-            if (repeatedMode) {
-                return -1;
-            }
-            if (rangeMode) {
-                return head + index;
-            }
-            if (index < cursorIndex) {
-                cursorIndex = 0;
-                cursorOrdinal = head;
-            }
-            while (cursorIndex < index) {
-                cursorOrdinal = next[cursorOrdinal];
-                cursorIndex++;
-            }
-            return cursorOrdinal;
-        }
-    }
-
-    private static ChainLongList[] createChainLongLists(int size)
-    {
-        ChainLongList[] matches = new ChainLongList[size];
-        for (int index = 0; index < size; index++) {
-            matches[index] = new ChainLongList();
         }
         return matches;
     }
