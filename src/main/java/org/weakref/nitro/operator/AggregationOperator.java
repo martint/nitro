@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
@@ -93,6 +94,12 @@ public class AggregationOperator
     public int outputCount()
     {
         return program.outputs().size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return program.outputSchema();
     }
 
     @Override

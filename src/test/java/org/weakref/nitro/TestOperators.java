@@ -1563,6 +1563,36 @@ public class TestOperators
     }
 
     @Test
+    void testPhysicalAggregationProgramDeclaresOperatorSchemas()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field key = new Field("key", i32Only, false);
+        Field count = new Field("count", i32Only, false);
+        Field sum = new Field("sum", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(key));
+        Schema resultSchema = new Schema(List.of(count, sum));
+        PhysicalAggregationProgram program = new PhysicalAggregationProgram(
+                List.of(new SumAndCountUnit(0)),
+                List.of(
+                        new PhysicalAggregationProgram.Output(0, 1),
+                        new PhysicalAggregationProgram.Output(0, 0)),
+                resultSchema);
+
+        try (Operator global = new AggregationOperator(allocator, program, typedTable(sourceSchema));
+                Operator grouped = new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0),
+                        List.of(0),
+                        program,
+                        typedTable(sourceSchema))) {
+            assertThat(global.outputSchema()).isSameAs(resultSchema);
+            assertThat(grouped.outputSchema().field(0)).isSameAs(key);
+            assertThat(grouped.outputSchema().field(1)).isSameAs(count);
+            assertThat(grouped.outputSchema().field(2)).isSameAs(sum);
+        }
+    }
+
+    @Test
     void testConditionalSumsPreserveSqlNullAndZeroSemanticsForBinaryDiscriminator()
     {
         assertThat(operator(new GroupedAggregationOperator(

@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator.aggregation;
 
+import org.weakref.nitro.core.type.Schema;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -25,12 +27,21 @@ import static java.util.Objects.requireNonNull;
  * result slot of a unit, allowing a provider-selected unit to share traversal and state across
  * results without any aggregate recognition in execution operators.
  */
-public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
+public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs, Schema outputSchema)
 {
+    public PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, List<Output> outputs)
+    {
+        this(units, outputs, Schema.unspecified(outputs.size()));
+    }
+
     public PhysicalAggregationProgram
     {
         units = List.copyOf(requireNonNull(units, "units is null"));
         outputs = List.copyOf(requireNonNull(outputs, "outputs is null"));
+        outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        if (outputSchema.size() != outputs.size()) {
+            throw new IllegalArgumentException("outputSchema size does not match outputs");
+        }
         boolean[][] boundResults = new boolean[units.size()][];
         for (int unit = 0; unit < units.size(); unit++) {
             int outputCount = units.get(unit).outputCount();

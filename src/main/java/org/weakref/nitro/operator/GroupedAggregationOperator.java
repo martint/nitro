@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
@@ -78,6 +79,7 @@ public class GroupedAggregationOperator
     private final int[] groupByColumns;
     private final int[] groupedKeyIndexes;
     private final PhysicalAggregationProgram program;
+    private final Schema outputSchema;
     private final PhysicalAggregationUnit[] aggregations;
     private final int[] plainAggregationIndexes;
     private final int[] filteredAggregationIndexes;
@@ -271,6 +273,7 @@ public class GroupedAggregationOperator
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
         this.program = requireNonNull(program, "program is null");
+        this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema());
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
         DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(
                 this.aggregations,
@@ -292,6 +295,23 @@ public class GroupedAggregationOperator
     public int outputCount()
     {
         return groupedColumns.length + program.outputs().size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema sourceSchema, int[] groupedColumns, Schema aggregationSchema)
+    {
+        List<Field> fields = new ArrayList<>(groupedColumns.length + aggregationSchema.size());
+        Field unspecified = Schema.unspecified(1).field(0);
+        for (int groupedColumn : groupedColumns) {
+            fields.add(groupedColumn >= 0 && groupedColumn < sourceSchema.size() ? sourceSchema.field(groupedColumn) : unspecified);
+        }
+        fields.addAll(aggregationSchema.fields());
+        return new Schema(fields);
     }
 
     @Override
