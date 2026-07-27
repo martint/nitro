@@ -82,6 +82,7 @@ import org.weakref.nitro.function.scalar.builtin.SubtractExactI64;
 import org.weakref.nitro.function.scalar.builtin.SubtractF64;
 import org.weakref.nitro.function.scalar.builtin.SubtractI64;
 import org.weakref.nitro.function.scalar.builtin.UpperUtf8;
+import org.weakref.nitro.function.scalar.builtin.Utf8BinaryDispatchPolicy;
 import org.weakref.nitro.function.scalar.builtin.YearOfDate;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 
@@ -96,6 +97,7 @@ public final class TestPrimitiveFunctions
         ScalarRegistry scalarRegistry = new ScalarRegistry();
         AnnotatedScalarLoader scalarLoader = new AnnotatedScalarLoader();
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        Utf8BinaryDispatchPolicy utf8Policy = Utf8BinaryDispatchPolicy.fromSystemProperties();
         for (Class<?> functionClass : List.of(
                 AddI64.class,
                 ArrayContainsI64.class,
@@ -160,14 +162,15 @@ public final class TestPrimitiveFunctions
                 SubstringUtf8.class,
                 UpperUtf8.class,
                 YearOfDate.class)) {
-            primitiveRegistry.register(scalarRegistry.register(load(scalarLoader, functionClass)));
+            primitiveRegistry.register(scalarRegistry.register(load(scalarLoader, functionClass, utf8Policy)));
         }
         return primitiveRegistry;
     }
 
     private static ScalarDescriptor load(
             AnnotatedScalarLoader scalarLoader,
-            Class<?> functionClass)
+            Class<?> functionClass,
+            Utf8BinaryDispatchPolicy utf8Policy)
     {
         if (functionClass == LikeUtf8.class) {
             return scalarLoader.load(new LikeUtf8(LikeUtf8Policy.fromSystemProperties()));
@@ -179,6 +182,25 @@ public final class TestPrimitiveFunctions
             return scalarLoader.load(new RegexpReplaceUtf8(
                     RegexpReplaceUtf8Policy.fromSystemProperties(),
                     JoniRegexpPolicy.fromSystemProperties()));
+        }
+        if (functionClass == EqualUtf8.class ||
+                functionClass == LessThanUtf8.class ||
+                functionClass == StartsWithUtf8.class ||
+                functionClass == ContainsUtf8.class ||
+                functionClass == InUtf8.class) {
+            if (functionClass == EqualUtf8.class) {
+                return scalarLoader.load(new EqualUtf8(utf8Policy));
+            }
+            if (functionClass == LessThanUtf8.class) {
+                return scalarLoader.load(new LessThanUtf8(utf8Policy));
+            }
+            if (functionClass == StartsWithUtf8.class) {
+                return scalarLoader.load(new StartsWithUtf8(utf8Policy));
+            }
+            if (functionClass == ContainsUtf8.class) {
+                return scalarLoader.load(new ContainsUtf8(utf8Policy));
+            }
+            return scalarLoader.load(new InUtf8(utf8Policy));
         }
         return scalarLoader.load(functionClass);
     }

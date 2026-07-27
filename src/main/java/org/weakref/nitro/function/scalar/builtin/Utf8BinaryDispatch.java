@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 public final class Utf8BinaryDispatch
 {
@@ -44,64 +45,54 @@ public final class Utf8BinaryDispatch
     private static final VectorSpecies<Byte> FIXED_BINARY_BYTE_SPECIES = ByteVector.SPECIES_PREFERRED;
     private static final VectorSpecies<Short> SHORT_SPECIES = ShortVector.SPECIES_PREFERRED;
     private static final jdk.incubator.vector.VectorSpecies<Byte> CONTAINS_SPECIES = jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length() <= Long.SIZE ? jdk.incubator.vector.ByteVector.SPECIES_PREFERRED : jdk.incubator.vector.ByteVector.SPECIES_512;
-    private static final boolean MONOMORPHIC_DICTIONARY_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.monomorphicDictionaryMask", "true"));
-    private static final boolean DIRECT_SINGLE_DICTIONARY_MATCH =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.directSingleDictionaryMatch", "true"));
-    private static final boolean WORD_EQUALS =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.wordEquals", "true"));
-    private static final boolean FLATTENED_DICTIONARY_EQUALS =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.flattenedDictionaryEquals", "true"));
-    private static final boolean FLAT_SINGLE_VALUE_EQUALS_MASK =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.flatSingleValueEqualsMask", "true"));
-    private static final boolean DIRECT_DICTIONARY_PATH =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.directDictionaryPath", "true"));
-    private static final boolean SPARSE_DICTIONARY_CONTAINS =
-            Boolean.parseBoolean(System.getProperty("nitro.utf8.sparseDictionaryContains", "true"));
+    private final Utf8BinaryDispatchPolicy policy;
 
-    private Utf8BinaryDispatch() {}
+    public Utf8BinaryDispatch(Utf8BinaryDispatchPolicy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+    }
 
-    public static Streams applyEquals(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    public Streams applyEquals(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return apply(functionName, allocationContext, Operation.EQUALS, inputs, mask, requestedStreams, output, context);
     }
 
-    public static Streams applyLessThan(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    public Streams applyLessThan(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return apply(functionName, allocationContext, Operation.LESS_THAN, inputs, mask, requestedStreams, output, context);
     }
 
-    public static Streams applyStartsWith(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    public Streams applyStartsWith(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return apply(functionName, allocationContext, Operation.STARTS_WITH, inputs, mask, requestedStreams, output, context);
     }
 
-    public static Streams applyContains(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    public Streams applyContains(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return apply(functionName, allocationContext, Operation.CONTAINS, inputs, mask, requestedStreams, output, context);
     }
 
-    public static Mask tryEvaluateEqualsTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    public Mask tryEvaluateEqualsTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return tryEvaluateEqualsMask(functionName, allocationContext, inputs, mask, context, true);
     }
 
-    public static Mask tryEvaluateEqualsFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    public Mask tryEvaluateEqualsFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return tryEvaluateEqualsMask(functionName, allocationContext, inputs, mask, context, false);
     }
 
-    public static boolean tryEvaluateEqualsTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    public boolean tryEvaluateEqualsTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
     {
         return tryEvaluateEqualsMaskInPlace(functionName, inputs, mask, true);
     }
 
-    public static boolean tryEvaluateEqualsFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    public boolean tryEvaluateEqualsFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
     {
         return tryEvaluateEqualsMaskInPlace(functionName, inputs, mask, false);
     }
 
-    public static Streams applyInSet(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    public Streams applyInSet(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
@@ -135,27 +126,27 @@ public final class Utf8BinaryDispatch
         return result;
     }
 
-    public static Mask tryEvaluateInSetTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    public Mask tryEvaluateInSetTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return tryEvaluateInSetMask(functionName, allocationContext, inputs, mask, context, true);
     }
 
-    public static Mask tryEvaluateInSetFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    public Mask tryEvaluateInSetFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
     {
         return tryEvaluateInSetMask(functionName, allocationContext, inputs, mask, context, false);
     }
 
-    public static boolean tryEvaluateInSetTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    public boolean tryEvaluateInSetTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
     {
         return tryEvaluateInSetMaskInPlace(functionName, inputs, mask, true);
     }
 
-    public static boolean tryEvaluateInSetFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    public boolean tryEvaluateInSetFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
     {
         return tryEvaluateInSetMaskInPlace(functionName, inputs, mask, false);
     }
 
-    private static Streams apply(String functionName, Allocator.Context allocationContext, Operation operation, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    private Streams apply(String functionName, Allocator.Context allocationContext, Operation operation, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
         if (!requestedStreams.contains(Stream.VALUES) && !requestedStreams.contains(Stream.NULLS)) {
@@ -221,7 +212,7 @@ public final class Utf8BinaryDispatch
         return result;
     }
 
-    private static Mask tryEvaluateInSetMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    private Mask tryEvaluateInSetMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
         Vector left = inputs.getFirst().values();
@@ -235,7 +226,7 @@ public final class Utf8BinaryDispatch
         return null;
     }
 
-    private static Mask tryEvaluateEqualsMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    private Mask tryEvaluateEqualsMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
 
@@ -257,7 +248,7 @@ public final class Utf8BinaryDispatch
         return null;
     }
 
-    private static boolean tryEvaluateEqualsMaskInPlace(String functionName, List<Streams> inputs, Mask mask, boolean selectMatches)
+    private boolean tryEvaluateEqualsMaskInPlace(String functionName, List<Streams> inputs, Mask mask, boolean selectMatches)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
 
@@ -274,11 +265,11 @@ public final class Utf8BinaryDispatch
         }
         VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
         VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
-        if (FLAT_SINGLE_VALUE_EQUALS_MASK && retainFlatSingleValueEquals(
+        if (policy.flatSingleValueEqualsMask() && retainFlatSingleValueEquals(
                 functionName, left, right, leftNulls, rightNulls, mask, selectMatches)) {
             return true;
         }
-        if (FLATTENED_DICTIONARY_EQUALS && retainFlattenedDictionaryEquals(left, right, leftNulls, rightNulls, mask, selectMatches)) {
+        if (policy.flattenedDictionaryEquals() && retainFlattenedDictionaryEquals(left, right, leftNulls, rightNulls, mask, selectMatches)) {
             return true;
         }
         mask.retainIf(position ->
@@ -288,7 +279,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static boolean retainFlatSingleValueEquals(
+    private boolean retainFlatSingleValueEquals(
             String functionName,
             Vector left,
             Vector right,
@@ -316,7 +307,7 @@ public final class Utf8BinaryDispatch
         return false;
     }
 
-    private static boolean retainFlattenedDictionaryEquals(
+    private boolean retainFlattenedDictionaryEquals(
             Vector left,
             Vector right,
             VectorAccess.BooleanValues leftNulls,
@@ -359,20 +350,20 @@ public final class Utf8BinaryDispatch
         return false;
     }
 
-    private static int dictionaryDepth(DictionaryVector dictionary)
+    private int dictionaryDepth(DictionaryVector dictionary)
     {
         return dictionary.dictionaryDepth();
     }
 
-    private static int basePosition(DictionaryVector dictionary, int position, int depth)
+    private int basePosition(DictionaryVector dictionary, int position, int depth)
     {
-        if (!DIRECT_DICTIONARY_PATH) {
+        if (!policy.directDictionaryPath()) {
             return dictionary.basePosition(position);
         }
         return dictionary.basePosition(position, depth);
     }
 
-    private static Mask evaluateEqualsOversizedDictionarySingleValueMask(
+    private Mask evaluateEqualsOversizedDictionarySingleValueMask(
             String functionName,
             Allocator.Context allocationContext,
             DictionaryVector left,
@@ -400,7 +391,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
-    private static Vector tryApplySpecializedValues(
+    private Vector tryApplySpecializedValues(
             String functionName,
             Allocator.Context allocationContext,
             Operation operation,
@@ -426,7 +417,7 @@ public final class Utf8BinaryDispatch
         return null;
     }
 
-    private static Vector tryApplyInSetSpecializedValues(
+    private Vector tryApplyInSetSpecializedValues(
             String functionName,
             Allocator.Context allocationContext,
             List<Streams> inputs,
@@ -445,7 +436,7 @@ public final class Utf8BinaryDispatch
         return null;
     }
 
-    private static void applyValues(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, boolean leftNullFree, Mask mask, BooleanVector output)
+    private void applyValues(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, boolean leftNullFree, Mask mask, BooleanVector output)
     {
         if (operation == Operation.CONTAINS && right instanceof RleVector rightRle && rightRle.counts().length == 1) {
             if (left instanceof BinaryVector leftValues) {
@@ -496,7 +487,7 @@ public final class Utf8BinaryDispatch
         applyGeneric(functionName, operation, left, right, leftNulls, rightNulls, mask, output);
     }
 
-    private static void applyGeneric(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyGeneric(String functionName, Operation operation, Vector left, Vector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         requireUtf8Traits(functionName, left, right);
         VectorAccess.BinaryValues leftValues = VectorAccess.binaryValues(left);
@@ -513,7 +504,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static boolean evaluateGeneric(Operation operation, VectorAccess.BinaryValues leftValues, VectorAccess.BinaryValues rightValues, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int position)
+    private boolean evaluateGeneric(Operation operation, VectorAccess.BinaryValues leftValues, VectorAccess.BinaryValues rightValues, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int position)
     {
         if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
             return false;
@@ -528,7 +519,7 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    private static void applyContainsFlatSingleNeedle(String functionName, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, boolean leftNullFree, Mask mask, BooleanVector output)
+    private void applyContainsFlatSingleNeedle(String functionName, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, boolean leftNullFree, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryRle(functionName, rightRle);
         requireUtf8Traits(functionName, left, right);
@@ -555,7 +546,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyContainsDictionarySingleNeedle(String functionName, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyContainsDictionarySingleNeedle(String functionName, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -567,7 +558,7 @@ public final class Utf8BinaryDispatch
         // After an earlier conjunct has made the mask sparse, probing only the surviving dictionary ids is cheaper
         // than scanning every dictionary entry in every batch.  It also avoids the per-invocation membership array.
         // Dense masks retain the dictionary-wide pass so repeated ids amortize the textual search as before.
-        if (SPARSE_DICTIONARY_CONTAINS && !mask.all() && mask.selectedCount() < left.length()) {
+        if (policy.sparseDictionaryContains() && !mask.all() && mask.selectedCount() < left.length()) {
             boolean[] outputValues = output.values();
             for (int position : mask) {
                 outputValues[position] = !needleNull &&
@@ -593,7 +584,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static Vector applyEqualsDictionarySingleValue(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
+    private Vector applyEqualsDictionarySingleValue(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -618,7 +609,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateDictionary(allocationContext, leftIds, dictionaryValues);
     }
 
-    private static Mask evaluateEqualsDictionarySingleValueMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    private Mask evaluateEqualsDictionarySingleValueMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -651,7 +642,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
-    private static Vector applyEqualsSingleValueDictionary(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
+    private Vector applyEqualsSingleValueDictionary(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
@@ -676,7 +667,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateDictionary(allocationContext, rightIds, dictionaryValues);
     }
 
-    private static Mask evaluateEqualsSingleValueDictionaryMask(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    private Mask evaluateEqualsSingleValueDictionaryMask(String functionName, Allocator.Context allocationContext, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
@@ -709,7 +700,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
-    private static Vector applyInSetDictionary(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
+    private Vector applyInSetDictionary(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, Vector existing, int outputLength, PrimitiveExecutionContext context)
     {
         if (leftDictionary.values() instanceof DictionaryVector nestedDictionary && nestedDictionary.values() instanceof BinaryVector nestedValues) {
             BinaryVector[] literals = literalVectors(functionName, literalInputs);
@@ -740,7 +731,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateDictionary(allocationContext, leftDictionary.ids(), dictionaryValues);
     }
 
-    private static Mask evaluateInSetDictionaryMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    private Mask evaluateInSetDictionaryMask(String functionName, Allocator.Context allocationContext, DictionaryVector leftDictionary, VectorAccess.BooleanValues leftNulls, List<Streams> literalInputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
     {
         if (leftDictionary.values() instanceof DictionaryVector nestedDictionary && nestedDictionary.values() instanceof BinaryVector nestedValues) {
             BinaryVector[] literals = literalVectors(functionName, literalInputs);
@@ -787,7 +778,7 @@ public final class Utf8BinaryDispatch
         return context.allocator().allocateSparseMask(allocationContext, positions, outputIndex, mask.size());
     }
 
-    private static boolean tryEvaluateInSetMaskInPlace(String functionName, List<Streams> inputs, Mask mask, boolean selectMatches)
+    private boolean tryEvaluateInSetMaskInPlace(String functionName, List<Streams> inputs, Mask mask, boolean selectMatches)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
         Vector leftValues = inputs.getFirst().values();
@@ -826,17 +817,17 @@ public final class Utf8BinaryDispatch
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         boolean[] dictionaryMatches = evaluateDictionaryMembership(left, literals);
         int[] ids = leftDictionary.ids();
-        int singleMatchingId = DIRECT_SINGLE_DICTIONARY_MATCH ? singleMatchingId(dictionaryMatches) : -1;
-        if (singleMatchingId >= 0 && MONOMORPHIC_DICTIONARY_MASK && VectorAccess.isAllFalseNulls(leftNullVector)) {
+        int singleMatchingId = policy.directSingleDictionaryMatch() ? singleMatchingId(dictionaryMatches) : -1;
+        if (singleMatchingId >= 0 && policy.monomorphicDictionaryMask() && VectorAccess.isAllFalseNulls(leftNullVector)) {
             mask.retainDictionaryIdComparison(ids, singleMatchingId, null, selectMatches);
         }
-        else if (singleMatchingId >= 0 && MONOMORPHIC_DICTIONARY_MASK && leftNullVector instanceof BooleanVector booleanNulls) {
+        else if (singleMatchingId >= 0 && policy.monomorphicDictionaryMask() && leftNullVector instanceof BooleanVector booleanNulls) {
             mask.retainDictionaryIdComparison(ids, singleMatchingId, booleanNulls.values(), selectMatches);
         }
-        else if (MONOMORPHIC_DICTIONARY_MASK && VectorAccess.isAllFalseNulls(leftNullVector)) {
+        else if (policy.monomorphicDictionaryMask() && VectorAccess.isAllFalseNulls(leftNullVector)) {
             mask.retainDictionaryComparison(ids, dictionaryMatches, null, selectMatches);
         }
-        else if (MONOMORPHIC_DICTIONARY_MASK && leftNullVector instanceof BooleanVector booleanNulls) {
+        else if (policy.monomorphicDictionaryMask() && leftNullVector instanceof BooleanVector booleanNulls) {
             mask.retainDictionaryComparison(ids, dictionaryMatches, booleanNulls.values(), selectMatches);
         }
         else {
@@ -845,7 +836,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static int singleMatchingId(boolean[] matches)
+    private int singleMatchingId(boolean[] matches)
     {
         int matchingId = -1;
         for (int index = 0; index < matches.length; index++) {
@@ -860,7 +851,7 @@ public final class Utf8BinaryDispatch
         return matchingId;
     }
 
-    private static boolean tryRetainFlatPackedShortInSet(
+    private boolean tryRetainFlatPackedShortInSet(
             BinaryVector left,
             BinaryVector[] literals,
             VectorAccess.BooleanValues leftNulls,
@@ -950,7 +941,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static void retainDenseFixedShortInSet(
+    private void retainDenseFixedShortInSet(
             BinaryVector values,
             Mask mask,
             boolean selectMatches,
@@ -1013,7 +1004,7 @@ public final class Utf8BinaryDispatch
         mask.finishRetain(retained);
     }
 
-    private static boolean packedShortScalarMatches(
+    private boolean packedShortScalarMatches(
             long value,
             int literalCount,
             short literal0,
@@ -1035,7 +1026,7 @@ public final class Utf8BinaryDispatch
                 (literalCount > 7 && value == (literal7 & 0xFFFFL));
     }
 
-    private static VectorMask<Short> packedShortMatches(
+    private VectorMask<Short> packedShortMatches(
             ShortVector values,
             int literalCount,
             short literal0,
@@ -1072,12 +1063,12 @@ public final class Utf8BinaryDispatch
         return matches;
     }
 
-    private static short nativeShort(short littleEndian)
+    private short nativeShort(short littleEndian)
     {
         return ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? littleEndian : Short.reverseBytes(littleEndian);
     }
 
-    private static boolean packedMatchesAt(
+    private boolean packedMatchesAt(
             BinaryVector values,
             byte[] data,
             int position,
@@ -1104,7 +1095,7 @@ public final class Utf8BinaryDispatch
                         literal7);
     }
 
-    private static void applyInSetValues(String functionName, List<Streams> inputs, VectorAccess.BooleanValues leftNulls, Mask mask, BooleanVector output)
+    private void applyInSetValues(String functionName, List<Streams> inputs, VectorAccess.BooleanValues leftNulls, Mask mask, BooleanVector output)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
         Vector leftValues = inputs.getFirst().values();
@@ -1155,7 +1146,7 @@ public final class Utf8BinaryDispatch
      * admitted width so {@link Long#MIN_VALUE} is an impossible packed value and can safely fill unused literal
      * lanes. The decision is made once per batch; the row loop contains no literal-count or representation dispatch.
      */
-    private static boolean tryApplyFlatPackedShortInSet(
+    private boolean tryApplyFlatPackedShortInSet(
             BinaryVector left,
             BinaryVector[] literals,
             VectorAccess.BooleanValues leftNulls,
@@ -1211,7 +1202,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static int commonPackedLiteralLength(BinaryVector[] literals)
+    private int commonPackedLiteralLength(BinaryVector[] literals)
     {
         if (literals.length == 0 || literals.length > 8) {
             return -1;
@@ -1228,7 +1219,7 @@ public final class Utf8BinaryDispatch
         return length;
     }
 
-    private static long packedLiteral(BinaryVector[] literals, int index)
+    private long packedLiteral(BinaryVector[] literals, int index)
     {
         if (index >= literals.length) {
             return Long.MIN_VALUE;
@@ -1237,7 +1228,7 @@ public final class Utf8BinaryDispatch
         return packShort(literal.data(), literal.startOffset(0), literal.length(0));
     }
 
-    private static boolean packedMatches(
+    private boolean packedMatches(
             long value,
             long literal0,
             long literal1,
@@ -1260,7 +1251,7 @@ public final class Utf8BinaryDispatch
                 (value == literal7);
     }
 
-    private static boolean[] evaluateDictionaryMembership(BinaryVector dictionary, BinaryVector[] literals)
+    private boolean[] evaluateDictionaryMembership(BinaryVector dictionary, BinaryVector[] literals)
     {
         boolean[] dictionaryMatches = new boolean[dictionary.length()];
         // Fast path: when every IN literal is at most 8 bytes (zip codes, state codes, and most short-string sets),
@@ -1298,7 +1289,7 @@ public final class Utf8BinaryDispatch
         return dictionaryMatches;
     }
 
-    private static boolean dictionaryMembershipWorthwhile(DictionaryVector dictionary, int activeRows)
+    private boolean dictionaryMembershipWorthwhile(DictionaryVector dictionary, int activeRows)
     {
         Vector values = dictionary.values();
         while (values instanceof DictionaryVector nested) {
@@ -1307,7 +1298,7 @@ public final class Utf8BinaryDispatch
         return values instanceof BinaryVector binary && binary.length() <= activeRows;
     }
 
-    private static boolean matchesAny(DictionaryVector dictionary, int position, BinaryVector[] literals)
+    private boolean matchesAny(DictionaryVector dictionary, int position, BinaryVector[] literals)
     {
         Vector values = dictionary.values();
         int dictionaryPosition = dictionary.ids()[position];
@@ -1318,7 +1309,7 @@ public final class Utf8BinaryDispatch
         return matchesAny((BinaryVector) values, dictionaryPosition, literals);
     }
 
-    private static boolean binaryEquals(DictionaryVector dictionary, int position, BinaryVector literal)
+    private boolean binaryEquals(DictionaryVector dictionary, int position, BinaryVector literal)
     {
         Vector values = dictionary.values();
         int dictionaryPosition = dictionary.ids()[position];
@@ -1329,7 +1320,7 @@ public final class Utf8BinaryDispatch
         return binaryEquals((BinaryVector) values, dictionaryPosition, literal, 0);
     }
 
-    private static boolean allShort(BinaryVector[] literals)
+    private boolean allShort(BinaryVector[] literals)
     {
         for (BinaryVector literal : literals) {
             if (literal.length(0) > 8) {
@@ -1340,7 +1331,7 @@ public final class Utf8BinaryDispatch
     }
 
     /** Pack up to 8 bytes into a little-endian long (low byte first); the caller compares length separately. */
-    private static long packShort(byte[] data, int start, int length)
+    private long packShort(byte[] data, int start, int length)
     {
         long value = 0;
         for (int index = 0; index < length; index++) {
@@ -1349,7 +1340,7 @@ public final class Utf8BinaryDispatch
         return value;
     }
 
-    private static boolean matchesAny(BinaryVector values, int position, BinaryVector[] literals)
+    private boolean matchesAny(BinaryVector values, int position, BinaryVector[] literals)
     {
         for (BinaryVector literal : literals) {
             if (binaryEquals(values, position, literal, 0)) {
@@ -1359,7 +1350,7 @@ public final class Utf8BinaryDispatch
         return false;
     }
 
-    private static boolean allSingleValueRle(String functionName, List<Streams> literalInputs)
+    private boolean allSingleValueRle(String functionName, List<Streams> literalInputs)
     {
         for (Streams input : literalInputs) {
             if (!(input.values() instanceof RleVector rle) || rle.counts().length != 1) {
@@ -1370,7 +1361,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static BinaryVector[] literalVectors(String functionName, List<Streams> literalInputs)
+    private BinaryVector[] literalVectors(String functionName, List<Streams> literalInputs)
     {
         BinaryVector[] literals = new BinaryVector[literalInputs.size()];
         for (int index = 0; index < literalInputs.size(); index++) {
@@ -1381,7 +1372,7 @@ public final class Utf8BinaryDispatch
         return literals;
     }
 
-    private static void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyFlatFlat(String functionName, Operation operation, BinaryVector left, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         boolean[] outputValues = output.values();
         if (mask.all()) {
@@ -1395,7 +1386,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyFlatDictionary(String functionName, Operation operation, BinaryVector left, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyFlatDictionary(String functionName, Operation operation, BinaryVector left, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
         int[] rightIds = rightDictionary.ids();
@@ -1411,7 +1402,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyDictionaryFlat(String functionName, Operation operation, DictionaryVector leftDictionary, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyDictionaryFlat(String functionName, Operation operation, DictionaryVector leftDictionary, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         int[] leftIds = leftDictionary.ids();
@@ -1427,7 +1418,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyDictionaryDictionary(String functionName, Operation operation, DictionaryVector leftDictionary, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyDictionaryDictionary(String functionName, Operation operation, DictionaryVector leftDictionary, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
@@ -1445,7 +1436,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyFlatRle(String functionName, Operation operation, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyFlatRle(String functionName, Operation operation, BinaryVector left, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector right = requireBinaryRle(functionName, rightRle);
         boolean[] outputValues = output.values();
@@ -1470,7 +1461,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyDictionaryRle(String functionName, Operation operation, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyDictionaryRle(String functionName, Operation operation, DictionaryVector leftDictionary, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryDictionary(functionName, leftDictionary);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -1497,7 +1488,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyRleFlat(String functionName, Operation operation, RleVector leftRle, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyRleFlat(String functionName, Operation operation, RleVector leftRle, BinaryVector right, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         boolean[] outputValues = output.values();
@@ -1522,7 +1513,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyRleDictionary(String functionName, Operation operation, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyRleDictionary(String functionName, Operation operation, RleVector leftRle, DictionaryVector rightDictionary, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryDictionary(functionName, rightDictionary);
@@ -1549,7 +1540,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void applyRleRle(String functionName, Operation operation, RleVector leftRle, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyRleRle(String functionName, Operation operation, RleVector leftRle, RleVector rightRle, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         BinaryVector left = requireBinaryRle(functionName, leftRle);
         BinaryVector right = requireBinaryRle(functionName, rightRle);
@@ -1585,7 +1576,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static boolean evaluate(String functionName, Operation operation, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int nullPosition)
+    private boolean evaluate(String functionName, Operation operation, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition, VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, int nullPosition)
     {
         if (isNull(leftNulls, nullPosition) || isNull(rightNulls, nullPosition)) {
             return false;
@@ -1599,27 +1590,27 @@ public final class Utf8BinaryDispatch
     }
 
     // The per-row compare kernels no longer re-check the UTF8_STRING trait: apply() validates it once per batch.
-    private static boolean compareEquals(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean compareEquals(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryEquals(left, leftPosition, right, rightPosition);
     }
 
-    private static boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryCompare(left, leftPosition, right, rightPosition) < 0;
     }
 
-    private static boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryStartsWith(left, leftPosition, right, rightPosition);
     }
 
-    private static boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean compareContains(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryContains(left, leftPosition, right, rightPosition);
     }
 
-    private static void applyNulls(VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
+    private void applyNulls(VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls, Mask mask, BooleanVector output)
     {
         boolean[] outputValues = output.values();
         if (mask.all()) {
@@ -1633,17 +1624,17 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static BinaryVector requireBinaryDictionary(String functionName, DictionaryVector vector)
+    private BinaryVector requireBinaryDictionary(String functionName, DictionaryVector vector)
     {
         return requireBinaryValues(functionName, vector.values());
     }
 
-    private static BinaryVector requireBinaryRle(String functionName, RleVector vector)
+    private BinaryVector requireBinaryRle(String functionName, RleVector vector)
     {
         return requireBinaryValues(functionName, vector.values());
     }
 
-    private static BinaryVector requireBinaryValues(String functionName, Vector vector)
+    private BinaryVector requireBinaryValues(String functionName, Vector vector)
     {
         return switch (vector) {
             case BinaryVector values -> values;
@@ -1653,7 +1644,7 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    private static BinaryVector materializeBinaryValues(String functionName, Vector vector)
+    private BinaryVector materializeBinaryValues(String functionName, Vector vector)
     {
         int length = vector.length();
         int totalBytes = 0;
@@ -1669,7 +1660,7 @@ public final class Utf8BinaryDispatch
         return materialized;
     }
 
-    private static int binaryLength(String functionName, Vector vector, int position)
+    private int binaryLength(String functionName, Vector vector, int position)
     {
         return switch (vector) {
             case BinaryVector values -> values.length(position);
@@ -1679,7 +1670,7 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    private static void copyBinaryBytes(String functionName, Vector source, int sourcePosition, BinaryVector target, int targetPosition)
+    private void copyBinaryBytes(String functionName, Vector source, int sourcePosition, BinaryVector target, int targetPosition)
     {
         switch (source) {
             case BinaryVector values -> target.setBytes(targetPosition, values.data(), values.startOffset(sourcePosition), values.length(sourcePosition));
@@ -1689,7 +1680,7 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void copyBinaryTraits(Vector source, BinaryVector target)
+    private void copyBinaryTraits(Vector source, BinaryVector target)
     {
         switch (source) {
             case BinaryVector values -> {
@@ -1706,17 +1697,17 @@ public final class Utf8BinaryDispatch
         }
     }
 
-    private static void requireUtf8Traits(String functionName, Vector left, Vector right)
+    private void requireUtf8Traits(String functionName, Vector left, Vector right)
     {
         checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
     }
 
-    private static void requireUtf8Traits(String functionName, BinaryVector left, BinaryVector right)
+    private void requireUtf8Traits(String functionName, BinaryVector left, BinaryVector right)
     {
         checkArgument(hasUtf8Traits(left) && hasUtf8Traits(right), "%s requires UTF8_STRING inputs", functionName);
     }
 
-    private static boolean hasUtf8Traits(Vector vector)
+    private boolean hasUtf8Traits(Vector vector)
     {
         return switch (vector) {
             case BinaryVector values -> hasUtf8Traits(values);
@@ -1726,22 +1717,22 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    private static boolean hasUtf8Traits(BinaryVector vector)
+    private boolean hasUtf8Traits(BinaryVector vector)
     {
         return vector.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
     }
 
-    private static boolean isNull(VectorAccess.BooleanValues nulls, int position)
+    private boolean isNull(VectorAccess.BooleanValues nulls, int position)
     {
         return nulls != null && nulls.value(position);
     }
 
-    private static BooleanVector writableBooleanOutput(Allocator.Context allocationContext, PrimitiveExecutionContext context, Vector existing, int outputLength)
+    private BooleanVector writableBooleanOutput(Allocator.Context allocationContext, PrimitiveExecutionContext context, Vector existing, int outputLength)
     {
         return VectorAccess.writableBooleanVector(context.allocator(), allocationContext, existing, outputLength);
     }
 
-    private static boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean binaryEquals(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         int leftLength = left.length(leftPosition);
         if (leftLength != right.length(rightPosition)) {
@@ -1751,7 +1742,7 @@ public final class Utf8BinaryDispatch
         byte[] rightData = right.data();
         int leftStart = left.startOffset(leftPosition);
         int rightStart = right.startOffset(rightPosition);
-        if (WORD_EQUALS) {
+        if (policy.wordEquals()) {
             if (leftLength >= 16) {
                 return Arrays.mismatch(leftData, leftStart, leftStart + leftLength, rightData, rightStart, rightStart + leftLength) == -1;
             }
@@ -1786,7 +1777,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static boolean binaryEquals(String functionName, Vector left, int leftPosition, Vector right, int rightPosition)
+    private boolean binaryEquals(String functionName, Vector left, int leftPosition, Vector right, int rightPosition)
     {
         return switch (left) {
             case BinaryVector leftValues -> switch (right) {
@@ -1801,7 +1792,7 @@ public final class Utf8BinaryDispatch
         };
     }
 
-    private static int binaryCompare(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private int binaryCompare(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         int leftLength = left.length(leftPosition);
         int rightLength = right.length(rightPosition);
@@ -1819,7 +1810,7 @@ public final class Utf8BinaryDispatch
         return Integer.compare(leftLength, rightLength);
     }
 
-    private static boolean binaryStartsWith(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean binaryStartsWith(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         int prefixLength = right.length(rightPosition);
         if (left.length(leftPosition) < prefixLength) {
@@ -1837,12 +1828,12 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static boolean binaryContains(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    private boolean binaryContains(BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryContains(left, leftPosition, compileContainsNeedle(right, rightPosition));
     }
 
-    private static boolean binaryContains(BinaryVector haystack, int haystackPosition, ContainsNeedle needle)
+    private boolean binaryContains(BinaryVector haystack, int haystackPosition, ContainsNeedle needle)
     {
         int haystackLength = haystack.length(haystackPosition);
         if (needle.length() == 0) {
@@ -1870,7 +1861,7 @@ public final class Utf8BinaryDispatch
                 needle.secondProbeByte());
     }
 
-    private static boolean binarySliceEquals(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    private boolean binarySliceEquals(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
     {
         if (left.length() != right.length()) {
             return false;
@@ -1883,7 +1874,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static int binarySliceCompare(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    private int binarySliceCompare(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
     {
         int compareLength = Math.min(left.length(), right.length());
         for (int index = 0; index < compareLength; index++) {
@@ -1895,7 +1886,7 @@ public final class Utf8BinaryDispatch
         return Integer.compare(left.length(), right.length());
     }
 
-    private static boolean binarySliceStartsWith(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
+    private boolean binarySliceStartsWith(VectorAccess.BinarySlice left, VectorAccess.BinarySlice right)
     {
         if (left.length() < right.length()) {
             return false;
@@ -1908,7 +1899,7 @@ public final class Utf8BinaryDispatch
         return true;
     }
 
-    private static boolean binarySliceContains(VectorAccess.BinarySlice haystack, VectorAccess.BinarySlice needle)
+    private boolean binarySliceContains(VectorAccess.BinarySlice haystack, VectorAccess.BinarySlice needle)
     {
         if (needle.length() == 0) {
             return true;

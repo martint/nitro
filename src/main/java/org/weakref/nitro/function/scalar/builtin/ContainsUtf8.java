@@ -29,6 +29,17 @@ public final class ContainsUtf8
         implements PrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("ContainsUtf8");
+    private final Utf8BinaryDispatch dispatch;
+
+    public ContainsUtf8()
+    {
+        this(Utf8BinaryDispatchPolicy.defaults());
+    }
+
+    public ContainsUtf8(Utf8BinaryDispatchPolicy policy)
+    {
+        dispatch = new Utf8BinaryDispatch(policy);
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -45,6 +56,6 @@ public final class ContainsUtf8
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        return Utf8BinaryDispatch.applyContains("contains_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
+        return dispatch.applyContains("contains_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 }

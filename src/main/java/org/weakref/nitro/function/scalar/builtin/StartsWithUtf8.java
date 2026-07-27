@@ -29,6 +29,17 @@ public final class StartsWithUtf8
         implements PrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("StartsWithUtf8");
+    private final Utf8BinaryDispatch dispatch;
+
+    public StartsWithUtf8()
+    {
+        this(Utf8BinaryDispatchPolicy.defaults());
+    }
+
+    public StartsWithUtf8(Utf8BinaryDispatchPolicy policy)
+    {
+        dispatch = new Utf8BinaryDispatch(policy);
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -45,6 +56,6 @@ public final class StartsWithUtf8
     @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
-        return Utf8BinaryDispatch.applyStartsWith("starts_with_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
+        return dispatch.applyStartsWith("starts_with_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 }

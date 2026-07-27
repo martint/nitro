@@ -31,6 +31,17 @@ public final class EqualUtf8
         implements PrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("EqualUtf8");
+    private final Utf8BinaryDispatch dispatch;
+
+    public EqualUtf8()
+    {
+        this(Utf8BinaryDispatchPolicy.defaults());
+    }
+
+    public EqualUtf8(Utf8BinaryDispatchPolicy policy)
+    {
+        dispatch = new Utf8BinaryDispatch(policy);
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
@@ -48,6 +59,6 @@ public final class EqualUtf8
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() == 2, "Unexpected argument count for eq_utf8");
-        return Utf8BinaryDispatch.applyEquals("eq_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
+        return dispatch.applyEquals("eq_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
     }
 }
