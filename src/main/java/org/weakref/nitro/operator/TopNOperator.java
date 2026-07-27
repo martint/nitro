@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
 
+import static java.util.Objects.requireNonNull;
+
 public class TopNOperator
         implements Operator
 {
@@ -45,6 +47,23 @@ public class TopNOperator
 
     public TopNOperator(Allocator allocator, int n, int[] columns, boolean[] descending, Operator source)
     {
+        this(
+                allocator,
+                n,
+                columns,
+                descending,
+                source,
+                allocator.engineResources().operatorResources().joinBufferPolicy());
+    }
+
+    public TopNOperator(
+            Allocator allocator,
+            int n,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            JoinBufferPolicy joinBufferPolicy)
+    {
         if (columns.length == 0) {
             throw new IllegalArgumentException("TopN requires at least one ordering column");
         }
@@ -57,7 +76,7 @@ public class TopNOperator
         state = new TopNState(
                 columns,
                 descending,
-                allocator.engineResources().operatorResources().joinBufferPolicy(),
+                requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,
                 source.outputCount(),

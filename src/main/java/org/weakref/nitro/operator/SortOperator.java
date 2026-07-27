@@ -19,6 +19,8 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
+import static java.util.Objects.requireNonNull;
+
 public class SortOperator
         implements Operator
 {
@@ -38,20 +40,37 @@ public class SortOperator
 
     public SortOperator(Allocator allocator, int[] columns, boolean[] descending, Operator source)
     {
+        this(
+                allocator,
+                columns,
+                descending,
+                source,
+                allocator.engineResources().operatorResources().sortPolicy(),
+                allocator.engineResources().operatorResources().joinBufferPolicy());
+    }
+
+    public SortOperator(
+            Allocator allocator,
+            int[] columns,
+            boolean[] descending,
+            Operator source,
+            SortOperatorPolicy policy,
+            JoinBufferPolicy joinBufferPolicy)
+    {
         if (columns.length == 0) {
             throw new IllegalArgumentException("Sort requires at least one ordering column");
         }
         if (columns.length != descending.length) {
             throw new IllegalArgumentException("Sort ordering columns and directions must have the same length");
         }
-        this.policy = allocator.engineResources().operatorResources().sortPolicy();
+        this.policy = requireNonNull(policy, "policy is null");
         this.allocator = allocator;
         this.arrayPool = allocator.primitiveArrays();
         this.source = source;
         this.state = new TopNState(
                 columns,
                 descending,
-                allocator.engineResources().operatorResources().joinBufferPolicy(),
+                requireNonNull(joinBufferPolicy, "joinBufferPolicy is null"),
                 allocator,
                 allocationContext,
                 source.outputCount(),

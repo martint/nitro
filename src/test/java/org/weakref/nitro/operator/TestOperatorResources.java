@@ -125,6 +125,8 @@ class TestOperatorResources
                 Operator joinOuter = new ConstantTableOperator(allocator, 0, List.of());
                 Operator joinInner = new ConstantTableOperator(allocator, 0, List.of());
                 Operator windowSource = new ConstantTableOperator(allocator, 0, List.of());
+                Operator sortSource = new ConstantTableOperator(allocator, 1, List.of());
+                Operator topNSource = new ConstantTableOperator(allocator, 1, List.of());
                 Operator group = new GroupOperator(allocator, 0, groupSource, operatorResources);
                 Operator filter = new FilterOperator(
                         filterSource,
@@ -160,7 +162,21 @@ class TestOperatorResources
                         new boolean[0],
                         List.of(new PartitionSumI64WindowFunction(0)),
                         org.weakref.nitro.core.type.Schema.unspecified(1),
-                        operatorResources.windowPolicy())) {
+                        operatorResources.windowPolicy());
+                Operator sort = new SortOperator(
+                        allocator,
+                        new int[] {0},
+                        new boolean[] {false},
+                        sortSource,
+                        operatorResources.sortPolicy(),
+                        operatorResources.joinBufferPolicy());
+                Operator topN = new TopNOperator(
+                        allocator,
+                        1,
+                        new int[] {0},
+                        new boolean[] {false},
+                        topNSource,
+                        operatorResources.joinBufferPolicy())) {
             assertThat(group.outputCount()).isEqualTo(1);
             assertThat(filter.outputCount()).isZero();
             assertThat(aggregation.outputCount()).isZero();
@@ -170,6 +186,8 @@ class TestOperatorResources
             assertThat(semiJoin.outputCount()).isZero();
             assertThat(hashJoin.outputCount()).isZero();
             assertThat(window.outputCount()).isEqualTo(1);
+            assertThat(sort.outputCount()).isEqualTo(1);
+            assertThat(topN.outputCount()).isEqualTo(1);
             assertThat(operatorResources.semiJoinPolicy()).isEqualTo(SemiJoinOperatorPolicy.defaults());
 
             Allocator.Context accumulatorContext = new Allocator.Context("resource-aware-accumulator");
