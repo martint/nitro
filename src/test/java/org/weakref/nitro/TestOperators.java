@@ -1426,6 +1426,23 @@ public class TestOperators
     }
 
     @Test
+    void testRowShapingOperatorsPreserveSourceSchema()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Schema sourceSchema = new Schema(List.of(
+                new Field("first", i32Only, false),
+                new Field("second", i32Only, true)));
+
+        try (Operator limit = new LimitOperator(allocator, 1, typedTable(sourceSchema));
+                Operator sort = new SortOperator(allocator, new int[] {0}, new boolean[] {false}, typedTable(sourceSchema));
+                Operator topN = new TopNOperator(allocator, 1, 0, typedTable(sourceSchema))) {
+            assertThat(limit.outputSchema()).isSameAs(sourceSchema);
+            assertThat(sort.outputSchema()).isSameAs(sourceSchema);
+            assertThat(topN.outputSchema()).isSameAs(sourceSchema);
+        }
+    }
+
+    @Test
     void testGroupedConditionalProductSumPreservesSqlNullAndZeroSemantics()
     {
         assertThat(operator(new GroupedAggregationOperator(

@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.ints.IntArrays;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -61,6 +62,12 @@ public class SortOperator
     public int outputCount()
     {
         return source.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return source.outputSchema();
     }
 
     @Override

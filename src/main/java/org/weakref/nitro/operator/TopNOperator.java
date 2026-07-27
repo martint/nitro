@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 
@@ -67,6 +68,12 @@ public class TopNOperator
     public int outputCount()
     {
         return source.outputCount();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return source.outputSchema();
     }
 
     @Override
