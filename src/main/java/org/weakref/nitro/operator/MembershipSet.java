@@ -14,16 +14,21 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -38,6 +43,7 @@ final class MembershipSet
     private final Allocator.Context allocationContext;
     private final OperatorResources operatorResources;
     private final Optional<TypeBinding> keyType;
+    private final StructuralKeyKernel keyKernel;
     private Index index;
 
     MembershipSet(
@@ -50,19 +56,31 @@ final class MembershipSet
         this.allocationContext = allocationContext;
         this.operatorResources = operatorResources;
         this.keyType = requireNonNull(keyType, "keyType is null");
+        this.keyKernel = operatorResources.codeGeneration().structuralTypes().key(
+                keyType.orElseGet(() -> Schema.unspecified(1).field(0).type()));
     }
 
     void addBatch(Vector values, Vector nulls, Mask mask)
     {
         validateKeyType(values);
         if (index == null) {
-            FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
-            LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
-                    ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
-                    : null;
-            index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources, keyType);
+            if (!keyKernel.allowsLegacyPhysicalShortcuts()) {
+                index = new StructuralIndex(allocator, allocationContext, keyKernel);
+            }
+            else {
+                FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
+                LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
+                        ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
+                        : null;
+                index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources, keyType);
+            }
         }
         index.addBatch(values, nulls, mask);
+    }
+
+    boolean allowsLegacyPhysicalShortcuts()
+    {
+        return keyKernel.allowsLegacyPhysicalShortcuts();
     }
 
     void beginProbeBatch(Vector values, Vector nulls)
@@ -261,6 +279,123 @@ final class MembershipSet
         {
             grouping.releaseBuffers();
             scratch = null;
+        }
+    }
+
+    private static final class StructuralIndex
+            implements Index
+    {
+        private final Allocator allocator;
+        private final Allocator.Context allocationContext;
+        private final StructuralKeyKernel kernel;
+        private final Set<StructuralMembershipKey> keys = new HashSet<>();
+        private final StructuralMembershipKey probeKey;
+
+        private StructuralIndex(
+                Allocator allocator,
+                Allocator.Context allocationContext,
+                StructuralKeyKernel kernel)
+        {
+            this.allocator = allocator;
+            this.allocationContext = allocationContext;
+            this.kernel = kernel;
+            this.probeKey = new StructuralMembershipKey(kernel);
+        }
+
+        @Override
+        public void addBatch(Vector values, Vector nulls, Mask mask)
+        {
+            Streams copied = allocator.copyStreams(
+                    allocationContext,
+                    Streams.of(values, nulls, null),
+                    mask);
+            Vector copiedValues = copied.values();
+            Vector copiedNulls = copied.getOrNull(Stream.NULLS);
+            for (int position = 0; position < copiedValues.length(); position++) {
+                if (!OperatorVectorSupport.isNull(copiedNulls, position)) {
+                    keys.add(new StructuralMembershipKey(kernel, copiedValues, copiedNulls, position));
+                }
+            }
+        }
+
+        @Override
+        public void beginProbeBatch(Vector values, Vector nulls)
+        {
+            probeKey.set(values, nulls, 0);
+        }
+
+        @Override
+        public boolean contains(int position)
+        {
+            if (OperatorVectorSupport.isNull(probeKey.nulls, position)) {
+                return false;
+            }
+            probeKey.position = position;
+            return keys.contains(probeKey);
+        }
+
+        @Override
+        public void endProbeBatch()
+        {
+            probeKey.clear();
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            keys.clear();
+            probeKey.clear();
+        }
+    }
+
+    private static final class StructuralMembershipKey
+    {
+        private final StructuralKeyKernel kernel;
+        private Vector values;
+        private Vector nulls;
+        private int position;
+
+        private StructuralMembershipKey(StructuralKeyKernel kernel)
+        {
+            this.kernel = kernel;
+        }
+
+        private StructuralMembershipKey(
+                StructuralKeyKernel kernel,
+                Vector values,
+                Vector nulls,
+                int position)
+        {
+            this.kernel = kernel;
+            set(values, nulls, position);
+        }
+
+        private void set(Vector values, Vector nulls, int position)
+        {
+            this.values = requireNonNull(values, "values is null");
+            this.nulls = nulls;
+            this.position = position;
+        }
+
+        private void clear()
+        {
+            values = null;
+            nulls = null;
+            position = 0;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Long.hashCode(kernel.hash(values, nulls, position));
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            return object instanceof StructuralMembershipKey other &&
+                    kernel == other.kernel &&
+                    kernel.identical(values, nulls, position, other.values, other.nulls, other.position);
         }
     }
 

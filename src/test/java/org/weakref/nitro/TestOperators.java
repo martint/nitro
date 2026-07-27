@@ -1594,7 +1594,7 @@ public class TestOperators
     }
 
     @Test
-    void testTopNRankingUsesRegistrySuppliedStructuralSemantics()
+    void testOperatorsUseRegistrySuppliedStructuralSemantics()
             throws ReflectiveOperationException
     {
         MethodHandles.Lookup lookup = MethodHandles.lookup();
@@ -1786,7 +1786,7 @@ public class TestOperators
                             row(2L, -2L)));
         }
 
-        Operator hashJoinOuter = typedTable(
+        Operator hashJoinOuter = rejectDynamicFilters(typedTable(
                 sourceSchema,
                 TableOperator.Page.values(
                         1,
@@ -1795,7 +1795,7 @@ public class TestOperators
                 TableOperator.Page.values(
                         1,
                         new Vector[] {new I64Vector(new long[] {2})},
-                        Mask.all(1)));
+                        Mask.all(1))));
         Operator hashJoinInner = typedTable(
                 sourceSchema,
                 TableOperator.Page.values(
@@ -1818,6 +1818,109 @@ public class TestOperators
                             row(1L, -1L),
                             row(2L, -2L)));
         }
+
+        Operator semiJoinOuter = rejectDynamicFilters(typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        3,
+                        new Vector[] {new I64Vector(new long[] {1, 2, 3})},
+                        Mask.all(3))));
+        Operator semiJoinInner = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {-1})},
+                        Mask.all(1)),
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {-2})},
+                        Mask.all(1)));
+        try (Operator join = new SemiJoinOperator(
+                allocator,
+                semiJoinOuter,
+                0,
+                semiJoinInner,
+                0,
+                true,
+                false,
+                allocator.engineResources().operatorResources())) {
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            row(1L),
+                            row(2L)));
+        }
+    }
+
+    private static Operator rejectDynamicFilters(Operator delegate)
+    {
+        return new Operator()
+        {
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                return delegate.next();
+            }
+
+            @Override
+            public void constrain(Mask mask)
+            {
+                delegate.constrain(mask);
+            }
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return delegate.supportsRetainedBatches();
+            }
+
+            @Override
+            public boolean supportsStableBatchBorrow()
+            {
+                return delegate.supportsStableBatchBorrow();
+            }
+
+            @Override
+            public long exactOutputRows()
+            {
+                return delegate.exactOutputRows();
+            }
+
+            @Override
+            public boolean supportsConstrainedReborrow()
+            {
+                return delegate.supportsConstrainedReborrow();
+            }
+
+            @Override
+            public void pushDynamicFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                throw new AssertionError("Raw-representation dynamic filter must not be pushed for registry-bound keys");
+            }
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
     }
 
     private static long readI64(Vector vector, int position)

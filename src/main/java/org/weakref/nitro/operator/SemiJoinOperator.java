@@ -56,6 +56,7 @@ public class SemiJoinOperator
     private final PositionScratch selectionScratch;
     private final SemiJoinOperatorPolicy policy;
     private final Schema outputSchema;
+    private final boolean allowsLegacyKeyShortcuts;
 
     private boolean loaded;
     private BatchState currentBatchState;
@@ -163,6 +164,7 @@ public class SemiJoinOperator
                 allocationContext,
                 operatorResources,
                 joinType(outer.outputSchema(), outerJoinColumn, inner.outputSchema(), innerJoinColumn));
+        this.allowsLegacyKeyShortcuts = membership.allowsLegacyPhysicalShortcuts();
     }
 
     private static Optional<TypeBinding> joinType(
@@ -381,7 +383,11 @@ public class SemiJoinOperator
 
     private void collectDynamicFilterValues(Vector values, Vector nulls, Mask mask)
     {
-        if (!policy.dynamicFilterEnabled() || !includeMatches || outputMatches || dynamicFilterAbandoned) {
+        if (!allowsLegacyKeyShortcuts ||
+                !policy.dynamicFilterEnabled() ||
+                !includeMatches ||
+                outputMatches ||
+                dynamicFilterAbandoned) {
             return;
         }
         if (nulls != null && !VectorAccess.isAllFalseNulls(nulls)) {
@@ -418,7 +424,10 @@ public class SemiJoinOperator
 
     private void collectSmallBinaryMembership(Vector values, Vector nulls, Mask mask)
     {
-        if (policy.smallBinarySetMaxValues() <= 0 || smallBinaryMembershipAbandoned || mask.none()) {
+        if (!allowsLegacyKeyShortcuts ||
+                policy.smallBinarySetMaxValues() <= 0 ||
+                smallBinaryMembershipAbandoned ||
+                mask.none()) {
             return;
         }
         if (!SmallBinarySet.supports(values)) {

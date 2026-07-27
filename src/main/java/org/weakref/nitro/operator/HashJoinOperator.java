@@ -499,7 +499,7 @@ public class HashJoinOperator
         this.preparedRangeCounts = joinScratch.preparedRangeCounts;
         this.preparedOuterMatches = new LongList[maxBatchRows];
         this.currentOutputs = new Streams[totalOutputCount];
-        this.buildKeysViable = dynamicFilterPolicy.enabled() && !probeOuterJoin
+        this.buildKeysViable = allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
                 && (innerJoinColumns.length == 1 || dynamicFilterPolicy.multiKey());
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
@@ -1079,7 +1079,8 @@ public class HashJoinOperator
 
     private void prepareProbeFirstBuildFilter()
     {
-        if (!dynamicFilterPolicy.probeFirstBuildFilter() ||
+        if (!allowsLegacyKeyShortcuts ||
+                !dynamicFilterPolicy.probeFirstBuildFilter() ||
                 probeOuterJoin ||
                 !supportsInnerDynamicFilterPushdown() ||
                 inner.exactOutputRows() < dynamicFilterPolicy.probeFirstMinBuildRows()) {
