@@ -13,16 +13,24 @@
  */
 package org.weakref.nitro.operator;
 
+import static java.util.Objects.requireNonNull;
+
 /// Engine-selected dynamic-filter and membership policy for semi joins.
 public record SemiJoinOperatorPolicy(
         boolean dynamicFilterEnabled,
         int dynamicFilterMaxValues,
         int smallBinarySetMaxValues,
-        boolean cacheDictionaryMatches)
+        boolean cacheDictionaryMatches,
+        MembershipSetPolicy membershipSet)
 {
+    public SemiJoinOperatorPolicy
+    {
+        requireNonNull(membershipSet, "membershipSet is null");
+    }
+
     public static SemiJoinOperatorPolicy defaults()
     {
-        return new SemiJoinOperatorPolicy(true, 1 << 13, 64, true);
+        return new SemiJoinOperatorPolicy(true, 1 << 13, 64, true, MembershipSetPolicy.defaults());
     }
 
     public static SemiJoinOperatorPolicy fromSystemProperties()
@@ -32,7 +40,8 @@ public record SemiJoinOperatorPolicy(
                 booleanProperty("nitro.dynamicFilter", defaults.dynamicFilterEnabled()),
                 Integer.getInteger("nitro.dynamicFilter.maxValues", defaults.dynamicFilterMaxValues()),
                 Integer.getInteger("nitro.semiJoin.smallBinarySetMaxValues", defaults.smallBinarySetMaxValues()),
-                booleanProperty("nitro.semiJoin.cacheDictionaryMatches", defaults.cacheDictionaryMatches()));
+                booleanProperty("nitro.semiJoin.cacheDictionaryMatches", defaults.cacheDictionaryMatches()),
+                MembershipSetPolicy.fromSystemProperties());
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

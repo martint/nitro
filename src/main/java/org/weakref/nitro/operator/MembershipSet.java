@@ -42,6 +42,7 @@ final class MembershipSet
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
     private final OperatorResources operatorResources;
+    private final MembershipSetPolicy policy;
     private final Optional<TypeBinding> keyType;
     private final StructuralKeyKernel keyKernel;
     private Index index;
@@ -50,11 +51,13 @@ final class MembershipSet
             Allocator allocator,
             Allocator.Context allocationContext,
             OperatorResources operatorResources,
+            MembershipSetPolicy policy,
             Optional<TypeBinding> keyType)
     {
         this.allocator = allocator;
         this.allocationContext = allocationContext;
         this.operatorResources = operatorResources;
+        this.policy = requireNonNull(policy, "policy is null");
         this.keyType = requireNonNull(keyType, "keyType is null");
         this.keyKernel = operatorResources.codeGeneration().structuralTypes().key(
                 keyType.orElseGet(() -> Schema.unspecified(1).field(0).type()));
@@ -70,7 +73,7 @@ final class MembershipSet
             else {
                 FlatTypeHandler handler = FlatTypeHandlers.forVector(values);
                 LongIndex longIndex = handler != null && handler.kind() == FlatTypeHandler.Kind.LONG
-                        ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays())
+                        ? LongIndex.tryCreate(values, nulls, mask, allocator.primitiveArrays(), policy)
                         : null;
                 index = longIndex != null ? longIndex : new GroupingIndex(allocator, allocationContext, operatorResources, keyType);
             }
@@ -406,11 +409,8 @@ final class MembershipSet
     {
         private static final int WORD_SHIFT = 6;
         private static final int WORD_BITS = Long.SIZE;
-        private static final int MIN_CAPACITY_BITS = 1 << 16;
-        private static final int MAX_CAPACITY_BITS = 1 << 26;
-        private static final long MAX_BITS_PER_OBSERVED_KEY = 256;
-
         private final PrimitiveArrayPool arrayPool;
+        private final MembershipSetPolicy policy;
         private long[] bits;
         private long base;
         private int capacityBits;
@@ -418,13 +418,19 @@ final class MembershipSet
         private VectorAccess.LongValues probeValues;
         private VectorAccess.BooleanValues probeNulls;
 
-        private LongIndex(long base, int capacityBits, PrimitiveArrayPool arrayPool)
+        private LongIndex(long base, int capacityBits, PrimitiveArrayPool arrayPool, MembershipSetPolicy policy)
         {
             this.arrayPool = arrayPool;
+            this.policy = policy;
             allocateBits(base, capacityBits);
         }
 
-        private static LongIndex tryCreate(Vector values, Vector nulls, Mask mask, PrimitiveArrayPool arrayPool)
+        private static LongIndex tryCreate(
+                Vector values,
+                Vector nulls,
+                Mask mask,
+                PrimitiveArrayPool arrayPool,
+                MembershipSetPolicy policy)
         {
             if (mask.none()) {
                 return null;
@@ -448,10 +454,12 @@ final class MembershipSet
             }
             long alignedMin = Math.floorDiv(min, WORD_BITS) * WORD_BITS;
             long required = safeSpan(alignedMin, max);
-            if (required <= 0 || required > MAX_CAPACITY_BITS || required > (long) observed * MAX_BITS_PER_OBSERVED_KEY) {
+            if (required <= 0 ||
+                    required > policy.denseLongMaxCapacityBits() ||
+                    required > (long) observed * policy.denseLongMaxBitsPerObservedKey()) {
                 return null;
             }
-            return new LongIndex(alignedMin, bitCapacity(required), arrayPool);
+            return new LongIndex(alignedMin, bitCapacity(required, policy.denseLongMinCapacityBits()), arrayPool, policy);
         }
 
         @Override
@@ -512,12 +520,12 @@ final class MembershipSet
             long max = Math.max(currentMax, key);
             long newBase = Math.floorDiv(min, WORD_BITS) * WORD_BITS;
             long required = safeSpan(newBase, max);
-            if (required <= 0 || required > MAX_CAPACITY_BITS ||
-                    required > (long) (bitCardinality() + 1) * MAX_BITS_PER_OBSERVED_KEY) {
+            if (required <= 0 || required > policy.denseLongMaxCapacityBits() ||
+                    required > (long) (bitCardinality() + 1) * policy.denseLongMaxBitsPerObservedKey()) {
                 convertToHash();
                 return false;
             }
-            int newCapacity = bitCapacity(required);
+            int newCapacity = bitCapacity(required, policy.denseLongMinCapacityBits());
             long[] expanded = arrayPool.borrowLongs(newCapacity >>> WORD_SHIFT);
             Arrays.fill(expanded, 0);
             int wordOffset = toIntExact((base - newBase) >>> WORD_SHIFT);
@@ -575,9 +583,9 @@ final class MembershipSet
             }
         }
 
-        private static int bitCapacity(long required)
+        private static int bitCapacity(long required, int minimumCapacity)
         {
-            int capacity = MIN_CAPACITY_BITS;
+            int capacity = minimumCapacity;
             while (capacity < required) {
                 capacity <<= 1;
             }

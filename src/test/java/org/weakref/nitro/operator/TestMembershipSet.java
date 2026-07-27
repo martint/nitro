@@ -45,6 +45,7 @@ class TestMembershipSet
                 allocator,
                 allocationContext,
                 engineResources.operatorResources(),
+                engineResources.operatorResources().semiJoinPolicy().membershipSet(),
                 Optional.of(i32Only));
         try {
             assertThatThrownBy(() -> set.addBatch(
@@ -66,7 +67,12 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
+        MembershipSet set = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                Optional.empty());
         try {
             long[] initial = new long[1_024];
             for (int index = 0; index < initial.length; index++) {
@@ -102,7 +108,12 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
+        MembershipSet set = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                new MembershipSetPolicy(64, 64, 1),
+                Optional.empty());
         try {
             set.addBatch(
                     new I64Vector(new long[] {Long.MIN_VALUE, 0, Long.MAX_VALUE}),
@@ -133,7 +144,12 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
+        MembershipSet set = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                Optional.empty());
         try {
             set.addBatch(new I64Vector(new long[] {1, 2, 2, 3}), null, Mask.all(4));
             set.addBatch(new I64Vector(new long[] {100_000_000}), null, Mask.all(1));
@@ -164,7 +180,12 @@ class TestMembershipSet
         EngineResources engineResources = EngineResources.createDefault();
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
-        MembershipSet set = new MembershipSet(allocator, allocationContext, engineResources.operatorResources(), Optional.empty());
+        MembershipSet set = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                Optional.empty());
         try {
             set.beginProbeBatch(new I64Vector(new long[] {1, 2}), null);
             try {

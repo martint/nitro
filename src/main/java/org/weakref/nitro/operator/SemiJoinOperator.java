@@ -163,6 +163,7 @@ public class SemiJoinOperator
                 allocator,
                 allocationContext,
                 operatorResources,
+                policy.membershipSet(),
                 joinType(outer.outputSchema(), outerJoinColumn, inner.outputSchema(), innerJoinColumn));
         this.allowsLegacyKeyShortcuts = membership.allowsLegacyPhysicalShortcuts();
     }
