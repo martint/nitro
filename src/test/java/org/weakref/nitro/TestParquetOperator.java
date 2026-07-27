@@ -82,6 +82,7 @@ import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanO
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanResources;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetLateMaterializationPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetNumericDecodeAdmissionPolicy;
+import org.weakref.nitro.operator.source.compatibility.parquet.ParquetProgressiveFilterCompactionPolicy;
 import org.weakref.nitro.operator.source.compatibility.parquet.ParquetScanOperator;
 import org.weakref.nitro.operator.source.compatibility.parquet.TrinoParquetScanOperator;
 import org.weakref.nitro.parquet.ColumnReader;
@@ -142,6 +143,17 @@ public class TestParquetOperator
                             Integer.MAX_VALUE,
                             false),
                     false);
+    private static final ParquetProgressiveFilterCompactionPolicy GENERIC_PROGRESSIVE_FILTER_COMPACTION =
+            new ParquetProgressiveFilterCompactionPolicy(
+                    false,
+                    0,
+                    Long.MAX_VALUE,
+                    0,
+                    new ParquetProgressiveFilterCompactionPolicy.Prospective(
+                            false, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE),
+                    new ParquetProgressiveFilterCompactionPolicy.Fused(
+                            false, 0, Integer.MAX_VALUE, Integer.MAX_VALUE),
+                    false);
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
 
     @TempDir
@@ -176,7 +188,8 @@ public class TestParquetOperator
                                         Integer.MAX_VALUE,
                                         Long.MAX_VALUE,
                                         false),
-                                GENERIC_LATE_MATERIALIZATION),
+                                GENERIC_LATE_MATERIALIZATION,
+                                GENERIC_PROGRESSIVE_FILTER_COMPACTION),
                         allocator,
                         List.of(file),
                         List.of("x"))) {

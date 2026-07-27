@@ -81,12 +81,6 @@ public final class NitroParquetScanOperator
     // existing survivor scratch carries ranks temporarily, so this adds no buffer or steady-state allocation. Admit
     // only after a narrow scan has demonstrated a long, sparse reuse horizon: wider scans make the large aligned
     // column scratches themselves the locality cost, while short scans cannot amortize the extra rank pass.
-    private static final boolean PROGRESSIVE_FILTER_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.progressiveFilterCompaction", "true"));
-    private static final int PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT =
-            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMaxPercent", 12);
-    private static final int PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS =
-            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMinObservedRows", 1 << 20);
     // A long scan need not physically process the entire reuse horizon before it can prove that horizon. Once at
     // least one million raw positions have established the lead-filter density, project its intermediate survivors
     // across the reader's exact physical row count. Require half of the physical scan as well as one million raw
@@ -96,26 +90,6 @@ public final class NitroParquetScanOperator
     // throwaway work. The current batch's exact kept fraction still decides whether compaction occurs, so a misleading
     // range estimate pays at most one rank pass and cannot select a different result. This is scan/representation
     // evidence, not a query policy.
-    private static final boolean PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.prospectiveProgressiveFilterCompaction", "true"));
-    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_RAW_ROWS =
-            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinRawRows", 1 << 20);
-    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_PERCENT =
-            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinObservedPercent", 50);
-    private static final int PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_PROJECTED_ROWS =
-            Integer.getInteger("nitro.parquet.prospectiveProgressiveFilterCompactionMinProjectedRows", 1 << 18);
-    private static final int PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS =
-            Integer.getInteger("nitro.parquet.progressiveFilterCompactionMaxColumns", 4);
-    private static final boolean FUSED_PROGRESSIVE_FILTER_COMPACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.parquet.fusedProgressiveFilterCompaction", "true"));
-    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT =
-            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMaxPercent", 60);
-    private static final int FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_ALIGNED_COLUMNS =
-            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAlignedColumns", 2);
-    private static final Integer FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN =
-            Integer.getInteger("nitro.parquet.fusedProgressiveFilterCompactionMinAverageRun");
-    private static final boolean DEBUG_PROGRESSIVE_FILTER_COMPACTION =
-            Boolean.getBoolean("nitro.debug.progressiveFilterCompaction");
 
     // The DF-window payload path freezes one page path (skip vs bulk) for the whole scan from the FIRST window's
     // survival rate, but that single 1M-row window is positionally biased: a filter whose survivors happen to cluster
@@ -149,6 +123,7 @@ public final class NitroParquetScanOperator
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
     private final ParquetLateMaterializationPolicy lateMaterializationPolicy;
     private final ParquetLateMaterializationPolicy.SkipDecode skipDecodePolicy;
+    private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
     private final PrimitiveArrayPool arrayPool;
     private final List<String> columnNames;
     private final ParquetFile[] files;
@@ -298,7 +273,8 @@ public final class NitroParquetScanOperator
                 resources.decompressedPageCachePolicy(),
                 resources.readerPolicy(),
                 resources.numericDecodeAdmissionPolicy(),
-                resources.lateMaterializationPolicy());
+                resources.lateMaterializationPolicy(),
+                resources.progressiveFilterCompactionPolicy());
     }
 
     private NitroParquetScanOperator(
@@ -311,7 +287,8 @@ public final class NitroParquetScanOperator
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             ParquetReaderPolicy readerPolicy,
             ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
-            ParquetLateMaterializationPolicy lateMaterializationPolicy)
+            ParquetLateMaterializationPolicy lateMaterializationPolicy,
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -329,6 +306,8 @@ public final class NitroParquetScanOperator
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
         this.lateMaterializationPolicy = requireNonNull(lateMaterializationPolicy, "lateMaterializationPolicy is null");
         this.skipDecodePolicy = lateMaterializationPolicy.skipDecode();
+        this.progressiveFilterCompactionPolicy = requireNonNull(
+                progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -1154,19 +1133,21 @@ public final class NitroParquetScanOperator
             long observedRows = progressiveFilterObservedRows[column];
             long observedKept = progressiveFilterObservedKept[column];
             int alignedFilterColumns = alignedFilterColumnCount(order, applied, survivors);
-            boolean fusedCompaction = FUSED_PROGRESSIVE_FILTER_COMPACTION &&
-                    readers.length <= PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS &&
-                    alignedFilterColumns >= FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_ALIGNED_COLUMNS &&
-                    observedRows >= PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS &&
-                    observedKept * 100 > observedRows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
-                    observedKept * 100 <= observedRows * FUSED_PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT &&
+            ParquetProgressiveFilterCompactionPolicy.Fused fusedPolicy =
+                    progressiveFilterCompactionPolicy.fused();
+            boolean fusedCompaction = fusedPolicy.enabled() &&
+                    readers.length <= progressiveFilterCompactionPolicy.maxColumns() &&
+                    alignedFilterColumns >= fusedPolicy.minAlignedColumns() &&
+                    observedRows >= progressiveFilterCompactionPolicy.minObservedRows() &&
+                    observedKept * 100 > observedRows * progressiveFilterCompactionPolicy.maxPercent() &&
+                    observedKept * 100 <= observedRows * fusedPolicy.maxPercent() &&
                     sampledAverageRunAtLeast(
                             survivors,
                             rows,
-                            FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN == null
-                                    ? skipDecodePolicy.minAverageRun()
-                                    : FUSED_PROGRESSIVE_FILTER_COMPACTION_MIN_AVERAGE_RUN);
-            if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && fusedCompaction && !debugFusedCompactionCandidatePrinted) {
+                            fusedPolicy.minAverageRun());
+            if (progressiveFilterCompactionPolicy.diagnostics() &&
+                    fusedCompaction &&
+                    !debugFusedCompactionCandidatePrinted) {
                 debugFusedCompactionCandidatePrinted = true;
                 System.err.printf("[fused-progressive-filter-candidate] columns=%s aligned=%d observed=%d/%d sampledAverageRun=%.3f%n",
                         columnNames,
@@ -1175,13 +1156,13 @@ public final class NitroParquetScanOperator
                         observedRows,
                         sampledAverageRun(survivors, rows));
             }
-            boolean rankForCompaction = PROGRESSIVE_FILTER_COMPACTION &&
+            boolean rankForCompaction = progressiveFilterCompactionPolicy.enabled() &&
                     !fusedCompaction &&
-                    readers.length <= PROGRESSIVE_FILTER_COMPACTION_MAX_COLUMNS &&
+                    readers.length <= progressiveFilterCompactionPolicy.maxColumns() &&
                     ((observedRows == 0
-                            ? PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS == 0
-                            : observedKept * 100 <= observedRows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT) &&
-                            observedRows + rows >= PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_ROWS ||
+                            ? progressiveFilterCompactionPolicy.minObservedRows() == 0
+                            : observedKept * 100 <= observedRows * progressiveFilterCompactionPolicy.maxPercent()) &&
+                            observedRows + rows >= progressiveFilterCompactionPolicy.minObservedRows() ||
                             prospectiveProgressiveFilterCompaction(order, applied, filter, observedRows + rows));
             kept = 0;
             if (fusedCompaction) {
@@ -1231,7 +1212,8 @@ public final class NitroParquetScanOperator
             }
             else {
                 boolean compact = fusedCompaction || (rankForCompaction &&
-                        (long) kept * 100 <= (long) rows * PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT);
+                        (long) kept * 100 <=
+                                (long) rows * progressiveFilterCompactionPolicy.maxPercent());
                 if (rankForCompaction && compact) {
                     compactAlignedFilterColumns(order, applied, inputSurvivors, next, kept);
                 }
@@ -1249,7 +1231,7 @@ public final class NitroParquetScanOperator
                             readPositions[alignedColumn] = survivors;
                         }
                     }
-                    if (DEBUG_PROGRESSIVE_FILTER_COMPACTION) {
+                    if (progressiveFilterCompactionPolicy.diagnostics()) {
                         debugProgressiveCompactionRows += rows;
                         debugProgressiveCompactionKept += kept;
                         debugProgressiveCompactionWindows++;
@@ -1396,17 +1378,21 @@ public final class NitroParquetScanOperator
 
     private boolean prospectiveProgressiveFilterCompaction(int[] order, int applied, DynamicFilter filter, long intermediateRows)
     {
-        if (!PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION ||
-                nextRow < PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_RAW_ROWS ||
-                (double) nextRow / totalRows * 100 < PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_OBSERVED_PERCENT ||
-                filter.rangeDensity() * 100 > PROGRESSIVE_FILTER_COMPACTION_MAX_PERCENT ||
+        ParquetProgressiveFilterCompactionPolicy.Prospective prospectivePolicy =
+                progressiveFilterCompactionPolicy.prospective();
+        if (!prospectivePolicy.enabled() ||
+                nextRow < prospectivePolicy.minRawRows() ||
+                (double) nextRow / totalRows * 100 < prospectivePolicy.minObservedPercent() ||
+                filter.rangeDensity() * 100 > progressiveFilterCompactionPolicy.maxPercent() ||
                 !remainingFiltersObservedNonSelective(order, applied)) {
             return false;
         }
         // Compare the projected full-scan intermediate count without integer multiplication overflow.
         double projectedRows = (double) intermediateRows / nextRow * totalRows;
-        boolean admitted = projectedRows >= PROSPECTIVE_PROGRESSIVE_FILTER_COMPACTION_MIN_PROJECTED_ROWS;
-        if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && admitted && !debugProspectiveCompactionCandidatePrinted) {
+        boolean admitted = projectedRows >= prospectivePolicy.minProjectedRows();
+        if (progressiveFilterCompactionPolicy.diagnostics() &&
+                admitted &&
+                !debugProspectiveCompactionCandidatePrinted) {
             debugProspectiveCompactionCandidatePrinted = true;
             System.err.printf("[prospective-progressive-filter-candidate] columns=%s raw=%d/%d intermediate=%d projected=%.0f rangeDensity=%.4f%n",
                     columnNames, nextRow, totalRows, intermediateRows, projectedRows, filter.rangeDensity());
@@ -2013,7 +1999,7 @@ public final class NitroParquetScanOperator
             }
             System.err.println(stages);
         }
-        if (DEBUG_PROGRESSIVE_FILTER_COMPACTION && debugProgressiveCompactionWindows > 0) {
+        if (progressiveFilterCompactionPolicy.diagnostics() && debugProgressiveCompactionWindows > 0) {
             System.err.printf("[progressive-filter-compaction] columns=%s windows=%d rows=%d kept=%d%n",
                     columnNames,
                     debugProgressiveCompactionWindows,

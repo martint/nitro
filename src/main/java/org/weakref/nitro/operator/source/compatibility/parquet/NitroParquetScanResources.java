@@ -35,26 +35,33 @@ public final class NitroParquetScanResources
     private final ParquetReaderPolicy readerPolicy;
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
     private final ParquetLateMaterializationPolicy lateMaterializationPolicy;
+    private final ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             ParquetReaderPolicy readerPolicy,
             ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
-            ParquetLateMaterializationPolicy lateMaterializationPolicy)
+            ParquetLateMaterializationPolicy lateMaterializationPolicy,
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy)
     {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
         this.lateMaterializationPolicy = requireNonNull(lateMaterializationPolicy, "lateMaterializationPolicy is null");
+        this.progressiveFilterCompactionPolicy = requireNonNull(
+                progressiveFilterCompactionPolicy, "progressiveFilterCompactionPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
     {
+        ParquetLateMaterializationPolicy lateMaterializationPolicy =
+                ParquetLateMaterializationPolicy.fromSystemProperties();
         return new NitroParquetScanResources(
                 DecompressedPageCachePolicy.fromSystemProperties(),
                 ParquetReaderPolicy.fromSystemProperties(),
                 ParquetNumericDecodeAdmissionPolicy.fromSystemProperties(),
-                ParquetLateMaterializationPolicy.fromSystemProperties());
+                lateMaterializationPolicy,
+                ParquetProgressiveFilterCompactionPolicy.fromSystemProperties(lateMaterializationPolicy));
     }
 
     Object batchBufferPool()
@@ -90,5 +97,10 @@ public final class NitroParquetScanResources
     ParquetLateMaterializationPolicy lateMaterializationPolicy()
     {
         return lateMaterializationPolicy;
+    }
+
+    ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy()
+    {
+        return progressiveFilterCompactionPolicy;
     }
 }
