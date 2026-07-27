@@ -18,5 +18,10 @@ import org.weakref.nitro.data.Vector;
 interface StructuralKeyKernel
         extends StructuralIdentityKernel
 {
+    default boolean allowsLegacyPhysicalShortcuts()
+    {
+        return false;
+    }
+
     long hash(Vector values, Vector nulls, int position);
 }

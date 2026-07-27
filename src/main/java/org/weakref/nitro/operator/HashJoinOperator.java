@@ -163,6 +163,8 @@ public class HashJoinOperator
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final List<Optional<TypeBinding>> joinKeyTypes;
+    private final StructuralKeyKernel[] structuralKeyKernels;
+    private final boolean allowsLegacyKeyShortcuts;
     private final JoinFilter[] joinFilters;
     private final Vector[] currentOuterFilterValues;
     private final Vector[] currentOuterFilterNulls;
@@ -448,6 +450,17 @@ public class HashJoinOperator
         else {
             this.joinKeyTypes = equiJoinKeyTypes;
         }
+        this.structuralKeyKernels = new StructuralKeyKernel[joinKeyTypes.size()];
+        boolean allowsLegacyKeyShortcuts = true;
+        StructuralTypeKernelFactory structuralTypes = operatorResources.codeGeneration().structuralTypes();
+        for (int keyIndex = 0; keyIndex < joinKeyTypes.size(); keyIndex++) {
+            int index = keyIndex;
+            TypeBinding keyType = joinKeyTypes.get(keyIndex)
+                    .orElseGet(() -> Schema.unspecified(index + 1).field(index).type());
+            structuralKeyKernels[keyIndex] = structuralTypes.key(keyType);
+            allowsLegacyKeyShortcuts &= structuralKeyKernels[keyIndex].allowsLegacyPhysicalShortcuts();
+        }
+        this.allowsLegacyKeyShortcuts = allowsLegacyKeyShortcuts;
         this.singleLongNotEqualJoinFilter = joinFilters.length == 1 && joinFilters[0].longNotEqual();
         this.singleLongBitwiseOverlapJoinFilter = joinFilters.length == 1 && joinFilters[0].longBitwiseOverlap();
         for (JoinFilter filter : joinFilters) {
@@ -1960,6 +1973,9 @@ public class HashJoinOperator
                     expectedSize,
                     joinValues.length,
                     java.util.Arrays.stream(joinValues).map(value -> value.getClass().getSimpleName() + '(' + value.length() + ')').toList());
+        }
+        if (!allowsLegacyKeyShortcuts) {
+            return new StructuralHashJoinIndex(structuralKeyKernels);
         }
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
             // For a key-only build, duplicate rows have identical output values. Preserve their exact multiplicity
@@ -8773,6 +8789,118 @@ public class HashJoinOperator
         public int size()
         {
             return 1;
+        }
+    }
+
+    private static final class StructuralHashJoinIndex
+            implements JoinIndex
+    {
+        private final Map<StructuralHashRowKey, LongArrayList> rowsByKey = new HashMap<>();
+        private final StructuralKeyKernel[] kernels;
+        private final StructuralHashRowKey reusableProbeKey;
+
+        private StructuralHashJoinIndex(StructuralKeyKernel[] kernels)
+        {
+            this.kernels = kernels;
+            this.reusableProbeKey = new StructuralHashRowKey(kernels);
+        }
+
+        @Override
+        public boolean isEmpty()
+        {
+            return rowsByKey.isEmpty();
+        }
+
+        @Override
+        public void add(Vector[] values, Vector[] nulls, int position, long rowReference)
+        {
+            if (hasNull(values, nulls, position)) {
+                return;
+            }
+            StructuralHashRowKey key = new StructuralHashRowKey(kernels);
+            key.set(values, nulls, position);
+            rowsByKey.computeIfAbsent(key, ignored -> new LongArrayList()).add(rowReference);
+        }
+
+        @Override
+        public LongList matches(Vector[] values, Vector[] nulls, int position)
+        {
+            if (hasNull(values, nulls, position)) {
+                return LongLists.emptyList();
+            }
+            reusableProbeKey.set(values, nulls, position);
+            LongArrayList rows = rowsByKey.get(reusableProbeKey);
+            return rows == null ? LongLists.emptyList() : rows;
+        }
+
+        private static boolean hasNull(Vector[] values, Vector[] nulls, int position)
+        {
+            if (nulls.length == 0) {
+                return false;
+            }
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                if (OperatorVectorSupport.isNull(nulls[keyIndex], position)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    private static final class StructuralHashRowKey
+    {
+        private final StructuralKeyKernel[] kernels;
+        private Vector[] values;
+        private Vector[] nulls;
+        private int position;
+        private int hash;
+
+        private StructuralHashRowKey(StructuralKeyKernel[] kernels)
+        {
+            this.kernels = kernels;
+        }
+
+        private void set(Vector[] values, Vector[] nulls, int position)
+        {
+            this.values = values;
+            this.nulls = nulls;
+            this.position = position;
+            int result = 1;
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                result = 31 * result + Long.hashCode(
+                        kernels[keyIndex].hash(values[keyIndex], nulls(nulls, keyIndex), position));
+            }
+            hash = result;
+        }
+
+        @Override
+        public boolean equals(Object object)
+        {
+            if (this == object) {
+                return true;
+            }
+            if (!(object instanceof StructuralHashRowKey other) || kernels != other.kernels) {
+                return false;
+            }
+            for (int keyIndex = 0; keyIndex < values.length; keyIndex++) {
+                if (!kernels[keyIndex].identical(
+                        values[keyIndex], nulls(nulls, keyIndex), position,
+                        other.values[keyIndex], nulls(other.nulls, keyIndex), other.position)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return hash;
+        }
+
+        private static Vector nulls(Vector[] nulls, int keyIndex)
+        {
+            return nulls.length == 0 ? null : nulls[keyIndex];
         }
     }
 

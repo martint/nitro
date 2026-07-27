@@ -338,6 +338,12 @@ public final class StructuralTypeKernelFactory
         INSTANCE;
 
         @Override
+        public boolean allowsLegacyPhysicalShortcuts()
+        {
+            return true;
+        }
+
+        @Override
         public long hash(Vector values, Vector nulls, int position)
         {
             return OperatorKeySemantics.hash(values, nulls, position);

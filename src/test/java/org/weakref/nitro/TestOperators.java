@@ -1785,6 +1785,39 @@ public class TestOperators
                             row(1L, -1L),
                             row(2L, -2L)));
         }
+
+        Operator hashJoinOuter = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {1})},
+                        Mask.all(1)),
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {2})},
+                        Mask.all(1)));
+        Operator hashJoinInner = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {-1})},
+                        Mask.all(1)),
+                TableOperator.Page.values(
+                        1,
+                        new Vector[] {new I64Vector(new long[] {-2})},
+                        Mask.all(1)));
+        try (Operator join = new HashJoinOperator(
+                allocator.engineResources().operatorResources(),
+                allocator,
+                hashJoinOuter,
+                0,
+                hashJoinInner,
+                0)) {
+            assertThat(operator(join))
+                    .matchesExactly(List.of(
+                            row(1L, -1L),
+                            row(2L, -2L)));
+        }
     }
 
     private static long readI64(Vector vector, int position)
