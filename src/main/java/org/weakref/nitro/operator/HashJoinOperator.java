@@ -121,7 +121,6 @@ public class HashJoinOperator
     private static final int VALUES_FLAG = 1;
     private static final int NULLS_FLAG = 1 << 1;
     private static final int ERRORS_FLAG = 1 << 2;
-    private static final Vector[] NO_NULL_STREAMS = new Vector[0];
     private final Allocator allocator;
     private final OperatorResources operatorResources;
     private final HashJoinIndexPolicy joinIndexPolicy;
@@ -243,6 +242,7 @@ public class HashJoinOperator
     // batch's matched rows as a DictionaryVector over the shared dictionary instead of flattening the
     // bytes per output row. Keyed by batchIndex * innerOutputCount + innerOutputIndex.
     private final Map<Integer, BuildDictionary> buildDictionaries = new HashMap<>();
+    private final BuildDictionary notDictionary = new BuildDictionary(new int[0], null);
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
@@ -2953,7 +2953,7 @@ public class HashJoinOperator
         }
 
         BuildDictionary dictionary = buildDictionaryFor(innerBatchIndex, innerOutputIndex, binarySource, innerBatch.length());
-        if (dictionary == NOT_DICTIONARY) {
+        if (dictionary == notDictionary) {
             // High-cardinality build column: a dedup dictionary does not pay, but flattening would copy the
             // (variable-width) bytes once per matched output row. Wrap the raw build column directly instead --
             // ids are the matched build positions, values are the build column itself -- so each matched row is
@@ -3013,8 +3013,8 @@ public class HashJoinOperator
             int id = interner.intern(data, start, valueLength);
             if (id == ValueIdInterner.TOO_MANY) {
                 releaseBuildDictionaryIds(idByPosition);
-                buildDictionaries.put(key, NOT_DICTIONARY);
-                return NOT_DICTIONARY;
+                buildDictionaries.put(key, notDictionary);
+                return notDictionary;
             }
             if (interner.distinctCount() > distinctBefore) {
                 totalBytes += valueLength;
@@ -3024,8 +3024,8 @@ public class HashJoinOperator
 
         if (totalBytes > Integer.MAX_VALUE) {
             releaseBuildDictionaryIds(idByPosition);
-            buildDictionaries.put(key, NOT_DICTIONARY);
-            return NOT_DICTIONARY;
+            buildDictionaries.put(key, notDictionary);
+            return notDictionary;
         }
         BinaryVector values = interner.toBinaryVector(allocator, buildAllocationContext);
         values.clearTraits();
@@ -3047,8 +3047,6 @@ public class HashJoinOperator
             arrayPool.release(ids);
         }
     }
-
-    private static final BuildDictionary NOT_DICTIONARY = new BuildDictionary(new int[0], null);
 
     private record BuildDictionary(int[] idByPosition, Vector values) {}
 
@@ -3707,22 +3705,24 @@ public class HashJoinOperator
         }
     }
 
-    private interface JoinIndex
+    private abstract static class JoinIndex
     {
-        boolean isEmpty();
+        private final Vector[] noNullStreams = new Vector[0];
 
-        void add(Vector[] values, Vector[] nulls, int position, long rowReference);
+        abstract boolean isEmpty();
 
-        LongList matches(Vector[] values, Vector[] nulls, int position);
+        abstract void add(Vector[] values, Vector[] nulls, int position, long rowReference);
 
-        default void addNoNulls(Vector[] values, int position, long rowReference)
+        abstract LongList matches(Vector[] values, Vector[] nulls, int position);
+
+        void addNoNulls(Vector[] values, int position, long rowReference)
         {
-            add(values, NO_NULL_STREAMS, position, rowReference);
+            add(values, noNullStreams, position, rowReference);
         }
 
-        default LongList matchesNoNulls(Vector[] values, int position)
+        LongList matchesNoNulls(Vector[] values, int position)
         {
-            return matches(values, NO_NULL_STREAMS, position);
+            return matches(values, noNullStreams, position);
         }
 
         /**
@@ -3736,7 +3736,7 @@ public class HashJoinOperator
          * join-index implementations that have not yet been batch-aware continue to work — the
          * operator always calls this method.
          */
-        default void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
+        void matchRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
@@ -3754,17 +3754,17 @@ public class HashJoinOperator
          * Probe a compacted one-to-many index into contiguous row-reference ranges. Returns false when this index
          * cannot expose stable ranges, in which case the operator falls back to {@link #matchRows}.
          */
-        default boolean matchRowRanges(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] starts, int[] counts)
+        boolean matchRowRanges(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] starts, int[] counts)
         {
             return false;
         }
 
-        default boolean supportsRowRanges()
+        boolean supportsRowRanges()
         {
             return false;
         }
 
-        default void copyRowRange(int start, long[] output, int outputOffset, int length)
+        void copyRowRange(int start, long[] output, int outputOffset, int length)
         {
             throw new UnsupportedOperationException();
         }
@@ -3774,7 +3774,7 @@ public class HashJoinOperator
          * single build row reference per outer row into a flat {@code long[]} instead of a {@link LongList}.
          * When true the operator uses {@link #matchSingleRows} and a flat output path. Off by default.
          */
-        default boolean supportsSingleMatchRefs()
+        boolean supportsSingleMatchRefs()
         {
             return false;
         }
@@ -3784,66 +3784,66 @@ public class HashJoinOperator
          * {@code refs} (or {@code NO_MATCH_ROW_REFERENCE} when the key has no match or is null). Only
          * called when {@link #supportsSingleMatchRefs()} is true.
          */
-        default void matchSingleRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, long[] refs)
+        void matchSingleRows(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, long[] refs)
         {
             throw new UnsupportedOperationException();
         }
 
-        default boolean supportsCompactSingleMatchRefs()
+        boolean supportsCompactSingleMatchRefs()
         {
             return false;
         }
 
-        default boolean supportsSingleMatchPositions()
+        boolean supportsSingleMatchPositions()
         {
             return false;
         }
 
-        default boolean supportsSingleMatchPositionRange()
+        boolean supportsSingleMatchPositionRange()
         {
             return false;
         }
 
-        default int singleMatchPositionBatchIndex()
+        int singleMatchPositionBatchIndex()
         {
             throw new UnsupportedOperationException();
         }
 
-        default void matchSingleRowsPositions(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
+        void matchSingleRowsPositions(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] logicalPositions)
         {
             throw new UnsupportedOperationException();
         }
 
-        default void matchSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] logicalPositions)
+        void matchSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] logicalPositions)
         {
             throw new UnsupportedOperationException();
         }
 
-        default boolean supportsDirectSingleMatchPositionRangeOutput()
+        boolean supportsDirectSingleMatchPositionRangeOutput()
         {
             return false;
         }
 
-        default int emitSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
+        int emitSingleRowsPositionsRange(Vector[] values, Vector[] nulls, boolean hasNulls, int startPosition, int positionCount, int[] outputOuterPositions, int[] outputInnerLogicalPositions, int outputStart)
         {
             throw new UnsupportedOperationException();
         }
 
-        default void matchSingleRowsCompact(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] refs)
+        void matchSingleRowsCompact(Vector[] values, Vector[] nulls, boolean hasNulls, int[] positions, int positionCount, int[] refs)
         {
             throw new UnsupportedOperationException();
         }
 
-        default long unpackCompactSingleMatchRef(int ref)
+        long unpackCompactSingleMatchRef(int ref)
         {
             throw new UnsupportedOperationException();
         }
 
-        default void releaseBuffers() {}
+        void releaseBuffers() {}
     }
 
     private static final class LongJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
         private static final int EMPTY = -1;
@@ -6843,7 +6843,7 @@ public class HashJoinOperator
     }
 
     private static final class FlatJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private final HashJoinIndexPolicy policy;
         private final PrimitiveArrayPool arrayPool;
@@ -7132,7 +7132,7 @@ public class HashJoinOperator
     }
 
     private static final class LongPairJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
         // Large compact pair tables otherwise scatter both the normalized key and row reference across the full
@@ -8283,7 +8283,7 @@ public class HashJoinOperator
     }
 
     private static final class LongTripleJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private static final float LOAD_FACTOR = 0.75f;
         // Swiss/F14-style SIMD-tag-bucket table (cf. LongPairJoinIndex): a probe scans a GROUP of 1-byte tags with
@@ -8807,7 +8807,7 @@ public class HashJoinOperator
     }
 
     private static final class StructuralHashJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private final Map<StructuralHashRowKey, LongArrayList> rowsByKey = new HashMap<>();
         private final StructuralKeyKernel[] kernels;
@@ -8919,7 +8919,7 @@ public class HashJoinOperator
     }
 
     private static final class ObjectJoinIndex
-            implements JoinIndex
+            extends JoinIndex
     {
         private final Map<OperatorKeySemantics.Key, LongArrayList> rowsByKey = new HashMap<>();
         private final OperatorKeySemantics.Key[] innerProbeKeys;
