@@ -123,6 +123,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -2409,6 +2410,54 @@ public class TestOperators
     }
 
     @Test
+    void testGroupOperatorDoesNotProbeNonRetainedSourceWithOpenBatch()
+    {
+        AtomicBoolean batchOpen = new AtomicBoolean();
+        Operator source = new Operator()
+        {
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (batchOpen.get()) {
+                    throw new AssertionError("hasNext called with an open non-retained batch");
+                }
+                return true;
+            }
+
+            @Override
+            public Batch next()
+            {
+                batchOpen.set(true);
+                return new Batch(
+                        Mask.all(1),
+                        _ -> {},
+                        Function.identity(),
+                        _ -> {},
+                        () -> batchOpen.set(false),
+                        new Output(Set.of(Stream.VALUES), _ -> new I64Vector(new long[] {11})));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator group = new GroupOperator(allocator, 0, source);
+                Batch batch = group.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(0L);
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorLeavesUnusedPayloadsCold()
     {
         AtomicInteger payloadBorrows = new AtomicInteger();
@@ -4347,6 +4396,56 @@ public class TestOperators
                         row(3L, 10L),
                         row(3L, 20L),
                         row(3L, 30L)));
+    }
+
+    @Test
+    void testNestedLoopDoesNotAdvanceNonRetainedOuterWithOpenBatch()
+    {
+        AtomicBoolean batchOpen = new AtomicBoolean();
+        AtomicBoolean produced = new AtomicBoolean();
+        Operator outer = new Operator()
+        {
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                if (batchOpen.get()) {
+                    throw new AssertionError("hasNext called with an open non-retained batch");
+                }
+                return !produced.get();
+            }
+
+            @Override
+            public Batch next()
+            {
+                produced.set(true);
+                batchOpen.set(true);
+                return new Batch(
+                        Mask.all(1),
+                        _ -> {},
+                        Function.identity(),
+                        _ -> {},
+                        () -> batchOpen.set(false),
+                        new Output(Set.of(Stream.VALUES), _ -> new I64Vector(new long[] {7})));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        assertThat(operator(new NestedLoopJoinOperator(
+                allocator,
+                outer,
+                new ConstantTableOperator(allocator, 1, List.of(row(11L))))))
+                .matchesExactly(List.of(row(7L, 11L)));
     }
 
     @Test

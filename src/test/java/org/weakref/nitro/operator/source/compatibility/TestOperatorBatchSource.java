@@ -148,6 +148,47 @@ class TestOperatorBatchSource
     }
 
     @Test
+    void testConstructedIngressDoesNotExposeConstrainedReborrowAcrossPolling()
+    {
+        BatchSource batchSource = new BatchSource()
+        {
+            @Override
+            public Schema schema()
+            {
+                return Schema.unspecified(0);
+            }
+
+            @Override
+            public SourceColumnHandle column(int outputIndex)
+            {
+                throw new IndexOutOfBoundsException(outputIndex);
+            }
+
+            @Override
+            public Set<SourceCapability> capabilities()
+            {
+                return Set.of(SourceCapability.CONSTRAINED_REBORROW);
+            }
+
+            @Override
+            public SourcePoll poll()
+            {
+                return SourcePoll.Finished.FINISHED;
+            }
+
+            @Override
+            public void close() {}
+        };
+        SourceOperatorIngress ingress = batch -> {
+            throw new AssertionError("no batch expected");
+        };
+
+        Operator source = new BatchSourceOperator(batchSource, ingress);
+
+        assertThat(source.supportsConstrainedReborrow()).isFalse();
+    }
+
+    @Test
     void testAvailabilityPollDoesNotAdvanceDecoder()
     {
         AtomicInteger pulls = new AtomicInteger();

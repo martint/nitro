@@ -134,7 +134,10 @@ public class GroupOperator
     public Batch next()
     {
         Batch sourceBatch = source.next();
-        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask(), source.hasNext());
+        // A non-retained source may invalidate sourceBatch when hasNext() advances its reader.
+        // Treat its input horizon as sustained rather than probing while the batch is open.
+        boolean moreInputExpected = !source.supportsRetainedBatches() || source.hasNext();
+        BatchState batchState = new BatchState(sourceBatch, sourceBatch.borrowMask(), moreInputExpected);
         currentBatchState = batchState;
 
         Output[] outputs = new Output[outputCount()];

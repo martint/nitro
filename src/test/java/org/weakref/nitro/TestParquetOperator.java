@@ -374,7 +374,9 @@ public class TestParquetOperator
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 2, 6));
             Batch batch = scan.next();
             assertThat(batch.borrowMask()).hasSize(5);
-            assertThat(scan.supportsConstrainedReborrow()).isTrue();
+            // The batch source can re-resolve a constrained generation before its next poll, but
+            // the pull adapter cannot promise that the batch survives a hasNext() poll.
+            assertThat(scan.supportsConstrainedReborrow()).isFalse();
 
             scan.constrain(Mask.sparse(new int[] {2}, 5));
             I64Vector payload = (I64Vector) batch.output(4).borrow(Stream.VALUES);

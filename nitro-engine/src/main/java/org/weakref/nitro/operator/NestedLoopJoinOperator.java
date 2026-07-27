@@ -64,6 +64,7 @@ public class NestedLoopJoinOperator
     private boolean outerConstrained;
 
     private boolean done;
+    private boolean started;
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
     {
@@ -201,6 +202,9 @@ public class NestedLoopJoinOperator
     @Override
     public boolean hasNext()
     {
+        if (!done && started && currentOuterBatch == null && outerRemaining == 0 && !outer.hasNext()) {
+            done = true;
+        }
         return !done;
     }
 
@@ -264,10 +268,6 @@ public class NestedLoopJoinOperator
         if (currentInnerBatch == bufferedInner.batches().size()) {
             currentInnerBatch = 0;
             outerRemaining -= outerProcessed;
-        }
-
-        if (outerRemaining == 0 && !outer.hasNext()) {
-            done = true;
         }
 
         return mask;
@@ -352,6 +352,7 @@ public class NestedLoopJoinOperator
     public Batch next()
     {
         Mask batchMask = produceBatch();
+        started = true;
         currentOutputMask = batchMask;
         outerConstrained = false;
         java.util.Arrays.fill(currentOutputs, null);
@@ -361,9 +362,21 @@ public class NestedLoopJoinOperator
                     ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, allocationContext)
                     : resultOutput(outputIndex);
         }
+        Batch outerBatch = currentOuterBatch;
+        boolean outerBatchConsumed = outerRemaining == 0;
         return new Batch(
                 batchMask,
+                _ -> {},
                 takenMask -> takenMask == currentOuterMask ? currentOuterBatch.takeMask() : allocator.transfer(allocationContext, takenMask),
+                _ -> {},
+                () -> {
+                    if (outerBatchConsumed && outerBatch != null) {
+                        outerBatch.close();
+                        if (currentOuterBatch == outerBatch) {
+                            currentOuterBatch = null;
+                        }
+                    }
+                },
                 outputs);
     }
 
