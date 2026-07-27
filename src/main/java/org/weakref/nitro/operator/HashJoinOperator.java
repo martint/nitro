@@ -3572,9 +3572,7 @@ public class HashJoinOperator
         // query, column, or logical type. Each nonzero entry packs an ordered-row start + 1 in 24 bits and the match
         // count in 8 bits, preserving the same insertion-ordered slices as the ordinary compacted hash representation.
         private final CompressedLongRangeIndex compressedRanges;
-        private final SingleLongList singleMatch = new SingleLongList();
-        private final ChainLongList scalarChain = new ChainLongList();
-        private ChainLongList[] chainMatches;
+        private final LongJoinMatchScratch matchScratch = new LongJoinMatchScratch();
 
         private LongJoinIndex(
                 HashJoinIndexPolicy policy,
@@ -3855,7 +3853,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(1);
             }
-            return rowsForKey(OperatorVectorSupport.longValue(values[0], position), singleMatch, scalarChain);
+            return rowsForKey(OperatorVectorSupport.longValue(values[0], position), matchScratch.scalarSingle(), matchScratch.scalarChain());
         }
 
         @Override
@@ -3864,7 +3862,7 @@ public class HashJoinOperator
             if (!finalized) {
                 finalizeForProbe(positionCount);
             }
-            chainMatches();
+            matchScratch.prepareBatch(executionPolicy.maxBatchRows());
             Vector values = valuesArray[0];
             Vector nulls = nullsArray == null ? null : nullsArray[0];
             if (!hasNulls || nulls == null) {
@@ -3878,7 +3876,7 @@ public class HashJoinOperator
                         VectorAccess.LongValues rowValues = VectorAccess.longValues(values);
                         for (int index = 0; index < positionCount; index++) {
                             int position = positions[index];
-                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], matchScratch.batchChain(index));
                         }
                     }
                 }
@@ -3898,7 +3896,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], matchScratch.batchChain(index));
                         }
                     }
                 }
@@ -3971,19 +3969,11 @@ public class HashJoinOperator
             compactedRows.copy(start, output, outputOffset, length);
         }
 
-        private ChainLongList[] chainMatches()
-        {
-            if (chainMatches == null) {
-                chainMatches = ChainLongList.createArray(executionPolicy.maxBatchRows());
-            }
-            return chainMatches;
-        }
-
         private void matchLongRowsNullFree(long[] values, int[] positions, int positionCount, LongList[] matches, SingleLongList[] singleMatches)
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+                matches[index] = rowsForKey(values[position], singleMatches[index], matchScratch.batchChain(index));
             }
         }
 
@@ -3991,7 +3981,7 @@ public class HashJoinOperator
         {
             for (int index = 0; index < positionCount; index++) {
                 int position = positions[index];
-                matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+                matches[index] = rowsForKey(values[position], singleMatches[index], matchScratch.batchChain(index));
             }
         }
 
@@ -4003,21 +3993,21 @@ public class HashJoinOperator
                     long[] dictionaryValues = longValues.values();
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], matchScratch.batchChain(index));
                     }
                 }
                 case org.weakref.nitro.data.I32Vector intValues -> {
                     int[] dictionaryValues = intValues.values();
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                        matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], matchScratch.batchChain(index));
                     }
                 }
                 default -> {
                     VectorAccess.LongValues dictionaryValues = VectorAccess.longValues(values.values());
                     for (int index = 0; index < positionCount; index++) {
                         int position = positions[index];
-                        matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], chainMatches[index]);
+                        matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], matchScratch.batchChain(index));
                     }
                 }
             }
@@ -5732,7 +5722,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(values[position], singleMatches[index], matchScratch.batchChain(index));
                 }
             }
         }
@@ -5745,7 +5735,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForKey(values[position], singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(values[position], singleMatches[index], matchScratch.batchChain(index));
                 }
             }
         }
@@ -5762,7 +5752,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], matchScratch.batchChain(index));
                         }
                     }
                 }
@@ -5774,7 +5764,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues[ids[position]], singleMatches[index], matchScratch.batchChain(index));
                         }
                     }
                 }
@@ -5786,7 +5776,7 @@ public class HashJoinOperator
                             matches[index] = LongLists.emptyList();
                         }
                         else {
-                            matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], chainMatches[index]);
+                            matches[index] = rowsForKey(dictionaryValues.value(ids[position]), singleMatches[index], matchScratch.batchChain(index));
                         }
                     }
                 }
@@ -5802,7 +5792,7 @@ public class HashJoinOperator
                     matches[index] = LongLists.emptyList();
                 }
                 else {
-                    matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], chainMatches[index]);
+                    matches[index] = rowsForKey(rowValues.value(position), singleMatches[index], matchScratch.batchChain(index));
                 }
             }
         }
