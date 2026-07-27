@@ -42,6 +42,20 @@ class TestScalarProviderResourceOwnership
                 .containsExactlyInAnyOrder("RegexpReplaceUtf8", "ExtractHostUtf8");
     }
 
+    @Test
+    void testRegexpPolicyOwnsSpecializedHelperAdmission()
+    {
+        RegexpReplaceUtf8Policy policy = RegexpReplaceUtf8Policy.defaults();
+        assertThat(policy.constantArguments()).isTrue();
+        assertThat(policy.specializeHostExtraction()).isTrue();
+
+        RegexpReplaceUtf8 function = new RegexpReplaceUtf8(new RegexpReplaceUtf8Policy(false, false));
+
+        assertThat(function.allocationContexts())
+                .extracting(Allocator.Context::name)
+                .containsExactly("RegexpReplaceUtf8");
+    }
+
     private static void assertContextsAreProviderOwned(PrimitiveFunction first, PrimitiveFunction second)
     {
         Set<Allocator.Context> firstContexts = first.allocationContexts();

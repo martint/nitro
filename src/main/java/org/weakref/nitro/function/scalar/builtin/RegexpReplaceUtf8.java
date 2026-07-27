@@ -37,23 +37,35 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Objects.requireNonNull;
 
 @ScalarFunction(name = "regexp_replace_utf8")
 public final class RegexpReplaceUtf8
         implements PrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("RegexpReplaceUtf8");
-    private static final boolean CONSTANT_ARGUMENTS =
-            Boolean.parseBoolean(System.getProperty("nitro.regexp.constantArguments", "true"));
-    private static final boolean SPECIALIZE_HOST_EXTRACTION =
-            Boolean.parseBoolean(System.getProperty("nitro.regexp.specializeHostExtraction", "true"));
     private static final Slice HOST_PATTERN = Slices.utf8Slice("^https?://(?:www\\.)?([^/]+)/.*$");
     private static final Slice HOST_REPLACEMENT = Slices.utf8Slice("\\1");
-    private final ExtractHostUtf8 hostExtractor = new ExtractHostUtf8();
+    private final RegexpReplaceUtf8Policy policy;
+    private final ExtractHostUtf8 hostExtractor;
+
+    public RegexpReplaceUtf8()
+    {
+        this(RegexpReplaceUtf8Policy.defaults());
+    }
+
+    public RegexpReplaceUtf8(RegexpReplaceUtf8Policy policy)
+    {
+        this.policy = requireNonNull(policy, "policy is null");
+        hostExtractor = policy.specializeHostExtraction() ? new ExtractHostUtf8() : null;
+    }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
+        if (hostExtractor == null) {
+            return Set.of(allocationContext);
+        }
         return Set.of(allocationContext, hostExtractor.allocationContext());
     }
 
@@ -75,7 +87,7 @@ public final class RegexpReplaceUtf8
         Vector patternNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector replacementNulls = inputs.get(2).getOrNull(Stream.NULLS);
 
-        if (SPECIALIZE_HOST_EXTRACTION &&
+        if (policy.specializeHostExtraction() &&
                 patternValues instanceof RleVector patternRle && patternRle.counts().length == 1 &&
                 replacementValues instanceof RleVector replacementRle && replacementRle.counts().length == 1 &&
                 VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls) &&
@@ -125,7 +137,7 @@ public final class RegexpReplaceUtf8
         byte[][] rewritten = new byte[mask.selectedCount()][];
         Slice constantReplacement = null;
         Regex constantPattern = null;
-        if (CONSTANT_ARGUMENTS &&
+        if (policy.constantArguments() &&
                 patternValues instanceof RleVector patternRle && patternRle.counts().length == 1 &&
                 replacementValues instanceof RleVector replacementRle && replacementRle.counts().length == 1 &&
                 VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls)) {

@@ -72,6 +72,7 @@ import org.weakref.nitro.function.scalar.builtin.NotBoolean;
 import org.weakref.nitro.function.scalar.builtin.NullI64;
 import org.weakref.nitro.function.scalar.builtin.OrBoolean;
 import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8;
+import org.weakref.nitro.function.scalar.builtin.RegexpReplaceUtf8Policy;
 import org.weakref.nitro.function.scalar.builtin.RoundF64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.StartsWithUtf8;
@@ -172,6 +173,9 @@ public final class TestPrimitiveFunctions
         }
         if (functionClass == CoalesceI64.class) {
             return scalarLoader.load(new CoalesceI64(CoalesceI64Policy.fromSystemProperties()));
+        }
+        if (functionClass == RegexpReplaceUtf8.class) {
+            return scalarLoader.load(new RegexpReplaceUtf8(RegexpReplaceUtf8Policy.fromSystemProperties()));
         }
         return scalarLoader.load(functionClass);
     }
