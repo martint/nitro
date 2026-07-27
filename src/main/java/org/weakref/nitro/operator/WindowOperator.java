@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -30,6 +32,8 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.ArrayList;
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 public final class WindowOperator
         implements Operator
 {
@@ -43,6 +47,7 @@ public final class WindowOperator
     private final boolean[] descendingByColumn;
     private final List<RunningWindowFunction> windowFunctions;
     private final boolean lazyOutputs;
+    private final Schema outputSchema;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -63,11 +68,27 @@ public final class WindowOperator
 
     public WindowOperator(Allocator allocator, Operator source, int[] partitionColumns, int[] orderingColumns, boolean[] descendingByColumn, List<RunningWindowFunction> windowFunctions)
     {
+        this(allocator, source, partitionColumns, orderingColumns, descendingByColumn, windowFunctions, Schema.unspecified(windowFunctions.size()));
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema)
+    {
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
         }
         if (windowFunctions.isEmpty()) {
             throw new IllegalArgumentException("windowFunctions is empty");
+        }
+        windowSchema = requireNonNull(windowSchema, "windowSchema is null");
+        if (windowSchema.size() != windowFunctions.size()) {
+            throw new IllegalArgumentException("windowSchema size must match windowFunctions size");
         }
         this.policy = allocator.engineResources().operatorResources().windowPolicy();
         this.allocator = allocator;
@@ -77,6 +98,7 @@ public final class WindowOperator
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
+        this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
         // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
         // nothing for lazy output to eliminate. Multiple cooperating functions create the wider filter/project
         // boundary where downstream operators can consume function results without gathering every source lane.
@@ -87,6 +109,19 @@ public final class WindowOperator
     public int outputCount()
     {
         return source.outputCount() + windowFunctions.size();
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema outputSchema(Schema sourceSchema, Schema windowSchema)
+    {
+        List<Field> fields = new ArrayList<>(sourceSchema.fields());
+        fields.addAll(windowSchema.fields());
+        return new Schema(fields);
     }
 
     @Override

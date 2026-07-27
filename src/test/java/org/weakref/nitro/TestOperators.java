@@ -69,11 +69,14 @@ import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.Output;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
+import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.AvgF64;
@@ -1515,6 +1518,45 @@ public class TestOperators
             assertThat(join.outputSchema().field(0)).isSameAs(outerKey);
             assertThat(join.outputSchema().field(1)).isSameAs(outerValue);
             assertThat(join.outputSchema().field(2)).isSameAs(innerKey);
+        }
+    }
+
+    @Test
+    void testRankingAndWindowOperatorsUseDeclaredResultSchemas()
+    {
+        TypeBinding i32Only = i32OnlyType();
+        Field sourceField = new Field("source", i32Only, false);
+        Field rankField = new Field("rank", i32Only, false);
+        Field runningField = new Field("running", i32Only, true);
+        Schema sourceSchema = new Schema(List.of(sourceField));
+        Schema rankSchema = new Schema(List.of(rankField));
+        Schema windowSchema = new Schema(List.of(rankField, runningField));
+
+        try (Operator ranking = new TopNRankingOperator(
+                allocator,
+                10,
+                new int[] {0},
+                new boolean[] {false},
+                typedTable(sourceSchema),
+                rankSchema,
+                allocator.engineResources().operatorResources().topNRankingPolicy());
+                Operator window = new WindowOperator(
+                        allocator,
+                        typedTable(sourceSchema),
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        List.of(
+                                new RankWindowFunction(new int[] {0}, new boolean[] {false}),
+                                new RankWindowFunction(new int[] {0}, new boolean[] {false})),
+                        windowSchema)) {
+            assertThat(ranking.outputSchema().fields()).containsExactly(sourceField, rankField);
+            assertThat(ranking.outputSchema().field(0)).isSameAs(sourceField);
+            assertThat(ranking.outputSchema().field(1)).isSameAs(rankField);
+            assertThat(window.outputSchema().fields()).containsExactly(sourceField, rankField, runningField);
+            assertThat(window.outputSchema().field(0)).isSameAs(sourceField);
+            assertThat(window.outputSchema().field(1)).isSameAs(rankField);
+            assertThat(window.outputSchema().field(2)).isSameAs(runningField);
         }
     }
 

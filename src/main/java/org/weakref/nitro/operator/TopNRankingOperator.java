@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -40,6 +42,7 @@ public class TopNRankingOperator
     private final int[] partitionColumns;
     private final int limit;
     private final int maxBatchRows;
+    private final Schema outputSchema;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -56,7 +59,19 @@ public class TopNRankingOperator
             Operator source,
             TopNRankingOperatorPolicy policy)
     {
-        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, policy);
+        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, defaultRankingSchema(), policy);
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            Schema rankingSchema,
+            TopNRankingOperatorPolicy policy)
+    {
+        this(allocator, limit, new int[0], orderingColumns, descendingByColumn, source, rankingSchema, policy);
     }
 
     public TopNRankingOperator(
@@ -68,11 +83,28 @@ public class TopNRankingOperator
             Operator source,
             TopNRankingOperatorPolicy policy)
     {
+        this(allocator, limit, partitionColumns, orderingColumns, descendingByColumn, source, defaultRankingSchema(), policy);
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            Operator source,
+            Schema rankingSchema,
+            TopNRankingOperatorPolicy policy)
+    {
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopNRanking requires at least one ordering column");
         }
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
+        }
+        rankingSchema = requireNonNull(rankingSchema, "rankingSchema is null");
+        if (rankingSchema.size() != 1) {
+            throw new IllegalArgumentException("rankingSchema must contain exactly one field");
         }
         this.allocator = allocator;
         this.source = source;
@@ -81,12 +113,32 @@ public class TopNRankingOperator
         this.partitionColumns = partitionColumns.clone();
         this.limit = limit;
         this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
+        this.outputSchema = outputSchema(source.outputSchema(), rankingSchema);
     }
 
     @Override
     public int outputCount()
     {
         return source.outputCount() + 1;
+    }
+
+    @Override
+    public Schema outputSchema()
+    {
+        return outputSchema;
+    }
+
+    private static Schema defaultRankingSchema()
+    {
+        Field unspecified = Schema.unspecified(1).field(0);
+        return new Schema(List.of(new Field(unspecified.type(), false)));
+    }
+
+    private static Schema outputSchema(Schema sourceSchema, Schema rankingSchema)
+    {
+        List<Field> fields = new ArrayList<>(sourceSchema.fields());
+        fields.add(rankingSchema.field(0));
+        return new Schema(fields);
     }
 
     @Override
