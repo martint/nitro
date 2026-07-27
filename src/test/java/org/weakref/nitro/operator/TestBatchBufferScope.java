@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BatchBufferOwner;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.EngineResources;
 import org.weakref.nitro.data.I32Vector;

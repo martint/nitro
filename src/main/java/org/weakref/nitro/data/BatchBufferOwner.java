@@ -11,17 +11,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.weakref.nitro.operator;
-
-import org.weakref.nitro.data.Stream;
-import org.weakref.nitro.data.Vector;
+package org.weakref.nitro.data;
 
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
 /**
- * Additional buffer owner participating in a {@link BatchBufferScope} generation. Implementations normally wrap
- * evaluator or kernel contexts that are distinct from the operator's primary batch context.
+ * Additional buffer owner participating in an allocator-backed batch generation. Implementations normally wrap
+ * evaluator, source, or kernel contexts that are distinct from the primary batch context.
  */
 public interface BatchBufferOwner
         extends BiFunction<Stream, Vector, Vector>, BiConsumer<Stream, Vector>

@@ -14,15 +14,17 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BatchBufferOwner;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorBatchScope;
 
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Reusable ownership scope for one operator's batch buffers.
+ * Operator-batch facade over a reusable allocator-owned vector generation.
  * <p>
  * Allocate generation-local vectors and masks in {@link #context()}, then create the public batch with
  * {@link #batch}. Closing the batch returns every untaken allocation, including lazily-created buffers that were
@@ -35,31 +37,27 @@ import static java.util.Objects.requireNonNull;
 public final class BatchBufferScope
         implements AutoCloseable, BatchBufferOwner
 {
-    private final Allocator allocator;
-    private final Allocator.Context context;
-    private BatchBufferOwner additionalOwner;
-    private boolean active;
+    private final VectorBatchScope buffers;
 
     public BatchBufferScope(Allocator allocator, String name)
     {
-        this(allocator, new Allocator.Context(requireNonNull(name, "name is null")));
+        this.buffers = new VectorBatchScope(allocator, name);
     }
 
-    /** Creates an isolated ownership scope backed by a pool shared with compatible scopes using the same key. */
+    /// Creates an isolated ownership scope backed by a pool shared with compatible scopes using the same key.
     public BatchBufferScope(Allocator allocator, String name, Object poolGroup)
     {
-        this(allocator, new Allocator.Context(requireNonNull(name, "name is null"), requireNonNull(poolGroup, "poolGroup is null")));
+        this.buffers = new VectorBatchScope(allocator, name, poolGroup);
     }
 
     public BatchBufferScope(Allocator allocator, Allocator.Context context)
     {
-        this.allocator = requireNonNull(allocator, "allocator is null");
-        this.context = requireNonNull(context, "context is null");
+        this.buffers = new VectorBatchScope(allocator, context);
     }
 
     public Allocator.Context context()
     {
-        return context;
+        return buffers.context();
     }
 
     public Batch batch(Mask mask, Output... outputs)
@@ -69,91 +67,56 @@ public final class BatchBufferScope
 
     public Batch batch(Mask mask, Consumer<Mask> constrainer, Runnable closeAction, Output... outputs)
     {
-        if (active) {
-            throw new IllegalStateException("Previous batch is still open");
-        }
-        begin(null);
-        return Batch.owned(mask, constrainer, closeAction, this, outputs);
+        buffers.begin(null);
+        return Batch.owned(
+                requireNonNull(mask, "mask is null"),
+                requireNonNull(constrainer, "constrainer is null"),
+                requireNonNull(closeAction, "closeAction is null"),
+                this,
+                requireNonNull(outputs, "outputs is null"));
     }
 
     public void begin(BatchBufferOwner additionalOwner)
     {
-        if (active) {
-            throw new IllegalStateException("Previous batch is still open");
-        }
-        this.additionalOwner = additionalOwner;
-        active = true;
+        buffers.begin(additionalOwner);
     }
 
     @Override
     public Vector take(Vector vector)
     {
-        checkActive();
-        Vector result = allocator.transferOwned(context, requireNonNull(vector, "vector is null"));
-        if (additionalOwner != null) {
-            additionalOwner.take(vector);
-        }
-        return result;
+        return buffers.take(vector);
     }
 
     @Override
     public void release(Vector vector)
     {
-        checkActive();
-        allocator.release(context, requireNonNull(vector, "vector is null"));
-        if (additionalOwner != null) {
-            additionalOwner.release(vector);
-        }
+        buffers.release(vector);
     }
 
     Mask take(Mask mask)
     {
-        checkActive();
-        return allocator.transfer(context, requireNonNull(mask, "mask is null"));
+        return buffers.take(mask);
     }
 
     void release(Mask mask)
     {
-        checkActive();
-        allocator.release(context, requireNonNull(mask, "mask is null"));
+        buffers.release(mask);
     }
 
     public void endBatch()
     {
-        checkActive();
-        try {
-            allocator.release(context);
-            if (additionalOwner != null) {
-                additionalOwner.releaseAll();
-            }
-        }
-        finally {
-            additionalOwner = null;
-            active = false;
-        }
+        buffers.endBatch();
     }
 
     @Override
     public void releaseAll()
     {
-        endBatch();
-    }
-
-    private void checkActive()
-    {
-        if (!active) {
-            throw new IllegalStateException("No batch is active");
-        }
+        buffers.releaseAll();
     }
 
     @Override
     public void close()
     {
-        if (active) {
-            endBatch();
-        }
-        else {
-            allocator.releaseIfPresent(context);
-        }
+        buffers.close();
     }
 }
