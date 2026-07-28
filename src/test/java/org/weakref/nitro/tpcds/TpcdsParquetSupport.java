@@ -11471,6 +11471,10 @@ final class TpcdsParquetSupport
                             remap(whenTrue, variableOffset),
                             remap(whenFalse, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.Copy(Reference source) -> new org.weakref.nitro.operator.evaluator.ir.Copy(remap(source, variableOffset));
+            case org.weakref.nitro.operator.evaluator.ir.Sequence(Reference first, Reference result) ->
+                    new org.weakref.nitro.operator.evaluator.ir.Sequence(
+                            remap(first, variableOffset),
+                            remap(result, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.StructField(Reference source, String fieldName) -> new org.weakref.nitro.operator.evaluator.ir.StructField(remap(source, variableOffset), fieldName);
             case org.weakref.nitro.operator.evaluator.ir.Merge _ -> throw new UnsupportedOperationException("Merge remapping is not implemented for TPC-DS helper filters");
         };

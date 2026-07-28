@@ -136,7 +136,23 @@ public final class IrNormalizer
                 }
             }
         }
+        // Strict sequencing is a semantic materialization requirement, so it takes precedence over the ordinary
+        // scratch downgrade for producers that are otherwise consumed only as masks.
+        for (Assignment assignment : plan.assignments()) {
+            if (assignment.operation() instanceof Sequence sequence) {
+                materializeBundle(normalized, sequence.first());
+                materializeBundle(normalized, sequence.result());
+                materializeBundle(normalized, new Reference(assignment.output(), Stream.VALUES));
+            }
+        }
         return normalized;
+    }
+
+    private static void materializeBundle(Map<Reference, StreamPlan> streamPlans, Reference reference)
+    {
+        for (Stream stream : Stream.values()) {
+            streamPlans.put(new Reference(reference.producer(), stream), StreamPlan.MATERIALIZED);
+        }
     }
 
     private static MaskExpression normalizeMaskExpression(MaskExpression expression)

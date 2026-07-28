@@ -124,6 +124,32 @@ public class TestEvaluationIr
     }
 
     @Test
+    void testNormalizerMaterializesStrictSequenceBundles()
+    {
+        Variable first = new Variable(0);
+        Variable body = new Variable(1);
+        Variable sequence = new Variable(2);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(first, new Call("first", List.of()), AllMask.ALL),
+                        new Assignment(body, new Call("body", List.of()), AllMask.ALL),
+                        new Assignment(sequence, new Sequence(
+                                new Reference(first, Stream.VALUES),
+                                new Reference(body, Stream.VALUES)), AllMask.ALL)),
+                List.of(new Reference(sequence, Stream.VALUES)));
+
+        EvaluationPlan normalizedPlan = IrNormalizer.standard().normalizePlan(plan);
+
+        for (Variable producer : List.of(first, body, sequence)) {
+            for (Stream stream : Stream.values()) {
+                assertThat(normalizedPlan.streamPlans())
+                        .containsEntry(new Reference(producer, stream), StreamPlan.MATERIALIZED);
+            }
+        }
+        assertThat(NormalizedIrValidator.isNormalized(normalizedPlan)).isTrue();
+    }
+
+    @Test
     void testNormalizerFlattensNestedBooleanMasks()
     {
         Variable result = new Variable(0);

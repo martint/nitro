@@ -871,6 +871,25 @@ The normalized form should require:
 - only primitive execution calls plus explicit structural operations such as
   copy and merge-like overlay
 
+Strict local bindings also need an explicit control dependency. Sharing an SSA
+producer is not sufficient: ordinary references are demand-driven, while a
+strict binding evaluates its value for every row active at the binding site
+even when the body uses that value only conditionally. The normalized
+`Sequence(first, result)` operation expresses that ordering without naming a
+host-language construct. It:
+
+- evaluates the complete `first` producer bundle under the sequence's active
+  mask before evaluating `result`
+- returns the `result` bundle
+- propagates row-local errors from `first`
+- requires the involved bundles to be memoized so non-deterministic producers
+  are not re-entered for sibling streams or repeated references
+
+When a sequence is itself nested in a conditional branch, its active mask is
+the intersection of all enclosing branch masks. Control dependencies therefore
+preserve strict evaluation at the binding site without making branch-local work
+eager for unrelated rows.
+
 ### Normalization framework
 
 Normalization should be implemented as a rule-driven rewrite framework rather

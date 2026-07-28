@@ -60,6 +60,7 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.RangeConstrainedAndMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
+import org.weakref.nitro.operator.evaluator.ir.Sequence;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -379,6 +380,7 @@ public final class PlanEvaluator
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
+            case Sequence sequence -> evaluateSequence(requestedStreamsFor(reference), sequence, mask, output);
             case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
             default -> throw new IllegalArgumentException("Unsupported operation in normalized evaluator");
         };
@@ -820,6 +822,22 @@ public final class PlanEvaluator
             }
         }
         return completeRequestedStreams(requestedStreams, result.build(), mask);
+    }
+
+    private Streams evaluateSequence(Set<Stream> requestedStreams, Sequence sequence, Mask mask, Streams output)
+    {
+        Streams first = evaluateArgument(sequence.first(), mask);
+        Streams result = copy(requestedStreams, sequence.result(), mask, output);
+        if (!requestedStreams.contains(Stream.ERRORS)) {
+            return result;
+        }
+
+        Vector errors = mergeOptionalBooleanStreams(
+                first.getOrNull(Stream.ERRORS),
+                result.getOrNull(Stream.ERRORS),
+                output == null ? null : output.getOrNull(Stream.ERRORS),
+                mask);
+        return errors == null ? result : result.with(Stream.ERRORS, errors);
     }
 
     private Streams evaluateStructField(Set<Stream> requestedStreams, StructField field, Mask mask, Streams output)

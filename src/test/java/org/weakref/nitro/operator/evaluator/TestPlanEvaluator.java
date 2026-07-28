@@ -69,6 +69,7 @@ import org.weakref.nitro.operator.evaluator.ir.NotMask;
 import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
+import org.weakref.nitro.operator.evaluator.ir.Sequence;
 import org.weakref.nitro.operator.evaluator.ir.StreamPlan;
 import org.weakref.nitro.operator.evaluator.ir.StructField;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -178,6 +179,45 @@ public class TestPlanEvaluator
 
         I64Vector result = (I64Vector) evaluator.evaluate(new Reference(sum, org.weakref.nitro.data.Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
         assertThat(result.values()).containsExactly(11L, 22L, 33L);
+    }
+
+    @Test
+    void testSequenceStrictlyEvaluatesFirstAndPropagatesItsErrors()
+    {
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        AtomicInteger evaluations = new AtomicInteger();
+        registry.register("strict_first", (_, mask, _, _, _) -> {
+            evaluations.incrementAndGet();
+            assertThat(mask).containsExactly(1, 3);
+            return Streams.ofValues(new I64Vector(new long[4]))
+                    .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, false, false, true}));
+        });
+
+        Variable first = new Variable(0);
+        Variable body = new Variable(1);
+        Variable sequence = new Variable(2);
+        Reference output = new Reference(sequence, Stream.VALUES);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(
+                        new Assignment(first, new Call("strict_first", List.of()), AllMask.ALL),
+                        new Assignment(body, new Literal(41L), AllMask.ALL),
+                        new Assignment(sequence, new Sequence(
+                                new Reference(first, Stream.VALUES),
+                                new Reference(body, Stream.VALUES)), AllMask.ALL)),
+                List.of(output)));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                registry,
+                inputResolver(Map.of()),
+                new Allocator(EngineResources.createDefault()),
+                new Object(),
+                true);
+
+        Streams result = evaluator.evaluate(output, Mask.sparse(new int[] {1, 3}, 4));
+
+        assertThat(evaluations).hasValue(1);
+        assertThat(readBooleans(result.get(Stream.ERRORS))).containsExactly(false, false, false, true);
+        assertThat(((RleVector) result.get(Stream.VALUES)).counts()).containsExactly(4);
     }
 
     @Test

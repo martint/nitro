@@ -14,6 +14,6 @@
 package org.weakref.nitro.operator.evaluator.ir;
 
 public sealed interface Operation
-        permits Call, Coalesce, Conditional, Copy, Literal, Merge, StructField
+        permits Call, Coalesce, Conditional, Copy, Literal, Merge, Sequence, StructField
 {
 }
