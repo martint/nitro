@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
+import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
 public final class StructVector
@@ -43,6 +44,18 @@ public final class StructVector
             throw new IllegalArgumentException("Unknown struct field: " + name);
         }
         return streams;
+    }
+
+    public Streams field(int index)
+    {
+        checkIndex(index, fields.size());
+        for (Streams streams : fields.values()) {
+            if (index == 0) {
+                return streams;
+            }
+            index--;
+        }
+        throw new AssertionError();
     }
 
     public Vector fieldValues(String name)

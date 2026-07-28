@@ -51,7 +51,7 @@ public class TestEvaluationIr
                 List.of(
                         new Assignment(condition, new Call("lt_zero", List.of(new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
                         new Assignment(result, new Merge(new ReferenceMask(conditionValues), thenValues, elseValues), AllMask.ALL),
-                        new Assignment(structField, new StructField(new Reference(new Input(3), Stream.VALUES), "name"), AllMask.ALL),
+                        new Assignment(structField, new StructField(new Reference(new Input(3), Stream.VALUES), 0), AllMask.ALL),
                         new Assignment(mapValue, new Call("element_at_i64_utf8", List.of(new Reference(new Input(4), Stream.VALUES), new Reference(new Input(5), Stream.VALUES))), AllMask.ALL),
                         new Assignment(mapContains, new Call("map_contains_key_utf8", List.of(new Reference(new Input(6), Stream.VALUES), new Reference(new Input(7), Stream.VALUES))), AllMask.ALL),
                         new Assignment(arrayElement, new Call("array_element_i64", List.of(new Reference(new Input(8), Stream.VALUES), new Reference(new Input(9), Stream.VALUES))), AllMask.ALL)),

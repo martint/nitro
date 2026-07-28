@@ -15,12 +15,14 @@ package org.weakref.nitro.operator.evaluator.ir;
 
 import static java.util.Objects.requireNonNull;
 
-public record StructField(Reference source, String fieldName)
+public record StructField(Reference source, int field)
         implements Operation
 {
     public StructField
     {
         source = requireNonNull(source, "source is null");
-        fieldName = requireNonNull(fieldName, "fieldName is null");
+        if (field < 0) {
+            throw new IllegalArgumentException("field is negative");
+        }
     }
 }

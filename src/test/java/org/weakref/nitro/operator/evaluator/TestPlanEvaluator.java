@@ -1174,7 +1174,7 @@ public class TestPlanEvaluator
         EvaluationPlan plan = new EvaluationPlan(
                 List.of(new Assignment(
                         name,
-                        new StructField(new Reference(new Input(0), Stream.VALUES), "name"),
+                        new StructField(new Reference(new Input(0), Stream.VALUES), 0),
                         AllMask.ALL)),
                 List.of(
                         new Reference(name, Stream.VALUES),

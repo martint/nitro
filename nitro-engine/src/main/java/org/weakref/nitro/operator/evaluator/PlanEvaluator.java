@@ -844,7 +844,7 @@ public final class PlanEvaluator
     {
         Streams sourceStreams = evaluateArgument(field.source(), mask);
         StructVector sourceValues = (StructVector) sourceStreams.values();
-        Streams fieldStreams = sourceValues.field(field.fieldName());
+        Streams fieldStreams = sourceValues.field(field.field());
 
         Streams.Builder result = Streams.builder();
         if (requestedStreams.contains(Stream.VALUES) && fieldStreams.has(Stream.VALUES)) {

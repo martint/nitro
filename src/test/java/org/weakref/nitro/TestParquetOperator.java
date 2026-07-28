@@ -2161,7 +2161,7 @@ public class TestParquetOperator
         EvaluationPlan projectionPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         name,
-                        new StructField(new Reference(new Input(0), Stream.VALUES), "name"),
+                        new StructField(new Reference(new Input(0), Stream.VALUES), 1),
                         AllMask.ALL)),
                 List.of(
                         new Reference(name, Stream.VALUES),
@@ -2199,7 +2199,7 @@ public class TestParquetOperator
         EvaluationPlan filterPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         active,
-                        new StructField(new Reference(new Input(0), Stream.VALUES), "active"),
+                        new StructField(new Reference(new Input(0), Stream.VALUES), 2),
                         AllMask.ALL)),
                 List.of());
 
@@ -2237,7 +2237,7 @@ public class TestParquetOperator
         EvaluationPlan projectionPlan = new EvaluationPlan(
                 List.of(new Assignment(
                         id,
-                        new StructField(new Reference(new Input(0), Stream.VALUES), "id"),
+                        new StructField(new Reference(new Input(0), Stream.VALUES), 0),
                         AllMask.ALL)),
                 List.of(
                         new Reference(id, Stream.VALUES),
