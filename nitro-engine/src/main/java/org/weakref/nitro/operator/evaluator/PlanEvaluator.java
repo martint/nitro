@@ -26,6 +26,9 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.ErrorValue;
+import org.weakref.nitro.data.ErrorVector;
+import org.weakref.nitro.data.ErrorVectors;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -955,6 +958,12 @@ public final class PlanEvaluator
             return parentStream;
         }
 
+        if (parentStream instanceof ErrorVector ||
+                childStream instanceof ErrorVector ||
+                existing instanceof ErrorVector) {
+            return mergeOptionalErrorStreams(parentStream, childStream, existing, mask);
+        }
+
         BooleanVector merged = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, mask.maxPosition() + 1);
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
@@ -969,9 +978,43 @@ public final class PlanEvaluator
         return merged;
     }
 
+    private ErrorVector mergeOptionalErrorStreams(Vector parentStream, Vector childStream, Vector existing, Mask mask)
+    {
+        ErrorVector merged = allocator.allocateOrGrow(
+                allocationContext,
+                existing instanceof ErrorVector errors ? errors : null,
+                ErrorVector.class,
+                mask.maxPosition() + 1,
+                ErrorVector::new);
+        for (int position : mask) {
+            boolean parentError = readBoolean(parentStream, position);
+            boolean childError = readBoolean(childStream, position);
+            ErrorValue error = parentError
+                    ? ErrorVectors.errorAt(parentStream, position)
+                    : ErrorVectors.errorAt(childStream, position);
+            if (error != null) {
+                merged.setError(position, error);
+            }
+            else if (parentError || childError) {
+                merged.clearError(position);
+                merged.values()[position] = true;
+            }
+            else {
+                merged.clearError(position);
+            }
+        }
+        return merged;
+    }
+
     private BooleanVector fillFalseBoolean(Vector existing, Mask mask, int length)
     {
         BooleanVector target = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, length);
+        if (target instanceof ErrorVector errors) {
+            for (int position : mask) {
+                errors.clearError(position);
+            }
+            return target;
+        }
         if (mask.all()) {
             Arrays.fill(target.values(), 0, mask.size(), false);
         }
@@ -1078,6 +1121,28 @@ public final class PlanEvaluator
 
     private Vector copyVector(Vector source, Vector existing, Mask mask)
     {
+        if (ErrorVectors.hasDiagnostics(source) || existing instanceof ErrorVector) {
+            ErrorVector target = allocator.allocateOrGrow(
+                    allocationContext,
+                    existing instanceof ErrorVector errors ? errors : null,
+                    ErrorVector.class,
+                    source.length(),
+                    ErrorVector::new);
+            for (int position : mask) {
+                ErrorValue error = ErrorVectors.errorAt(source, position);
+                if (error != null) {
+                    target.setError(position, error);
+                }
+                else if (readBoolean(source, position)) {
+                    target.clearError(position);
+                    target.values()[position] = true;
+                }
+                else {
+                    target.clearError(position);
+                }
+            }
+            return target;
+        }
         return source.copyMasked(allocator, allocationContext, existing, mask);
     }
 

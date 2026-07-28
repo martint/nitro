@@ -25,6 +25,8 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.ErrorValue;
+import org.weakref.nitro.data.ErrorVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -170,6 +172,42 @@ public class TestPlanEvaluator
         assertThat(((I64Vector) struct.field(0).values()).values()).containsExactly(1, 2, 3);
         assertThat(((I64Vector) struct.field(1).values()).values()).containsExactly(10, 20, 30);
         assertThat(readBooleans(result.get(Stream.ERRORS))).containsExactly(false, true, true);
+    }
+
+    @Test
+    void testStructuralConstructionPreservesRichChildError()
+    {
+        ErrorValue diagnostic = new ErrorValue("test", 17, "BAD_ARGUMENT", "USER_ERROR", "bad argument");
+        ErrorVector richErrors = new ErrorVector(3);
+        richErrors.setError(1, diagnostic);
+
+        Variable constructed = new Variable(0);
+        Reference values = new Reference(constructed, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        constructed,
+                        new Construct(
+                                testingStructType(),
+                                List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
+                        new Reference(new Input(0), Stream.ERRORS), richErrors,
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}),
+                        new Reference(new Input(1), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        ErrorVector errors = (ErrorVector) evaluator.evaluate(values, Mask.all(3)).get(Stream.ERRORS);
+
+        assertThat(errors.values()).containsExactly(false, true, true);
+        assertThat(errors.error(1)).isEqualTo(diagnostic);
+        assertThat(errors.error(2)).isNull();
     }
 
     @Test
@@ -2066,6 +2104,51 @@ public class TestPlanEvaluator
         assertThat(((BooleanVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS)).values()).containsExactly(true, false, false);
         assertThat(trueRequestedStreams.get()).containsExactly(Stream.ERRORS);
         assertThat(falseRequestedStreams.get()).containsExactly(Stream.ERRORS);
+    }
+
+    @Test
+    void testMergePreservesSelectedRichErrorDiagnostics()
+    {
+        ErrorValue diagnostic = new ErrorValue("test", 23, "TRUE_BRANCH", "USER_ERROR", "true branch");
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("when_true", (_, _, _, _, _) -> {
+            ErrorVector errors = new ErrorVector(3);
+            errors.setError(0, diagnostic);
+            errors.setError(1, new ErrorValue("test", 24, "UNSELECTED", "USER_ERROR", "unselected"));
+            return Streams.of(Stream.ERRORS, errors);
+        });
+        primitiveRegistry.register("when_false", (_, _, _, _, _) ->
+                Streams.of(Stream.ERRORS, new BooleanVector(new boolean[] {false, true, false})));
+
+        Variable whenTrue = new Variable(0);
+        Variable whenFalse = new Variable(1);
+        Variable merged = new Variable(2);
+        Reference mergedErrors = new Reference(merged, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(whenTrue, new Call("when_true", List.of()), AllMask.ALL),
+                        new Assignment(whenFalse, new Call("when_false", List.of()), AllMask.ALL),
+                        new Assignment(
+                                merged,
+                                new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                        new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                        new Reference(whenTrue, Stream.ERRORS),
+                                        new Reference(whenFalse, Stream.ERRORS)),
+                                AllMask.ALL)),
+                List.of(mergedErrors));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new BooleanVector(new boolean[] {true, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        ErrorVector errors = (ErrorVector) evaluator.evaluate(mergedErrors, Mask.all(3)).get(Stream.ERRORS);
+
+        assertThat(errors.values()).containsExactly(true, true, false);
+        assertThat(errors.error(0)).isEqualTo(diagnostic);
+        assertThat(errors.error(1)).isNull();
     }
 
     @Test
