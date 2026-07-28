@@ -348,27 +348,45 @@ public final class BinaryVector
     @Override
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
+        BinaryVector previous = (BinaryVector) existing;
+        int outputLength = Math.max(positionCount, previous == null ? 0 : previous.length());
         int totalBytes = 0;
-        for (int position : mask) {
-            totalBytes += length(position);
+        for (int position = 0; position < outputLength; position++) {
+            totalBytes = Math.addExact(
+                    totalBytes,
+                    mask.contains(position)
+                            ? length(position)
+                            : previous == null ? 0 : previous.length(position));
         }
 
-        BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, positionCount, totalBytes);
-        target.clearTraits();
-        target.addTraits(traits);
-        Arrays.fill(target.offsets(), 0);
+        // Variable-width offsets form one cumulative chain, so updating an existing vector in place can overwrite
+        // the start offset or bytes of an earlier branch when masks are interleaved. Rebuild the chain in logical
+        // position order and preserve every inactive position from the previous result.
+        BinaryVector target = allocate(allocator, allocationContext, outputLength, totalBytes);
+        if (previous == null) {
+            target.addTraits(traits);
+        }
+        else {
+            Set<Trait> commonTraits = new LinkedHashSet<>(traits);
+            commonTraits.retainAll(previous.traits());
+            target.addTraits(commonTraits);
+        }
 
         int currentOffset = 0;
-        for (int position : mask) {
+        for (int position = 0; position < outputLength; position++) {
             target.offsets()[position] = currentOffset;
-            int valueLength = length(position);
+            BinaryVector source = mask.contains(position) ? this : previous;
+            int valueLength = source == null ? 0 : source.length(position);
             if (valueLength == 0) {
                 target.setNull(position);
             }
             else {
-                target.setBytes(position, data, startOffset(position), valueLength);
+                target.setBytes(position, source.data(), source.startOffset(position), valueLength);
                 currentOffset = target.endOffset(position);
             }
+        }
+        if (previous != null) {
+            allocator.discard(allocationContext, previous);
         }
         return target;
     }

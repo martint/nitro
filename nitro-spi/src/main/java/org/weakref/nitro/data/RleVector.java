@@ -165,6 +165,16 @@ public final class RleVector
     @Override
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
+        if (values.isVariableWidth()) {
+            int[] positions = new int[length];
+            for (int position = 0; position < length; position++) {
+                positions[position] = position;
+            }
+            Vector materialized = copy(allocator, allocationContext, positions);
+            Vector result = materialized.copyMasked(allocator, allocationContext, existing, mask);
+            allocator.release(allocationContext, materialized);
+            return result;
+        }
         for (int position : mask) {
             existing = values.copySinglePositionInto(allocator, allocationContext, existing, runIndex(position), position, length);
         }

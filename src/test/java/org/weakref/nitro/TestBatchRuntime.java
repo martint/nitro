@@ -25,6 +25,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.MinUtf8StateVector;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.SumStateVector;
@@ -442,6 +443,66 @@ public class TestBatchRuntime
         assertThat(copy.copyBytes(1)).isEqualTo("one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         assertThat(copy.copyBytes(3)).isEqualTo("three".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         assertThat(copy.copyBytes(4)).isEqualTo("four".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void testVariableWidthMaskedCopiesPreserveInterleavedBranches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("VariableWidthMaskedMerge");
+
+        BinaryVector trueValues = new BinaryVector(5, 32);
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        trueValues.setBytes(0, "zero".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(1, "one".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(2, "two".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(3, "three".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.setBytes(4, "four".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        BinaryVector empty = new BinaryVector(1, 0);
+        empty.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        RleVector falseValues = new RleVector(new int[] {4}, empty);
+
+        Vector merged = trueValues.copyMasked(
+                allocator,
+                context,
+                null,
+                Mask.sparse(new int[] {1, 3, 4}, 5));
+        merged = falseValues.copyMasked(
+                allocator,
+                context,
+                merged,
+                Mask.sparse(new int[] {0, 2}, 4));
+
+        BinaryVector result = (BinaryVector) merged;
+        assertThat(new String(result.copyBytes(0), java.nio.charset.StandardCharsets.UTF_8)).isEmpty();
+        assertThat(new String(result.copyBytes(1), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("one");
+        assertThat(new String(result.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEmpty();
+        assertThat(new String(result.copyBytes(3), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("three");
+        assertThat(new String(result.copyBytes(4), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("four");
+
+        BinaryVector dictionaryValues = new BinaryVector(2, 8);
+        dictionaryValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionaryValues.setBytes(0, "unused".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        dictionaryValues.setBytes(1, new byte[0]);
+        DictionaryVector dictionary = new DictionaryVector(new int[] {1, 0, 1, 0}, dictionaryValues);
+
+        merged = trueValues.copyMasked(
+                allocator,
+                context,
+                null,
+                Mask.sparse(new int[] {1, 3, 4}, 5));
+        merged = dictionary.copyMasked(
+                allocator,
+                context,
+                merged,
+                Mask.sparse(new int[] {0, 2}, 4));
+
+        result = (BinaryVector) merged;
+        assertThat(new String(result.copyBytes(0), java.nio.charset.StandardCharsets.UTF_8)).isEmpty();
+        assertThat(new String(result.copyBytes(1), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("one");
+        assertThat(new String(result.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEmpty();
+        assertThat(new String(result.copyBytes(3), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("three");
+        assertThat(new String(result.copyBytes(4), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("four");
     }
 
     @Test
