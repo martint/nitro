@@ -3792,11 +3792,7 @@ public class HashJoinOperator
                 long rowReferenceBase)
         {
             if (sourcePositions == null) {
-                for (int position = startPosition; position < endPosition; position++) {
-                    if (nulls == null || !nulls.value(position)) {
-                        addCompressedDirectRangeRow(values.value(position), rowReferenceBase + position);
-                    }
-                }
+                addCompressedDirectRangeDenseRows(values, nulls, startPosition, endPosition, rowReferenceBase);
                 return;
             }
             for (int position = startPosition; position < endPosition; position++) {
@@ -3815,11 +3811,7 @@ public class HashJoinOperator
                 long rowReferenceBase)
         {
             if (mask.all()) {
-                for (int position = 0; position < count; position++) {
-                    if (nulls == null || !nulls.value(position)) {
-                        addCompressedDirectRangeRow(values.value(position), rowReferenceBase + position);
-                    }
-                }
+                addCompressedDirectRangeDenseRows(values, nulls, 0, count, rowReferenceBase);
                 return;
             }
             for (int logicalPosition = 0; logicalPosition < count; logicalPosition++) {
@@ -3827,6 +3819,41 @@ public class HashJoinOperator
                 if (nulls == null || !nulls.value(sourcePosition)) {
                     addCompressedDirectRangeRow(values.value(sourcePosition), rowReferenceBase + logicalPosition);
                 }
+            }
+        }
+
+        private void addCompressedDirectRangeDenseRows(
+                VectorAccess.LongValues values,
+                VectorAccess.BooleanValues nulls,
+                int startPosition,
+                int endPosition,
+                long rowReferenceBase)
+        {
+            for (int position = startPosition; position < endPosition; position++) {
+                if (nulls != null && nulls.value(position)) {
+                    continue;
+                }
+                long key = values.value(position);
+                long rowReference = rowReferenceBase + position;
+                if (key < 0 || key >= policy.maxDirectBuildKey()) {
+                    addRow(key, rowReference);
+                    continue;
+                }
+                minKey = Math.min(minKey, key);
+                maxKey = Math.max(maxKey, key);
+                directBuild.recordRow();
+                int intKey = (int) key;
+                ensureDirectBuildCapacity(intKey + 1);
+                int head = directBuild.entry(intKey);
+                if (head != EMPTY) {
+                    directBuild.incrementDenseDuplicate(intKey);
+                    continue;
+                }
+                int ordinal = buildCardinality.storedRowCount();
+                rows.append(ordinal, rowReference);
+                buildCardinality.recordStoredRow();
+                directBuild.initializeKey(intKey, ordinal);
+                buildCardinality.recordDistinctKey();
             }
         }
 
