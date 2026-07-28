@@ -51,6 +51,7 @@ import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8DictionaryMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
@@ -1637,6 +1638,25 @@ public class TestPlanEvaluator
         RleVector vector = (RleVector) result.values();
         assertThat(vector.counts()).containsExactly(1, 1, 2);
         assertThat(((BooleanVector) vector.values()).values()).containsExactly(true, true, false);
+    }
+
+    @Test
+    void testIntegralLessThanOrEqualSupportsNullsAndRleInputs()
+    {
+        PrimitiveFunction lessThanOrEqual = new LessThanOrEqualI64();
+        Streams result = lessThanOrEqual.apply(
+                List.of(
+                        Streams.ofValuesAndNulls(
+                                new RleVector(new int[] {2, 2}, new I64Vector(new long[] {1, 5})),
+                                new BooleanVector(new boolean[] {false, true, false, false})),
+                        Streams.ofValues(new RleVector(new int[] {1, 3}, new I64Vector(new long[] {1, 4})))),
+                Mask.all(4),
+                Set.of(Stream.VALUES, Stream.NULLS),
+                null,
+                new PrimitiveExecutionContext(new Allocator(EngineResources.createDefault())));
+
+        assertThat(readBooleans(result.values())).containsExactly(true, true, false, false);
+        assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(false, true, false, false);
     }
 
     @Test
@@ -4125,6 +4145,7 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(EqualI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(InUtf8.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(ScaledRelativeDifferenceGtI64.class)));
         return primitiveRegistry;
     }
