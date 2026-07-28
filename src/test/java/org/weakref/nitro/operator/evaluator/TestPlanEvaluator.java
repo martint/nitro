@@ -34,6 +34,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.AnnotatedScalarLoader;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
@@ -52,6 +53,8 @@ import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.Coalesce;
+import org.weakref.nitro.operator.evaluator.ir.Conditional;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
@@ -242,6 +245,108 @@ public class TestPlanEvaluator
 
         I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, org.weakref.nitro.data.Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
         assertThat(resultVector.values()).containsExactly(1L, 2L, 1L, 2L);
+    }
+
+    @Test
+    void testConditionalEvaluatesNestedBranchesUnderBranchMasks()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register(new ScalarDescriptor("true_branch", true, maskedConstant(10, Set.of(0, 2))));
+        primitiveRegistry.register(new ScalarDescriptor("false_branch", true, maskedConstant(20, Set.of(1, 3))));
+
+        Variable trueBranch = new Variable(0);
+        Variable falseBranch = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(
+                        new Assignment(trueBranch, new Call("true_branch", List.of()), AllMask.ALL),
+                        new Assignment(falseBranch, new Call("false_branch", List.of()), AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new Conditional(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(trueBranch, Stream.VALUES),
+                                        new Reference(falseBranch, Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES))));
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}))),
+                new Allocator(EngineResources.createDefault()));
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(10L, 20L, 10L, 20L);
+    }
+
+    @Test
+    void testConditionalDoesNotEvaluateUnselectedNestedBranch()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register(new ScalarDescriptor("selected_branch", true, maskedConstant(10, Set.of(0, 1, 2))));
+        primitiveRegistry.register(new ScalarDescriptor("unselected_branch", true, (_, _, _, _, _) -> {
+            throw new AssertionError("unselected branch was evaluated");
+        }));
+
+        Variable selectedBranch = new Variable(0);
+        Variable unselectedBranch = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(
+                        new Assignment(selectedBranch, new Call("selected_branch", List.of()), AllMask.ALL),
+                        new Assignment(unselectedBranch, new Call("unselected_branch", List.of()), AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new Conditional(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(selectedBranch, Stream.VALUES),
+                                        new Reference(unselectedBranch, Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES))));
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, true, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(10L, 10L, 10L);
+    }
+
+    @Test
+    void testCoalesceDoesNotEvaluateUnselectedNestedFallback()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register(new ScalarDescriptor("selected_branch", true, maskedConstant(10, Set.of(0, 1, 2))));
+        primitiveRegistry.register(new ScalarDescriptor("unselected_branch", true, (_, _, _, _, _) -> {
+            throw new AssertionError("unselected fallback was evaluated");
+        }));
+
+        Variable selectedBranch = new Variable(0);
+        Variable unselectedBranch = new Variable(1);
+        Variable result = new Variable(2);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(
+                        new Assignment(selectedBranch, new Call("selected_branch", List.of()), AllMask.ALL),
+                        new Assignment(unselectedBranch, new Call("unselected_branch", List.of()), AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new Coalesce(
+                                        new Reference(selectedBranch, Stream.VALUES),
+                                        new Reference(unselectedBranch, Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES))));
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of()),
+                new Allocator(EngineResources.createDefault()));
+
+        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(3)).get(Stream.VALUES);
+        assertThat(resultVector.values()).containsExactly(10L, 10L, 10L);
     }
 
     @Test
@@ -3663,6 +3768,18 @@ public class TestPlanEvaluator
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
+    }
+
+    private static PrimitiveFunction maskedConstant(long value, Set<Integer> expectedPositions)
+    {
+        return (_, mask, _, _, _) -> {
+            assertThat(mask).containsExactlyInAnyOrderElementsOf(expectedPositions);
+            long[] values = new long[mask.maxPosition() + 1];
+            for (int position : mask) {
+                values[position] = value;
+            }
+            return Streams.ofValues(new I64Vector(values));
+        };
     }
 
     private static boolean[] readBooleans(org.weakref.nitro.data.Vector vector)
