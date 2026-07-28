@@ -85,6 +85,7 @@ import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.ConditionalSumsAggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountAvgStddevI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
@@ -93,7 +94,6 @@ import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
-import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
@@ -3761,13 +3761,18 @@ public class TestOperators
     }
 
     @Test
-    void testCountAvgStddevPreserveIndependentResultsAndNulls()
+    void testCountAvgStddevPhysicalUnitPreservesResultsAndNulls()
     {
-        // Put STDDEV first to verify that independent aggregate state is insensitive to output order.
+        // Bind STDDEV first to verify that physical result slots are independent of output order.
         Operator grouped = new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new StddevSamp(1), new Avg(1), new CountColumn(1)),
+                new PhysicalAggregationProgram(
+                        List.of(new CountAvgStddevI64AggregationUnit(1)),
+                        List.of(
+                                new PhysicalAggregationProgram.Output(0, 2),
+                                new PhysicalAggregationProgram.Output(0, 1),
+                                new PhysicalAggregationProgram.Output(0, 0))),
                 new ConstantTableOperator(
                         allocator,
                         2,

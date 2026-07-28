@@ -47,6 +47,7 @@ import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.ConditionalSumsAggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountAvgStddevI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
@@ -9592,7 +9593,12 @@ final class TpcdsParquetSupport
         inventory = profiled(profilePrefix + ".group", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3),
-                List.of(new CountColumn(4), new StddevSamp(4), new Avg(4)),
+                new PhysicalAggregationProgram(
+                        List.of(new CountAvgStddevI64AggregationUnit(4)),
+                        List.of(
+                                new PhysicalAggregationProgram.Output(0, 0),
+                                new PhysicalAggregationProgram.Output(0, 2),
+                                new PhysicalAggregationProgram.Output(0, 1))),
                 inventory));
         inventory = profiled(profilePrefix + ".filter.cov", filter(allocator, primitiveRegistry, inventory, query39CovarianceThresholdPredicate(4, 6, 5, covarianceThreshold)));
         return profiled(profilePrefix + ".project.output", projectQuery39InventoryOutput(allocator, primitiveRegistry, inventory));
