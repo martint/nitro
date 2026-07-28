@@ -1703,12 +1703,27 @@ final class DistinctKeySet
             boolean nullFree = policy.longPairNullFreeBatch() &&
                     VectorAccess.isAllFalseNulls(nulls[0]) &&
                     VectorAccess.isAllFalseNulls(nulls[1]);
+            if (policy.taggedLongPairHash()) {
+                return addTaggedBatch(firstValues, secondValues, firstNulls, secondNulls, mask, distinctPositions, nullFree);
+            }
+            return addBooleanBatch(firstValues, secondValues, firstNulls, secondNulls, mask, distinctPositions, nullFree);
+        }
+
+        private int addTaggedBatch(
+                VectorAccess.LongValues firstValues,
+                VectorAccess.LongValues secondValues,
+                VectorAccess.BooleanValues firstNulls,
+                VectorAccess.BooleanValues secondNulls,
+                Mask mask,
+                int[] distinctPositions,
+                boolean nullFree)
+        {
             int count = 0;
             if (mask.all()) {
                 int size = mask.size();
                 if (nullFree) {
                     for (int position = 0; position < size; position++) {
-                        if (addKey(firstValues.value(position), secondValues.value(position))) {
+                        if (addTaggedKey(firstValues.value(position), secondValues.value(position))) {
                             distinctPositions[count++] = position;
                         }
                     }
@@ -1718,7 +1733,7 @@ final class DistinctKeySet
                     if (firstNulls.value(position) || secondNulls.value(position)) {
                         continue;
                     }
-                    if (addKey(firstValues.value(position), secondValues.value(position))) {
+                    if (addTaggedKey(firstValues.value(position), secondValues.value(position))) {
                         distinctPositions[count++] = position;
                     }
                 }
@@ -1726,7 +1741,7 @@ final class DistinctKeySet
             else {
                 if (nullFree) {
                     for (int position : mask) {
-                        if (addKey(firstValues.value(position), secondValues.value(position))) {
+                        if (addTaggedKey(firstValues.value(position), secondValues.value(position))) {
                             distinctPositions[count++] = position;
                         }
                     }
@@ -1736,7 +1751,57 @@ final class DistinctKeySet
                     if (firstNulls.value(position) || secondNulls.value(position)) {
                         continue;
                     }
-                    if (addKey(firstValues.value(position), secondValues.value(position))) {
+                    if (addTaggedKey(firstValues.value(position), secondValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            return count;
+        }
+
+        private int addBooleanBatch(
+                VectorAccess.LongValues firstValues,
+                VectorAccess.LongValues secondValues,
+                VectorAccess.BooleanValues firstNulls,
+                VectorAccess.BooleanValues secondNulls,
+                Mask mask,
+                int[] distinctPositions,
+                boolean nullFree)
+        {
+            int count = 0;
+            if (mask.all()) {
+                int size = mask.size();
+                if (nullFree) {
+                    for (int position = 0; position < size; position++) {
+                        if (addBooleanKey(firstValues.value(position), secondValues.value(position))) {
+                            distinctPositions[count++] = position;
+                        }
+                    }
+                    return count;
+                }
+                for (int position = 0; position < size; position++) {
+                    if (firstNulls.value(position) || secondNulls.value(position)) {
+                        continue;
+                    }
+                    if (addBooleanKey(firstValues.value(position), secondValues.value(position))) {
+                        distinctPositions[count++] = position;
+                    }
+                }
+            }
+            else {
+                if (nullFree) {
+                    for (int position : mask) {
+                        if (addBooleanKey(firstValues.value(position), secondValues.value(position))) {
+                            distinctPositions[count++] = position;
+                        }
+                    }
+                    return count;
+                }
+                for (int position : mask) {
+                    if (firstNulls.value(position) || secondNulls.value(position)) {
+                        continue;
+                    }
+                    if (addBooleanKey(firstValues.value(position), secondValues.value(position))) {
                         distinctPositions[count++] = position;
                     }
                 }
@@ -1804,6 +1869,46 @@ final class DistinctKeySet
             return true;
         }
 
+        private boolean addTaggedKey(long first, long second)
+        {
+            long hash = hash64(first, second);
+            byte tag = hashTag(hash);
+            int index = ((int) hash) & mask;
+            while (tags[index] != 0) {
+                if (tags[index] == tag && firstKeys[index] == first && secondKeys[index] == second) {
+                    return false;
+                }
+                index = (index + 1) & mask;
+            }
+            firstKeys[index] = first;
+            secondKeys[index] = second;
+            tags[index] = tag;
+            size++;
+            if (size >= maxFill) {
+                rehashTagged(firstKeys.length * 2);
+            }
+            return true;
+        }
+
+        private boolean addBooleanKey(long first, long second)
+        {
+            int index = mix(first, second) & mask;
+            while (occupied[index]) {
+                if (firstKeys[index] == first && secondKeys[index] == second) {
+                    return false;
+                }
+                index = (index + 1) & mask;
+            }
+            firstKeys[index] = first;
+            secondKeys[index] = second;
+            occupied[index] = true;
+            size++;
+            if (size >= maxFill) {
+                rehashBoolean(firstKeys.length * 2);
+            }
+            return true;
+        }
+
         private int findSlot(long first, long second)
         {
             if (policy.taggedLongPairHash()) {
@@ -1840,28 +1945,72 @@ final class DistinctKeySet
 
         private void rehash(int capacity)
         {
+            if (policy.taggedLongPairHash()) {
+                rehashTagged(capacity);
+            }
+            else {
+                rehashBoolean(capacity);
+            }
+        }
+
+        private void rehashTagged(int capacity)
+        {
             long[] previousFirstKeys = firstKeys;
             long[] previousSecondKeys = secondKeys;
-            boolean[] previousOccupied = occupied;
             byte[] previousTags = tags;
 
             allocate(capacity);
             size = 0;
 
             for (int index = 0; index < previousFirstKeys.length; index++) {
-                if (policy.taggedLongPairHash() ? previousTags[index] == 0 : !previousOccupied[index]) {
+                if (previousTags[index] == 0) {
                     continue;
                 }
-                int newIndex = findSlot(previousFirstKeys[index], previousSecondKeys[index]);
+                long first = previousFirstKeys[index];
+                long second = previousSecondKeys[index];
+                long hash = hash64(first, second);
+                byte tag = hashTag(hash);
+                int newIndex = ((int) hash) & mask;
+                while (tags[newIndex] != 0) {
+                    newIndex = (newIndex + 1) & mask;
+                }
+                firstKeys[newIndex] = first;
+                secondKeys[newIndex] = second;
+                tags[newIndex] = tag;
+                size++;
+            }
+            arrayPool.release(previousFirstKeys);
+            arrayPool.release(previousSecondKeys);
+            arrayPool.release(previousTags);
+        }
+
+        private void rehashBoolean(int capacity)
+        {
+            long[] previousFirstKeys = firstKeys;
+            long[] previousSecondKeys = secondKeys;
+            boolean[] previousOccupied = occupied;
+
+            allocate(capacity);
+            size = 0;
+
+            for (int index = 0; index < previousFirstKeys.length; index++) {
+                if (!previousOccupied[index]) {
+                    continue;
+                }
+                long first = previousFirstKeys[index];
+                long second = previousSecondKeys[index];
+                int newIndex = mix(first, second) & mask;
+                while (occupied[newIndex]) {
+                    newIndex = (newIndex + 1) & mask;
+                }
                 firstKeys[newIndex] = previousFirstKeys[index];
                 secondKeys[newIndex] = previousSecondKeys[index];
-                markOccupied(newIndex, previousFirstKeys[index], previousSecondKeys[index]);
+                occupied[newIndex] = true;
                 size++;
             }
             arrayPool.release(previousFirstKeys);
             arrayPool.release(previousSecondKeys);
             arrayPool.release(previousOccupied);
-            arrayPool.release(previousTags);
         }
 
         private boolean isOccupied(int index)

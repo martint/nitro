@@ -60,6 +60,36 @@ class TestDistinctKeySet
     }
 
     @Test
+    void testFullWidthLongPairBatchStrategiesAreExact()
+    {
+        long wide = 1L << 40;
+        for (boolean taggedHash : new boolean[] {false, true}) {
+            Vector[] values = longPair(
+                    new long[] {wide, 2, wide, 3, 4},
+                    new long[] {10, 20, 10, 30, 40});
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    arrayPool,
+                    codeGeneration,
+                    longPairPolicy(taggedHash),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                assertDistinctPositions(keys, values, new boolean[] {false, false, false, true, false}, 0, 1, 4);
+                assertDistinctPositions(
+                        keys,
+                        longPair(new long[] {wide, 5, 6}, new long[] {10, 50, 60}),
+                        null,
+                        1,
+                        2);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
+
+    @Test
     void testAdaptiveMultiLongDistinctSharesDictionaryPositionOnlyForIdenticalMappings()
     {
         int[] innerIds = {2, 0, 1, 2};
@@ -347,6 +377,32 @@ class TestDistinctKeySet
     private static Vector[] longPair(long[] first, long[] second)
     {
         return new Vector[] {new I64Vector(first), new I64Vector(second)};
+    }
+
+    private static DistinctKeySetPolicy longPairPolicy(boolean taggedHash)
+    {
+        DistinctKeySetPolicy defaults = DistinctKeySetPolicy.defaults();
+        return new DistinctKeySetPolicy(
+                defaults.pooledLongHashSetPolicy(),
+                defaults.debugDistinctShapes(),
+                defaults.sharedDictionaryPositionResolver(),
+                defaults.sharedDictionaryNullResolver(),
+                defaults.sharedDictionaryBasePositionCache(),
+                defaults.adaptiveCompactMultiLong(),
+                defaults.adaptiveRetainNullsBatch(),
+                defaults.adaptiveCompactLongPair(),
+                defaults.adaptiveCompactLongPairSampleSize(),
+                defaults.adaptiveCompactMultiLongMinArity(),
+                defaults.adaptivePagedLongBitmap(),
+                defaults.pagedLongBitmapMinKeys(),
+                defaults.pagedLongBitmapMaxBitsPerKey(),
+                defaults.emptyBinaryFastPath(),
+                defaults.filterSentinelBeforeHash(),
+                defaults.adaptiveDirectBatch(),
+                taggedHash,
+                defaults.longPairNullFreeBatch(),
+                defaults.adaptiveCompactLongPairStartBatch(),
+                defaults.inlineSmallGroupedLong());
     }
 
     private static DictionaryVector nestedLongDictionary(int[] outerIds, int[] innerIds, long[] values)
