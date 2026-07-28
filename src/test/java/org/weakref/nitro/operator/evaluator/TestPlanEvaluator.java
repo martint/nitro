@@ -2763,6 +2763,35 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testCastI64ToI64ProjectsDictionaryEncodedValues()
+    {
+        Variable castValue = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        castValue,
+                        new Call("cast_i64_to_i64", List.of(new Reference(new Input(0), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(new Reference(castValue, Stream.VALUES)));
+
+        int[] ids = {2, 0, 1, 2};
+        DictionaryVector values = DictionaryVector.wrap(ids, new I64Vector(new long[] {7L, 11L, 13L}));
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(new Reference(castValue, Stream.VALUES), Mask.all(4));
+        assertThat(result.values()).isInstanceOf(DictionaryVector.class);
+
+        DictionaryVector encoded = (DictionaryVector) result.values();
+        assertThat(encoded.ids()).isSameAs(ids);
+        assertThat(encoded.ids()).containsExactly(2, 0, 1, 2);
+        assertThat(((I64Vector) encoded.values()).values()).containsExactly(7L, 11L, 13L);
+    }
+
+    @Test
     void testCastI64ToI32DoesNotRequestInputNullsWhenOnlyValuesAreNeeded()
     {
         Variable castValue = new Variable(0);

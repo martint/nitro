@@ -27,6 +27,7 @@ import org.weakref.nitro.function.scalar.builtin.ArraySumI64;
 import org.weakref.nitro.function.scalar.builtin.Cardinality;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToF64;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI32;
+import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
 import org.weakref.nitro.function.scalar.builtin.CastUtf8ToI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64;
 import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
@@ -108,6 +109,7 @@ public final class TestPrimitiveFunctions
                 Cardinality.class,
                 CastI64ToF64.class,
                 CastI64ToI32.class,
+                CastI64ToI64.class,
                 CastUtf8ToI64.class,
                 CoalesceI64.class,
                 ConcatUtf8.class,
