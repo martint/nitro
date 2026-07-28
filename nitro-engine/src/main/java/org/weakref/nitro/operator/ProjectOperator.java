@@ -171,6 +171,7 @@ public class ProjectOperator
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             Reference outputReference = outputReferences.get(outputIndex);
+            Field outputField = outputSchema.field(outputIndex);
             if (outputReference.producer() instanceof Input input) {
                 Output selected = sourceBatch.output(input.index())
                         .select(exposedStreams(sourceBatch, outputReference));
@@ -182,12 +183,12 @@ public class ProjectOperator
                 outputs[outputIndex] = recycleEvaluatorOutputs
                         ? new Output(
                                 exposedStreams(sourceBatch, outputReference),
-                                stream -> evaluateOutput(batchState, outputReference, stream),
+                                stream -> evaluateOutput(batchState, outputReference, outputField, stream),
                                 (stream, vector) -> allocator.transfer(allocationContext, batchState.planEvaluator().prepareResultForTransfer(vector)),
                                 (stream, vector) -> batchState.releaseOutput(vector))
                         : new Output(
                                 exposedStreams(sourceBatch, outputReference),
-                                stream -> evaluateOutput(batchState, outputReference, stream),
+                                stream -> evaluateOutput(batchState, outputReference, outputField, stream),
                                 (stream, vector) -> allocator.transfer(allocationContext, vector));
             }
             // Both computed outputs and forwarding wrappers cache their resolved vector. A later constrain must
@@ -278,7 +279,7 @@ public class ProjectOperator
         return source.supportsConstrainedReborrow();
     }
 
-    private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Stream stream)
+    private org.weakref.nitro.data.Vector evaluateOutput(BatchState batchState, Reference outputReference, Field outputField, Stream stream)
     {
         if (!exposedStreams(outputReference.stream()).contains(stream)) {
             throw new IllegalArgumentException("Output does not expose stream: " + stream);
@@ -291,7 +292,7 @@ public class ProjectOperator
             bundle = batchState.schemaBundles().computeIfAbsent(outputReference.producer(), _ -> batchState.planEvaluator().evaluate(outputReference, batchState.schemaMask()));
         }
         if (!bundle.has(stream) && batchState.mask().none() && batchState.schemaMask().none()) {
-            return emptyStreamVector(stream);
+            return emptyStreamVector(outputField, stream);
         }
         if (!bundle.has(stream) && (stream == Stream.NULLS || stream == Stream.ERRORS)) {
             // A fused output omits the NULLS/ERRORS stream when it is provably all-false; synthesize it at the values'
@@ -352,10 +353,24 @@ public class ProjectOperator
         return batchState.planEvaluator().evaluate(outputReference, batchState.mask());
     }
 
-    private org.weakref.nitro.data.Vector emptyStreamVector(Stream stream)
+    private org.weakref.nitro.data.Vector emptyStreamVector(Field outputField, Stream stream)
     {
         return switch (stream) {
-            case VALUES -> allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
+            case VALUES -> {
+                if (!outputField.type().isSpecified()) {
+                    yield allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);
+                }
+                Vector values = outputField.type().vectorFactory()
+                        .orElseThrow(() -> new IllegalArgumentException("Type does not provide empty vector construction: " + outputField.type().identity()))
+                        .nullValues(allocator.vectorAllocator(allocationContext), 0);
+                if (values.length() != 0) {
+                    throw new IllegalArgumentException("Type vector factory returned length " + values.length() + " for empty projection output");
+                }
+                if (!outputField.type().supportsVector(values)) {
+                    throw new IllegalArgumentException("Type " + outputField.type().identity() + " does not support empty factory result " + values.getClass().getName());
+                }
+                yield values;
+            }
             case NULLS, ERRORS -> allocator.allocate(allocationContext, BooleanVector.class, 0, BooleanVector::new);
         };
     }

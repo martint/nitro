@@ -29,6 +29,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -43,6 +44,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
@@ -244,6 +246,75 @@ public class TestOperators
                         row(11L),
                         row(22L),
                         row(33L)));
+    }
+
+    @Test
+    void testProjectOperatorUsesOutputTypeForEmptyComputedValues()
+    {
+        TypeBinding binaryType = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:binary");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return String.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(VectorAllocator allocator, int length)
+                    {
+                        return allocator.allocate(BinaryVector.class, length, size -> new BinaryVector(size, 0));
+                    }
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(BinaryVector.class);
+            }
+        };
+        Variable computed = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(computed, new Literal("unused"), AllMask.ALL)),
+                List.of(new Reference(computed, Stream.VALUES)));
+        Schema outputSchema = new Schema(List.of(new Field(binaryType, false)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                new TableOperator(0, List.of(TableOperator.Page.values(0, new Vector[0], Mask.all(0)))),
+                outputSchema);
+                Batch batch = operator.next()) {
+            assertThat(batch.borrowMask().none()).isTrue();
+            assertThat(batch.output(0).borrow(Stream.VALUES))
+                    .isInstanceOf(BinaryVector.class)
+                    .extracting(Vector::length)
+                    .isEqualTo(0);
+        }
     }
 
     @Test
