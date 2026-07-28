@@ -37,6 +37,12 @@ public final class AllocatedSelectionOperatorIngress
     public Mask toMask(Selection selection)
     {
         requireNonNull(selection, "selection is null");
+        if (selection instanceof MaskSelection maskSelection) {
+            // MaskSelection is Nitro's already-validated selection representation. Keep engine
+            // ownership independent from the source batch, but preserve the compact dense/sparse
+            // shape without enumerating every selected row again at the boundary.
+            return allocator.copyMask(allocationContext, maskSelection.mask());
+        }
         int positionCount = selection.positionCount();
         int selectedCount = selection.count();
         if (positionCount < 0 || selectedCount < 0 || selectedCount > positionCount) {

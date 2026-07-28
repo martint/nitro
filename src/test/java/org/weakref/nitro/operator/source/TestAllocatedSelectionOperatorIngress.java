@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MaskSelection;
 import org.weakref.nitro.execution.EngineResources;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,6 +42,25 @@ class TestAllocatedSelectionOperatorIngress
             assertThat(selection.count()).isEqualTo(2);
             assertThat(selection.maxPosition()).isEqualTo(2);
             ingress.releaseMask(mask);
+        }
+    }
+
+    @Test
+    void testCopiesNativeMaskSelectionWithoutSharingOwnership()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context sourceContext = new Allocator.Context("source");
+            AllocatedSelectionOperatorIngress ingress = new AllocatedSelectionOperatorIngress(allocator, ALLOCATION_CONTEXT);
+            Mask source = allocator.allocateAllMask(sourceContext, 512);
+            Mask copy = ingress.toMask(new MaskSelection(source));
+
+            assertThat(copy).isNotSameAs(source);
+            assertThat(copy.all()).isTrue();
+            assertThat(copy.size()).isEqualTo(512);
+
+            ingress.releaseMask(copy);
+            assertThat(source.all()).isTrue();
+            allocator.release(sourceContext, source);
         }
     }
 
