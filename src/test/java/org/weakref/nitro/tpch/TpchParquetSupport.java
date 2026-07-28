@@ -34,10 +34,10 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
-import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.MaxF64;
-import org.weakref.nitro.operator.aggregation.Min;
 import org.weakref.nitro.operator.aggregation.MinF64;
+import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumF64;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
@@ -1654,13 +1654,13 @@ final class TpchParquetSupport
         Operator supplierRange = profiled(profile, "q21.group.supplier_range", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new Min(1), new Max(1)),
+                PhysicalAggregationProgram.singleUnit(new MinMaxI64AggregationUnit(1)),
                 profiled(profile, "q21.scan.supplier_range", scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey"))));
         // Since l1 itself is late, NOT EXISTS(other late supplier) is exactly a singleton late-supplier range.
         Operator lateSupplierRange = profiled(profile, "q21.group.late_supplier_range", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new Min(1), new Max(1)),
+                PhysicalAggregationProgram.singleUnit(new MinMaxI64AggregationUnit(1)),
                 profiled(profile, "q21.filter.late_supplier_range", filter(allocator, primitiveRegistry,
                         profiled(profile, "q21.scan.late_supplier_range", scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_suppkey", "l_commitdate", "l_receiptdate")),
                         lessThanColumns(2, 3)))));

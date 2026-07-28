@@ -179,13 +179,21 @@ public final class MinMaxI64AggregationUnit
     public void accumulate(Object stateObject, Vector groups, Mask mask, StreamAccessor streams)
     {
         State state = (State) stateObject;
+        Vector inputVector = streams.values(inputColumn);
+        Vector inputNullVector = streams.stream(inputColumn, Stream.NULLS);
+        if (inputVector instanceof I64Vector inputValues &&
+                VectorAccess.isAllFalseNulls(inputNullVector) &&
+                accumulateNullFreeGroupedRuns(state, (I64Vector) groups, mask, inputValues)) {
+            return;
+        }
+
         long[] groupIds = ((I64Vector) groups).values();
         long[] minimums = ((I64Vector) state.minimum().values()).values();
         boolean[] minimumNulls = ((BooleanVector) state.minimum().get(Stream.NULLS)).values();
         long[] maximums = ((I64Vector) state.maximum().values()).values();
         boolean[] maximumNulls = ((BooleanVector) state.maximum().get(Stream.NULLS)).values();
-        VectorAccess.LongValues values = VectorAccess.longValues(streams.values(inputColumn));
-        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(streams.stream(inputColumn, Stream.NULLS));
+        VectorAccess.LongValues values = VectorAccess.longValues(inputVector);
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(inputNullVector);
 
         for (int position : mask) {
             if (!nulls.value(position)) {
@@ -198,6 +206,61 @@ public final class MinMaxI64AggregationUnit
                         maximumNulls);
             }
         }
+    }
+
+    private static boolean accumulateNullFreeGroupedRuns(State state, I64Vector groups, Mask mask, I64Vector inputs)
+    {
+        int count = mask.count();
+        if (!mask.all() || count < 5 || !hasFrequentGroupRuns(groups.values(), count)) {
+            return false;
+        }
+
+        long[] groupIds = groups.values();
+        long[] input = inputs.values();
+        long[] minimums = ((I64Vector) state.minimum().values()).values();
+        boolean[] minimumNulls = ((BooleanVector) state.minimum().get(Stream.NULLS)).values();
+        long[] maximums = ((I64Vector) state.maximum().values()).values();
+        boolean[] maximumNulls = ((BooleanVector) state.maximum().get(Stream.NULLS)).values();
+
+        int index = 0;
+        while (index < count) {
+            int position = index;
+            int group = toIntExact(groupIds[position]);
+            long minimum = minimumNulls[group] ? Long.MAX_VALUE : minimums[group];
+            long maximum = maximumNulls[group] ? Long.MIN_VALUE : maximums[group];
+            do {
+                long value = input[position];
+                minimum = Math.min(minimum, value);
+                maximum = Math.max(maximum, value);
+                index++;
+                if (index == count) {
+                    break;
+                }
+                position = index;
+            }
+            while (groupIds[position] == group);
+
+            minimums[group] = minimum;
+            maximums[group] = maximum;
+            minimumNulls[group] = false;
+            maximumNulls[group] = false;
+        }
+        return true;
+    }
+
+    private static boolean hasFrequentGroupRuns(long[] groups, int count)
+    {
+        int comparisons = Math.min(count - 1, 64);
+        int hits = 0;
+        long previous = groups[0];
+        for (int index = 1; index <= comparisons; index++) {
+            long group = groups[index];
+            if (group == previous) {
+                hits++;
+            }
+            previous = group;
+        }
+        return hits * 2 >= comparisons;
     }
 
     private static void update(
