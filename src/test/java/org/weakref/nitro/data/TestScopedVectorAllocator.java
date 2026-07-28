@@ -15,11 +15,40 @@ package org.weakref.nitro.data;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class TestScopedVectorAllocator
 {
+    @Test
+    void testInterleavesStreamBundlesInRowMajorOrder()
+    {
+        Allocator.Context context = new Allocator.Context("connector");
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                VectorAllocator vectors = allocator.vectorAllocator(context)) {
+            Streams interleaved = vectors.interleave(
+                    List.of(
+                            Streams.of(
+                                    new I64Vector(new long[] {1, 2}),
+                                    new BooleanVector(new boolean[] {false, true}),
+                                    null),
+                            Streams.of(
+                                    new I64Vector(new long[] {10, 20}),
+                                    null,
+                                    new BooleanVector(new boolean[] {true, false}))),
+                    2);
+
+            assertThat(((I64Vector) interleaved.values()).values()).containsExactly(1, 10, 2, 20);
+            assertThat(((BooleanVector) interleaved.get(Stream.NULLS)).values())
+                    .containsExactly(false, false, true, false);
+            assertThat(((BooleanVector) interleaved.get(Stream.ERRORS)).values())
+                    .containsExactly(false, true, false, false);
+        }
+    }
+
     @Test
     void testAllocatesReleasesAndTransfersWithoutExposingEngineResources()
     {

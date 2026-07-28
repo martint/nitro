@@ -50,6 +50,16 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /// Provider-owned construction from structural child expressions.
+    ///
+    /// Empty means that the logical type cannot be constructed from child expressions. The
+    /// evaluator passes generic stream bundles and must not infer construction from the type
+    /// identity, carrier, or admitted vector classes.
+    default Optional<TypeVectorConstructor> vectorConstructor()
+    {
+        return Optional.empty();
+    }
+
     /// Vector representations this type provider permits at an SPI boundary.
     ///
     /// The set is descriptive metadata for connectors and integration adapters. A provider can

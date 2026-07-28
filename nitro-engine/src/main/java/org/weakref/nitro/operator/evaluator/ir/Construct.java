@@ -13,7 +13,19 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public sealed interface Operation
-        permits Call, Coalesce, Conditional, Construct, Copy, Literal, Merge, Sequence, StructField
+import org.weakref.nitro.core.type.TypeBinding;
+
+import java.util.List;
+
+import static java.util.Objects.requireNonNull;
+
+/// Constructs one typed value from row-wise structural child expressions.
+public record Construct(TypeBinding type, List<Reference> arguments)
+        implements Operation
 {
+    public Construct
+    {
+        type = requireNonNull(type, "type is null");
+        arguments = List.copyOf(requireNonNull(arguments, "arguments is null"));
+    }
 }

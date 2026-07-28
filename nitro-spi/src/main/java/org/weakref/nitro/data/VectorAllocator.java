@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.List;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
@@ -37,6 +38,12 @@ public interface VectorAllocator
     DictionaryVector dictionary(int[] ids, int length, Vector values);
 
     RleVector runLength(int[] counts, Vector values);
+
+    /// Interleaves same-cardinality column bundles into row-major order.
+    ///
+    /// For input bundles {@code [a, b]} with three positions, the output positions are
+    /// {@code [a0, b0, a1, b1, a2, b2]}. Missing NULLS or ERRORS streams contribute false.
+    Streams interleave(List<Streams> columns, int positionCount);
 
     <T extends Vector> T transfer(T vector);
 

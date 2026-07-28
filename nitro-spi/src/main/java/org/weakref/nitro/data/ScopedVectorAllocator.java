@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.List;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
@@ -87,6 +88,16 @@ public final class ScopedVectorAllocator
                 context,
                 requireNonNull(counts, "counts is null"),
                 requireNonNull(values, "values is null"));
+    }
+
+    @Override
+    public Streams interleave(List<Streams> columns, int positionCount)
+    {
+        checkOpen();
+        return allocator.interleaveStreams(
+                context,
+                List.copyOf(requireNonNull(columns, "columns is null")),
+                positionCount);
     }
 
     @Override

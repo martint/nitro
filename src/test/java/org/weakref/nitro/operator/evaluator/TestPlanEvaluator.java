@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorConstructor;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
@@ -59,6 +60,7 @@ import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.Coalesce;
 import org.weakref.nitro.operator.evaluator.ir.Conditional;
+import org.weakref.nitro.operator.evaluator.ir.Construct;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
@@ -134,6 +136,40 @@ public class TestPlanEvaluator
         assertThat(vector.counts()).containsExactly(3);
         assertThat(((I32Vector) vector.values()).values()).containsExactly(0);
         assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(true, true, true);
+    }
+
+    @Test
+    void testStructuralConstructionUsesProviderAndPropagatesChildErrors()
+    {
+        Variable constructed = new Variable(0);
+        Reference values = new Reference(constructed, Stream.VALUES);
+        Reference errors = new Reference(constructed, Stream.ERRORS);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        constructed,
+                        new Construct(
+                                testingStructType(),
+                                List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values, errors));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {false, true, false}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30}),
+                        new Reference(new Input(1), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(values, Mask.all(3));
+
+        StructVector struct = (StructVector) result.values();
+        assertThat(((I64Vector) struct.field(0).values()).values()).containsExactly(1, 2, 3);
+        assertThat(((I64Vector) struct.field(1).values()).values()).containsExactly(10, 20, 30);
+        assertThat(readBooleans(result.get(Stream.ERRORS))).containsExactly(false, true, true);
     }
 
     @Test
@@ -3929,6 +3965,49 @@ public class TestPlanEvaluator
             public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
             {
                 return Set.of(I32Vector.class, RleVector.class);
+            }
+        };
+    }
+
+    private static TypeBinding testingStructType()
+    {
+        TypeVectorConstructor constructor = (allocator, arguments, length) -> {
+            StructVector struct = allocator.allocate(StructVector.class, length, StructVector::new);
+            for (int field = 0; field < arguments.size(); field++) {
+                struct.setField(Integer.toString(field), arguments.get(field));
+            }
+            return struct;
+        };
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:struct");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorConstructor> vectorConstructor()
+            {
+                return Optional.of(constructor);
+            }
+
+            @Override
+            public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class);
             }
         };
     }

@@ -47,6 +47,7 @@ import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.Construct;
 import org.weakref.nitro.operator.evaluator.ir.Copy;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
@@ -379,6 +380,7 @@ public final class PlanEvaluator
             case Literal literal -> evaluateLiteral(requestedStreamsFor(reference), literal, mask);
             case Copy(Reference source) -> copy(requestedStreamsFor(reference), source, mask, output);
             case Call call -> evaluateCall(reference, call, mask, output);
+            case Construct construct -> evaluateConstruct(requestedStreamsFor(reference), construct, mask, output);
             case Merge merge -> evaluateMerge(requestedStreamsFor(reference), merge, mask, output);
             case Sequence sequence -> evaluateSequence(requestedStreamsFor(reference), sequence, mask, output);
             case StructField field -> evaluateStructField(requestedStreamsFor(reference), field, mask, output);
@@ -423,6 +425,49 @@ public final class PlanEvaluator
             case String stringValue -> fillUtf8(stringValue, length);
             default -> throw new IllegalArgumentException("Unsupported literal value: " + value);
         };
+    }
+
+    private Streams evaluateConstruct(Set<Stream> requestedStreams, Construct construct, Mask mask, Streams output)
+    {
+        int length = mask.maxPosition() + 1;
+        List<Streams> arguments = construct.arguments().stream()
+                .map(argument -> evaluateArgument(argument, mask))
+                .toList();
+
+        Streams result = Streams.empty();
+        if (requestedStreams.contains(Stream.VALUES)) {
+            Vector values = construct.type().vectorConstructor()
+                    .orElseThrow(() -> new IllegalArgumentException("Type does not provide structural construction: " + construct.type().identity()))
+                    .construct(vectorAllocator, arguments, length);
+            checkArgument(
+                    values.length() == length,
+                    "Type vector constructor returned length %s for requested length %s",
+                    values.length(),
+                    length);
+            checkArgument(
+                    construct.type().supportsVector(values),
+                    "Type %s does not support constructor result %s",
+                    construct.type().identity(),
+                    values.getClass().getName());
+            result = Streams.ofValues(values);
+        }
+
+        if (requestedStreams.contains(Stream.ERRORS)) {
+            Vector errors = null;
+            for (Streams argument : arguments) {
+                errors = mergeOptionalBooleanStreams(errors, argument.getOrNull(Stream.ERRORS), null, mask);
+            }
+            Vector existing = output == null ? null : output.getOrNull(Stream.ERRORS);
+            if (existing != null) {
+                errors = errors == null
+                        ? fillFalseBoolean(existing, mask, length)
+                        : copyVector(errors, existing, mask);
+            }
+            if (errors != null) {
+                result = result.with(Stream.ERRORS, errors);
+            }
+        }
+        return completeRequestedStreams(requestedStreams, result, mask);
     }
 
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)

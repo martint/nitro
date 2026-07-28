@@ -20,6 +20,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -30,6 +31,7 @@ import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 // TODO: support hierarchical contexts
@@ -1083,6 +1085,58 @@ public class Allocator
             copied.put(Stream.ERRORS, copyVector(context, streams.get(Stream.ERRORS), mask));
         }
         return copied.build();
+    }
+
+    Streams interleaveStreams(Context context, List<Streams> columns, int positionCount)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(columns, "columns is null");
+        checkArgument(positionCount >= 0, "positionCount is negative");
+        checkArgument(!columns.isEmpty(), "columns is empty");
+
+        int outputSize = Math.multiplyExact(columns.size(), positionCount);
+        for (Streams column : columns) {
+            requireNonNull(column, "column is null");
+            checkArgument(column.hasValues(), "column does not have VALUES");
+            for (Vector vector : column.asMap().values()) {
+                checkArgument(
+                        vector.length() == positionCount,
+                        "column stream length %s does not match position count %s",
+                        vector.length(),
+                        positionCount);
+            }
+        }
+
+        Streams.Builder result = Streams.builder();
+        for (Stream stream : Stream.values()) {
+            boolean present = stream == Stream.VALUES || columns.stream().anyMatch(column -> column.has(stream));
+            if (!present) {
+                continue;
+            }
+
+            Vector output = stream == Stream.VALUES
+                    ? null
+                    : allocate(context, BooleanVector.class, outputSize, BooleanVector::new);
+            for (int position = 0; position < positionCount; position++) {
+                for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
+                    Vector source = columns.get(columnIndex).getOrNull(stream);
+                    if (source != null) {
+                        output = source.copySinglePositionInto(
+                                this,
+                                context,
+                                output,
+                                position,
+                                position * columns.size() + columnIndex,
+                                outputSize);
+                    }
+                }
+            }
+            if (output == null) {
+                output = columns.getFirst().values().emptyLike(this, context);
+            }
+            result.put(stream, output);
+        }
+        return result.build();
     }
 
     public Vector copyVector(Context context, Vector vector)

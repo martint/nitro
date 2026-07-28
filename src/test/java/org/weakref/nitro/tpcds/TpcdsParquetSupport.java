@@ -11470,6 +11470,10 @@ final class TpcdsParquetSupport
                             remap(condition, variableOffset),
                             remap(whenTrue, variableOffset),
                             remap(whenFalse, variableOffset));
+            case org.weakref.nitro.operator.evaluator.ir.Construct(var type, List<Reference> arguments) ->
+                    new org.weakref.nitro.operator.evaluator.ir.Construct(
+                            type,
+                            remapReferences(arguments, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.Copy(Reference source) -> new org.weakref.nitro.operator.evaluator.ir.Copy(remap(source, variableOffset));
             case org.weakref.nitro.operator.evaluator.ir.Sequence(Reference first, Reference result) ->
                     new org.weakref.nitro.operator.evaluator.ir.Sequence(
