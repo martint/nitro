@@ -30,6 +30,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestBenchmarkSchemaRegistry
 {
+    @Test
+    void testIntegerAndDateAdmitConnectorAndEngineVectorWidths()
+    {
+        BenchmarkTypeRegistry registry = new BenchmarkTypeRegistry();
+
+        for (String identity : List.of(BenchmarkTypeRegistry.INTEGER, BenchmarkTypeRegistry.DATE)) {
+            var binding = registry.resolve(new TypeIdentity(identity));
+            assertThat(binding.supportsVector(new I32Vector(1))).isTrue();
+            assertThat(binding.supportsVector(new I64Vector(1))).isTrue();
+        }
+    }
+
     private final BenchmarkSchemaRegistry schemas = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
 
     @Test

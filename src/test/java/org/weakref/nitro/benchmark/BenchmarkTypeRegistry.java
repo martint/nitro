@@ -60,44 +60,47 @@ public final class BenchmarkTypeRegistry
     {
         String value = identity.value();
         Class<?> carrierType;
-        Class<? extends Vector> flatVectorType;
+        Set<Class<? extends Vector>> flatVectorTypes;
         if (value.equals(DOUBLE)) {
             carrierType = double.class;
-            flatVectorType = F64Vector.class;
+            flatVectorTypes = Set.of(F64Vector.class);
         }
         else if (value.equals(BOOLEAN)) {
             carrierType = boolean.class;
-            flatVectorType = BooleanVector.class;
+            flatVectorTypes = Set.of(BooleanVector.class);
         }
         else if (value.equals(VARCHAR) || value.startsWith("benchmark:varchar(") || value.startsWith("benchmark:char(")) {
             carrierType = byte[].class;
-            flatVectorType = BinaryVector.class;
+            flatVectorTypes = Set.of(BinaryVector.class);
         }
         else if (value.equals(INTEGER)) {
             carrierType = long.class;
-            flatVectorType = I32Vector.class;
+            flatVectorTypes = Set.of(I32Vector.class, I64Vector.class);
+        }
+        else if (value.equals(DATE)) {
+            carrierType = long.class;
+            flatVectorTypes = Set.of(I32Vector.class, I64Vector.class);
         }
         else if (value.equals(BIGINT) ||
-                value.equals(DATE) ||
                 value.equals(TIME) ||
                 value.startsWith("benchmark:decimal(")) {
             carrierType = long.class;
-            flatVectorType = I64Vector.class;
+            flatVectorTypes = Set.of(I64Vector.class);
         }
         else {
             throw new IllegalArgumentException("Unknown benchmark type identity: " + value);
         }
-        return new RegistryTypeBinding(identity, carrierType, flatVectorType);
+        return new RegistryTypeBinding(identity, carrierType, flatVectorTypes);
     }
 
-    private record RegistryTypeBinding(TypeIdentity identity, Class<?> carrierType, Class<? extends Vector> flatVectorType)
+    private record RegistryTypeBinding(TypeIdentity identity, Class<?> carrierType, Set<Class<? extends Vector>> flatVectorTypes)
             implements TypeBinding
     {
         private RegistryTypeBinding
         {
             requireNonNull(identity, "identity is null");
             requireNonNull(carrierType, "carrierType is null");
-            requireNonNull(flatVectorType, "flatVectorType is null");
+            flatVectorTypes = Set.copyOf(requireNonNull(flatVectorTypes, "flatVectorTypes is null"));
         }
 
         @Override
@@ -109,14 +112,17 @@ public final class BenchmarkTypeRegistry
         @Override
         public Set<Class<? extends Vector>> supportedVectorTypes()
         {
-            return Set.of(flatVectorType, DictionaryVector.class, RleVector.class);
+            return Set.copyOf(java.util.stream.Stream.concat(
+                            flatVectorTypes.stream(),
+                            java.util.stream.Stream.of(DictionaryVector.class, RleVector.class))
+                    .collect(java.util.stream.Collectors.toSet()));
         }
 
         @Override
         public boolean supportsVector(Vector vector)
         {
             requireNonNull(vector, "vector is null");
-            if (flatVectorType.isInstance(vector)) {
+            if (flatVectorTypes.stream().anyMatch(type -> type.isInstance(vector))) {
                 return true;
             }
             if (vector instanceof DictionaryVector dictionary) {
