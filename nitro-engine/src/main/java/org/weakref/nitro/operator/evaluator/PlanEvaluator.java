@@ -20,6 +20,8 @@ import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.mask.RangeConstraint;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -34,6 +36,7 @@ import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.MaskOutcome;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
@@ -90,6 +93,7 @@ public final class PlanEvaluator
     private final PrimitiveRegistry primitiveRegistry;
     private final InputResolver input;
     private final Allocator allocator;
+    private final VectorAllocator vectorAllocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
     private final Map<Variable, BoundDictionaryMaskOptimization> dictionaryMaskOptimizations;
@@ -168,6 +172,7 @@ public final class PlanEvaluator
         this.primitiveRegistry = primitiveRegistry;
         this.input = input;
         this.allocator = allocator;
+        this.vectorAllocator = allocator.vectorAllocator(allocationContext);
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
@@ -382,17 +387,40 @@ public final class PlanEvaluator
     private Streams evaluateLiteral(Set<Stream> requestedStreams, Literal literal, Mask mask)
     {
         Streams result = Streams.empty();
+        int length = mask.maxPosition() + 1;
         if (requestedStreams.contains(Stream.VALUES)) {
-            int length = mask.maxPosition() + 1;
-            result = switch (literal.value()) {
-                case Long value -> Streams.ofValues(fillLongRle(value, length));
-                case Double value -> Streams.ofValues(fillDoubleRle(value, length));
-                case Boolean value -> Streams.of(Stream.VALUES, fillBoolean(value, length));
-                case String value -> Streams.of(Stream.VALUES, fillUtf8(value, length));
-                default -> throw new IllegalArgumentException("Unsupported literal value: " + literal.value());
-            };
+            Vector values = literal.type()
+                    .map(type -> typedLiteralValues(type, literal.value(), length))
+                    .orElseGet(() -> untypedLiteralValues(literal.value(), length));
+            result = Streams.ofValues(values);
+        }
+        if (literal.value() == null && requestedStreams.contains(Stream.NULLS)) {
+            result = result.with(Stream.NULLS, fillBoolean(true, length));
         }
         return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private Vector typedLiteralValues(TypeBinding type, Object value, int length)
+    {
+        TypeVectorFactory factory = type.vectorFactory()
+                .orElseThrow(() -> new IllegalArgumentException("Type does not provide vector construction: " + type.identity()));
+        Vector vector = value == null
+                ? factory.nullValues(vectorAllocator, length)
+                : factory.constant(vectorAllocator, value, length);
+        checkArgument(vector.length() == length, "Type vector factory returned length %s for requested length %s", vector.length(), length);
+        checkArgument(type.supportsVector(vector), "Type %s does not support factory result %s", type.identity(), vector.getClass().getName());
+        return vector;
+    }
+
+    private Vector untypedLiteralValues(Object value, int length)
+    {
+        return switch (value) {
+            case Long longValue -> fillLongRle(longValue, length);
+            case Double doubleValue -> fillDoubleRle(doubleValue, length);
+            case Boolean booleanValue -> fillBoolean(booleanValue, length);
+            case String stringValue -> fillUtf8(stringValue, length);
+            default -> throw new IllegalArgumentException("Unsupported literal value: " + value);
+        };
     }
 
     private Streams evaluateCall(Reference reference, Call call, Mask mask, Streams output)

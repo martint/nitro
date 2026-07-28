@@ -14,6 +14,10 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
@@ -71,6 +75,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -82,6 +87,54 @@ import static org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry;
 
 public class TestPlanEvaluator
 {
+    @Test
+    void testTypedLiteralUsesProviderVectorFactory()
+    {
+        Variable literal = new Variable(0);
+        Reference values = new Reference(literal, Stream.VALUES);
+        TypeBinding type = testingIntegerType();
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(literal, new Literal(37, type), AllMask.ALL)),
+                List.of(values));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of()),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(values, Mask.all(4));
+
+        assertThat(result.get(Stream.VALUES)).isInstanceOf(RleVector.class);
+        RleVector vector = (RleVector) result.get(Stream.VALUES);
+        assertThat(vector.counts()).containsExactly(4);
+        assertThat(((I32Vector) vector.values()).values()).containsExactly(37);
+    }
+
+    @Test
+    void testTypedNullUsesProviderPlaceholderAndSeparateNullStream()
+    {
+        Variable literal = new Variable(0);
+        Reference values = new Reference(literal, Stream.VALUES);
+        Reference nulls = new Reference(literal, Stream.NULLS);
+        TypeBinding type = testingIntegerType();
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(literal, new Literal(null, type), AllMask.ALL)),
+                List.of(values, nulls));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of()),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(values, Mask.all(3));
+
+        assertThat(result.get(Stream.VALUES)).isInstanceOf(RleVector.class);
+        RleVector vector = (RleVector) result.get(Stream.VALUES);
+        assertThat(vector.counts()).containsExactly(3);
+        assertThat(((I32Vector) vector.values()).values()).containsExactly(0);
+        assertThat(readBooleans(result.get(Stream.NULLS))).containsExactly(true, true, true);
+    }
+
     @Test
     void testFlatBooleanReferenceCompactsOwnedMaskInPlaceWithoutTemporaryMask()
     {
@@ -3779,6 +3832,64 @@ public class TestPlanEvaluator
                 values[position] = value;
             }
             return Streams.ofValues(new I64Vector(values));
+        };
+    }
+
+    private static TypeBinding testingIntegerType()
+    {
+        TypeVectorFactory vectorFactory = new TypeVectorFactory()
+        {
+            @Override
+            public org.weakref.nitro.data.Vector constant(
+                    org.weakref.nitro.data.VectorAllocator allocator,
+                    Object value,
+                    int length)
+            {
+                I32Vector scalar = allocator.allocate(I32Vector.class, 1, I32Vector::new);
+                scalar.values()[0] = (Integer) value;
+                return allocator.runLength(new int[] {length}, scalar);
+            }
+
+            @Override
+            public org.weakref.nitro.data.Vector nullValues(
+                    org.weakref.nitro.data.VectorAllocator allocator,
+                    int length)
+            {
+                I32Vector scalar = allocator.allocate(I32Vector.class, 1, I32Vector::new);
+                return allocator.runLength(new int[] {length}, scalar);
+            }
+        };
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:integer");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return int.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(vectorFactory);
+            }
+
+            @Override
+            public Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes()
+            {
+                return Set.of(I32Vector.class, RleVector.class);
+            }
         };
     }
 

@@ -15,6 +15,7 @@ package org.weakref.nitro.core.type;
 
 import org.weakref.nitro.data.Vector;
 
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -39,6 +40,15 @@ public interface TypeBinding
     Class<?> carrierType();
 
     TypeOperators operators();
+
+    /// Provider-owned construction for typed constants and null placeholders.
+    ///
+    /// Empty is retained for compatibility bindings and types that cannot be materialized as
+    /// literals. The evaluator must not infer a factory from a carrier class or type identity.
+    default Optional<TypeVectorFactory> vectorFactory()
+    {
+        return Optional.empty();
+    }
 
     /// Vector representations this type provider permits at an SPI boundary.
     ///

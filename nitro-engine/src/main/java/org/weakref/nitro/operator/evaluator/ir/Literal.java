@@ -13,7 +13,34 @@
  */
 package org.weakref.nitro.operator.evaluator.ir;
 
-public record Literal(Object value)
+import org.weakref.nitro.core.type.TypeBinding;
+
+import java.util.Optional;
+
+import static java.util.Objects.requireNonNull;
+
+/// A structural constant.
+///
+/// Typed literals may carry a null value because nullability is emitted as a separate stream.
+/// Untyped literals are retained for standalone plans and must be non-null.
+public record Literal(Object value, Optional<TypeBinding> type)
         implements Operation
 {
+    public Literal(Object value)
+    {
+        this(requireNonNull(value, "value is null"), Optional.empty());
+    }
+
+    public Literal(Object value, TypeBinding type)
+    {
+        this(value, Optional.of(requireNonNull(type, "type is null")));
+    }
+
+    public Literal
+    {
+        type = requireNonNull(type, "type is null");
+        if (type.isEmpty()) {
+            requireNonNull(value, "untyped literal value is null");
+        }
+    }
 }
