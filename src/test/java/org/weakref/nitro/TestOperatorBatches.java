@@ -14,6 +14,12 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Field;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
@@ -28,6 +34,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -80,6 +87,7 @@ import org.weakref.nitro.operator.generator.SequenceGenerator;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -2171,6 +2179,94 @@ public class TestOperatorBatches
                         assertThat(nulls.counts()).containsExactly(2);
                         assertThat(((BooleanVector) nulls.values()).values()).containsExactly(true);
                     });
+        }
+    }
+
+    @Test
+    void testProbeOuterJoinUsesTypeFactoryForNullPayloadValues()
+    {
+        AtomicInteger nullValueConstructions = new AtomicInteger();
+        TypeVectorFactory vectorFactory = new TypeVectorFactory()
+        {
+            @Override
+            public Vector constant(VectorAllocator allocator, Object value, int length)
+            {
+                throw new AssertionError("constant construction is not expected");
+            }
+
+            @Override
+            public Vector nullValues(VectorAllocator allocator, int length)
+            {
+                nullValueConstructions.incrementAndGet();
+                I64Vector values = allocator.allocate(I64Vector.class, length, I64Vector::new);
+                Arrays.fill(values.values(), 999);
+                return values;
+            }
+        };
+        TypeBinding payloadType = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:provider-owned-long");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(vectorFactory);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class, RleVector.class);
+            }
+        };
+        TypeBinding unspecified = Schema.unspecified(1).field(0).type();
+        Schema outerSchema = new Schema(List.of(new Field(unspecified, false)));
+        Schema innerSchema = new Schema(List.of(
+                new Field(unspecified, false),
+                new Field(payloadType, false)));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                new TableOperator(
+                        outerSchema,
+                        List.of(TableOperator.Page.values(
+                                2,
+                                new Vector[] {new I64Vector(new long[] {2, 3})},
+                                Mask.all(2)))),
+                0,
+                new TableOperator(
+                        innerSchema,
+                        List.of(TableOperator.Page.values(
+                                1,
+                                new Vector[] {
+                                        new I64Vector(new long[] {1}),
+                                        new I64Vector(new long[] {100})},
+                                Mask.all(1)))),
+                0,
+                true);
+                Batch batch = operator.next()) {
+            assertThat(batch.output(2).borrow(Stream.VALUES))
+                    .isInstanceOfSatisfying(RleVector.class, values ->
+                            assertThat(((I64Vector) values.values()).values()).containsExactly(999));
+            assertThat(booleanValues(batch.output(2).borrow(Stream.NULLS), 2)).containsExactly(true, true);
+            assertThat(nullValueConstructions).hasValue(1);
         }
     }
 

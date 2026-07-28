@@ -33,6 +33,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Arrays;
@@ -141,6 +142,7 @@ public class HashJoinOperator
     // contexts by this stable name. Build ownership is still isolated below by a distinct scope and name.
     private final Allocator.Context allocationContext;
     private final Allocator.Context buildAllocationContext;
+    private final VectorAllocator typeVectorAllocator;
     private final Operator outer;
     private Operator probeSource;
     private final Operator inner;
@@ -421,6 +423,7 @@ public class HashJoinOperator
         this.arrayPool = allocator.primitiveArrays();
         allocator.register(allocationContext);
         allocator.register(buildAllocationContext);
+        this.typeVectorAllocator = allocator.vectorAllocator(allocationContext);
         this.outer = outer;
         this.probeSource = outer;
         this.inner = inner;
@@ -1919,7 +1922,7 @@ public class HashJoinOperator
         releaseCollectedBuildKeys();
         arrayPool.release(matchedOuterPositions);
         matchedOuterPositions = null;
-        allocator.release(allocationContext);
+        typeVectorAllocator.close();
         allocator.release(buildAllocationContext);
         if (executionPolicy.poolScratch() && !joinScratchReleased) {
             joinScratchReleased = true;
@@ -2546,7 +2549,7 @@ public class HashJoinOperator
             if (schema == null) {
                 throw new IllegalStateException("Unable to determine inner output schema for left join");
             }
-            return allNullInnerOutput(schema, currentOutputCount);
+            return allNullInnerOutput(innerOutputIndex, schema, currentOutputCount);
         }
 
         if (!hasNoMatchRows()) {
@@ -2618,7 +2621,7 @@ public class HashJoinOperator
                         throw new IllegalStateException("Unable to determine inner output schema for left join");
                     }
                 }
-                result = copyNullInnerPosition(result, nullInnerSchema, currentOutputCount, outputPosition);
+                result = copyNullInnerPosition(innerOutputIndex, result, nullInnerSchema, currentOutputCount, outputPosition);
                 continue;
             }
             int innerBatchIndex = JoinRowReference.batchIndex(rowReference);
@@ -2658,10 +2661,10 @@ public class HashJoinOperator
         return true;
     }
 
-    private Streams allNullInnerOutput(Streams schema, int size)
+    private Streams allNullInnerOutput(int innerOutputIndex, Streams schema, int size)
     {
         Streams.Builder result = Streams.builder();
-        Vector value = nullValuesLike(schema.values(), 1);
+        Vector value = nullValuesForInnerOutput(innerOutputIndex, schema.values(), 1);
         result.put(Stream.VALUES, allocator.allocateSingleRunRle(allocationContext, size, value));
 
         result.put(Stream.NULLS, allTrueBooleanStream(size));
@@ -3110,10 +3113,10 @@ public class HashJoinOperator
         return withSyntheticNulls(existing, buffers.copySinglePositionFresh(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
     }
 
-    private Streams copyNullInnerPosition(Streams existing, Streams schema, int size, int outputPosition)
+    private Streams copyNullInnerPosition(int innerOutputIndex, Streams existing, Streams schema, int size, int outputPosition)
     {
         Streams.Builder builder = Streams.builder();
-        builder.put(Stream.VALUES, existing == null ? nullValuesLike(schema.values(), size) : existing.values());
+        builder.put(Stream.VALUES, existing == null ? nullValuesForInnerOutput(innerOutputIndex, schema.values(), size) : existing.values());
         builder.put(Stream.NULLS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.NULLS), size, outputPosition, true));
         if (schema.has(Stream.ERRORS)) {
             builder.put(Stream.ERRORS, setBooleanPosition(existing == null ? null : existing.getOrNull(Stream.ERRORS), size, outputPosition, false));
@@ -3486,6 +3489,24 @@ public class HashJoinOperator
             }
             default -> throw new IllegalArgumentException("Unsupported null materialization type: " + sample.getClass().getSimpleName());
         };
+    }
+
+    private Vector nullValuesForInnerOutput(int innerOutputIndex, Vector sample, int size)
+    {
+        TypeBinding type = fullOutputSchema.field(outerOutputCount + innerOutputIndex).type();
+        if (type.isSpecified() && type.vectorFactory().isPresent()) {
+            Vector values = type.vectorFactory().orElseThrow().nullValues(typeVectorAllocator, size);
+            if (values.length() != size) {
+                throw new IllegalArgumentException("Type vector factory returned length %s for requested length %s"
+                        .formatted(values.length(), size));
+            }
+            if (!type.supportsVector(values)) {
+                throw new IllegalArgumentException("Type %s does not support factory result %s"
+                        .formatted(type.identity(), values.getClass().getName()));
+            }
+            return values;
+        }
+        return nullValuesLike(sample, size);
     }
 
     private static boolean isSingleLongJoinCandidate(Vector values)
