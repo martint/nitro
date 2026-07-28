@@ -603,6 +603,12 @@ public class HashJoinOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return true;
+    }
+
+    @Override
     public Batch next()
     {
         long start = System.nanoTime();

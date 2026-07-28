@@ -265,6 +265,12 @@ public class ProjectOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return source.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public boolean supportsConstrainedReborrow()
     {
         // A projection recomputes its outputs on demand after constrain(), so it can satisfy a

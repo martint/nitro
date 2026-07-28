@@ -148,7 +148,7 @@ class TestOperatorBatchSource
     }
 
     @Test
-    void testConstructedIngressDoesNotExposeConstrainedReborrowAcrossPolling()
+    void testConstructedIngressSeparatesConstrainedReborrowFromOpenBatchPolling()
     {
         BatchSource batchSource = new BatchSource()
         {
@@ -185,7 +185,8 @@ class TestOperatorBatchSource
 
         Operator source = new BatchSourceOperator(batchSource, ingress);
 
-        assertThat(source.supportsConstrainedReborrow()).isFalse();
+        assertThat(source.supportsConstrainedReborrow()).isTrue();
+        assertThat(source.supportsOpenBatchHasNext()).isFalse();
     }
 
     @Test
@@ -271,6 +272,7 @@ class TestOperatorBatchSource
         assertThat(source.supportsDynamicFilterPushdown(1)).isFalse();
         assertThat(source.supportsDynamicFilterPushdown(2)).isFalse();
         assertThat(source.supportsConstrainedReborrow()).isFalse();
+        assertThat(source.supportsOpenBatchHasNext()).isFalse();
 
         source.pushDynamicFilter(DynamicFilter.fromRange(0, 10, 20));
 

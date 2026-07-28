@@ -93,6 +93,19 @@ public interface Operator
     }
 
     /**
+     * Returns whether {@link #hasNext()} may be called while the most recent batch remains open without advancing
+     * or invalidating that batch.
+     * <p>
+     * This is weaker than {@link #supportsRetainedBatches()}: an operator whose availability is already known from
+     * instance-owned execution state can answer without touching its input, even when its output batch cannot
+     * outlive the next {@link #next()} call.
+     */
+    default boolean supportsOpenBatchHasNext()
+    {
+        return supportsRetainedBatches();
+    }
+
+    /**
      * Returns the exact number of rows this operator will produce when that is known without executing it, or
      * {@code -1} otherwise. Consumers may use this only as a capacity hint; it must never affect query semantics.
      */

@@ -214,6 +214,12 @@ public class FilterOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return source.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public boolean supportsConstrainedReborrow()
     {
         // Filtering only narrows the active mask; re-borrow safety is whatever the source provides.

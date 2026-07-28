@@ -2461,6 +2461,64 @@ public class TestOperators
     }
 
     @Test
+    void testGroupOperatorUsesSafeOpenBatchAvailability()
+    {
+        AtomicBoolean batchOpen = new AtomicBoolean();
+        AtomicInteger availabilityChecks = new AtomicInteger();
+        Operator source = new Operator()
+        {
+            private boolean produced;
+
+            @Override
+            public int outputCount()
+            {
+                return 1;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                availabilityChecks.incrementAndGet();
+                return !produced;
+            }
+
+            @Override
+            public Batch next()
+            {
+                produced = true;
+                batchOpen.set(true);
+                return new Batch(
+                        Mask.all(1),
+                        _ -> {},
+                        Function.identity(),
+                        _ -> {},
+                        () -> batchOpen.set(false),
+                        new Output(Set.of(Stream.VALUES), _ -> new I64Vector(new long[] {11})));
+            }
+
+            @Override
+            public boolean supportsOpenBatchHasNext()
+            {
+                return true;
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+
+        try (Operator group = new GroupOperator(allocator, 0, source);
+                Batch batch = group.next()) {
+            assertThat(batchOpen).isTrue();
+            assertThat(availabilityChecks).hasValue(1);
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(0L);
+        }
+    }
+
+    @Test
     void testGroupedAggregationOperatorLeavesUnusedPayloadsCold()
     {
         AtomicInteger payloadBorrows = new AtomicInteger();

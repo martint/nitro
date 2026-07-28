@@ -65,6 +65,12 @@ public final class CountingNextOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return delegate.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public void close()
     {
         delegate.close();

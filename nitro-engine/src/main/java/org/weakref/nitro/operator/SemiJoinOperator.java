@@ -330,6 +330,12 @@ public class SemiJoinOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return outer.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public boolean supportsConstrainedReborrow()
     {
         // The output adds a semi-join match column relative to the outer input, so it cannot be

@@ -191,6 +191,12 @@ public final class MarkDistinctMarkerOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return source.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public void close()
     {
         if (currentBatchState != null) {

@@ -136,6 +136,12 @@ public class MarkDistinctOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        return source.supportsOpenBatchHasNext();
+    }
+
+    @Override
     public boolean supportsConstrainedReborrow()
     {
         // The output adds a distinct-marker column relative to the source, so it cannot be

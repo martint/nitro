@@ -143,16 +143,23 @@ public final class BatchSourceOperator
     }
 
     @Override
+    public boolean supportsOpenBatchHasNext()
+    {
+        if (nativeSource != null) {
+            return nativeSource.supportsOpenBatchHasNext();
+        }
+        // The BatchSource protocol advances through poll(). Consumers must close the adapted batch before asking
+        // for availability, independently of whether that batch supports a constrained re-borrow while open.
+        return false;
+    }
+
+    @Override
     public boolean supportsConstrainedReborrow()
     {
         if (nativeSource != null) {
             return nativeSource.supportsConstrainedReborrow();
         }
-        // The BatchSource protocol has no non-advancing availability probe. hasNext() must poll,
-        // and a non-retained source may invalidate its current batch while producing that poll.
-        // The pull Operator contract therefore cannot preserve constrained re-borrow across
-        // hasNext(), even when the underlying source can re-borrow before its next poll.
-        return false;
+        return source.capabilities().contains(SourceCapability.CONSTRAINED_REBORROW);
     }
 
     @Override
