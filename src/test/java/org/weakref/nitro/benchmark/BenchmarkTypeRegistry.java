@@ -60,47 +60,76 @@ public final class BenchmarkTypeRegistry
     {
         String value = identity.value();
         Class<?> carrierType;
-        Set<Class<? extends Vector>> flatVectorTypes;
+        Class<? extends Vector> flatVectorType;
+        Class<? extends Vector> alternateFlatVectorType = null;
         if (value.equals(DOUBLE)) {
             carrierType = double.class;
-            flatVectorTypes = Set.of(F64Vector.class);
+            flatVectorType = F64Vector.class;
         }
         else if (value.equals(BOOLEAN)) {
             carrierType = boolean.class;
-            flatVectorTypes = Set.of(BooleanVector.class);
+            flatVectorType = BooleanVector.class;
         }
         else if (value.equals(VARCHAR) || value.startsWith("benchmark:varchar(") || value.startsWith("benchmark:char(")) {
             carrierType = byte[].class;
-            flatVectorTypes = Set.of(BinaryVector.class);
+            flatVectorType = BinaryVector.class;
         }
         else if (value.equals(INTEGER)) {
             carrierType = long.class;
-            flatVectorTypes = Set.of(I32Vector.class, I64Vector.class);
+            flatVectorType = I32Vector.class;
+            alternateFlatVectorType = I64Vector.class;
         }
         else if (value.equals(DATE)) {
             carrierType = long.class;
-            flatVectorTypes = Set.of(I32Vector.class, I64Vector.class);
+            flatVectorType = I64Vector.class;
+            alternateFlatVectorType = I32Vector.class;
         }
         else if (value.equals(BIGINT) ||
                 value.equals(TIME) ||
                 value.startsWith("benchmark:decimal(")) {
             carrierType = long.class;
-            flatVectorTypes = Set.of(I64Vector.class);
+            flatVectorType = I64Vector.class;
         }
         else {
             throw new IllegalArgumentException("Unknown benchmark type identity: " + value);
         }
-        return new RegistryTypeBinding(identity, carrierType, flatVectorTypes);
+        return new RegistryTypeBinding(identity, carrierType, flatVectorType, alternateFlatVectorType);
     }
 
-    private record RegistryTypeBinding(TypeIdentity identity, Class<?> carrierType, Set<Class<? extends Vector>> flatVectorTypes)
+    private static final class RegistryTypeBinding
             implements TypeBinding
     {
-        private RegistryTypeBinding
+        private final TypeIdentity identity;
+        private final Class<?> carrierType;
+        private final Class<? extends Vector> flatVectorType;
+        private final Class<? extends Vector> alternateFlatVectorType;
+        private final Set<Class<? extends Vector>> supportedVectorTypes;
+
+        private RegistryTypeBinding(
+                TypeIdentity identity,
+                Class<?> carrierType,
+                Class<? extends Vector> flatVectorType,
+                Class<? extends Vector> alternateFlatVectorType)
         {
-            requireNonNull(identity, "identity is null");
-            requireNonNull(carrierType, "carrierType is null");
-            flatVectorTypes = Set.copyOf(requireNonNull(flatVectorTypes, "flatVectorTypes is null"));
+            this.identity = requireNonNull(identity, "identity is null");
+            this.carrierType = requireNonNull(carrierType, "carrierType is null");
+            this.flatVectorType = requireNonNull(flatVectorType, "flatVectorType is null");
+            this.alternateFlatVectorType = alternateFlatVectorType;
+            this.supportedVectorTypes = alternateFlatVectorType == null
+                    ? Set.of(flatVectorType, DictionaryVector.class, RleVector.class)
+                    : Set.of(flatVectorType, alternateFlatVectorType, DictionaryVector.class, RleVector.class);
+        }
+
+        @Override
+        public TypeIdentity identity()
+        {
+            return identity;
+        }
+
+        @Override
+        public Class<?> carrierType()
+        {
+            return carrierType;
         }
 
         @Override
@@ -112,17 +141,15 @@ public final class BenchmarkTypeRegistry
         @Override
         public Set<Class<? extends Vector>> supportedVectorTypes()
         {
-            return Set.copyOf(java.util.stream.Stream.concat(
-                            flatVectorTypes.stream(),
-                            java.util.stream.Stream.of(DictionaryVector.class, RleVector.class))
-                    .collect(java.util.stream.Collectors.toSet()));
+            return supportedVectorTypes;
         }
 
         @Override
         public boolean supportsVector(Vector vector)
         {
             requireNonNull(vector, "vector is null");
-            if (flatVectorTypes.stream().anyMatch(type -> type.isInstance(vector))) {
+            if (flatVectorType.isInstance(vector) ||
+                    (alternateFlatVectorType != null && alternateFlatVectorType.isInstance(vector))) {
                 return true;
             }
             if (vector instanceof DictionaryVector dictionary) {
