@@ -83,7 +83,7 @@ import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.AvgF64;
-import org.weakref.nitro.operator.aggregation.ConditionalSum;
+import org.weakref.nitro.operator.aggregation.ConditionalSumsAggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
@@ -91,6 +91,7 @@ import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAggregationUnit;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
+import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
@@ -2282,9 +2283,10 @@ public class TestOperators
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(
-                        ConditionalSum.equalUtf8(1, "Monday", 2),
-                        ConditionalSum.equalUtf8(1, "Tuesday", 2)),
+                PhysicalAggregationProgram.singleUnit(ConditionalSumsAggregationUnit.equalUtf8(
+                        1,
+                        2,
+                        List.of("Monday", "Tuesday"))),
                 new ConstantTableOperator(
                         allocator,
                         3,
@@ -2308,9 +2310,10 @@ public class TestOperators
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(
-                        ConditionalSum.equalLong(1, 1, 2),
-                        ConditionalSum.equalLong(1, 2, 2)),
+                PhysicalAggregationProgram.singleUnit(ConditionalSumsAggregationUnit.equalLong(
+                        1,
+                        2,
+                        List.of(1L, 2L))),
                 new ConstantTableOperator(
                         allocator,
                         3,
@@ -4317,7 +4320,7 @@ public class TestOperators
         assertThat(operator(new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
-                List.of(new Min(1), new Max(1)),
+                PhysicalAggregationProgram.singleUnit(new MinMaxI64AggregationUnit(1)),
                 new ConstantTableOperator(allocator, 2, input))))
                 .matchesExactly(expected);
     }

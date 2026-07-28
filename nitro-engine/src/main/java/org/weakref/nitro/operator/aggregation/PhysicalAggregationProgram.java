@@ -77,6 +77,16 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
         return new PhysicalAggregationProgram(units, outputs);
     }
 
+    public static PhysicalAggregationProgram singleUnit(PhysicalAggregationUnit unit)
+    {
+        requireNonNull(unit, "unit is null");
+        List<Output> outputs = new ArrayList<>(unit.outputCount());
+        for (int result = 0; result < unit.outputCount(); result++) {
+            outputs.add(new Output(0, result));
+        }
+        return new PhysicalAggregationProgram(List.of(unit), outputs);
+    }
+
     public record Output(int unit, int result)
     {
         public Output

@@ -42,9 +42,9 @@ import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
-import org.weakref.nitro.operator.aggregation.Max;
-import org.weakref.nitro.operator.aggregation.Min;
+import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.MinUtf8;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
@@ -260,7 +260,7 @@ public final class ClickBenchHitsSupport
     {
         return new AggregationOperator(
                 allocator,
-                List.of(new Min(0), new Max(0)),
+                PhysicalAggregationProgram.singleUnit(new MinMaxI64AggregationUnit(0)),
                 clickBenchScan(allocator, file, "EventDate"));
     }
 

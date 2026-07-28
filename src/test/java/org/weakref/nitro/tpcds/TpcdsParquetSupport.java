@@ -45,11 +45,12 @@ import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.Avg;
-import org.weakref.nitro.operator.aggregation.ConditionalSum;
+import org.weakref.nitro.operator.aggregation.ConditionalSumsAggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.Max;
 import org.weakref.nitro.operator.aggregation.Min;
+import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.StddevSamp;
 import org.weakref.nitro.operator.aggregation.Sum;
 import org.weakref.nitro.operator.aggregation.SumProductIfEqual;
@@ -8173,16 +8174,19 @@ final class TpcdsParquetSupport
                         0, 1, 2),
                 0).withOutputs(1, 3, 4));
         union = profiled(prefix + ".project.buckets", projectQuery02Buckets(allocator, primitiveRegistry, union, 1, 2, 0));
-        List<org.weakref.nitro.operator.aggregation.Accumulator> sums = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query02ConditionalAggregation", "true"))
-                ? List.of(
-                        ConditionalSum.equalUtf8(8, "Sunday", 9),
-                        ConditionalSum.equalUtf8(8, "Monday", 9),
-                        ConditionalSum.equalUtf8(8, "Tuesday", 9),
-                        ConditionalSum.equalUtf8(8, "Wednesday", 9),
-                        ConditionalSum.equalUtf8(8, "Thursday", 9),
-                        ConditionalSum.equalUtf8(8, "Friday", 9),
-                        ConditionalSum.equalUtf8(8, "Saturday", 9))
-                : List.of(new Sum(1), new Sum(2), new Sum(3), new Sum(4), new Sum(5), new Sum(6), new Sum(7));
+        PhysicalAggregationProgram sums = Boolean.parseBoolean(System.getProperty("nitro.tpcds.query02ConditionalAggregation", "true"))
+                ? PhysicalAggregationProgram.singleUnit(ConditionalSumsAggregationUnit.equalUtf8(
+                        8,
+                        9,
+                        List.of("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")))
+                : PhysicalAggregationProgram.independent(List.of(
+                        new Sum(1),
+                        new Sum(2),
+                        new Sum(3),
+                        new Sum(4),
+                        new Sum(5),
+                        new Sum(6),
+                        new Sum(7)));
         Operator weekly = profiled(prefix + ".group.week", new GroupedAggregationOperator(
                 allocator,
                 List.of(0),
