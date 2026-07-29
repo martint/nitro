@@ -74,6 +74,13 @@ public final class ProjectionMaskCompiler
             MaskCodeProvider provider,
             List<ProjectionArgument> arguments)
     {
+        // A prebound mask can read direct inputs and planner literals without first materializing another
+        // assignment. Computed arguments require a dependency-aware evaluation contract: compiling them here can
+        // expose lanes that their producing assignment did not materialize under the active mask. Until that
+        // contract is represented explicitly, retain the ordinary scalar path for any computed argument.
+        if (arguments.stream().anyMatch(argument -> argument.kind() == ProjectionArgument.Kind.COMPUTED)) {
+            return Optional.empty();
+        }
         ProjectionProgramBuilder builder = new ProjectionProgramBuilder();
         Program program;
         try {

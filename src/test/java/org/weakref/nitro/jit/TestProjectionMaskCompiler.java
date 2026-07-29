@@ -73,6 +73,19 @@ class TestProjectionMaskCompiler
     }
 
     @Test
+    void testRejectsComputedComparisonArguments()
+    {
+        assertThat(compiler.tryCompile(
+                new LessThanI64RangeOptimization(),
+                List.of(ProjectionArgument.computed(), ProjectionArgument.input())))
+                .isEmpty();
+        assertThat(compiler.tryCompile(
+                new LessThanI64RangeOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.computed())))
+                .isEmpty();
+    }
+
+    @Test
     void testCompilesProviderAuthoredUtf8LiteralEquality()
     {
         ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
