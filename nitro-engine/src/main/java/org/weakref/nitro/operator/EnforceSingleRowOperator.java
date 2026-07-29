@@ -114,7 +114,7 @@ public class EnforceSingleRowOperator
                 for (int position : mask) {
                     rowCount++;
                     if (rowCount > 1) {
-                        throw new IllegalStateException("Scalar subquery returned multiple rows");
+                        throw new MultipleRowsException();
                     }
                     copyRow(batch, position);
                 }
@@ -151,10 +151,7 @@ public class EnforceSingleRowOperator
     {
         for (int outputIndex = 0; outputIndex < outputCount(); outputIndex++) {
             Streams schema = stagedColumns[outputIndex];
-            if (schema == null) {
-                throw new IllegalStateException("Unable to determine output schema for EnforceSingleRowOperator");
-            }
-            stagedColumns[outputIndex] = nullStreamsLike(schema);
+            stagedColumns[outputIndex] = nullStreams(outputIndex, schema);
         }
     }
 
@@ -181,17 +178,32 @@ public class EnforceSingleRowOperator
         return builder.build();
     }
 
-    private Streams nullStreamsLike(Streams schema)
+    private Streams nullStreams(int outputIndex, Streams schema)
     {
         Streams.Builder builder = Streams.builder();
-        Vector values = valuesLike(schema.values());
+        var type = outputSchema().field(outputIndex).type();
+        Vector values;
+        if (type.isSpecified()) {
+            values = type.vectorFactory()
+                    .orElseThrow(() -> new IllegalStateException("EnforceSingleRow output type does not provide a vector factory"))
+                    .nullValues(allocator.vectorAllocator(allocationContext), 1);
+            if (values.length() != 1 || !type.supportsVector(values)) {
+                throw new IllegalStateException("EnforceSingleRow output type returned an incompatible NULL representation");
+            }
+        }
+        else {
+            if (schema == null) {
+                throw new IllegalStateException("Unable to determine output schema for EnforceSingleRowOperator");
+            }
+            values = valuesLike(schema.values());
+        }
         builder.put(Stream.VALUES, values);
 
         BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
         nulls.values()[0] = true;
         builder.put(Stream.NULLS, nulls);
 
-        if (schema.has(Stream.ERRORS)) {
+        if (schema != null && schema.has(Stream.ERRORS)) {
             BooleanVector errors = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
             builder.put(Stream.ERRORS, errors);
         }
@@ -227,5 +239,14 @@ public class EnforceSingleRowOperator
             builder.put(stream, output.borrow(stream));
         }
         return builder.build();
+    }
+
+    public static final class MultipleRowsException
+            extends IllegalStateException
+    {
+        public MultipleRowsException()
+        {
+            super("Scalar subquery returned multiple rows");
+        }
     }
 }

@@ -42,6 +42,7 @@ import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
+import org.weakref.nitro.operator.EnforceSingleRowSession;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.GeneratorOperator;
@@ -2543,6 +2544,91 @@ public class TestOperatorBatches
             assertThatThrownBy(() -> OperatorAssertions.OperatorAssert.toRows(operator))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("Scalar subquery returned multiple rows");
+        }
+    }
+
+    @Test
+    void testEnforceSingleRowSessionRetainsInputAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 1, List.of(row(11L)));
+                EnforceSingleRowSession session = new EnforceSingleRowSession(allocator, first.outputSchema())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 1, List.of(row(12L)));
+                    Batch batch = second.next()) {
+                assertThatThrownBy(() -> session.addInput(batch))
+                        .isInstanceOf(EnforceSingleRowOperator.MultipleRowsException.class)
+                        .hasMessage("Scalar subquery returned multiple rows");
+            }
+        }
+    }
+
+    @Test
+    void testEnforceSingleRowSessionUsesTypeFactoryForEmptyInput()
+    {
+        AtomicInteger nullValueConstructions = new AtomicInteger();
+        TypeVectorFactory vectorFactory = new TypeVectorFactory()
+        {
+            @Override
+            public Vector constant(VectorAllocator allocator, Object value, int length)
+            {
+                throw new AssertionError("constant construction is not expected");
+            }
+
+            @Override
+            public Vector nullValues(VectorAllocator allocator, int length)
+            {
+                nullValueConstructions.incrementAndGet();
+                return allocator.allocate(I64Vector.class, length, I64Vector::new);
+            }
+        };
+        TypeBinding type = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("test:enforce-single-row");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(vectorFactory);
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (EnforceSingleRowSession session = new EnforceSingleRowSession(
+                allocator,
+                new Schema(List.of(new Field(type, true))))) {
+            session.finishInput();
+            assertThat(session.hasNext()).isTrue();
+            try (Batch batch = session.next()) {
+                assertThat(batch.borrowMask()).containsExactly(0);
+                assertThat(batch.output(0).borrow(Stream.VALUES)).isInstanceOf(I64Vector.class);
+                assertThat(VectorAccess.isNull(batch.output(0).borrow(Stream.NULLS), 0)).isTrue();
+            }
+            assertThat(nullValueConstructions).hasValue(1);
         }
     }
 
