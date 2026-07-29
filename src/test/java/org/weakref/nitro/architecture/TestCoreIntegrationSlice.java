@@ -26,10 +26,15 @@ import org.weakref.nitro.core.function.InvocationConvention;
 import org.weakref.nitro.core.function.ResolvedCall;
 import org.weakref.nitro.core.function.aggregation.AggregationArgument;
 import org.weakref.nitro.core.function.aggregation.AggregationArgumentBinding;
+import org.weakref.nitro.core.function.aggregation.AggregationExecution;
+import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
+import org.weakref.nitro.core.function.aggregation.AggregationImplementationProvider;
+import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateProvider;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateResolver;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdateTemplate;
+import org.weakref.nitro.core.function.aggregation.ResolvedAggregation;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
@@ -304,6 +309,37 @@ class TestCoreIntegrationSlice
                 .isEmpty();
     }
 
+    @Test
+    void testAggregationImplementationResolvesAcrossIsolatedClassLoader()
+            throws ReflectiveOperationException, IOException
+    {
+        AggregationImplementation implementation = new TestingAggregationImplementation();
+        AggregationImplementationProvider provider = isolatedAggregationImplementationProvider(BIGINT, implementation);
+        assertThat(provider.getClass().getClassLoader()).isNotSameAs(getClass().getClassLoader());
+
+        PrimitiveFunction scalarPlaceholder = new IsNullI64();
+        ResolvedCall resolvedCall = new ResolvedCall(
+                new FunctionIdentity("isolated:aggregate"),
+                new BoundSignature(BIGINT, List.of(BIGINT)),
+                new FunctionSemantics(
+                        scalarPlaceholder.deterministic(),
+                        List.of(FunctionSemantics.ArgumentNullConvention.RETURN_NULL_ON_NULL),
+                        false,
+                        FunctionSemantics.FailureConvention.NEVER_FAILS),
+                List.of(),
+                new PrimitiveInvocationBinding(scalarPlaceholder, List.of(provider)));
+
+        AggregationImplementationProvider.Binding binding = ResolvedAggregation.resolve(
+                        resolvedCall,
+                        List.of(AggregationArgument.input()))
+                .orElseThrow();
+        assertThat(binding.intermediateType()).isSameAs(BIGINT);
+        assertThat(binding.implementation()).isSameAs(implementation);
+        assertThat(ResolvedAggregation.resolve(
+                resolvedCall,
+                List.of(AggregationArgument.computed()))).isEmpty();
+    }
+
     private static ResolvedCall resolvedCall(
             FunctionIdentity identity,
             TypeBinding result,
@@ -431,6 +467,46 @@ class TestCoreIntegrationSlice
         return (GroupedAggregationUpdateProvider) loader.loadClass(name).getConstructor().newInstance();
     }
 
+    private static AggregationImplementationProvider isolatedAggregationImplementationProvider(
+            TypeBinding intermediateType,
+            AggregationImplementation implementation)
+            throws IOException, ReflectiveOperationException
+    {
+        String name = IsolatedAggregationImplementationProvider.class.getName();
+        String resource = "/" + name.replace('.', '/') + ".class";
+        byte[] bytes;
+        try (var input = TestCoreIntegrationSlice.class.getResourceAsStream(resource)) {
+            if (input == null) {
+                throw new IllegalStateException("Missing class bytes: " + resource);
+            }
+            bytes = input.readAllBytes();
+        }
+        ClassLoader loader = new ClassLoader(TestCoreIntegrationSlice.class.getClassLoader())
+        {
+            @Override
+            protected Class<?> loadClass(String requestedName, boolean resolve)
+                    throws ClassNotFoundException
+            {
+                synchronized (getClassLoadingLock(requestedName)) {
+                    if (!requestedName.equals(name)) {
+                        return super.loadClass(requestedName, resolve);
+                    }
+                    Class<?> loaded = findLoadedClass(requestedName);
+                    if (loaded == null) {
+                        loaded = defineClass(requestedName, bytes, 0, bytes.length);
+                    }
+                    if (resolve) {
+                        resolveClass(loaded);
+                    }
+                    return loaded;
+                }
+            }
+        };
+        return (AggregationImplementationProvider) loader.loadClass(name)
+                .getConstructor(TypeBinding.class, AggregationImplementation.class)
+                .newInstance(intermediateType, implementation);
+    }
+
     public static final class IsolatedAdd
             implements PrimitiveFunction
     {
@@ -492,6 +568,98 @@ class TestCoreIntegrationSlice
                 return java.util.Optional.empty();
             }
             return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
+        }
+    }
+
+    public static final class IsolatedAggregationImplementationProvider
+            implements AggregationImplementationProvider
+    {
+        private final TypeBinding intermediateType;
+        private final AggregationImplementation implementation;
+
+        public IsolatedAggregationImplementationProvider(
+                TypeBinding intermediateType,
+                AggregationImplementation implementation)
+        {
+            this.intermediateType = intermediateType;
+            this.implementation = implementation;
+        }
+
+        @Override
+        public java.util.Optional<Binding> bind(List<AggregationArgument> arguments)
+        {
+            if (arguments.size() != 1 || arguments.getFirst().kind() != AggregationArgument.Kind.INPUT) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(new Binding(intermediateType, implementation));
+        }
+    }
+
+    private static final class TestingAggregationImplementation
+            implements AggregationImplementation
+    {
+        @Override
+        public Object allocate(AggregationExecution execution, int groups)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int groups)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void initialize(Object state, int offset, int length)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addRawInput(Object state, int group, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addRawInput(Object state, org.weakref.nitro.data.Vector groups, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addIntermediate(Object state, int group, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void addIntermediate(Object state, org.weakref.nitro.data.Vector groups, Mask mask, AggregationInput input)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Streams intermediate(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Streams result(
+                int maxGroup,
+                Object state,
+                Streams existing,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            throw new UnsupportedOperationException();
         }
     }
 
