@@ -507,11 +507,24 @@ public final class NitroParquetBatchSource
             return;
         }
         filtersByColumn[column] = filter;
+        if (existing == null && filterOrder != null) {
+            // Runtime filters may arrive after this source has already decoded a window. Preserve the established
+            // order so partially consumed readers keep their lead/selected roles, and append the newly active
+            // column so it is decoded before the filtered-column gather below.
+            filterOrder = appendFilterColumn(filterOrder, column);
+        }
         int dictionaryEntries = readers[column].peekDictionarySize();
         filterVersionsByColumn[column] = dictionaryFilterPolicy.admitsVersionedPredicate(dictionaryEntries, filter.size())
                 ? filter
                 : null;
         hasFilters = true;
+    }
+
+    static int[] appendFilterColumn(int[] filterOrder, int column)
+    {
+        int[] extended = java.util.Arrays.copyOf(filterOrder, filterOrder.length + 1);
+        extended[extended.length - 1] = column;
+        return extended;
     }
 
     @Override

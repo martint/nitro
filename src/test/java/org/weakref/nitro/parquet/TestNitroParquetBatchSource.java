@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,6 +55,14 @@ class TestNitroParquetBatchSource
         RowGroup dictionary = rowGroup(150, 90);
         assertTrue(ParquetFile.splitContainsRowGroup(dictionary, 0, 100));
         assertFalse(ParquetFile.splitContainsRowGroup(dictionary, 100, 200));
+    }
+
+    @Test
+    void testLateRuntimeFilterPreservesEstablishedOrder()
+    {
+        int[] establishedOrder = {2, 0};
+        assertArrayEquals(new int[] {2, 0, 1}, NitroParquetBatchSource.appendFilterColumn(establishedOrder, 1));
+        assertArrayEquals(new int[] {2, 0}, establishedOrder);
     }
 
     private static boolean admits(int selected, int total, int scanColumns, int payloadColumns)
