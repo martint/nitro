@@ -63,6 +63,7 @@ import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
 import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SingleBatchOperator;
+import org.weakref.nitro.operator.SortSession;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
@@ -2591,6 +2592,46 @@ public class TestOperatorBatches
                 assertThat(utf8(payload, 0)).isEqualTo("fourth");
                 assertThat(utf8(payload, 1)).isEqualTo("second");
                 assertThat(utf8(payload, 2)).isEqualTo("third");
+            }
+        }
+    }
+
+    @Test
+    void testSortSessionRetainsRowsAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(
+                        row(9L, "second"),
+                        row(1L, "first")));
+                SortSession session = new SortSession(
+                        allocator,
+                        new int[] {0},
+                        new boolean[] {false},
+                        first.outputSchema())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(
+                    allocator,
+                    2,
+                    List.of(
+                            row(12L, "fourth"),
+                            row(5L, "third")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+
+            try (Batch result = session.finish().orElseThrow()) {
+                Vector keys = result.output(0).borrow(Stream.VALUES);
+                Vector payload = result.output(1).borrow(Stream.VALUES);
+                assertThat(longValues(keys, result.borrowMask().count())).containsExactly(1L, 5L, 9L, 12L);
+                assertThat(utf8(payload, 0)).isEqualTo("first");
+                assertThat(utf8(payload, 1)).isEqualTo("third");
+                assertThat(utf8(payload, 2)).isEqualTo("second");
+                assertThat(utf8(payload, 3)).isEqualTo("fourth");
             }
         }
     }
