@@ -50,6 +50,7 @@ import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
+import org.weakref.nitro.operator.LimitSession;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
@@ -2632,6 +2633,32 @@ public class TestOperatorBatches
                 assertThat(utf8(payload, 1)).isEqualTo("third");
                 assertThat(utf8(payload, 2)).isEqualTo("second");
                 assertThat(utf8(payload, 3)).isEqualTo("fourth");
+            }
+        }
+    }
+
+    @Test
+    void testLimitSessionPreservesRemainingRowsAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (LimitSession session = new LimitSession(allocator, 3);
+                Operator first = new ConstantTableOperator(
+                        allocator,
+                        1,
+                        List.of(row(1L), row(2L)));
+                Batch firstBatch = first.next()) {
+            assertThat(session.select(firstBatch).orElseThrow().count()).isEqualTo(2);
+            assertThat(session.isFinished()).isFalse();
+
+            try (Operator second = new ConstantTableOperator(
+                    allocator,
+                    1,
+                    List.of(row(3L), row(4L)));
+                    Batch secondBatch = second.next()) {
+                assertThat(session.select(secondBatch).orElseThrow().count()).isOne();
+                assertThat(longValues(secondBatch.output(0).borrow(Stream.VALUES), secondBatch.borrowMask().count()))
+                        .containsExactly(3L);
+                assertThat(session.isFinished()).isTrue();
             }
         }
     }
