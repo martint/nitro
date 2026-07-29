@@ -71,6 +71,7 @@ import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TopNSession;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
+import org.weakref.nitro.operator.WindowSession;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -820,6 +821,42 @@ public class TestOperatorBatches
                 new boolean[] {false},
                 List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})))) {
             assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, "first-a", 1L),
+                            row(1L, "first-b", 1L),
+                            row(2L, "second", 3L),
+                            row(3L, "third", 4L));
+        }
+    }
+
+    @Test
+    void testWindowSessionRanksAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 2, List.of(
+                row(3L, "third"),
+                row(1L, "first-a")));
+                WindowSession session = new WindowSession(
+                        allocator,
+                        first.outputSchema(),
+                        new int[0],
+                        new int[] {0},
+                        new boolean[] {false},
+                        List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 2, List.of(
+                    row(1L, "first-b"),
+                    row(2L, "second")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
                     .containsExactly(
                             row(1L, "first-a", 1L),
                             row(1L, "first-b", 1L),
