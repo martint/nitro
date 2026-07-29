@@ -24,7 +24,10 @@ import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
 import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.core.source.SourceMetrics;
+import org.weakref.nitro.core.source.SourceMetricsProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
+import org.weakref.nitro.core.source.SourceProtocol;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BatchBufferOwner;
@@ -42,11 +45,13 @@ import org.weakref.nitro.data.VectorSourceBatch;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.Math.addExact;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
@@ -149,6 +154,7 @@ public final class NitroParquetBatchSource
     private final boolean[] nullable;
     private final boolean[] intOutputAsLong;
     private final long totalRows;
+    private final long totalCompressedBytes;
 
     private final boolean allNumeric;
     private int filterWindow;
@@ -395,8 +401,11 @@ public final class NitroParquetBatchSource
             outputResolvers[c] = new ScanOutputResolver(c);
         }
         long rows = 0;
+        long compressedBytes = 0;
         for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
             ParquetFile file = files[fileIndex];
+            Split split = splits.get(fileIndex);
+            List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
             for (int c = 0; c < columnCount; c++) {
                 ParquetFile.Column column = file.column(columns.get(c));
                 DecompressedPageCache.Source source = decompressedPages == null
@@ -405,17 +414,18 @@ public final class NitroParquetBatchSource
                 if (source != null) {
                     decompressedPages.register(source);
                 }
-                Split split = splits.get(fileIndex);
-                for (RowGroup rowGroup : file.rowGroups(split.start(), split.length())) {
-                    readers[c].addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows, source);
+                for (RowGroup rowGroup : rowGroups) {
+                    var columnMetadata = file.columnChunk(rowGroup, column).meta_data;
+                    readers[c].addChunk(file.data(), columnMetadata, rowGroup.num_rows, source);
+                    compressedBytes = addExact(compressedBytes, columnMetadata.total_compressed_size);
                 }
             }
-            Split split = splits.get(fileIndex);
-            rows += file.rowGroups(split.start(), split.length()).stream()
+            rows += rowGroups.stream()
                     .mapToLong(rowGroup -> rowGroup.num_rows)
                     .sum();
         }
         this.totalRows = rows;
+        this.totalCompressedBytes = compressedBytes;
 
         int intColumns = 0;
         for (ColumnReader reader : readers) {
@@ -507,6 +517,35 @@ public final class NitroParquetBatchSource
     public OptionalLong exactRows()
     {
         return OptionalLong.of(totalRows);
+    }
+
+    @Override
+    public <T> Optional<T> protocol(SourceProtocol<T> protocol)
+    {
+        if (protocol == SourceMetricsProtocol.METRICS) {
+            SourceMetrics metrics = new SourceMetrics()
+            {
+                @Override
+                public OptionalLong completedBytes()
+                {
+                    return nextRow == totalRows ? OptionalLong.of(totalCompressedBytes) : OptionalLong.empty();
+                }
+
+                @Override
+                public OptionalLong completedPositions()
+                {
+                    return OptionalLong.of(nextRow);
+                }
+
+                @Override
+                public OptionalLong readTimeNanos()
+                {
+                    return OptionalLong.empty();
+                }
+            };
+            return Optional.of(protocol.valueType().cast(metrics));
+        }
+        return Optional.empty();
     }
 
     @Override

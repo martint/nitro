@@ -29,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.SourceMetrics;
+import org.weakref.nitro.core.source.SourceMetricsProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
@@ -258,6 +260,10 @@ public class TestParquetOperator
                         schema)) {
             assertThat(source.schema()).isSameAs(schema);
             assertThat(source.column(0)).isSameAs(source.column(0));
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
+            assertThat(metrics.completedBytes()).isEmpty();
+            assertThat(metrics.completedPositions()).hasValue(0);
+            assertThat(metrics.readTimeNanos()).isEmpty();
 
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
             var batch = ready.batch();
@@ -268,6 +274,8 @@ public class TestParquetOperator
                     .startsWith(false, true, false);
             batch.close();
 
+            assertThat(metrics.completedBytes().orElseThrow()).isPositive();
+            assertThat(metrics.completedPositions()).hasValue(3);
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
     }
