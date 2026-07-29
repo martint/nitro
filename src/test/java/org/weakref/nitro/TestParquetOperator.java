@@ -93,6 +93,7 @@ import org.weakref.nitro.parquet.ColumnReader;
 import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.NitroParquetBatchSource;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
+import org.weakref.nitro.parquet.ParquetColumnNameMatching;
 import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetFilterEvaluationPolicy;
@@ -277,6 +278,29 @@ public class TestParquetOperator
             assertThat(metrics.completedBytes().orElseThrow()).isPositive();
             assertThat(metrics.completedPositions()).hasValue(3);
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceCanMatchConnectorColumnNamesIgnoringCase()
+            throws IOException
+    {
+        java.nio.file.Path file = ClickBenchHitsSupport.writeHitsFixture(tempDirectory.resolve("mixed-case-column.parquet"), 3);
+        Schema schema = new Schema(List.of(new Field("advengineid", BIGINT, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = NitroParquetBatchSource.forSplits(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(NitroParquetBatchSource.Split.wholeFile(file)),
+                        schema,
+                        ParquetColumnNameMatching.CASE_INSENSITIVE)) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            try (var batch = ready.batch()) {
+                assertThat(((I32Vector) batch.column(0).borrow(Stream.VALUES)).values())
+                        .startsWith(0, 10, 10);
+            }
         }
     }
 

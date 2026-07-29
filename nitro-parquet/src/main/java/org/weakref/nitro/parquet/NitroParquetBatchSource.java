@@ -43,6 +43,7 @@ import org.weakref.nitro.data.VectorBatchScope;
 import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.data.VectorSourceBatch;
 
+import java.lang.foreign.Arena;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
@@ -128,6 +129,7 @@ public final class NitroParquetBatchSource
     // window is convincingly dense — a genuinely non-selective filter reads dense everywhere, so even a biased sample
     // clears this higher bar. A merely-front-loaded window (q39: 21.9% first vs 1.5% overall) stays on skip.
     private final Allocator allocator;
+    private final Arena arena;
     private final VectorBatchScope batchBuffers;
     private final Allocator.Context allocationContext;
     private final Allocator.SharedResource<DecompressedPageCache> decompressedPageCacheLease;
@@ -269,7 +271,17 @@ public final class NitroParquetBatchSource
             List<Split> splits,
             Schema schema)
     {
-        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema);
+        return forSplits(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT);
+    }
+
+    public static NitroParquetBatchSource forSplits(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Split> splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching)
+    {
+        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema, columnNameMatching);
     }
 
     private NitroParquetBatchSource(
@@ -278,11 +290,22 @@ public final class NitroParquetBatchSource
             Splits splits,
             Schema schema)
     {
+        this(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT);
+    }
+
+    private NitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            Splits splits,
+            Schema schema,
+            ParquetColumnNameMatching columnNameMatching)
+    {
         this(
                 allocator,
                 splits.values(),
                 requireColumnNames(schema),
                 schema,
+                requireNonNull(columnNameMatching, "columnNameMatching is null"),
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
@@ -304,6 +327,7 @@ public final class NitroParquetBatchSource
             List<Split> splits,
             List<String> columns,
             Schema schema,
+            ParquetColumnNameMatching columnNameMatching,
             Object batchBufferPoolKey,
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
@@ -320,6 +344,7 @@ public final class NitroParquetBatchSource
             ParquetArenaPolicy arenaPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
+        this.arena = requireNonNull(arenaPolicy, "arenaPolicy is null").createArena();
         this.arrayPool = allocator.primitiveArrays();
         this.batchBuffers = new VectorBatchScope(allocator, "NitroParquetBatchSource", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
@@ -358,7 +383,7 @@ public final class NitroParquetBatchSource
         }
         checkArgument(!splits.isEmpty(), "splits is empty");
 
-        this.files = splits.stream().map(Split::path).map(path -> ParquetFile.open(path, arenaPolicy)).toArray(ParquetFile[]::new);
+        this.files = splits.stream().map(Split::path).map(path -> ParquetFile.open(path, arena)).toArray(ParquetFile[]::new);
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];
@@ -372,7 +397,7 @@ public final class NitroParquetBatchSource
         this.directNullPendingAdvance = new long[columnCount];
 
         for (int c = 0; c < columnCount; c++) {
-            ParquetFile.Column first = files[0].column(columns.get(c));
+            ParquetFile.Column first = files[0].column(columns.get(c), columnNameMatching);
             readers[c] = new ColumnReader(
                     first.type(),
                     first.optional(),
@@ -381,7 +406,8 @@ public final class NitroParquetBatchSource
                     decompressedPages,
                     arrayPool,
                     readerPolicy,
-                    arenaPolicy);
+                    arenaPolicy,
+                    arena);
             nullable[c] = first.optional();
             if (readers[c].kind() == ColumnReader.Kind.INT) {
                 Set<Class<? extends Vector>> supportedVectors = schema.field(c).type().supportedVectorTypes();
@@ -407,7 +433,7 @@ public final class NitroParquetBatchSource
             Split split = splits.get(fileIndex);
             List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
             for (int c = 0; c < columnCount; c++) {
-                ParquetFile.Column column = file.column(columns.get(c));
+                ParquetFile.Column column = file.column(columns.get(c), columnNameMatching);
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
                         : new DecompressedPageCache.Source(splits.get(fileIndex).path(), columns.get(c));
@@ -2172,6 +2198,7 @@ public final class NitroParquetBatchSource
         for (ParquetFile file : files) {
             file.close();
         }
+        arena.close();
         if (decompressedPageCacheLease != null) {
             decompressedPageCacheLease.close();
         }

@@ -34,6 +34,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static java.lang.Math.addExact;
@@ -60,6 +61,7 @@ public final class ParquetFile
     private static final int MAGIC = 0x31524150; // "PAR1" little-endian
 
     private final Arena arena;
+    private final boolean ownsArena;
     private final MemorySegment data;
     private final FileMetaData footer;
     private final List<Column> columns;
@@ -79,27 +81,39 @@ public final class ParquetFile
 
     static ParquetFile open(Path path, ParquetArenaPolicy arenaPolicy)
     {
+        return open(path, arenaPolicy.createArena(), true);
+    }
+
+    static ParquetFile open(Path path, Arena arena)
+    {
+        return open(path, arena, false);
+    }
+
+    private static ParquetFile open(Path path, Arena arena, boolean ownsArena)
+    {
         try {
-            // Confined to the opening thread: single-threaded scan, and confined sessions skip the atomic
-            // liveness checks a shared session pays on every native (snappy) downcall.
-            Arena arena = arenaPolicy.createArena();
+            // The caller selects confined or shared lifetime according to the execution boundary.
             MemorySegment data;
             long size;
             try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
                 size = channel.size();
                 data = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
             }
-            return new ParquetFile(arena, data, size);
+            return new ParquetFile(arena, ownsArena, data, size);
         }
         catch (IOException e) {
+            if (ownsArena) {
+                arena.close();
+            }
             throw new UncheckedIOException("Unable to open Parquet file: " + path, e);
         }
     }
 
-    private ParquetFile(Arena arena, MemorySegment data, long size)
+    private ParquetFile(Arena arena, boolean ownsArena, MemorySegment data, long size)
             throws IOException
     {
         this.arena = arena;
+        this.ownsArena = ownsArena;
         this.data = data;
         if (size < 8 || data.get(LE_INT, size - 4) != MAGIC) {
             throw new IOException("Not a Parquet file (bad magic)");
@@ -170,7 +184,24 @@ public final class ParquetFile
 
     public Column column(String name)
     {
+        return column(name, ParquetColumnNameMatching.EXACT);
+    }
+
+    public Column column(String name, ParquetColumnNameMatching matching)
+    {
         Integer index = columnIndexByName.get(name);
+        if (index == null && matching == ParquetColumnNameMatching.CASE_INSENSITIVE) {
+            String normalizedName = name.toLowerCase(Locale.ROOT);
+            for (Map.Entry<String, Integer> entry : columnIndexByName.entrySet()) {
+                if (!entry.getKey().toLowerCase(Locale.ROOT).equals(normalizedName)) {
+                    continue;
+                }
+                if (index != null) {
+                    throw new IllegalArgumentException("Ambiguous case-insensitive column: " + name);
+                }
+                index = entry.getValue();
+            }
+        }
         if (index == null) {
             throw new IllegalArgumentException("No such column: " + name + " (have " + columnIndexByName.keySet() + ")");
         }
@@ -191,7 +222,9 @@ public final class ParquetFile
     @Override
     public void close()
     {
-        arena.close();
+        if (ownsArena) {
+            arena.close();
+        }
     }
 
     /** A minimal {@link InputStream} over a region of a {@link MemorySegment}, for the Thrift footer/page-header reads. */

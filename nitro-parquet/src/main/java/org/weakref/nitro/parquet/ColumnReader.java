@@ -30,6 +30,7 @@ import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
@@ -160,7 +161,8 @@ public final class ColumnReader
     // reusable buffers (grow to high-water mark). The decompression target is an off-heap segment from a
     // confined arena so the snappy FFM downcall is native->native (no heap marshalling); the SIMD unpacker
     // loads vectors straight from it via ByteVector.fromMemorySegment.
-    private final java.lang.foreign.Arena scratchArena;
+    private final Arena scratchArena;
+    private final boolean ownsScratchArena;
     private final Decompressor snappy = SnappyDecompressor.create();
     private MemorySegment decompressSegment;
     private long decompressCapacity;
@@ -316,10 +318,60 @@ public final class ColumnReader
             ParquetReaderPolicy readerPolicy,
             ParquetArenaPolicy arenaPolicy)
     {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                decompressedPages,
+                arrayPool,
+                readerPolicy,
+                arenaPolicy,
+                arenaPolicy.createArena(),
+                true);
+    }
+
+    ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy,
+            ParquetArenaPolicy arenaPolicy,
+            Arena scratchArena)
+    {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                decompressedPages,
+                arrayPool,
+                readerPolicy,
+                arenaPolicy,
+                scratchArena,
+                false);
+    }
+
+    private ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy,
+            ParquetArenaPolicy arenaPolicy,
+            Arena scratchArena,
+            boolean ownsScratchArena)
+    {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
-        this.scratchArena = arenaPolicy.createArena();
+        this.scratchArena = requireNonNull(scratchArena, "scratchArena is null");
+        this.ownsScratchArena = ownsScratchArena;
         this.decompressSegment = scratchArena.allocate(0);
         this.rleReaderPolicy = readerPolicy.rle();
         this.pageNavigationPolicy = readerPolicy.pageNavigation();
@@ -371,15 +423,30 @@ public final class ColumnReader
      */
     public ColumnReader newSibling()
     {
-        ColumnReader sibling = new ColumnReader(
-                physicalType,
-                optional,
-                typeLength,
-                flbaDecimal,
-                decompressedPages,
-                arrayPool,
-                readerPolicy,
-                arenaPolicy);
+        ColumnReader sibling;
+        if (ownsScratchArena) {
+            sibling = new ColumnReader(
+                    physicalType,
+                    optional,
+                    typeLength,
+                    flbaDecimal,
+                    decompressedPages,
+                    arrayPool,
+                    readerPolicy,
+                    arenaPolicy);
+        }
+        else {
+            sibling = new ColumnReader(
+                    physicalType,
+                    optional,
+                    typeLength,
+                    flbaDecimal,
+                    decompressedPages,
+                    arrayPool,
+                    readerPolicy,
+                    arenaPolicy,
+                    scratchArena);
+        }
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
@@ -472,7 +539,9 @@ public final class ColumnReader
         dictionaryByteOffsets = null;
         dictionaryBytes = null;
         reusableDictionaryBytes = EMPTY_BYTES;
-        scratchArena.close();
+        if (ownsScratchArena) {
+            scratchArena.close();
+        }
     }
 
     /**
