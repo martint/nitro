@@ -537,6 +537,43 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testStructFieldAccessPreservesOuterEncodings()
+    {
+        StructVector values = new StructVector(2);
+        values.setField("high", Streams.ofValues(new I64Vector(new long[] {10, 20})));
+        values.setField("low", Streams.ofValues(new I64Vector(new long[] {100, 200})));
+
+        Vector dictionary = new DictionaryVector(new int[] {1, 0, 1}, values);
+        Vector rle = new RleVector(new int[] {2, 1}, values);
+
+        VectorAccess.LongValues dictionaryHigh = VectorAccess.longValues(VectorAccess.structFieldValues(dictionary, "high"));
+        VectorAccess.LongValues dictionaryLow = VectorAccess.longValues(VectorAccess.structFieldValues(dictionary, "low"));
+        assertThat(new long[] {
+                dictionaryHigh.value(0),
+                dictionaryHigh.value(1),
+                dictionaryHigh.value(2)})
+                .containsExactly(20, 10, 20);
+        assertThat(new long[] {
+                dictionaryLow.value(0),
+                dictionaryLow.value(1),
+                dictionaryLow.value(2)})
+                .containsExactly(200, 100, 200);
+
+        VectorAccess.LongValues rleHigh = VectorAccess.longValues(VectorAccess.structFieldValues(rle, "high"));
+        VectorAccess.LongValues rleLow = VectorAccess.longValues(VectorAccess.structFieldValues(rle, "low"));
+        assertThat(new long[] {
+                rleHigh.value(0),
+                rleHigh.value(1),
+                rleHigh.value(2)})
+                .containsExactly(10, 10, 20);
+        assertThat(new long[] {
+                rleLow.value(0),
+                rleLow.value(1),
+                rleLow.value(2)})
+                .containsExactly(100, 100, 200);
+    }
+
+    @Test
     void testBinaryVectorCopySinglePositionPreservesSparseOutputOffsets()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

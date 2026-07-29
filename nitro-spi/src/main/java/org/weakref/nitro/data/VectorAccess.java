@@ -90,6 +90,60 @@ public final class VectorAccess
         };
     }
 
+    /**
+     * Projects one VALUES field from a structural vector while preserving any outer dictionary or RLE encoding.
+     * The returned wrappers borrow the source mappings and child vector and are intended as read-only access views.
+     */
+    public static Vector structFieldValues(Vector vector, String field)
+    {
+        return structField(vector, field).values();
+    }
+
+    public static Streams structField(Vector vector, String field)
+    {
+        return switch (vector) {
+            case StructVector values -> values.field(field);
+            case DictionaryVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> DictionaryVector.wrapNested(values.ids(), values.length(), child));
+            case RleVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> new RleVector(values.counts(), child));
+            default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    public static Streams structField(Vector vector, int field)
+    {
+        return switch (vector) {
+            case StructVector values -> values.field(field);
+            case DictionaryVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> DictionaryVector.wrapNested(values.ids(), values.length(), child));
+            case RleVector values -> mapStreams(
+                    structField(values.values(), field),
+                    child -> new RleVector(values.counts(), child));
+            default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    public static int structFieldCount(Vector vector)
+    {
+        return switch (vector) {
+            case StructVector values -> values.fields().size();
+            case DictionaryVector values -> structFieldCount(values.values());
+            case RleVector values -> structFieldCount(values.values());
+            default -> throw new IllegalArgumentException("Expected structural vector but found " + vector.getClass().getSimpleName());
+        };
+    }
+
+    private static Streams mapStreams(Streams streams, java.util.function.Function<Vector, Vector> mapper)
+    {
+        Streams.Builder result = Streams.builder();
+        streams.asMap().forEach((stream, vector) -> result.put(stream, mapper.apply(vector)));
+        return result.build();
+    }
+
     public static BooleanValues booleanValues(Vector vector)
     {
         if (vector == null) {
