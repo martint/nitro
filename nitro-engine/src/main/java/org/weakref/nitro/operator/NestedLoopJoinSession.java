@@ -19,43 +19,33 @@ import org.weakref.nitro.data.Allocator;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Long-lived hash-join state for probe batches scheduled by an external host.
+ * Long-lived cross-join state for outer batches scheduled by an external host.
  *
- * <p>The build operator is consumed once, on the first probe. Probe-batch ownership transfers to
- * the session and each batch is closed as soon as all of its join output has been drained. The
- * hash table, retained build payload, generated kernels, and reusable buffers survive across every
- * offered probe batch.
+ * <p>The inner operator is buffered once. Outer-batch ownership transfers to the
+ * session and each batch is closed after all of its cross-product output is drained.
  */
-public final class HashJoinSession
+public final class NestedLoopJoinSession
         implements AutoCloseable
 {
-    private final ExternallyScheduledBatchFeed probe;
-    private final HashJoinOperator join;
+    private final ExternallyScheduledBatchFeed outer;
+    private final NestedLoopJoinOperator join;
 
     private Batch output;
     private boolean finishing;
     private boolean closed;
 
-    public HashJoinSession(
+    public NestedLoopJoinSession(
             OperatorResources operatorResources,
             Allocator allocator,
-            Schema probeSchema,
-            int[] probeJoinColumns,
-            Operator build,
-            int[] buildJoinColumns,
-            boolean probeOuterJoin,
-            HashJoinOperator.JoinFilter... joinFilters)
+            Schema outerSchema,
+            Operator inner)
     {
-        probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
-        join = new HashJoinOperator(
+        outer = new ExternallyScheduledBatchFeed(requireNonNull(outerSchema, "outerSchema is null"));
+        join = new NestedLoopJoinOperator(
                 requireNonNull(operatorResources, "operatorResources is null"),
                 requireNonNull(allocator, "allocator is null"),
-                probe,
-                probeJoinColumns.clone(),
-                requireNonNull(build, "build is null"),
-                buildJoinColumns.clone(),
-                probeOuterJoin,
-                joinFilters.clone());
+                outer,
+                requireNonNull(inner, "inner is null"));
     }
 
     public Schema outputSchema()
@@ -63,37 +53,22 @@ public final class HashJoinSession
         return join.outputSchema();
     }
 
-    public HashJoinSession withOutputs(int... outputChannels)
-    {
-        checkAcceptingInput();
-        join.withOutputs(outputChannels);
-        return this;
-    }
-
-    /**
-     * Transfers ownership of the next probe batch to this session.
-     *
-     * <p>The previous input must be fully drained first.
-     */
     public void addInput(Batch batch)
     {
         checkAcceptingInput();
-        if (output != null || probe.hasInput()) {
-            throw new IllegalStateException("previous probe input is not fully drained");
+        if (output != null || outer.hasInput()) {
+            throw new IllegalStateException("previous outer input is not fully drained");
         }
-        probe.addInput(requireNonNull(batch, "batch is null"));
+        outer.addInput(requireNonNull(batch, "batch is null"));
     }
 
-    /**
-     * Returns whether a joined output batch is ready for the current probe input.
-     */
     public boolean hasOutput()
     {
         checkOpen();
         if (output != null) {
             return true;
         }
-        if (!probe.hasInput() && !finishing) {
+        if (!outer.hasInput() && !finishing) {
             return false;
         }
 
@@ -104,20 +79,15 @@ public final class HashJoinSession
                 return true;
             }
             candidate.close();
-            if (join.isWaitingForProbeInput()) {
-                probe.releaseInput();
+            if (join.isWaitingForOuterInput()) {
+                outer.releaseInput();
                 return false;
             }
         }
-        probe.releaseInput();
+        outer.releaseInput();
         return false;
     }
 
-    /**
-     * Returns the next joined batch after {@link #hasOutput()} reports one.
-     *
-     * <p>Ownership transfers to the caller.
-     */
     public Batch getOutput()
     {
         checkOpen();
@@ -129,20 +99,17 @@ public final class HashJoinSession
         return result;
     }
 
-    /**
-     * Signals that no more probe batches will be offered.
-     */
     public void finish()
     {
         checkOpen();
         finishing = true;
-        probe.finish();
+        outer.finish();
     }
 
     public boolean isFinished()
     {
         checkOpen();
-        if (!finishing || output != null || probe.hasInput()) {
+        if (!finishing || output != null || outer.hasInput()) {
             return false;
         }
         hasOutput();
@@ -153,14 +120,14 @@ public final class HashJoinSession
     {
         checkOpen();
         if (finishing) {
-            throw new IllegalStateException("hash join session is finishing");
+            throw new IllegalStateException("nested loop join session is finishing");
         }
     }
 
     private void checkOpen()
     {
         if (closed) {
-            throw new IllegalStateException("hash join session is closed");
+            throw new IllegalStateException("nested loop join session is closed");
         }
     }
 

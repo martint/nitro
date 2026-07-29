@@ -20,6 +20,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.source.ExternallyScheduledSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -65,6 +66,7 @@ public class NestedLoopJoinOperator
 
     private boolean done;
     private boolean started;
+    private boolean waitingForOuterInput;
 
     public NestedLoopJoinOperator(Allocator allocator, Operator outer, Operator inner)
     {
@@ -203,9 +205,19 @@ public class NestedLoopJoinOperator
     public boolean hasNext()
     {
         if (!done && started && currentOuterBatch == null && outerRemaining == 0 && !outer.hasNext()) {
+            if (outer instanceof ExternallyScheduledSource source && !source.isFinished()) {
+                waitingForOuterInput = true;
+                return false;
+            }
             done = true;
         }
+        waitingForOuterInput = false;
         return !done;
+    }
+
+    boolean isWaitingForOuterInput()
+    {
+        return waitingForOuterInput;
     }
 
     private Mask produceBatch()
@@ -224,7 +236,7 @@ public class NestedLoopJoinOperator
 
         if (outerRemaining == 0) {
             if (!loadNextOuterBatch()) {
-                done = true;
+                markDoneOrWaitingForOuterInput();
                 return allocator.allocateAllMask(allocationContext, 0);
             }
         }
@@ -286,7 +298,7 @@ public class NestedLoopJoinOperator
         int outputPosition = 0;
         while (outputPosition < policy.maxBatchRows()) {
             if (outerRemaining == 0 && !loadNextOuterBatch()) {
-                done = true;
+                markDoneOrWaitingForOuterInput();
                 break;
             }
 
@@ -346,6 +358,15 @@ public class NestedLoopJoinOperator
             }
         }
         return false;
+    }
+
+    private void markDoneOrWaitingForOuterInput()
+    {
+        if (outer instanceof ExternallyScheduledSource source && !source.isFinished()) {
+            waitingForOuterInput = true;
+            return;
+        }
+        done = true;
     }
 
     @Override
