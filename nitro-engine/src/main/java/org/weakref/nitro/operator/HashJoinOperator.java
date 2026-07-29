@@ -35,6 +35,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.source.ExternallyScheduledSource;
 
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -278,6 +279,7 @@ public class HashJoinOperator
     private boolean outputInnerLogicalPositionsReady;
     private int outputInnerLogicalPositionsBatchIndex;
     private boolean done;
+    private boolean waitingForProbeInput;
     private boolean outerConstrained;
     private boolean outerConstraintApplied;
     // Proven once per result batch by constrainOuterIfNecessary(). Materializing every retained stream must not
@@ -687,7 +689,9 @@ public class HashJoinOperator
                     break;
                 }
                 if (!loadNextOuterBatch()) {
-                    done = true;
+                    if (!waitingForProbeInput) {
+                        done = true;
+                    }
                     break;
                 }
                 outputOuterBatch = currentOuterBatch;
@@ -816,7 +820,9 @@ public class HashJoinOperator
                     break;
                 }
                 if (!loadNextOuterBatch()) {
-                    done = true;
+                    if (!waitingForProbeInput) {
+                        done = true;
+                    }
                     break;
                 }
             }
@@ -960,6 +966,7 @@ public class HashJoinOperator
 
     private boolean loadNextOuterBatch()
     {
+        waitingForProbeInput = false;
         // The previous probe batch has been fully consumed before this method is reached. Closing it releases lazy
         // projection results and evaluator scratch back to their shared pools before the source advances. Without
         // this boundary, ProjectOperator loses its old BatchState on next() and retains one full set of vectors per
@@ -994,7 +1001,13 @@ public class HashJoinOperator
                 return true;
             }
         }
+        waitingForProbeInput = probeSource instanceof ExternallyScheduledSource source && !source.isFinished();
         return false;
+    }
+
+    boolean isWaitingForProbeInput()
+    {
+        return waitingForProbeInput;
     }
 
     private LongList matchesForOuterPosition()
