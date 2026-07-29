@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.source;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.batch.ColumnCapability;
 import org.weakref.nitro.core.batch.ColumnEncoding;
 import org.weakref.nitro.core.batch.ColumnTraits;
 import org.weakref.nitro.core.batch.ColumnView;
@@ -24,10 +25,14 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorColumnCapability;
+import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.operator.Output;
 
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,7 +45,7 @@ class TestVectorColumnViewOperatorIngress
     private static final TypeBinding TYPE = new TestingTypeBinding();
 
     @Test
-    void testPreservesLazinessAndTransfersVectorOwnership()
+    void testPreservesSourceStreamsAndTransfersVectorOwnership()
     {
         I64Vector values = new I64Vector(new long[] {11, 22});
         BooleanVector nulls = new BooleanVector(new boolean[] {false, true});
@@ -53,7 +58,7 @@ class TestVectorColumnViewOperatorIngress
                     return column;
                 });
 
-        assertThat(columnRequests).hasValue(0);
+        assertThat(columnRequests).hasValue(1);
         assertThat(output.streams()).containsExactlyInAnyOrder(Stream.VALUES, Stream.NULLS);
         assertThat(output.borrow(Stream.VALUES)).isSameAs(values);
         assertThat(columnRequests).hasValue(1);
@@ -79,18 +84,65 @@ class TestVectorColumnViewOperatorIngress
         output.close();
     }
 
+    @Test
+    void testPreservesVectorGenerationMaskedResolution()
+    {
+        I64Vector values = new I64Vector(new long[] {11, 22});
+        AtomicInteger unconstrainedResolutions = new AtomicInteger();
+        AtomicInteger maskedResolutions = new AtomicInteger();
+        VectorColumnGeneration generation = new VectorColumnGeneration(
+                Set.of(Stream.VALUES),
+                _ -> values,
+                (_, mask) -> {
+                    if (mask == null) {
+                        unconstrainedResolutions.incrementAndGet();
+                    }
+                    else {
+                        maskedResolutions.incrementAndGet();
+                    }
+                    return values;
+                },
+                (_, vector) -> vector,
+                (_, _) -> {},
+                null,
+                null);
+        ColumnView column = new TestingColumnView(values, null, new AtomicBoolean(), generation);
+        AtomicInteger columnRequests = new AtomicInteger();
+        Output output = new VectorColumnViewOperatorIngress(new Field(TYPE, true))
+                .output(() -> {
+                    columnRequests.incrementAndGet();
+                    return column;
+                });
+
+        assertThat(columnRequests).hasValue(1);
+        assertThat(output.streams()).containsExactly(Stream.VALUES);
+        assertThat(output.borrow(Stream.VALUES)).isSameAs(values);
+        assertThat(unconstrainedResolutions).hasValue(1);
+        assertThat(output.borrow(Stream.VALUES, Mask.all(2))).isSameAs(values);
+        assertThat(columnRequests).hasValue(1);
+        assertThat(maskedResolutions).hasValue(1);
+        output.close();
+    }
+
     private static final class TestingColumnView
             implements ColumnView
     {
         private Vector values;
         private Vector nulls;
         private final AtomicBoolean valuesTaken;
+        private final VectorColumnGeneration generation;
 
         private TestingColumnView(Vector values, Vector nulls, AtomicBoolean valuesTaken)
+        {
+            this(values, nulls, valuesTaken, null);
+        }
+
+        private TestingColumnView(Vector values, Vector nulls, AtomicBoolean valuesTaken, VectorColumnGeneration generation)
         {
             this.values = values;
             this.nulls = nulls;
             this.valuesTaken = valuesTaken;
+            this.generation = generation;
         }
 
         @Override
@@ -142,6 +194,15 @@ class TestVectorColumnViewOperatorIngress
                 case ERRORS -> throw new IllegalArgumentException("no errors");
             }
             return vector;
+        }
+
+        @Override
+        public <T> Optional<T> capability(ColumnCapability<T> capability)
+        {
+            if (capability == VectorColumnCapability.VECTOR_GENERATION && generation != null) {
+                return Optional.of(capability.valueType().cast(generation));
+            }
+            return Optional.empty();
         }
     }
 

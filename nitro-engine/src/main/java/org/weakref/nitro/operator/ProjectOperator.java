@@ -310,7 +310,7 @@ public class ProjectOperator
             throw new IllegalStateException("No active project batch");
         }
         return switch (reference.producer()) {
-            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> batchState.sourceBatch().output(index).borrowOrNull(reference.stream());
+            case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> batchState.sourceBatch().output(index).borrowOrNull(reference.stream(), mask);
             default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
         };
     }
@@ -424,7 +424,7 @@ public class ProjectOperator
             this.planEvaluator = reusablePlanEvaluator != null
                     ? reusablePlanEvaluator
                     : newPlanEvaluator((reference, currentMask) -> switch (reference.producer()) {
-                        case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> sourceBatch.output(index).borrowOrNull(reference.stream());
+                        case org.weakref.nitro.operator.evaluator.ir.Input(int index) -> sourceBatch.output(index).borrowOrNull(reference.stream(), currentMask);
                         default -> throw new IllegalArgumentException("Unexpected input reference: " + reference);
                     });
         }

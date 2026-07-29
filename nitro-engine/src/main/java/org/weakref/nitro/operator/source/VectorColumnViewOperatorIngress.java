@@ -16,8 +16,13 @@ package org.weakref.nitro.operator.source;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorColumnCapability;
+import org.weakref.nitro.data.VectorColumnGeneration;
 import org.weakref.nitro.operator.Output;
 
 import java.util.Set;
@@ -54,46 +59,122 @@ public final class VectorColumnViewOperatorIngress
     public Output output(Supplier<ColumnView> column)
     {
         requireNonNull(column, "column is null");
-        return new Output(
-                streams,
-                stream -> borrow(column, stream),
-                (stream, _) -> take(column, stream),
-                (_, _) -> {});
-    }
-
-    private Vector borrow(Supplier<ColumnView> column, Stream stream)
-    {
-        ColumnView view = view(column, stream);
-        Vector vector = requireNonNull(
-                view.borrow(stream),
-                "column returned null vector");
-        validate(stream, vector);
-        return vector;
-    }
-
-    private Vector take(Supplier<ColumnView> column, Stream stream)
-    {
-        ColumnView view = view(column, stream);
-        Vector vector = requireNonNull(
-                view.take(stream),
-                "column returned null transferred vector");
-        validate(stream, vector);
-        return vector;
-    }
-
-    private void validate(Stream stream, Vector vector)
-    {
-        if (stream == Stream.VALUES && !type.supportsVector(vector)) {
-            throw new IllegalArgumentException("source returned a vector representation not supported by its type");
-        }
-    }
-
-    private static ColumnView view(Supplier<ColumnView> column, Stream stream)
-    {
         ColumnView view = requireNonNull(column.get(), "column supplier returned null");
-        if (!requireNonNull(view.streams(), "column returned null streams").contains(stream)) {
-            throw new IllegalArgumentException("source column does not expose declared stream: " + stream);
+        Set<Stream> actualStreams = requireNonNull(view.streams(), "column returned null streams");
+        if (!streams.containsAll(actualStreams)) {
+            throw new IllegalArgumentException("source column exposes streams outside its field contract");
         }
-        return view;
+        ColumnAccess access = new ColumnAccess(view);
+        return new Output(
+                actualStreams,
+                access::borrow,
+                access::borrow,
+                access::tryBorrowMask,
+                access::take,
+                (_, _) -> {},
+                access::copyPositions,
+                access::copySinglePosition);
+    }
+
+    private final class ColumnAccess
+    {
+        private final ColumnView view;
+        private VectorColumnGeneration generation;
+        private boolean generationResolved;
+
+        private ColumnAccess(ColumnView view)
+        {
+            this.view = view;
+        }
+
+        private Vector borrow(Stream stream)
+        {
+            VectorColumnGeneration generation = generation();
+            Vector vector = generation == null ? view(stream).borrow(stream) : generation.borrow(stream);
+            return validate(stream, vector, "column returned null vector");
+        }
+
+        private Vector borrow(Stream stream, Mask mask)
+        {
+            VectorColumnGeneration generation = generation();
+            Vector vector = generation == null
+                    ? view(stream).borrow(stream)
+                    : mask == null ? generation.borrow(stream) : generation.borrow(stream, mask);
+            return validate(stream, vector, "column returned null vector");
+        }
+
+        private Mask tryBorrowMask(
+                Stream stream,
+                Mask mask,
+                boolean selectTrue,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            VectorColumnGeneration generation = generation();
+            return generation == null ? null : generation.tryBorrowMask(stream, mask, selectTrue, allocator, allocationContext);
+        }
+
+        private Vector take(Stream stream, Vector ignored)
+        {
+            VectorColumnGeneration generation = generation();
+            Vector vector = generation == null ? view(stream).take(stream) : generation.take(stream);
+            return validate(stream, vector, "column returned null transferred vector");
+        }
+
+        private Streams copyPositions(
+                Set<Stream> streams,
+                Streams existing,
+                int[] positions,
+                int sourceStart,
+                int sourceCount,
+                int outputStart,
+                int size,
+                boolean assumeClear)
+        {
+            VectorColumnGeneration generation = generation();
+            return generation == null
+                    ? null
+                    : generation.copyPositions(existing, positions, sourceStart, sourceCount, outputStart, size, assumeClear);
+        }
+
+        private Streams copySinglePosition(Streams existing, int sourcePosition, int outputPosition, int size)
+        {
+            VectorColumnGeneration generation = generation();
+            return generation == null
+                    ? null
+                    : generation.copySinglePosition(existing, sourcePosition, outputPosition, size);
+        }
+
+        private VectorColumnGeneration generation()
+        {
+            if (!generationResolved) {
+                generation = view().capability(VectorColumnCapability.VECTOR_GENERATION).orElse(null);
+                generationResolved = true;
+            }
+            return generation;
+        }
+
+        private ColumnView view()
+        {
+            return view;
+        }
+
+        private ColumnView view(Stream stream)
+        {
+            ColumnView view = view();
+            if (!requireNonNull(view.streams(), "column returned null streams").contains(stream)) {
+                throw new IllegalArgumentException("source column does not expose declared stream: " + stream);
+            }
+            return view;
+        }
+
+        private Vector validate(Stream stream, Vector vector, String nullMessage)
+        {
+            vector = requireNonNull(vector, nullMessage);
+            if (stream == Stream.VALUES && !type.supportsVector(vector)) {
+                throw new IllegalArgumentException("source returned a vector representation not supported by its type");
+            }
+            return vector;
+        }
     }
 }

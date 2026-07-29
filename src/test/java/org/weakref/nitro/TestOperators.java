@@ -104,8 +104,10 @@ import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
+import org.weakref.nitro.operator.evaluator.ir.Conditional;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
@@ -731,6 +733,80 @@ public class TestOperators
                 assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(11L, 22L, 23L);
             }
         }
+    }
+
+    @Test
+    void testProjectOperatorPassesBranchMaskToLazyInputs()
+    {
+        List<int[]> lazyInputMasks = new ArrayList<>();
+        Operator source = new Operator()
+        {
+            private boolean hasNext = true;
+
+            @Override
+            public int outputCount()
+            {
+                return 3;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return hasNext;
+            }
+
+            @Override
+            public Batch next()
+            {
+                hasNext = false;
+                BooleanVector condition = new BooleanVector(new boolean[] {true, false, true, false});
+                I64Vector values = new I64Vector(new long[] {11, 22, 33, 44});
+                return new Batch(
+                        Mask.all(4),
+                        new Output(Set.of(Stream.VALUES), _ -> condition),
+                        new Output(
+                                Set.of(Stream.VALUES),
+                                _ -> values,
+                                (_, mask) -> {
+                                    int[] positions = new int[mask.selectedCount()];
+                                    for (int index = 0; index < positions.length; index++) {
+                                        positions[index] = mask.position(index);
+                                    }
+                                    lazyInputMasks.add(positions);
+                                    return values;
+                                },
+                                (_, vector) -> vector,
+                                (_, _) -> {},
+                                null,
+                                null),
+                        new Output(Set.of(Stream.VALUES), _ -> new I64Vector(new long[] {55, 66, 77, 88})));
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+        };
+        Variable selected = new Variable(0);
+        Reference condition = new Reference(new Input(0), Stream.VALUES);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(new Assignment(
+                        selected,
+                        new Conditional(
+                                condition,
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES))));
+
+        try (ProjectOperator project = new ProjectOperator(allocator, plan, primitiveRegistry(), source);
+                Batch batch = project.next()) {
+            batch.output(0).borrow(Stream.VALUES);
+        }
+
+        assertThat(lazyInputMasks)
+                .anySatisfy(mask -> assertThat(mask).containsExactly(0, 2));
     }
 
     @Test
