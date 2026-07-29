@@ -1934,6 +1934,22 @@ public final class ColumnReader
                 batchCursor = pageEnd;
                 continue;
             }
+            if (pageDirectDictionary || pageDirectPlain) {
+                while (sel < count && survivors[sel] < pageEnd) {
+                    int pagePosition = pageCursor + survivors[sel] - batchCursor;
+                    out[produced] = pageDirectDictionary
+                            ? dictionaryLongs[idBuffer[pagePosition]]
+                            : pageDirectPlainBody.get(LE_LONG, pageDirectPlainOffset + (long) pagePosition * Long.BYTES);
+                    if (nullsOut != null) {
+                        nullsOut[produced] = false;
+                    }
+                    produced++;
+                    sel++;
+                }
+                pageCursor += pageRows;
+                batchCursor = pageEnd;
+                continue;
+            }
             if (skipBody != null) {
                 // Fused per-page skip-decode of a dict LONG page: the fully-inlined pure-Java kernel keeps both RLE
                 // cursors in locals/registers with no per-value method call or idBuffer/runDef materialization.
@@ -2128,7 +2144,12 @@ public final class ColumnReader
         if (pageFullyDecoded) {
             System.arraycopy(pageLongs, runStartPage, out, produced, runLen);
             if (nullsOut != null) {
-                System.arraycopy(pageNulls, runStartPage, nullsOut, produced, runLen);
+                if (optional) {
+                    System.arraycopy(pageNulls, runStartPage, nullsOut, produced, runLen);
+                }
+                else {
+                    Arrays.fill(nullsOut, produced, produced + runLen, false);
+                }
             }
         }
         else if (flbaDecimal) {
@@ -2172,6 +2193,22 @@ public final class ColumnReader
                     out[produced] = isNull ? 0 : dictionaryInts[pageDictIds[pagePosition]];
                     if (nullsOut != null) {
                         nullsOut[produced] = isNull;
+                    }
+                    produced++;
+                    sel++;
+                }
+                pageCursor += pageRows;
+                batchCursor = pageEnd;
+                continue;
+            }
+            if (pageDirectDictionary || pageDirectPlain) {
+                while (sel < count && survivors[sel] < pageEnd) {
+                    int pagePosition = pageCursor + survivors[sel] - batchCursor;
+                    out[produced] = pageDirectDictionary
+                            ? dictionaryInts[idBuffer[pagePosition]]
+                            : pageDirectPlainBody.get(LE_INT, pageDirectPlainOffset + (long) pagePosition * Integer.BYTES);
+                    if (nullsOut != null) {
+                        nullsOut[produced] = false;
                     }
                     produced++;
                     sel++;
@@ -2339,7 +2376,12 @@ public final class ColumnReader
         if (pageFullyDecoded) {
             System.arraycopy(pageInts, runStartPage, out, produced, runLen);
             if (nullsOut != null) {
-                System.arraycopy(pageNulls, runStartPage, nullsOut, produced, runLen);
+                if (optional) {
+                    System.arraycopy(pageNulls, runStartPage, nullsOut, produced, runLen);
+                }
+                else {
+                    Arrays.fill(nullsOut, produced, produced + runLen, false);
+                }
             }
         }
         else {
@@ -2663,6 +2705,11 @@ public final class ColumnReader
         pageValueCursor = 0;
         pageBinaryDeferred = false;
         pageNumericDictionaryIdsDecoded = false;
+        pageDirectDictionary = false;
+        pageDirectPlain = false;
+        pageDirectPlainBody = null;
+        pageDirectPlainOffset = 0;
+        pageFullyDecoded = false;
         long offset = 0;
         int nonNullCount = valueCount;
         pageDict = encoding == Encoding.RLE_DICTIONARY || encoding == Encoding.PLAIN_DICTIONARY;
@@ -3295,6 +3342,7 @@ public final class ColumnReader
             }
             else if (kind == Kind.BINARY) {
                 scatterDictionaryBinaryIds(nonNullCount);
+                pageFullyDecoded = true;
             }
             else if (directDictionary) {
                 pageDirectDictionary = true;
@@ -3303,6 +3351,7 @@ public final class ColumnReader
             else {
                 ensurePageCapacity(valueCount);
                 gatherDictionary(nonNullCount);
+                pageFullyDecoded = true;
             }
         }
         else if (encoding == Encoding.PLAIN) {
@@ -3310,6 +3359,7 @@ public final class ColumnReader
                 ensurePageCapacity(valueCount);
                 decodePlainBinary(body, offset, nonNullCount);
                 pageBinaryDeferred = false;
+                pageFullyDecoded = true;
             }
             else if (directFullDecodeRequested && numericDecodePolicy.directPlainBatchDecode() && nonNullCount == valueCount && !flbaDecimal) {
                 pageDirectPlain = true;
@@ -3320,6 +3370,7 @@ public final class ColumnReader
             else {
                 ensurePageCapacity(valueCount);
                 decodePlain(body, offset, nonNullCount);
+                pageFullyDecoded = true;
             }
         }
         else {

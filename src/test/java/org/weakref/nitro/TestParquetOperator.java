@@ -1121,6 +1121,51 @@ public class TestParquetOperator
     }
 
     @Test
+    void testSelectedLongReadContinuesWithinPartiallyConsumedNumericPage()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 257; position++) {
+            rows.add(new ParquetRow(10_000 + (position % 17), true, null));
+        }
+
+        for (boolean directDecode : new boolean[] {false, true}) {
+            for (boolean dictionaryEnabled : new boolean[] {false, true}) {
+                java.nio.file.Path file = writeParquetFile(
+                        (directDecode ? "direct" : "materialized") + "-then-selected-" +
+                                (dictionaryEnabled ? "dictionary" : "plain") + ".parquet",
+                        dictionaryEnabled,
+                        rows);
+                if (dictionaryEnabled) {
+                    assertDictionaryEncoding(file, "x");
+                }
+                try (ParquetFile parquetFile = ParquetFile.open(file);
+                        ColumnReader reader = columnReader(List.of(parquetFile), "x")) {
+                    if (directDecode) {
+                        reader.enableDirectNumericBatchDecode();
+                    }
+
+                    long[] prefix = new long[31];
+                    reader.readLongs(prefix, null, prefix.length);
+                    for (int index = 0; index < prefix.length; index++) {
+                        assertThat(prefix[index]).isEqualTo(10_000L + (index % 17));
+                    }
+
+                    int[] survivors = {0, 1, 17, 63, 96, 151, 225};
+                    long[] values = new long[survivors.length];
+                    boolean[] nulls = new boolean[survivors.length];
+                    reader.readSelectedLongs(survivors, survivors.length, rows.size() - prefix.length, values, nulls);
+
+                    for (int index = 0; index < survivors.length; index++) {
+                        assertThat(values[index]).isEqualTo(10_000L + ((prefix.length + survivors[index]) % 17));
+                        assertThat(nulls[index]).isFalse();
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void testDenseSelectedNullablePageResetsDefinitionReaderAfterAllOnesProbe()
             throws IOException
     {
