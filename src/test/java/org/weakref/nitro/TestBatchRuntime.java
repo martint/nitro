@@ -28,6 +28,7 @@ import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.SumStateVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
@@ -503,6 +504,36 @@ public class TestBatchRuntime
         assertThat(new String(result.copyBytes(2), java.nio.charset.StandardCharsets.UTF_8)).isEmpty();
         assertThat(new String(result.copyBytes(3), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("three");
         assertThat(new String(result.copyBytes(4), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("four");
+    }
+
+    @Test
+    void testStructMaskedCopiesPreserveInterleavedBranches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("StructMaskedMerge");
+
+        StructVector trueValues = new StructVector(5);
+        trueValues.setField("high", Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13, 14})));
+        trueValues.setField("low", Streams.ofValues(new I64Vector(new long[] {20, 21, 22, 23, 24})));
+
+        StructVector falseValues = new StructVector(5);
+        falseValues.setField("high", Streams.ofValues(new I64Vector(new long[5])));
+        falseValues.setField("low", Streams.ofValues(new I64Vector(new long[5])));
+
+        Vector merged = trueValues.copyMasked(
+                allocator,
+                context,
+                null,
+                Mask.sparse(new int[] {1, 3, 4}, 5));
+        merged = falseValues.copyMasked(
+                allocator,
+                context,
+                merged,
+                Mask.sparse(new int[] {0, 2}, 5));
+
+        StructVector result = (StructVector) merged;
+        assertThat(((I64Vector) result.fieldValues("high")).values()).containsExactly(0, 11, 0, 13, 14);
+        assertThat(((I64Vector) result.fieldValues("low")).values()).containsExactly(0, 21, 0, 23, 24);
     }
 
     @Test

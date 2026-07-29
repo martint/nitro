@@ -118,10 +118,19 @@ public final class StructVector
     @Override
     public Vector copyMasked(Allocator allocator, Allocator.Context allocationContext, Vector existing, Mask mask)
     {
-        for (int position : mask) {
-            existing = copySinglePositionInto(allocator, allocationContext, existing, position, position, length());
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        StructVector output = allocator.reallocateIfNecessary(
+                allocationContext,
+                existing instanceof StructVector vector ? vector : null,
+                StructVector.class,
+                length(),
+                StructVector::new);
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            output.setField(
+                    entry.getKey(),
+                    copyMaskedStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, mask));
         }
-        return existing;
+        return output;
     }
 
     @Override
@@ -265,6 +274,16 @@ public final class StructVector
         for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
             Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
             result.put(entry.getKey(), entry.getValue().copySinglePositionInto(allocator, allocationContext, existingVector, sourcePosition, outputPosition, size));
+        }
+        return result.build();
+    }
+
+    private static Streams copyMaskedStreams(Streams source, Streams existing, Allocator allocator, Allocator.Context allocationContext, Mask mask)
+    {
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
+            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
+            result.put(entry.getKey(), entry.getValue().copyMasked(allocator, allocationContext, existingVector, mask));
         }
         return result.build();
     }
