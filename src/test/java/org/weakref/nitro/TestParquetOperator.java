@@ -115,11 +115,14 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executors;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.weakref.nitro.OperatorAssertions.operator;
@@ -266,6 +269,58 @@ public class TestParquetOperator
             batch.close();
 
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceWidensInt32ForLongLogicalBinding()
+            throws IOException
+    {
+        java.nio.file.Path file = writeInt32ParquetFile("nitro-int32-as-long.parquet", List.of(1, -20, 300));
+        TypeBinding longBinding = new VectorTypeBinding(
+                new TypeIdentity("testing:int32-as-long"),
+                long.class,
+                Set.of(I64Vector.class));
+        Schema schema = new Schema(List.of(new Field("value", longBinding, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            try (var batch = ready.batch()) {
+                assertThat(batch.column(0).borrow(Stream.VALUES))
+                        .isInstanceOf(I64Vector.class);
+                assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
+                        .startsWith(1L, -20L, 300L);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceWithSharedArenasCanCloseOnAnotherThread()
+            throws Exception
+    {
+        java.nio.file.Path file = writeInt32ParquetFile("nitro-shared-arena.parquet", List.of(1, 2, 3));
+        TypeBinding intBinding = new VectorTypeBinding(
+                new TypeIdentity("testing:int32"),
+                int.class,
+                Set.of(I32Vector.class));
+        Schema schema = new Schema(List.of(new Field("value", intBinding, false)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                var executor = Executors.newSingleThreadExecutor()) {
+            NitroParquetBatchSource source = new NitroParquetBatchSource(
+                    NitroParquetScanResources.createDefault(org.weakref.nitro.parquet.ParquetArenaPolicy.shared()),
+                    allocator,
+                    List.of(file),
+                    schema);
+            executor.submit(source::close).get();
         }
     }
 
@@ -2895,7 +2950,39 @@ public class TestParquetOperator
         return file;
     }
 
+    private java.nio.file.Path writeInt32ParquetFile(String name, List<Integer> values)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .required(INT32).named("value")
+                .named("nitro_int32_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .build()) {
+            for (int value : values) {
+                writer.write(groups.newGroup().append("value", value));
+            }
+        }
+        return file;
+    }
+
     private record TestingTypeBinding(TypeIdentity identity, Class<?> carrierType)
+            implements TypeBinding
+    {
+        @Override
+        public TypeOperators operators()
+        {
+            return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private record VectorTypeBinding(
+            TypeIdentity identity,
+            Class<?> carrierType,
+            Set<Class<? extends org.weakref.nitro.data.Vector>> supportedVectorTypes)
             implements TypeBinding
     {
         @Override

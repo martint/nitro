@@ -147,6 +147,7 @@ public final class NitroParquetBatchSource
     private final ColumnReader[] readers;
     private final ColumnReader[] nullReaders;
     private final boolean[] nullable;
+    private final boolean[] intOutputAsLong;
     private final long totalRows;
 
     private final boolean allNumeric;
@@ -288,7 +289,8 @@ public final class NitroParquetBatchSource
                 resources.filterWindowPolicy(),
                 resources.filterEvaluationPolicy(),
                 resources.diagnostics(),
-                resources.batchPolicy());
+                resources.batchPolicy(),
+                resources.arenaPolicy());
     }
 
     private NitroParquetBatchSource(
@@ -308,7 +310,8 @@ public final class NitroParquetBatchSource
             ParquetFilterWindowPolicy filterWindowPolicy,
             ParquetFilterEvaluationPolicy filterEvaluationPolicy,
             ParquetScanDiagnostics diagnostics,
-            ParquetScanBatchPolicy batchPolicy)
+            ParquetScanBatchPolicy batchPolicy,
+            ParquetArenaPolicy arenaPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.arrayPool = allocator.primitiveArrays();
@@ -349,11 +352,12 @@ public final class NitroParquetBatchSource
         }
         checkArgument(!splits.isEmpty(), "splits is empty");
 
-        this.files = splits.stream().map(Split::path).map(ParquetFile::open).toArray(ParquetFile[]::new);
+        this.files = splits.stream().map(Split::path).map(path -> ParquetFile.open(path, arenaPolicy)).toArray(ParquetFile[]::new);
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];
         this.nullable = new boolean[columnCount];
+        this.intOutputAsLong = new boolean[columnCount];
         this.currentValues = new Vector[columnCount];
         this.currentNulls = new Vector[columnCount];
         this.outputResolvers = new ScanOutputResolver[columnCount];
@@ -370,8 +374,21 @@ public final class NitroParquetBatchSource
                     first.decimal(),
                     decompressedPages,
                     arrayPool,
-                    readerPolicy);
+                    readerPolicy,
+                    arenaPolicy);
             nullable[c] = first.optional();
+            if (readers[c].kind() == ColumnReader.Kind.INT) {
+                Set<Class<? extends Vector>> supportedVectors = schema.field(c).type().supportedVectorTypes();
+                if (supportedVectors.isEmpty() || supportedVectors.contains(I32Vector.class)) {
+                    intOutputAsLong[c] = false;
+                }
+                else if (supportedVectors.contains(I64Vector.class)) {
+                    intOutputAsLong[c] = true;
+                }
+                else {
+                    throw new IllegalArgumentException("INT32 Parquet column has no supported I32 or I64 output representation");
+                }
+            }
             if (filterEvaluationPolicy.directNullMask().reader() && first.optional()) {
                 directNullScratch[c] = new boolean[0];
             }
@@ -706,9 +723,10 @@ public final class NitroParquetBatchSource
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             Vector valueVector = switch (reader.kind()) {
                 case INT -> {
-                    I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
-                    reader.readInts(vector.values(), nulls, count);
-                    yield vector;
+                    int[] values = ensureInt(colInt[c], count);
+                    colInt[c] = values;
+                    reader.readInts(values, nulls, count);
+                    yield copyIntOutput(c, values, 0, count, count);
                 }
                 case LONG -> {
                     if (reader.isDouble()) {
@@ -913,7 +931,7 @@ public final class NitroParquetBatchSource
         // lifecycle rule: empty evidence neither pays decode work nor fixes an irreversible decoder strategy.
         if (lateMaterializationPolicy.deferEmptyConstrainedDecode() && lazyConstrained && lazyMask.none()) {
             lazyPendingAdvance[column] += count;
-            currentValues[column] = allocateMaskedEmptyColumn(reader, count);
+            currentValues[column] = allocateMaskedEmptyColumn(column, reader, count);
             currentNulls[column] = nullVector;
             return;
         }
@@ -935,7 +953,7 @@ public final class NitroParquetBatchSource
         // across batches (which would corrupt its cursor state). Binary has no skip path here, so it stays full;
         // a binary column is therefore always read before constrain or never (filter columns are numeric).
         if (!skip) {
-            currentValues[column] = decodeFullColumn(reader, nulls, count);
+            currentValues[column] = decodeFullColumn(column, reader, nulls, count);
             currentNulls[column] = nullVector;
             return;
         }
@@ -963,11 +981,8 @@ public final class NitroParquetBatchSource
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(survivorCount, false);
             reader.readSelectedInts(survivors, survivorCount, count, lazyScratchInt, isNullable ? lazyScratchNull : null);
-            I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
-            int[] out = vector.values();
-            for (int j = 0; j < survivorCount; j++) {
-                out[survivors[j]] = lazyScratchInt[j];
-            }
+            Vector vector = allocateIntOutput(column, count);
+            scatterIntOutput(vector, survivors, lazyScratchInt, survivorCount);
             if (nulls != null) {
                 for (int j = 0; j < survivorCount; j++) {
                     nulls[survivors[j]] = lazyScratchNull[j];
@@ -1009,10 +1024,10 @@ public final class NitroParquetBatchSource
     }
 
     /** Allocate a correctly typed vector for a batch whose active mask is empty; no value is semantically live. */
-    private Vector allocateMaskedEmptyColumn(ColumnReader reader, int count)
+    private Vector allocateMaskedEmptyColumn(int column, ColumnReader reader, int count)
     {
         return switch (reader.kind()) {
-            case INT -> allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
+            case INT -> allocateIntOutput(column, count);
             case LONG -> reader.isDouble()
                     ? allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new)
                     : allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
@@ -1031,13 +1046,53 @@ public final class NitroParquetBatchSource
         return vector;
     }
 
-    private Vector decodeFullColumn(ColumnReader reader, boolean[] nulls, int count)
+    private Vector allocateIntOutput(int column, int capacity)
+    {
+        if (intOutputAsLong[column]) {
+            return allocator.allocate(allocationContext, I64Vector.class, capacity, I64Vector::new);
+        }
+        return allocator.allocate(allocationContext, I32Vector.class, capacity, I32Vector::new);
+    }
+
+    private Vector copyIntOutput(int column, int[] source, int offset, int count, int capacity)
+    {
+        Vector output = allocateIntOutput(column, capacity);
+        if (output instanceof I64Vector vector) {
+            long[] values = vector.values();
+            for (int index = 0; index < count; index++) {
+                values[index] = source[offset + index];
+            }
+        }
+        else {
+            System.arraycopy(source, offset, ((I32Vector) output).values(), 0, count);
+        }
+        return output;
+    }
+
+    private static void scatterIntOutput(Vector output, int[] positions, int[] source, int count)
+    {
+        if (output instanceof I64Vector vector) {
+            long[] values = vector.values();
+            for (int index = 0; index < count; index++) {
+                values[positions[index]] = source[index];
+            }
+        }
+        else {
+            int[] values = ((I32Vector) output).values();
+            for (int index = 0; index < count; index++) {
+                values[positions[index]] = source[index];
+            }
+        }
+    }
+
+    private Vector decodeFullColumn(int column, ColumnReader reader, boolean[] nulls, int count)
     {
         return switch (reader.kind()) {
             case INT -> {
-                I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, count, I32Vector::new);
-                reader.readInts(vector.values(), nulls, count);
-                yield vector;
+                int[] values = ensureInt(colInt[column], count);
+                colInt[column] = values;
+                reader.readInts(values, nulls, count);
+                yield copyIntOutput(column, values, 0, count, count);
             }
             case LONG -> {
                 if (reader.isDouble()) {
@@ -1581,9 +1636,7 @@ public final class NitroParquetBatchSource
                     : null;
             Vector valueVector;
             if (readers[c].kind() == ColumnReader.Kind.INT) {
-                I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, batchPolicy.maxRows(), I32Vector::new);
-                System.arraycopy(windowInt[c], start, vector.values(), 0, sliceCount);
-                valueVector = vector;
+                valueVector = copyIntOutput(c, windowInt[c], start, sliceCount, batchPolicy.maxRows());
             }
             else if (readers[c].isDouble()) {
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
@@ -1748,14 +1801,18 @@ public final class NitroParquetBatchSource
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(decodeCount, false);
             reader.readSelectedInts(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchInt, isNullable ? lazyScratchNull : null);
-            I32Vector vector = allocator.allocate(allocationContext, I32Vector.class, batchPolicy.maxRows(), I32Vector::new);
+            Vector vector = allocateIntOutput(column, batchPolicy.maxRows());
             for (int index = 0; index < decodeCount; index++) {
                 int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
-                vector.values()[outputPosition] = lazyScratchInt[index];
                 if (nulls != null) {
                     nulls[outputPosition] = lazyScratchNull[index];
                 }
             }
+            scatterIntOutput(
+                    vector,
+                    weakConstraint || outputPositions == null ? identitySurvivors(decodeCount) : outputPositions,
+                    lazyScratchInt,
+                    decodeCount);
             currentValues[column] = vector;
         }
         else {

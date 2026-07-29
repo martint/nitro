@@ -74,10 +74,15 @@ public final class ParquetFile
 
     public static ParquetFile open(Path path)
     {
+        return open(path, ParquetArenaPolicy.confined());
+    }
+
+    static ParquetFile open(Path path, ParquetArenaPolicy arenaPolicy)
+    {
         try {
             // Confined to the opening thread: single-threaded scan, and confined sessions skip the atomic
             // liveness checks a shared session pays on every native (snappy) downcall.
-            Arena arena = Arena.ofConfined();
+            Arena arena = arenaPolicy.createArena();
             MemorySegment data;
             long size;
             try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {

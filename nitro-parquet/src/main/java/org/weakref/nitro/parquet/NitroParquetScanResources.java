@@ -38,6 +38,7 @@ public final class NitroParquetScanResources
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
     private final ParquetScanDiagnostics diagnostics;
     private final ParquetScanBatchPolicy batchPolicy;
+    private final ParquetArenaPolicy arenaPolicy;
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
@@ -51,6 +52,33 @@ public final class NitroParquetScanResources
             ParquetScanDiagnostics diagnostics,
             ParquetScanBatchPolicy batchPolicy)
     {
+        this(
+                decompressedPageCachePolicy,
+                readerPolicy,
+                numericDecodeAdmissionPolicy,
+                lateMaterializationPolicy,
+                progressiveFilterCompactionPolicy,
+                filteredPayloadPolicy,
+                filterWindowPolicy,
+                filterEvaluationPolicy,
+                diagnostics,
+                batchPolicy,
+                ParquetArenaPolicy.confined());
+    }
+
+    public NitroParquetScanResources(
+            DecompressedPageCachePolicy decompressedPageCachePolicy,
+            ParquetReaderPolicy readerPolicy,
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
+            ParquetLateMaterializationPolicy lateMaterializationPolicy,
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
+            ParquetFilteredPayloadPolicy filteredPayloadPolicy,
+            ParquetFilterWindowPolicy filterWindowPolicy,
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy,
+            ParquetScanDiagnostics diagnostics,
+            ParquetScanBatchPolicy batchPolicy,
+            ParquetArenaPolicy arenaPolicy)
+    {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
@@ -62,9 +90,15 @@ public final class NitroParquetScanResources
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
+        this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
+    {
+        return createDefault(ParquetArenaPolicy.confined());
+    }
+
+    public static NitroParquetScanResources createDefault(ParquetArenaPolicy arenaPolicy)
     {
         ParquetLateMaterializationPolicy lateMaterializationPolicy =
                 ParquetLateMaterializationPolicy.fromSystemProperties();
@@ -78,7 +112,8 @@ public final class NitroParquetScanResources
                 ParquetFilterWindowPolicy.fromSystemProperties(),
                 ParquetFilterEvaluationPolicy.fromSystemProperties(),
                 ParquetScanDiagnostics.fromSystemProperties(),
-                ParquetScanBatchPolicy.fromSystemProperties());
+                ParquetScanBatchPolicy.fromSystemProperties(),
+                arenaPolicy);
     }
 
     Object batchBufferPool()
@@ -144,5 +179,10 @@ public final class NitroParquetScanResources
     ParquetScanBatchPolicy batchPolicy()
     {
         return batchPolicy;
+    }
+
+    ParquetArenaPolicy arenaPolicy()
+    {
+        return arenaPolicy;
     }
 }

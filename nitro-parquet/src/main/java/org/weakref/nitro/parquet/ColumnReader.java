@@ -138,6 +138,7 @@ public final class ColumnReader
     private final ParquetMaterializationPolicy materializationPolicy;
     private final ParquetNumericDecodePolicy numericDecodePolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
+    private final ParquetArenaPolicy arenaPolicy;
     private final RleReader rle;
     // Skip path: stream the definition levels rather than materializing a per-page prefix. defRle co-advances with
     // the id reader `rle` — skipCountingOnes(gap) returns the non-nulls in a gap (O(1) per RLE run) so `rle` skips
@@ -159,9 +160,9 @@ public final class ColumnReader
     // reusable buffers (grow to high-water mark). The decompression target is an off-heap segment from a
     // confined arena so the snappy FFM downcall is native->native (no heap marshalling); the SIMD unpacker
     // loads vectors straight from it via ByteVector.fromMemorySegment.
-    private final java.lang.foreign.Arena scratchArena = java.lang.foreign.Arena.ofConfined();
+    private final java.lang.foreign.Arena scratchArena;
     private final Decompressor snappy = SnappyDecompressor.create();
-    private MemorySegment decompressSegment = scratchArena.allocate(0);
+    private MemorySegment decompressSegment;
     private long decompressCapacity;
     private long compressedPageCount;
     private long compressedPageBytes;
@@ -294,8 +295,32 @@ public final class ColumnReader
             PrimitiveArrayPool arrayPool,
             ParquetReaderPolicy readerPolicy)
     {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                decompressedPages,
+                arrayPool,
+                readerPolicy,
+                ParquetArenaPolicy.confined());
+    }
+
+    ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy,
+            ParquetArenaPolicy arenaPolicy)
+    {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
+        this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
+        this.scratchArena = arenaPolicy.createArena();
+        this.decompressSegment = scratchArena.allocate(0);
         this.rleReaderPolicy = readerPolicy.rle();
         this.pageNavigationPolicy = readerPolicy.pageNavigation();
         this.diagnostics = readerPolicy.diagnostics();
@@ -353,7 +378,8 @@ public final class ColumnReader
                 flbaDecimal,
                 decompressedPages,
                 arrayPool,
-                readerPolicy);
+                readerPolicy,
+                arenaPolicy);
         for (Chunk chunk : chunks) {
             sibling.addChunk(chunk.segment(), chunk.metadata(), chunk.rowCount(), chunk.source());
         }
