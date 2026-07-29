@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static java.lang.Math.addExact;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.nio.ByteOrder.BIG_ENDIAN;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
@@ -127,6 +128,39 @@ public final class ParquetFile
     public List<RowGroup> rowGroups()
     {
         return footer.row_groups;
+    }
+
+    /**
+     * Returns the row groups owned by a byte-range split.
+     *
+     * <p>Parquet splits own a row group when the first physical column starts within the half-open
+     * split range. Dictionary data, when present before the first data page, is the physical start
+     * of that column. This is the same ownership rule used by Trino's Parquet metadata reader and
+     * guarantees that adjacent splits neither duplicate nor omit a row group.
+     */
+    public List<RowGroup> rowGroups(long splitStart, long splitLength)
+    {
+        if (splitStart < 0) {
+            throw new IllegalArgumentException("splitStart is negative");
+        }
+        if (splitLength < 0) {
+            throw new IllegalArgumentException("splitLength is negative");
+        }
+        long splitEnd = addExact(splitStart, splitLength);
+        return footer.row_groups.stream()
+                .filter(rowGroup -> splitContainsRowGroup(rowGroup, splitStart, splitEnd))
+                .toList();
+    }
+
+    static boolean splitContainsRowGroup(RowGroup rowGroup, long splitStart, long splitEnd)
+    {
+        ColumnChunk firstColumn = rowGroup.columns.getFirst();
+        long dataOffset = firstColumn.meta_data.data_page_offset;
+        long dictionaryOffset = firstColumn.meta_data.dictionary_page_offset;
+        long rowGroupStart = dictionaryOffset > 0 && dictionaryOffset < dataOffset
+                ? dictionaryOffset
+                : dataOffset;
+        return splitStart <= rowGroupStart && rowGroupStart < splitEnd;
     }
 
     public Column column(String name)

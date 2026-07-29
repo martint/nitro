@@ -60,6 +60,29 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetBatchSource
         implements BatchSource
 {
+    public record Split(Path path, long start, long length)
+    {
+        public Split
+        {
+            requireNonNull(path, "path is null");
+            checkArgument(start >= 0, "start is negative");
+            checkArgument(length >= 0, "length is negative");
+        }
+
+        public static Split wholeFile(Path path)
+        {
+            return new Split(path, 0, Long.MAX_VALUE);
+        }
+    }
+
+    private record Splits(List<Split> values)
+    {
+        private Splits
+        {
+            values = List.copyOf(values);
+        }
+    }
+
     // A wide, all-numeric scan with no downstream constraint is usually feeding a cardinality-preserving operator.
     // In that shape, removing the page-sized materialization buffer can increase TLB pressure in the consumer even
     // though it saves allocation in the decoder. Wait for runtime evidence that a downstream operator is narrowing
@@ -230,9 +253,27 @@ public final class NitroParquetBatchSource
             List<Path> paths,
             Schema schema)
     {
+        this(resources, allocator, new Splits(paths.stream().map(Split::wholeFile).toList()), schema);
+    }
+
+    public static NitroParquetBatchSource forSplits(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Split> splits,
+            Schema schema)
+    {
+        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema);
+    }
+
+    private NitroParquetBatchSource(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            Splits splits,
+            Schema schema)
+    {
         this(
                 allocator,
-                paths,
+                splits.values(),
                 requireColumnNames(schema),
                 schema,
                 requireNonNull(resources, "resources is null").batchBufferPool(),
@@ -252,7 +293,7 @@ public final class NitroParquetBatchSource
 
     private NitroParquetBatchSource(
             Allocator allocator,
-            List<Path> paths,
+            List<Split> splits,
             List<String> columns,
             Schema schema,
             Object batchBufferPoolKey,
@@ -306,9 +347,9 @@ public final class NitroParquetBatchSource
         for (int column = 0; column < sourceColumns.length; column++) {
             sourceColumns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
         }
-        checkArgument(!paths.isEmpty(), "paths is empty");
+        checkArgument(!splits.isEmpty(), "splits is empty");
 
-        this.files = paths.stream().map(ParquetFile::open).toArray(ParquetFile[]::new);
+        this.files = splits.stream().map(Split::path).map(ParquetFile::open).toArray(ParquetFile[]::new);
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];
@@ -343,15 +384,19 @@ public final class NitroParquetBatchSource
                 ParquetFile.Column column = file.column(columns.get(c));
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
-                        : new DecompressedPageCache.Source(paths.get(fileIndex), columns.get(c));
+                        : new DecompressedPageCache.Source(splits.get(fileIndex).path(), columns.get(c));
                 if (source != null) {
                     decompressedPages.register(source);
                 }
-                for (RowGroup rowGroup : file.rowGroups()) {
+                Split split = splits.get(fileIndex);
+                for (RowGroup rowGroup : file.rowGroups(split.start(), split.length())) {
                     readers[c].addChunk(file.data(), file.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows, source);
                 }
             }
-            rows += file.numRows();
+            Split split = splits.get(fileIndex);
+            rows += file.rowGroups(split.start(), split.length()).stream()
+                    .mapToLong(rowGroup -> rowGroup.num_rows)
+                    .sum();
         }
         this.totalRows = rows;
 
