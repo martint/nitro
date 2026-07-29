@@ -1835,6 +1835,82 @@ class FlatKeyLayout
         return result;
     }
 
+    Vector tryCopyIdBackedBinaryValue(
+            FlatGroupingTable table,
+            int fieldIndex,
+            int recordIndex,
+            Vector output,
+            int outputPosition,
+            int size,
+            org.weakref.nitro.data.Allocator allocator,
+            org.weakref.nitro.data.Allocator.Context allocationContext)
+    {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
+            return null;
+        }
+
+        byte[] chunk = table.fixedChunk(recordIndex);
+        int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+        int length;
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+            length = token >= 0
+                    ? fieldInterners[fieldIndex].valueLength(token)
+                    : compactBinaryLength(compactBinaryFallback(fieldIndex, ~token));
+        }
+        else {
+            int storedLength = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+            length = storedLength < 0
+                    ? fieldInterners[fieldIndex].valueLength(recordDictionaryId(fieldIndex, chunk, offset, recordIndex))
+                    : storedLength;
+        }
+
+        BinaryVector existing = output instanceof BinaryVector binary ? binary : null;
+        int outputOffset = existing == null ? 0 : existing.offsets()[outputPosition];
+        BinaryVector result = BinaryVector.allocateOrGrow(
+                allocator,
+                allocationContext,
+                existing,
+                size,
+                Math.addExact(outputOffset, length));
+        if (outputPosition == 0) {
+            Arrays.fill(result.offsets(), 0);
+            result.clearTraits();
+            result.addTraits(field(fieldIndex).binaryTraits());
+        }
+        else if (result.traits().isEmpty()) {
+            result.addTraits(field(fieldIndex).binaryTraits());
+        }
+
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+            if (token >= 0) {
+                fieldInterners[fieldIndex].copyValue(token, result, outputPosition);
+            }
+            else {
+                long fallback = compactBinaryFallback(fieldIndex, ~token);
+                result.setBytes(
+                        outputPosition,
+                        table.variableWidthArena().chunk(compactBinaryChunkIndex(fallback)),
+                        compactBinaryChunkOffset(fallback),
+                        compactBinaryLength(fallback));
+            }
+        }
+        else {
+            int storedLength = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+            if (storedLength < 0) {
+                fieldInterners[fieldIndex].copyValue(
+                        recordDictionaryId(fieldIndex, chunk, offset, recordIndex),
+                        result,
+                        outputPosition);
+            }
+            else {
+                FlatTypeHandlers.BINARY.copyBinaryTo(chunk, offset, table.variableWidthArena(), result, outputPosition);
+            }
+        }
+        return result;
+    }
+
     /**
      * Hook called by {@link FlatGroupingTable} after a batch completes. Mirror of
      * {@link #beginBatch}; subclasses release cached references here.

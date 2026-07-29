@@ -2332,6 +2332,10 @@ final class GroupingState
             return structuralGrouping.copyGroupedValuePosition(
                     groupedColumnIndex, output, sourcePosition, outputPosition, size, allocator, allocationContext);
         }
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.copyGroupedValuePosition(
+                    groupedColumnIndex, output, sourcePosition, outputPosition, size, allocator, allocationContext);
+        }
         if (!useLongGrouping && !usePackedIntPairGrouping && !useMultiLongGrouping) {
             return null;
         }

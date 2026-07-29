@@ -100,6 +100,14 @@ final class FlatTypeHandlers
         }
 
         @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            result.values()[outputPosition] = readLong(fixedChunk, fixedOffset);
+            return result;
+        }
+
+        @Override
         public OperatorKeySemantics.Key reusableProbeKey()
         {
             return new OperatorKeySemantics.LongProbeKey(0);
@@ -195,6 +203,14 @@ final class FlatTypeHandlers
                     result.values()[index] = readBoolean(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }
+            return result;
+        }
+
+        @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            BooleanVector result = VectorAccess.writableBooleanVector(allocator, allocationContext, output, size);
+            result.values()[outputPosition] = readBoolean(fixedChunk, fixedOffset);
             return result;
         }
 
@@ -295,6 +311,14 @@ final class FlatTypeHandlers
                     result.values()[index] = Double.longBitsToDouble(readDoubleBits(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset()));
                 }
             }
+            return result;
+        }
+
+        @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            F64Vector result = allocator.allocateOrGrow(allocationContext, (F64Vector) output, F64Vector.class, size, F64Vector::new);
+            result.values()[outputPosition] = Double.longBitsToDouble(readDoubleBits(fixedChunk, fixedOffset));
             return result;
         }
 
@@ -525,6 +549,19 @@ final class FlatTypeHandlers
                 result.setNull(previousIndex++);
             }
             return result;
+        }
+
+        @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            int length = binaryLength(fixedChunk, fixedOffset);
+            int offset = readChunkOffset(fixedChunk, fixedOffset);
+            BinaryVector source = new BinaryVector(
+                    1,
+                    new int[] {offset, offset + length},
+                    variableWidthArena.chunk(readChunkIndex(fixedChunk, fixedOffset)));
+            source.addTraits(field.binaryTraits());
+            return source.copySinglePositionInto(allocator, allocationContext, output, 0, outputPosition, size);
         }
 
         @Override

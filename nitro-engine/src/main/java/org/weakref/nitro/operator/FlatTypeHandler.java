@@ -74,6 +74,20 @@ interface FlatTypeHandler
         throw new UnsupportedOperationException();
     }
 
+    default Vector copyFlatValue(
+            FlatKeyLayout.Field field,
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena variableWidthArena,
+            Vector output,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException();
+    }
+
     default OperatorKeySemantics.Key reusableProbeKey()
     {
         throw new UnsupportedOperationException();

@@ -798,6 +798,65 @@ final class FlatGroupingTable
                 materializeNulls(groupedColumnIndex, size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
+    public Streams copyGroupedValuePosition(
+            int groupedColumnIndex,
+            Streams output,
+            int sourcePosition,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
+        int recordIndex = recordIndex(sourcePosition);
+        boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+        Vector outputValues = output == null ? null : output.values();
+        if (!nullValue) {
+            int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+            Vector idBackedBinary = layout.tryCopyIdBackedBinaryValue(
+                    this,
+                    groupedColumnIndex,
+                    recordIndex,
+                    outputValues,
+                    outputPosition,
+                    size,
+                    allocator,
+                    allocationContext);
+            outputValues = idBackedBinary != null
+                    ? idBackedBinary
+                    : field.handler().copyFlatValue(
+                            field,
+                            fixedChunk(recordIndex),
+                            fixedOffset,
+                            variableWidthArena,
+                            outputValues,
+                            outputPosition,
+                            size,
+                            allocator,
+                            allocationContext);
+        }
+        else if (outputValues == null) {
+            outputValues = field.handler().materializeValues(
+                    this,
+                    field,
+                    groupedColumnIndex,
+                    size,
+                    Mask.none(size),
+                    -1,
+                    null,
+                    allocator,
+                    allocationContext);
+        }
+
+        BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
+        outputNulls.values()[outputPosition] = nullValue;
+        return Streams.ofValuesAndNulls(outputValues, outputNulls);
+    }
+
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
         int packedHash = packedHashRecordSlots ? packedTableHash(hash) : 0;

@@ -25,6 +25,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.RleVector;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -1261,6 +1262,40 @@ class TestFlatGroupingTable
         }
         finally {
             table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testCopiesOneFlatBinaryGroupWithoutMaterializingAllGroups()
+    {
+        Vector[] values = {utf8("alpha", "beta", "gamma")};
+        Vector[] nulls = {null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                16,
+                true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("testFlatBinaryGroupCopy");
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isEqualTo(0);
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(values, nulls, 2, 2)).isEqualTo(2);
+            table.endBatch();
+
+            Streams output = table.copyGroupedValuePosition(0, null, 2, 0, 1, allocator, allocationContext);
+            BinaryVector binary = (BinaryVector) output.values();
+            assertThat(new String(binary.data(), binary.startOffset(0), binary.length(0), StandardCharsets.UTF_8))
+                    .isEqualTo("gamma");
+
+            output = table.copyGroupedValuePosition(0, output, 0, 0, 1, allocator, allocationContext);
+            binary = (BinaryVector) output.values();
+            assertThat(new String(binary.data(), binary.startOffset(0), binary.length(0), StandardCharsets.UTF_8))
+                    .isEqualTo("alpha");
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
         }
     }
 
