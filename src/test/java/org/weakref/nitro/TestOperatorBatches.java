@@ -2136,6 +2136,24 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupIdOperatorUsesMappedTypeForNullExtendedOutput()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(10L, "detail"))),
+                new int[][] {
+                        {-1, 0},
+                        {1, 0}},
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(null, 10L, 0L),
+                            row("detail", 10L, 1L));
+        }
+    }
+
+    @Test
     void testHashJoinOperatorSupportsProbeOuterJoin()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

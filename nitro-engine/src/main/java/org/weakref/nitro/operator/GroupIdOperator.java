@@ -37,6 +37,7 @@ public final class GroupIdOperator
     private final Allocator.Context allocationContext = new Allocator.Context("GroupIdOperator");
     private final Operator source;
     private final int[][] groupingSetInputs;
+    private final int[] representativeSourceInputs;
     private final GroupIdOperatorPolicy policy;
     private final boolean[] outputCanBeNullExtended;
     private final Schema outputSchema;
@@ -70,6 +71,7 @@ public final class GroupIdOperator
         this.allocator = allocator;
         this.source = source;
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
+        this.representativeSourceInputs = representativeSourceInputs(this.groupingSetInputs);
         this.policy = requireNonNull(policy, "policy is null");
         this.outputCanBeNullExtended = computeOutputNullExtension(this.groupingSetInputs);
         this.outputSchema = outputSchema(source.outputSchema(), this.groupingSetInputs, outputCanBeNullExtended, groupIdField);
@@ -188,7 +190,7 @@ public final class GroupIdOperator
 
     private Streams materializeOutput(int outputIndex, int sourceIndex, int rowCount)
     {
-        Output sourceOutput = currentSourceBatch.output(sourceIndex >= 0 ? sourceIndex : outputIndex);
+        Output sourceOutput = currentSourceBatch.output(sourceIndex >= 0 ? sourceIndex : representativeSourceInputs[outputIndex]);
         Vector values = selectValues(sourceOutput.borrow(Stream.VALUES), currentSourcePositions, outputIndex);
 
         Streams.Builder streams = Streams.builder()
@@ -354,6 +356,24 @@ public final class GroupIdOperator
                     result[outputIndex] = true;
                     break;
                 }
+            }
+        }
+        return result;
+    }
+
+    private static int[] representativeSourceInputs(int[][] groupingSetInputs)
+    {
+        int[] result = new int[groupingSetInputs[0].length];
+        java.util.Arrays.fill(result, -1);
+        for (int outputIndex = 0; outputIndex < result.length; outputIndex++) {
+            for (int[] groupingSet : groupingSetInputs) {
+                if (groupingSet[outputIndex] >= 0) {
+                    result[outputIndex] = groupingSet[outputIndex];
+                    break;
+                }
+            }
+            if (result[outputIndex] < 0) {
+                throw new IllegalArgumentException("GroupId output has no source mapping: " + outputIndex);
             }
         }
         return result;
