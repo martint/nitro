@@ -34,6 +34,13 @@ import static java.util.Objects.requireNonNull;
 public class TopNRankingOperator
         implements Operator
 {
+    public enum RankingType
+    {
+        ROW_NUMBER,
+        RANK,
+        DENSE_RANK
+    }
+
     private final Allocator.Context allocationContext = new Allocator.Context("TopNRankingOperator");
 
     private final Allocator allocator;
@@ -41,10 +48,12 @@ public class TopNRankingOperator
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final int[] partitionColumns;
+    private final RankingType rankingType;
     private final int limit;
     private final int maxBatchRows;
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
+    private final StructuralKeyKernel[] partitionKernels;
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
@@ -69,7 +78,9 @@ public class TopNRankingOperator
                 descendingByColumn,
                 source,
                 defaultRankingSchema(),
-                policy);
+                policy,
+                RankingType.RANK,
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
     public TopNRankingOperator(
@@ -90,6 +101,7 @@ public class TopNRankingOperator
                 source,
                 rankingSchema,
                 policy,
+                RankingType.RANK,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -110,7 +122,9 @@ public class TopNRankingOperator
                 descendingByColumn,
                 source,
                 defaultRankingSchema(),
-                policy);
+                policy,
+                RankingType.RANK,
+                EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
     public TopNRankingOperator(
@@ -132,6 +146,7 @@ public class TopNRankingOperator
                 source,
                 rankingSchema,
                 policy,
+                RankingType.RANK,
                 EngineResources.from(allocator).operatorResources().codeGeneration().structuralTypes());
     }
 
@@ -154,6 +169,31 @@ public class TopNRankingOperator
                 source,
                 rankingSchema,
                 requireNonNull(resources, "resources is null").topNRankingPolicy(),
+                RankingType.RANK,
+                resources.codeGeneration().structuralTypes());
+    }
+
+    public TopNRankingOperator(
+            Allocator allocator,
+            int limit,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            RankingType rankingType,
+            Operator source,
+            Schema rankingSchema,
+            OperatorResources resources)
+    {
+        this(
+                allocator,
+                limit,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                source,
+                rankingSchema,
+                requireNonNull(resources, "resources is null").topNRankingPolicy(),
+                rankingType,
                 resources.codeGeneration().structuralTypes());
     }
 
@@ -166,8 +206,12 @@ public class TopNRankingOperator
             Operator source,
             Schema rankingSchema,
             TopNRankingOperatorPolicy policy,
+            RankingType rankingType,
             StructuralTypeKernelFactory structuralTypes)
     {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("TopNRanking limit must be positive");
+        }
         if (orderingColumns.length == 0) {
             throw new IllegalArgumentException("TopNRanking requires at least one ordering column");
         }
@@ -183,6 +227,7 @@ public class TopNRankingOperator
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.partitionColumns = partitionColumns.clone();
+        this.rankingType = requireNonNull(rankingType, "rankingType is null");
         this.limit = limit;
         this.maxBatchRows = requireNonNull(policy, "policy is null").maxBatchRows();
         this.outputSchema = outputSchema(source.outputSchema(), rankingSchema);
@@ -191,6 +236,10 @@ public class TopNRankingOperator
                 this.partitionColumns,
                 this.orderingColumns,
                 requireNonNull(structuralTypes, "structuralTypes is null"));
+        this.partitionKernels = partitionKernels(
+                source.outputSchema(),
+                this.partitionColumns,
+                structuralTypes);
     }
 
     @Override
@@ -230,6 +279,18 @@ public class TopNRankingOperator
         }
         for (int column : orderingColumns) {
             kernels[column] = structuralTypes.comparison(sourceSchema.field(column).type());
+        }
+        return kernels;
+    }
+
+    private static StructuralKeyKernel[] partitionKernels(
+            Schema sourceSchema,
+            int[] partitionColumns,
+            StructuralTypeKernelFactory structuralTypes)
+    {
+        StructuralKeyKernel[] kernels = new StructuralKeyKernel[sourceSchema.size()];
+        for (int column : partitionColumns) {
+            kernels[column] = structuralTypes.key(sourceSchema.field(column).type());
         }
         return kernels;
     }
@@ -343,17 +404,11 @@ public class TopNRankingOperator
         // the limit rather than the partition size.
         List<RankedRow> ranked = new ArrayList<>();
         if (limit > 0) {
-            // A row with a null in any partition column never shares a partition with another row, because
-            // partition equality is value equality and that is false in the presence of nulls. Each such
-            // row is therefore its own singleton partition with rank 1. Bucket the rest by partition value.
             Map<PartitionKey, List<RowReference>> partitions = new HashMap<>();
             for (RowReference row : rows) {
-                if (hasNullPartition(row)) {
-                    ranked.add(new RankedRow(row, 1));
-                }
-                else {
-                    partitions.computeIfAbsent(new PartitionKey(row), _ -> new ArrayList<>()).add(row);
-                }
+                // Window partitioning uses NOT DISTINCT semantics: all rows with the same
+                // values, including nulls in the same positions, share one partition.
+                partitions.computeIfAbsent(new PartitionKey(row), _ -> new ArrayList<>()).add(row);
             }
             for (List<RowReference> partition : partitions.values()) {
                 rankPartition(partition, ranked);
@@ -388,10 +443,7 @@ public class TopNRankingOperator
             }
         }
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int comparison = compareColumn(orderingColumns[orderingIndex], left, right);
-            if (descendingByColumn[orderingIndex]) {
-                comparison = -comparison;
-            }
+            int comparison = compareOrderingColumn(orderingIndex, left, right);
             if (comparison != 0) {
                 return comparison;
             }
@@ -399,34 +451,43 @@ public class TopNRankingOperator
         return 0;
     }
 
-    /**
-     * Selects the rows of a single partition with {@code rank() <= limit} and appends them with their
-     * ranks. The bounded candidate set already contains every row that can reach {@code rank <= limit}
-     * (all rows ordering-before-or-equal to the limit-th best), so the standard rank walk over it assigns
-     * the same ranks a full-partition walk would.
-     */
     private void rankPartition(List<RowReference> partition, List<RankedRow> ranked)
     {
-        List<RowReference> candidates = boundedTopN(partition);
+        List<RowReference> candidates = rankingType == RankingType.DENSE_RANK
+                ? new ArrayList<>(partition)
+                : boundedTopN(partition);
         candidates.sort(this::compareOrdering);
 
         RowReference previous = null;
         long partitionRowNumber = 0;
         long currentRank = 0;
+        long currentDenseRank = 0;
         for (RowReference row : candidates) {
             if (previous == null) {
                 partitionRowNumber = 1;
                 currentRank = 1;
+                currentDenseRank = 1;
             }
             else {
                 partitionRowNumber++;
                 if (!sameOrderingValue(previous, row)) {
                     currentRank = partitionRowNumber;
+                    currentDenseRank++;
                 }
             }
-            if (currentRank <= limit) {
-                ranked.add(new RankedRow(row, currentRank));
+            long outputRank = switch (rankingType) {
+                case ROW_NUMBER -> partitionRowNumber;
+                case RANK -> currentRank;
+                case DENSE_RANK -> currentDenseRank;
+            };
+            if (outputRank > limit) {
+                if (rankingType == RankingType.DENSE_RANK) {
+                    break;
+                }
+                previous = row;
+                continue;
             }
+            ranked.add(new RankedRow(row, outputRank));
             previous = row;
         }
     }
@@ -463,24 +524,10 @@ public class TopNRankingOperator
         return candidates;
     }
 
-    private boolean hasNullPartition(RowReference row)
-    {
-        for (int partitionColumn : partitionColumns) {
-            Streams streams = row.page().columns()[partitionColumn];
-            if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), row.position())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private int compareOrdering(RowReference left, RowReference right)
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
-            int comparison = compareColumn(orderingColumns[orderingIndex], left, right);
-            if (descendingByColumn[orderingIndex]) {
-                comparison = -comparison;
-            }
+            int comparison = compareOrderingColumn(orderingIndex, left, right);
             if (comparison != 0) {
                 return comparison;
             }
@@ -515,6 +562,11 @@ public class TopNRankingOperator
     {
         Streams leftStreams = left.page().columns()[column];
         Streams rightStreams = right.page().columns()[column];
+        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
+        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+        if (leftNull || rightNull) {
+            return leftNull == rightNull;
+        }
         return comparisonKernels[column].identical(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
@@ -522,6 +574,29 @@ public class TopNRankingOperator
                 rightStreams.values(),
                 rightStreams.getOrNull(Stream.NULLS),
                 right.position());
+    }
+
+    private int compareOrderingColumn(int orderingIndex, RowReference left, RowReference right)
+    {
+        int column = orderingColumns[orderingIndex];
+        Streams leftStreams = left.page().columns()[column];
+        Streams rightStreams = right.page().columns()[column];
+        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
+        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+        if (leftNull || rightNull) {
+            if (leftNull == rightNull) {
+                return 0;
+            }
+            return leftNull ? 1 : -1;
+        }
+        int comparison = comparisonKernels[column].compare(
+                leftStreams.values(),
+                leftStreams.getOrNull(Stream.NULLS),
+                left.position(),
+                rightStreams.values(),
+                rightStreams.getOrNull(Stream.NULLS),
+                right.position());
+        return descendingByColumn[orderingIndex] ? -comparison : comparison;
     }
 
     private Streams materializeSourceColumnBatch(int outputIndex, int startPosition, int batchSize)
@@ -621,8 +696,7 @@ public class TopNRankingOperator
     private record RankedRow(RowReference row, long rank) {}
 
     /**
-     * Groups rows by partition value. Only built for rows whose partition columns are all non-null, so
-     * equality and hashing never observe nulls and the standard hash-map contract holds.
+     * Groups rows by partition value using NOT DISTINCT equality, including nulls.
      */
     private final class PartitionKey
     {
@@ -635,7 +709,10 @@ public class TopNRankingOperator
             int result = 1;
             for (int partitionColumn : partitionColumns) {
                 Streams streams = row.page().columns()[partitionColumn];
-                result = 31 * result + OperatorVectorSupport.hash(streams.values(), streams.getOrNull(Stream.NULLS), row.position());
+                result = 31 * result + Long.hashCode(partitionKernels[partitionColumn].hash(
+                        streams.values(),
+                        streams.getOrNull(Stream.NULLS),
+                        row.position()));
             }
             this.hash = result;
         }
@@ -659,7 +736,23 @@ public class TopNRankingOperator
                 return false;
             }
             for (int partitionColumn : partitionColumns) {
-                if (!equalColumn(partitionColumn, row, that.row)) {
+                Streams left = row.page().columns()[partitionColumn];
+                Streams right = that.row.page().columns()[partitionColumn];
+                boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), row.position());
+                boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), that.row.position());
+                if (leftNull || rightNull) {
+                    if (leftNull != rightNull) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!partitionKernels[partitionColumn].identical(
+                        left.values(),
+                        left.getOrNull(Stream.NULLS),
+                        row.position(),
+                        right.values(),
+                        right.getOrNull(Stream.NULLS),
+                        that.row.position())) {
                     return false;
                 }
             }

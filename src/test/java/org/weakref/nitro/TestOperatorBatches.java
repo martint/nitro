@@ -68,6 +68,7 @@ import org.weakref.nitro.operator.SortSession;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
+import org.weakref.nitro.operator.TopNRankingSession;
 import org.weakref.nitro.operator.TopNSession;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
@@ -862,6 +863,125 @@ public class TestOperatorBatches
                             row(1L, "first-b", 1L),
                             row(2L, "second", 3L),
                             row(3L, "third", 4L));
+        }
+    }
+
+    @Test
+    void testTopNRankingSessionRanksNullPartitionAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 3, List.of(
+                row(null, 1L, "first-a"),
+                row(null, 2L, "second")));
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        2,
+                        new int[] {0},
+                        new int[] {1},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.RANK,
+                        first.outputSchema(),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 3, List.of(
+                    row(null, 1L, "first-b"),
+                    row(null, 3L, "third")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactlyInAnyOrder(
+                            row(null, 1L, "first-a", 1L),
+                            row(null, 1L, "first-b", 1L));
+        }
+    }
+
+    @Test
+    void testTopNRankingSupportsRowNumberAndDenseRank()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        List<org.weakref.nitro.data.Row> rows = List.of(
+                row(1L, "first-a"),
+                row(1L, "first-b"),
+                row(2L, "second"),
+                row(3L, "third"));
+
+        try (Operator rowNumber = new TopNRankingOperator(
+                allocator,
+                2,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.ROW_NUMBER,
+                new ConstantTableOperator(allocator, 2, rows),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(rowNumber))
+                    .hasSize(2)
+                    .extracting(row -> row.values()[2])
+                    .containsExactlyInAnyOrder(1L, 2L);
+        }
+
+        try (Operator denseRank = new TopNRankingOperator(
+                allocator,
+                2,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.DENSE_RANK,
+                new ConstantTableOperator(allocator, 2, rows),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(denseRank))
+                    .containsExactlyInAnyOrder(
+                            row(1L, "first-a", 1L),
+                            row(1L, "first-b", 1L),
+                            row(2L, "second", 2L));
+        }
+    }
+
+    @Test
+    void testTopNRankingTreatsNullOrderingValuesAsPeersAndKeepsThemLastWhenDescending()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator nullPeers = new TopNRankingOperator(
+                allocator,
+                1,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                TopNRankingOperator.RankingType.RANK,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(null, "null-a"),
+                        row(null, "null-b"))),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(nullPeers))
+                    .containsExactlyInAnyOrder(
+                            row(null, "null-a", 1L),
+                            row(null, "null-b", 1L));
+        }
+
+        try (Operator descending = new TopNRankingOperator(
+                allocator,
+                1,
+                new int[0],
+                new int[] {0},
+                new boolean[] {true},
+                TopNRankingOperator.RankingType.ROW_NUMBER,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(null, "null"),
+                        row(1L, "one"),
+                        row(2L, "two"))),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(descending))
+                    .containsExactly(row(2L, "two", 1L));
         }
     }
 
