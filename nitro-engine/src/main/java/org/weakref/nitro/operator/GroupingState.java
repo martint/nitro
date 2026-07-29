@@ -575,7 +575,7 @@ final class GroupingState
      */
     public void beginContainsBatch(Vector values, Vector nulls)
     {
-        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
+        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls}, null);
         if (structuralGrouping != null) {
             return;
         }
@@ -593,7 +593,7 @@ final class GroupingState
 
     public boolean contains(Vector values, Vector nulls, int position)
     {
-        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls});
+        initializeIfNecessary(new Vector[] {values}, new Vector[] {nulls}, null);
         if (OperatorVectorSupport.isNull(nulls, position)) {
             return false;
         }
@@ -613,7 +613,12 @@ final class GroupingState
 
     public void initializeSchema(Vector[] values, Vector[] nulls)
     {
-        initializeIfNecessary(values, nulls);
+        initializeIfNecessary(values, nulls, null);
+    }
+
+    public void initializeSchema(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        initializeIfNecessary(values, nulls, requireNonNull(mask, "mask is null"));
     }
 
     @SuppressWarnings("unchecked")
@@ -651,7 +656,7 @@ final class GroupingState
         if (!initialized && allowsLegacyKeyShortcuts) {
             useFullWidthPairPackedIdentity = admitsFullWidthPairPackedIdentity(values, nulls, mask);
         }
-        initializeIfNecessary(values, nulls);
+        initializeIfNecessary(values, nulls, mask);
         if (structuralGrouping != null) {
             nextGroupId = structuralGrouping.assignGroups(values, nulls, mask, result, nextGroupId);
             return;
@@ -919,7 +924,7 @@ final class GroupingState
         }
     }
 
-    private void initializeIfNecessary(Vector[] values, Vector[] nulls)
+    private void initializeIfNecessary(Vector[] values, Vector[] nulls, Mask mask)
     {
         validateKeyTypes(values);
         if (initialized) {
@@ -957,7 +962,7 @@ final class GroupingState
 
         if (values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
             useLongGrouping = true;
-            initLongGroupTable(initialLongGroupExpectedSize(values[0], nulls[0]));
+            initLongGroupTable(initialLongGroupExpectedSize(values[0], nulls[0], mask));
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
@@ -1065,9 +1070,9 @@ final class GroupingState
         initializeObjectKeyGrouping(values);
     }
 
-    private int initialLongGroupExpectedSize(Vector values, Vector nulls)
+    private int initialLongGroupExpectedSize(Vector values, Vector nulls, Mask mask)
     {
-        int rowCount = values.length();
+        int rowCount = mask == null ? values.length() : mask.selectedCount();
         int sampleSize = Math.min(rowCount, longPolicy.initialCardinalitySampleSize());
         if (sampleSize == 0) {
             return 16;
@@ -1078,7 +1083,8 @@ final class GroupingState
         int distinctCount = 0;
         boolean sampledNull = false;
         for (int sample = 0; sample < sampleSize; sample++) {
-            int position = (int) ((long) sample * rowCount / sampleSize);
+            int sampleOrdinal = (int) ((long) sample * rowCount / sampleSize);
+            int position = mask == null ? sampleOrdinal : mask.position(sampleOrdinal);
             if (nulls != null && OperatorVectorSupport.booleanValue(nulls, nulls.length() == 1 ? 0 : position)) {
                 if (!sampledNull) {
                     sampledNull = true;

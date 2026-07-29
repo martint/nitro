@@ -459,12 +459,12 @@ public class GroupedAggregationOperator
     {
         Mask mask = batch.borrowMask();
         if (mask.none()) {
-            initializeInlineGroupingSchema(batch);
+            initializeInlineGroupingSchema(batch, mask);
             return;
         }
 
         if (!inlineGroupingState.isInitialized()) {
-            initializeInlineGroupingSchema(batch);
+            initializeInlineGroupingSchema(batch, mask);
         }
         if (inlineGroupingState.isInitialized() && !fusedChecked) {
             prepareFusedKernel();
@@ -776,7 +776,7 @@ public class GroupedAggregationOperator
         return capacity;
     }
 
-    private void initializeInlineGroupingSchema(Batch batch)
+    private void initializeInlineGroupingSchema(Batch batch, Mask mask)
     {
         if (groupByColumns == null || groupByColumns.length == 0) {
             return;
@@ -795,7 +795,7 @@ public class GroupedAggregationOperator
                     return;
                 }
             }
-            inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls);
+            inlineGroupingState.initializeSchema(inlineGroupValues, inlineGroupNulls, mask);
         }
         finally {
             Arrays.fill(inlineGroupValues, null);

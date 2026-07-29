@@ -72,6 +72,28 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSingleLongGroupingSamplesSelectedPhysicalPositions()
+    {
+        long[] values = new long[100];
+        for (int position = 0; position < values.length; position++) {
+            values[position] = position;
+        }
+
+        GroupingState grouping = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            grouping.initializeSchema(
+                    new Vector[] {new I64Vector(values)},
+                    new Vector[] {new BooleanVector(new boolean[10])},
+                    Mask.all(10));
+
+            assertThat(grouping.longGroupIds.length).isEqualTo(32);
+        }
+        finally {
+            grouping.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGroupingRejectsLaterVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding binaryOnly = new TypeBinding()
