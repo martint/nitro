@@ -93,6 +93,7 @@ public class GroupedAggregationOperator
     private final Vector[] inlineGroupNulls;
     private Object[] states;
     private int stateCapacity;
+    private long maxObservedGroup = -1;
     private int maxGroup = -1;
     private boolean done;
     private GroupedKeySource groupedKeySource;
@@ -403,53 +404,96 @@ public class GroupedAggregationOperator
 
     private Mask computeInlineGroupedResults()
     {
-        states = new Object[aggregations.length];
-        stateCapacity = 0;
-        long maxObservedGroup = -1;
+        startInlineGrouping();
         while (source.hasNext()) {
             try (Batch batch = source.next()) {
-                Mask mask = batch.borrowMask();
-                if (mask.none()) {
-                    initializeInlineGroupingSchema(batch);
-                    continue;
-                }
-
-                if (!inlineGroupingState.isInitialized()) {
-                    initializeInlineGroupingSchema(batch);
-                }
-                if (inlineGroupingState.isInitialized() && !fusedChecked) {
-                    prepareFusedKernel();
-                    fusedChecked = true;
-                }
-
-                // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
-                // wins on memory-level parallelism (each pass streams one random-access array the OOO window
-                // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
-                if (fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
-                    if (tryFusedSingleLongAggregation(batch, mask)) {
-                        maxObservedGroup = inlineGroupingState.groupCount() - 1;
-                        if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
-                            accumulateFilteredGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch));
-                            accumulateDistinctGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
-                        }
-                        continue;
-                    }
-                }
-
-                long previousMaxGroup = maxObservedGroup;
-                reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
-                assignInlineGroups(batch, mask, reusableGroups);
-                // The grouping state knows the max assigned group id (group ids are dense 0..count-1),
-                // so use it directly instead of a separate O(rows) scan of the just-assigned group vector.
-                maxObservedGroup = inlineGroupingState.groupCount() - 1;
-
-                int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
-                var streamAccessor = StreamAccessors.forBatch(batch);
-                prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
-                accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
+                addInlineInput(batch);
             }
         }
 
+        return finishInlineGrouping();
+    }
+
+    void addInput(Batch batch)
+    {
+        requireNonNull(batch, "batch is null");
+        if (groupByColumns == null) {
+            throw new IllegalStateException("incremental input requires inline grouping columns");
+        }
+        if (done) {
+            throw new IllegalStateException("grouped aggregation is finished");
+        }
+        startInlineGrouping();
+        addInlineInput(batch);
+    }
+
+    Batch finishInput()
+    {
+        if (groupByColumns == null) {
+            throw new IllegalStateException("incremental input requires inline grouping columns");
+        }
+        if (done) {
+            throw new IllegalStateException("grouped aggregation is finished");
+        }
+        startInlineGrouping();
+        return outputBatch(finishInlineGrouping());
+    }
+
+    private void startInlineGrouping()
+    {
+        if (states != null) {
+            return;
+        }
+        states = new Object[aggregations.length];
+        stateCapacity = 0;
+        maxObservedGroup = -1;
+    }
+
+    private void addInlineInput(Batch batch)
+    {
+        Mask mask = batch.borrowMask();
+        if (mask.none()) {
+            initializeInlineGroupingSchema(batch);
+            return;
+        }
+
+        if (!inlineGroupingState.isInitialized()) {
+            initializeInlineGroupingSchema(batch);
+        }
+        if (inlineGroupingState.isInitialized() && !fusedChecked) {
+            prepareFusedKernel();
+            fusedChecked = true;
+        }
+
+        // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
+        // wins on memory-level parallelism (each pass streams one random-access array the OOO window
+        // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
+        if (fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
+            if (tryFusedSingleLongAggregation(batch, mask)) {
+                maxObservedGroup = inlineGroupingState.groupCount() - 1;
+                if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
+                    accumulateFilteredGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch));
+                    accumulateDistinctGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
+                }
+                return;
+            }
+        }
+
+        long previousMaxGroup = maxObservedGroup;
+        reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
+        assignInlineGroups(batch, mask, reusableGroups);
+        // The grouping state knows the max assigned group id (group ids are dense 0..count-1),
+        // so use it directly instead of a separate O(rows) scan of the just-assigned group vector.
+        maxObservedGroup = inlineGroupingState.groupCount() - 1;
+
+        int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
+        var streamAccessor = StreamAccessors.forBatch(batch);
+        prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+        accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
+    }
+
+    private Mask finishInlineGrouping()
+    {
         finishResults(maxObservedGroup);
         return allocator.allocateAllMask(allocationContext, this.maxGroup + 1);
     }
@@ -922,7 +966,11 @@ public class GroupedAggregationOperator
     @Override
     public Batch next()
     {
-        Mask batchMask = computeResults();
+        return outputBatch(computeResults());
+    }
+
+    private Batch outputBatch(Mask batchMask)
+    {
         BatchState batchState = new BatchState(batchMask);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {

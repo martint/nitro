@@ -36,7 +36,7 @@ import static org.weakref.nitro.data.Stream.VALUES;
  * without being mistaken for end of input.
  */
 public final class AggregationSession
-        implements AutoCloseable
+        implements BatchAggregationSession
 {
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
