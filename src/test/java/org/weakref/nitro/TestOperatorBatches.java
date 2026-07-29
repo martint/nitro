@@ -2629,6 +2629,52 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSingleBatchOperatorPropagatesTopNConstraintToLazyDelegate()
+    {
+        AtomicInteger payloadRows = new AtomicInteger();
+        Mask mask = Mask.all(100_000);
+        Batch delegate = new Batch(
+                mask,
+                constrained -> payloadRows.set(constrained.count()),
+                java.util.function.Function.identity(),
+                new Output(
+                        Set.of(Stream.VALUES),
+                        ignored -> new I64Vector(100_000),
+                        (stream, vector) -> vector,
+                        (stream, vector) -> {},
+                        (existing, sourcePosition, outputPosition, size) -> {
+                            payloadRows.incrementAndGet();
+                            I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
+                            output.values()[outputPosition] = sourcePosition;
+                            return Streams.ofValues(output);
+                        }),
+                new Output(
+                        Set.of(Stream.VALUES),
+                        ignored -> {
+                            payloadRows.set(mask.count());
+                            return new I64Vector(100_000);
+                        },
+                        (stream, vector) -> vector,
+                        (stream, vector) -> {},
+                        (existing, sourcePosition, outputPosition, size) -> {
+                            payloadRows.incrementAndGet();
+                            I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
+                            output.values()[outputPosition] = sourcePosition;
+                            return Streams.ofValues(output);
+                        }));
+
+        try (Operator operator = new TopNOperator(
+                new Allocator(EngineResources.createDefault()),
+                2,
+                0,
+                new SingleBatchOperator(Schema.unspecified(2), delegate));
+                Batch output = operator.next()) {
+            output.output(1).borrow(Stream.VALUES);
+            assertThat(payloadRows.get()).isEqualTo(4);
+        }
+    }
+
+    @Test
     void testTopNOperatorMaterializesOnlyConstrainedPayloadRows()
     {
         BinaryVector payloads = new BinaryVector(3, 16);

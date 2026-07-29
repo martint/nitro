@@ -25,8 +25,10 @@ public final class SingleBatchOperator
 {
     private final Schema outputSchema;
     private final Supplier<Output[]> outputsSupplier;
+    private final Batch delegate;
     private Mask currentMask;
     private boolean emitted;
+    private boolean closed;
 
     public SingleBatchOperator(int outputCount, Mask mask, Supplier<Output[]> outputsSupplier)
     {
@@ -38,6 +40,21 @@ public final class SingleBatchOperator
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.currentMask = requireNonNull(mask, "mask is null");
         this.outputsSupplier = requireNonNull(outputsSupplier, "outputsSupplier is null");
+        this.delegate = null;
+    }
+
+    /**
+     * Exposes one existing batch as an operator while preserving its lazy constraint protocol.
+     *
+     * <p>The operator owns {@code batch}. Its emitted forwarding batch does not close the delegate;
+     * the delegate remains available for constrained re-borrows until this operator is closed.
+     */
+    public SingleBatchOperator(Schema outputSchema, Batch batch)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        this.delegate = requireNonNull(batch, "batch is null");
+        this.currentMask = batch.borrowMask();
+        this.outputsSupplier = null;
     }
 
     @Override
@@ -65,6 +82,15 @@ public final class SingleBatchOperator
             throw new IllegalStateException("No more rows");
         }
         emitted = true;
+        if (delegate != null) {
+            return Batch.forwarding(
+                    currentMask,
+                    this::constrain,
+                    java.util.function.Function.identity(),
+                    _ -> {},
+                    () -> {},
+                    delegate);
+        }
         return new Batch(currentMask, this::constrain, java.util.function.Function.identity(), outputsSupplier.get());
     }
 
@@ -72,6 +98,9 @@ public final class SingleBatchOperator
     public void constrain(Mask mask)
     {
         currentMask = mask;
+        if (delegate != null) {
+            delegate.constrain(mask);
+        }
     }
 
     @Override
@@ -83,7 +112,16 @@ public final class SingleBatchOperator
     }
 
     @Override
-    public void close() {}
+    public void close()
+    {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (delegate != null) {
+            delegate.close();
+        }
+    }
 
     public Mask currentMask()
     {
