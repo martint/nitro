@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Stream;
@@ -23,6 +24,7 @@ public final class RankWindowFunction
 {
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
+    private final StructuralComparisonKernel[] orderingKernels;
 
     private Streams[] previousColumns;
     private int previousPosition;
@@ -31,11 +33,29 @@ public final class RankWindowFunction
 
     public RankWindowFunction(int[] orderingColumns, boolean[] descendingByColumn)
     {
+        this(null, orderingColumns, descendingByColumn);
+    }
+
+    public RankWindowFunction(Schema inputSchema, int[] orderingColumns, boolean[] descendingByColumn)
+    {
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
         }
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
+        if (inputSchema == null) {
+            orderingKernels = null;
+            return;
+        }
+        StructuralTypeKernelFactory structuralTypes = new StructuralTypeKernelFactory();
+        orderingKernels = new StructuralComparisonKernel[orderingColumns.length];
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int column = orderingColumns[orderingIndex];
+            if (column < 0 || column >= inputSchema.size()) {
+                throw new IllegalArgumentException("Ordering column is outside the input schema: " + column);
+            }
+            orderingKernels[orderingIndex] = structuralTypes.comparison(inputSchema.field(column).type());
+        }
     }
 
     @Override
@@ -72,13 +92,21 @@ public final class RankWindowFunction
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             Streams left = leftColumns[orderingColumns[orderingIndex]];
             Streams right = rightColumns[orderingColumns[orderingIndex]];
-            int comparison = OperatorOrderingSemantics.compare(
+            int comparison = orderingKernels == null
+                    ? OperatorOrderingSemantics.compare(
                     left.values(),
                     left.getOrNull(Stream.NULLS),
                     leftPosition,
                     right.values(),
                     right.getOrNull(Stream.NULLS),
-                    rightPosition);
+                    rightPosition)
+                    : orderingKernels[orderingIndex].compare(
+                            left.values(),
+                            left.getOrNull(Stream.NULLS),
+                            leftPosition,
+                            right.values(),
+                            right.getOrNull(Stream.NULLS),
+                            rightPosition);
             if (descendingByColumn[orderingIndex]) {
                 comparison = -comparison;
             }

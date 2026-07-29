@@ -1784,6 +1784,29 @@ public class TestOperators
                             row(2L, 0L)));
         }
 
+        Operator rankSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-1, 1, -2, 2})},
+                        Mask.all(4)));
+        try (Operator window = new WindowOperator(
+                allocator,
+                rankSource,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new RankWindowFunction(sourceSchema, new int[] {0}, new boolean[] {false})),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(window))
+                    .matchesExactly(List.of(
+                            row(-1L, 1L),
+                            row(1L, 1L),
+                            row(-2L, 3L),
+                            row(2L, 3L)));
+        }
+
         Operator hashOuter = typedTable(
                 sourceSchema,
                 TableOperator.Page.values(
