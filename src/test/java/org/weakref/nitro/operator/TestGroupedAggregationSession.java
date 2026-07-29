@@ -14,18 +14,28 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.core.type.TypeIdentity;
+import org.weakref.nitro.core.type.TypeOperators;
+import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
@@ -86,10 +96,79 @@ class TestGroupedAggregationSession
         }
     }
 
+    @Test
+    void testEmptyInputUsesGroupedKeyTypeVectorFactory()
+    {
+        TypeBinding binaryType = binaryType();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        new Schema(List.of(new Field(binaryType, true))),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            try (Batch result = session.finish()) {
+                assertThat(result.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+            }
+        }
+    }
+
     private static Batch batch(long... values)
     {
         return new Batch(
                 Mask.all(values.length),
                 Output.of(Streams.ofValues(new I64Vector(values))));
+    }
+
+    private static TypeBinding binaryType()
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:binary");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return String.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public Vector nullValues(VectorAllocator allocator, int length)
+                    {
+                        return allocator.allocate(BinaryVector.class, length, size -> new BinaryVector(size, 0));
+                    }
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(BinaryVector.class);
+            }
+        };
     }
 }

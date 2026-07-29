@@ -79,6 +79,7 @@ public class GroupedAggregationOperator
     private final int[] groupedColumns;
     private final int[] groupByColumns;
     private final int[] groupedKeyIndexes;
+    private final TypeBinding[] inlineGroupedOutputTypes;
     private final PhysicalAggregationProgram program;
     private final Schema outputSchema;
     private final PhysicalAggregationUnit[] aggregations;
@@ -268,6 +269,11 @@ public class GroupedAggregationOperator
                 .toArray();
         this.groupByColumns = groupByColumns;
         this.groupedKeyIndexes = groupedKeyIndexes;
+        this.inlineGroupedOutputTypes = groupByColumns == null
+                ? null
+                : Arrays.stream(groupedKeyIndexes)
+                        .mapToObj(index -> index < inlineGroupingTypes.size() ? inlineGroupingTypes.get(index) : null)
+                        .toArray(TypeBinding[]::new);
         this.program = requireNonNull(program, "program is null");
         this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema());
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
@@ -1094,7 +1100,7 @@ public class GroupedAggregationOperator
             return streams;
         }
         if (batchState.mask.none() && groupByColumns != null && !inlineGroupingState.isInitialized()) {
-            streams = emptyGroupedKeyOutput(streams);
+            streams = emptyGroupedKeyOutput(output);
             groupedResults[output] = streams;
             batchState.materializedMask[output] = batchState.mask;
             return streams;
@@ -1123,18 +1129,18 @@ public class GroupedAggregationOperator
         return EnumSet.of(Stream.VALUES, Stream.NULLS);
     }
 
-    private Streams emptyGroupedKeyOutput(Streams output)
+    private Streams emptyGroupedKeyOutput(int output)
     {
-        I64Vector values = allocator.allocateOrGrow(
-                allocationContext,
-                output == null ? null : (I64Vector) output.getOrNull(Stream.VALUES),
-                I64Vector.class,
-                0,
-                I64Vector::new);
+        TypeBinding type = inlineGroupedOutputTypes[output];
+        Vector values = type == null || !type.isSpecified()
+                ? allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new)
+                : type.vectorFactory()
+                        .orElseThrow(() -> new IllegalStateException("Grouped output type does not provide a vector factory"))
+                        .nullValues(allocator.vectorAllocator(allocationContext), 0);
         BooleanVector nulls = VectorAccess.writableBooleanVector(
                 allocator,
                 allocationContext,
-                output == null ? null : output.getOrNull(Stream.NULLS),
+                null,
                 0);
         return Streams.ofValuesAndNulls(values, nulls);
     }
