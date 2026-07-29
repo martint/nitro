@@ -957,7 +957,7 @@ final class GroupingState
 
         if (values.length == 1 && isSingleLongGroupingCandidate(values[0])) {
             useLongGrouping = true;
-            initLongGroupTable(Math.max(16, values[0].length()));
+            initLongGroupTable(initialLongGroupExpectedSize(values[0], nulls[0]));
             return;
         }
         boolean nullableCompositeKeys = values.length > 1 && hasNullableKeys(nulls);
@@ -1063,6 +1063,46 @@ final class GroupingState
         }
 
         initializeObjectKeyGrouping(values);
+    }
+
+    private int initialLongGroupExpectedSize(Vector values, Vector nulls)
+    {
+        int rowCount = values.length();
+        int sampleSize = Math.min(rowCount, longPolicy.initialCardinalitySampleSize());
+        if (sampleSize == 0) {
+            return 16;
+        }
+
+        VectorAccess.LongValues keyValues = VectorAccess.longValues(values);
+        long[] distinctValues = new long[sampleSize];
+        int distinctCount = 0;
+        boolean sampledNull = false;
+        for (int sample = 0; sample < sampleSize; sample++) {
+            int position = (int) ((long) sample * rowCount / sampleSize);
+            if (nulls != null && OperatorVectorSupport.booleanValue(nulls, nulls.length() == 1 ? 0 : position)) {
+                if (!sampledNull) {
+                    sampledNull = true;
+                    distinctCount++;
+                }
+                continue;
+            }
+            long value = keyValues.value(position);
+            boolean found = false;
+            for (int index = 0; index < distinctCount - (sampledNull ? 1 : 0); index++) {
+                if (distinctValues[index] == value) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                distinctValues[distinctCount - (sampledNull ? 1 : 0)] = value;
+                distinctCount++;
+            }
+        }
+        if ((long) distinctCount * 100 >= (long) sampleSize * longPolicy.initialHighCardinalityPercent()) {
+            return Math.max(16, rowCount);
+        }
+        return Math.max(16, distinctCount * longPolicy.initialLowCardinalityHeadroom());
     }
 
     private boolean admitsFullWidthPairPackedIdentity(Vector[] values, Vector[] nulls, Mask mask)

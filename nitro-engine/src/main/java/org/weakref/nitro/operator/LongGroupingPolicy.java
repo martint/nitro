@@ -17,6 +17,9 @@ package org.weakref.nitro.operator;
  * Engine-selected representation and admission policy for single-long grouping.
  */
 public record LongGroupingPolicy(
+        int initialCardinalitySampleSize,
+        int initialHighCardinalityPercent,
+        int initialLowCardinalityHeadroom,
         boolean runCache,
         boolean idIndexed,
         int idIndexedMinGroups,
@@ -41,7 +44,13 @@ public record LongGroupingPolicy(
 
     public LongGroupingPolicy
     {
-        if (idIndexedMinGroups < 0 || idIndexedMaxGroups <= 0 || idIndexedMaxGroups > MAX_ID_INDEXED_GROUPS) {
+        if (initialCardinalitySampleSize <= 0 ||
+                initialHighCardinalityPercent <= 0 ||
+                initialHighCardinalityPercent > 100 ||
+                initialLowCardinalityHeadroom <= 0 ||
+                idIndexedMinGroups < 0 ||
+                idIndexedMaxGroups <= 0 ||
+                idIndexedMaxGroups > MAX_ID_INDEXED_GROUPS) {
             throw new IllegalArgumentException("Invalid id-indexed group bounds");
         }
         if (idIndexedActivationCapacityMultiplier <= 0 ||
@@ -62,6 +71,9 @@ public record LongGroupingPolicy(
     public static LongGroupingPolicy defaults(boolean poolZeroedLongDirectIds)
     {
         return new LongGroupingPolicy(
+                256,
+                80,
+                4,
                 true,
                 true,
                 1 << 20,
@@ -87,6 +99,15 @@ public record LongGroupingPolicy(
     {
         LongGroupingPolicy defaults = defaults(poolZeroedLongDirectIds);
         return new LongGroupingPolicy(
+                Integer.getInteger(
+                        "nitro.group.initialCardinalitySampleSize",
+                        defaults.initialCardinalitySampleSize()),
+                Integer.getInteger(
+                        "nitro.group.initialHighCardinalityPercent",
+                        defaults.initialHighCardinalityPercent()),
+                Integer.getInteger(
+                        "nitro.group.initialLowCardinalityHeadroom",
+                        defaults.initialLowCardinalityHeadroom()),
                 booleanProperty("nitro.group.longRunCache", defaults.runCache()),
                 booleanProperty("nitro.group.idIndexedLong", defaults.idIndexed()),
                 Integer.getInteger("nitro.group.idIndexedLongMinGroups", defaults.idIndexedMinGroups()),

@@ -46,6 +46,32 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testSingleLongGroupingInitialCapacityUsesSampledCardinality()
+    {
+        int size = 100_000;
+        long[] lowCardinality = new long[size];
+        long[] highCardinality = new long[size];
+        for (int position = 0; position < size; position++) {
+            lowCardinality[position] = position % 12;
+            highCardinality[position] = position;
+        }
+
+        GroupingState low = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        GroupingState high = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            low.initializeSchema(new Vector[] {new I64Vector(lowCardinality)}, new Vector[] {null});
+            high.initializeSchema(new Vector[] {new I64Vector(highCardinality)}, new Vector[] {null});
+
+            assertThat(low.longGroupIds.length).isLessThanOrEqualTo(128);
+            assertThat(high.longGroupIds.length).isEqualTo(262_144);
+        }
+        finally {
+            low.releaseBuffers();
+            high.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGroupingRejectsLaterVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding binaryOnly = new TypeBinding()
