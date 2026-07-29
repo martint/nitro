@@ -34,6 +34,7 @@ import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
 
+import java.util.List;
 import java.util.Optional;
 
 public class FilterOperator
@@ -102,6 +103,9 @@ public class FilterOperator
                 primitiveRegistry,
                 predicateMask,
                 policy.fuseConstantRanges());
+        if (policy.pushStaticLongRanges()) {
+            staticLongRangeFilters(evaluationPlan, predicateMask, primitiveRegistry).forEach(source::pushDynamicFilter);
+        }
         if (policy.pushStaticLongEquality()) {
             staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
         }
@@ -147,6 +151,27 @@ public class FilterOperator
             }
         }
         return null;
+    }
+
+    /**
+     * Extracts inclusive long domains from registry-owned range metadata. The logical predicate remains in this
+     * operator, so a source may conservatively prune decode work without becoming responsible for query semantics.
+     */
+    static List<DynamicFilter> staticLongRangeFilters(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        return RangeConstraintLowerer.staticLongRanges(plan, primitiveRegistry, predicateMask).stream()
+                .filter(range -> range.input().producer() instanceof Input)
+                .filter(range -> range.input().stream() == Stream.VALUES)
+                .filter(range -> range.lowerExclusive() != Long.MAX_VALUE)
+                .filter(range -> range.upperExclusive() != Long.MIN_VALUE)
+                .map(range -> DynamicFilter.fromRange(
+                        ((Input) range.input().producer()).index(),
+                        range.lowerExclusive() + 1,
+                        range.upperExclusive() - 1))
+                .toList();
     }
 
     @Override

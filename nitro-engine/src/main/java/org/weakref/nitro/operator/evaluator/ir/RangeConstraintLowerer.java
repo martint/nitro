@@ -49,6 +49,53 @@ public final class RangeConstraintLowerer
         return new RangeConstraintLowerer(plan, registry, fuseRanges).lower(expression);
     }
 
+    /**
+     * Extracts conservative long ranges from conjunctive registry-owned bound metadata.
+     *
+     * <p>This is independent of fused-kernel compatibility: source pruning needs only compatible input identity and
+     * bounds, while the complete logical predicate remains downstream as a residual.
+     */
+    public static List<LongRange> staticLongRanges(
+            EvaluationPlan plan,
+            PrimitiveRegistry registry,
+            MaskExpression expression)
+    {
+        RangeConstraintLowerer lowerer = new RangeConstraintLowerer(plan, registry, false);
+        List<BoundRange> bounds = conjunctiveTerms(expression)
+                .map(lowerer::rangeBound)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        java.util.LinkedHashMap<Reference, LongBounds> ranges = new java.util.LinkedHashMap<>();
+        for (BoundRange bound : bounds) {
+            if (!(bound.bound() instanceof Long value)) {
+                continue;
+            }
+            LongBounds range = ranges.computeIfAbsent(bound.input(), _ -> new LongBounds());
+            switch (bound.position()) {
+                case LOWER_EXCLUSIVE ->
+                        range.lowerExclusive = range.lowerExclusive == null ? value : Math.max(range.lowerExclusive, value);
+                case UPPER_EXCLUSIVE ->
+                        range.upperExclusive = range.upperExclusive == null ? value : Math.min(range.upperExclusive, value);
+            }
+        }
+        return ranges.entrySet().stream()
+                .filter(entry -> entry.getValue().lowerExclusive != null)
+                .filter(entry -> entry.getValue().upperExclusive != null)
+                .map(entry -> new LongRange(
+                        entry.getKey(),
+                        entry.getValue().lowerExclusive,
+                        entry.getValue().upperExclusive))
+                .toList();
+    }
+
+    private static java.util.stream.Stream<MaskExpression> conjunctiveTerms(MaskExpression expression)
+    {
+        if (expression instanceof AndMask(List<MaskExpression> terms)) {
+            return terms.stream().flatMap(RangeConstraintLowerer::conjunctiveTerms);
+        }
+        return java.util.stream.Stream.of(expression);
+    }
+
     private MaskExpression lower(MaskExpression expression)
     {
         return switch (expression) {
@@ -126,4 +173,12 @@ public final class RangeConstraintLowerer
             Object bound,
             RangeConstraint.Position position,
             RangeConstraint.Kernel kernel) {}
+
+    public record LongRange(Reference input, long lowerExclusive, long upperExclusive) {}
+
+    private static final class LongBounds
+    {
+        private Long lowerExclusive;
+        private Long upperExclusive;
+    }
 }

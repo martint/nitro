@@ -17,10 +17,18 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.batch.ColumnView;
 import org.weakref.nitro.core.batch.Selection;
 import org.weakref.nitro.core.batch.SourceBatch;
+import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.LongDomainCapability;
+import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceCapability;
+import org.weakref.nitro.core.source.SourceColumnHandle;
+import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
+import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Output;
 
 import java.util.List;
@@ -97,6 +105,126 @@ class TestBatchFeedOperator
 
         assertThat(firstClosed).isTrue();
         assertThat(secondClosed).isFalse();
+    }
+
+    @Test
+    void testAppliesRetainedDynamicFiltersThroughIngress()
+    {
+        AtomicReference<RuntimeFilter> applied = new AtomicReference<>();
+        SourceColumnHandle column = () -> SCHEMA.field(0).type();
+        SourceOperatorIngress ingress = new SourceOperatorIngress()
+        {
+            @Override
+            public Batch adapt(SourceBatch batch)
+            {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public boolean supportsRuntimeFilter(BatchSource source, SourceColumnHandle sourceColumn)
+            {
+                return sourceColumn == column;
+            }
+
+            @Override
+            public RuntimeFilter runtimeFilter(SourceColumnHandle sourceColumn, DynamicFilter filter)
+            {
+                return new RuntimeFilter(
+                        sourceColumn,
+                        new org.weakref.nitro.core.source.TypedDomain()
+                        {
+                            @Override
+                            public TypeBinding type()
+                            {
+                                return sourceColumn.type();
+                            }
+
+                            @Override
+                            public boolean includesNull()
+                            {
+                                return false;
+                            }
+
+                            @Override
+                            public boolean isAll()
+                            {
+                                return false;
+                            }
+
+                            @Override
+                            public boolean isNone()
+                            {
+                                return filter.isEmpty();
+                            }
+
+                            @Override
+                            public <T> java.util.Optional<T> capability(org.weakref.nitro.core.source.DomainCapability<T> capability)
+                            {
+                                if (capability == LongDomainCapability.LONG_DOMAIN) {
+                                    return java.util.Optional.of(capability.valueType().cast(filter));
+                                }
+                                return java.util.Optional.empty();
+                            }
+                        },
+                        false);
+            }
+        };
+        BatchSource source = new BatchSource()
+        {
+            @Override
+            public Schema schema()
+            {
+                return SCHEMA;
+            }
+
+            @Override
+            public SourceColumnHandle column(int outputIndex)
+            {
+                assertThat(outputIndex).isZero();
+                return column;
+            }
+
+            @Override
+            public Set<SourceCapability> capabilities()
+            {
+                return Set.of();
+            }
+
+            @Override
+            public boolean supportsRuntimeFilter(SourceColumnHandle sourceColumn)
+            {
+                return sourceColumn == column;
+            }
+
+            @Override
+            public RuntimeFilterAcceptance addRuntimeFilter(RuntimeFilter filter)
+            {
+                applied.set(filter);
+                return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+            }
+
+            @Override
+            public SourcePoll poll()
+            {
+                return SourcePoll.Finished.FINISHED;
+            }
+
+            @Override
+            public void close() {}
+        };
+
+        try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, ingress)) {
+            feed.pushDynamicFilter(DynamicFilter.fromRange(0, 10, 12));
+
+            assertThat(feed.applyDynamicFilters(source))
+                    .containsExactly(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+            assertThat(applied.get()).isNotNull();
+            var domain = applied.get().domain().capability(LongDomainCapability.LONG_DOMAIN).orElseThrow();
+            assertThat(domain.test(9)).isFalse();
+            assertThat(domain.test(10)).isTrue();
+            assertThat(domain.test(12)).isTrue();
+            assertThat(domain.test(13)).isFalse();
+        }
     }
 
     private record TestingIngress(AtomicInteger adaptations, AtomicReference<Selection> selected)

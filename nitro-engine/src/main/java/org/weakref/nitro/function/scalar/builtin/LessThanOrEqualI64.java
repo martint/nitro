@@ -31,7 +31,7 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-@ScalarFunction(name = "lte_i64")
+@ScalarFunction(name = "lte_i64", capabilities = LessThanOrEqualI64RangeOptimization.class)
 public final class LessThanOrEqualI64
         implements PrimitiveFunction
 {

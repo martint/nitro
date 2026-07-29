@@ -17,8 +17,13 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64Optimization;
+import org.weakref.nitro.function.scalar.builtin.LessThanI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanI64RangeOptimization;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64RangeOptimization;
 import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
 import org.weakref.nitro.operator.evaluator.ir.AllMask;
+import org.weakref.nitro.operator.evaluator.ir.AndMask;
 import org.weakref.nitro.operator.evaluator.ir.Assignment;
 import org.weakref.nitro.operator.evaluator.ir.Call;
 import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
@@ -150,5 +155,70 @@ class TestDynamicFilter
         PrimitiveRegistry registry = new PrimitiveRegistry();
         registry.register("eq", (inputs, mask, requestedStreams, output, context) -> output);
         assertThat(FilterOperator.staticLongEqualityFilter(plan, predicate, registry)).isEmpty();
+    }
+
+    @Test
+    void extractsRegistryLoweredStaticLongRange()
+    {
+        Variable lowerLiteral = new Variable(0);
+        Variable upperLiteral = new Variable(1);
+        Variable lower = new Variable(2);
+        Variable upper = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(lowerLiteral, new Literal(9L), AllMask.ALL),
+                new Assignment(upperLiteral, new Literal(13L), AllMask.ALL),
+                new Assignment(lower, new Call("aliased_lt", List.of(
+                        new Reference(lowerLiteral, Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                new Assignment(upper, new Call("aliased_lt", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(upperLiteral, Stream.VALUES))), AllMask.ALL)), List.of());
+        AndMask predicate = new AndMask(List.of(
+                new ReferenceMask(new Reference(lower, Stream.VALUES)),
+                new ReferenceMask(new Reference(upper, Stream.VALUES))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("aliased_lt", new LessThanI64(), new LessThanI64RangeOptimization());
+
+        List<DynamicFilter> filters = FilterOperator.staticLongRangeFilters(plan, predicate, registry);
+
+        assertThat(filters).hasSize(1);
+        DynamicFilter filter = filters.getFirst();
+        assertThat(filter.column()).isEqualTo(2);
+        assertThat(filter.accepts(9)).isFalse();
+        assertThat(filter.accepts(10)).isTrue();
+        assertThat(filter.accepts(12)).isTrue();
+        assertThat(filter.accepts(13)).isFalse();
+    }
+
+    @Test
+    void extractsMixedInclusiveAndExclusiveStaticLongRange()
+    {
+        Variable lowerLiteral = new Variable(0);
+        Variable upperLiteral = new Variable(1);
+        Variable lower = new Variable(2);
+        Variable upper = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(lowerLiteral, new Literal(10L), AllMask.ALL),
+                new Assignment(upperLiteral, new Literal(13L), AllMask.ALL),
+                new Assignment(lower, new Call("aliased_lte", List.of(
+                        new Reference(lowerLiteral, Stream.VALUES),
+                        new Reference(new Input(2), Stream.VALUES))), AllMask.ALL),
+                new Assignment(upper, new Call("aliased_lt", List.of(
+                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(upperLiteral, Stream.VALUES))), AllMask.ALL)), List.of());
+        AndMask predicate = new AndMask(List.of(
+                new ReferenceMask(new Reference(lower, Stream.VALUES)),
+                new ReferenceMask(new Reference(upper, Stream.VALUES))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("aliased_lte", new LessThanOrEqualI64(), new LessThanOrEqualI64RangeOptimization());
+        registry.register("aliased_lt", new LessThanI64(), new LessThanI64RangeOptimization());
+
+        DynamicFilter filter = FilterOperator.staticLongRangeFilters(plan, predicate, registry).getFirst();
+
+        assertThat(filter.column()).isEqualTo(2);
+        assertThat(filter.accepts(9)).isFalse();
+        assertThat(filter.accepts(10)).isTrue();
+        assertThat(filter.accepts(12)).isTrue();
+        assertThat(filter.accepts(13)).isFalse();
     }
 }
