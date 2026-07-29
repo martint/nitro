@@ -532,6 +532,11 @@ final class TopNState
         }
     }
 
+    public void discardFallbackBatch()
+    {
+        fallbackBatch = null;
+    }
+
     public boolean shouldKeepBatchForEmptySchema(Batch batch, boolean queueEmpty)
     {
         return queueEmpty && batch == fallbackBatch && hasMissingSchema();

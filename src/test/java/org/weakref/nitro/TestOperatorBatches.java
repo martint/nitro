@@ -66,6 +66,7 @@ import org.weakref.nitro.operator.SingleBatchOperator;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
+import org.weakref.nitro.operator.TopNSession;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
@@ -2552,6 +2553,46 @@ public class TestOperatorBatches
         assertThat(utf8(second, 1)).isEqualTo("banana");
         assertThat(utf8(second, 2)).isEqualTo("pear");
         assertThat(Arrays.copyOf(payload.values(), batch.borrowMask().count())).containsExactly(3L, 4L, 2L);
+    }
+
+    @Test
+    void testTopNSessionRetainsCandidatesAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(
+                        row(1L, "first"),
+                        row(9L, "second")));
+                TopNSession session = new TopNSession(
+                        allocator,
+                        3,
+                        new int[] {0},
+                        new boolean[] {true},
+                        first.outputSchema())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(
+                    allocator,
+                    2,
+                    List.of(
+                            row(5L, "third"),
+                            row(12L, "fourth")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+
+            try (Batch result = session.finish().orElseThrow()) {
+                I64Vector keys = (I64Vector) result.output(0).borrow(Stream.VALUES);
+                BinaryVector payload = (BinaryVector) result.output(1).borrow(Stream.VALUES);
+                assertThat(Arrays.copyOf(keys.values(), result.borrowMask().count())).containsExactly(12L, 9L, 5L);
+                assertThat(utf8(payload, 0)).isEqualTo("fourth");
+                assertThat(utf8(payload, 1)).isEqualTo("second");
+                assertThat(utf8(payload, 2)).isEqualTo("third");
+            }
+        }
     }
 
     @Test
