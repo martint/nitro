@@ -489,11 +489,17 @@ public final class PlanEvaluator
         }
         for (int index = 0; index < call.arguments().size(); index++) {
             Reference argument = call.arguments().get(index);
+            Set<Stream> hardRequiredInputStreams = requiredInputStreams(
+                    function.requiredInputStreams(index, hardRequestedStreams),
+                    hardRequestedStreams);
+            Set<Stream> requiredInputStreams = requiredInputStreams(
+                    function.requiredInputStreams(index, requestedStreams),
+                    requestedStreams);
             inputs.add(evaluateArgument(
                     argument,
                     mask,
-                    function.requiredInputStreams(index, hardRequestedStreams),
-                    function.requiredInputStreams(index, requestedStreams)));
+                    hardRequiredInputStreams,
+                    requiredInputStreams));
         }
         // Both peels require a dictionary-encoded input to do anything, so skip the machinery entirely on the common
         // flat-input case with one cheap instanceof scan (rather than building and discarding a peeling per call).
@@ -503,11 +509,34 @@ public final class PlanEvaluator
                 peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
             }
             if (peeledResult != null) {
-                return completeRequestedStreams(requestedStreams, peeledResult, mask);
+                return completeRequestedStreams(requestedStreams, propagateInputErrors(requestedStreams, inputs, peeledResult, mask), mask);
             }
         }
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
-        return completeRequestedStreams(requestedStreams, result, mask);
+        return completeRequestedStreams(requestedStreams, propagateInputErrors(requestedStreams, inputs, result, mask), mask);
+    }
+
+    private static Set<Stream> requiredInputStreams(Set<Stream> functionRequiredStreams, Set<Stream> requestedOutputStreams)
+    {
+        if (!requestedOutputStreams.contains(Stream.ERRORS) || functionRequiredStreams.contains(Stream.ERRORS)) {
+            return functionRequiredStreams;
+        }
+        java.util.EnumSet<Stream> required = java.util.EnumSet.noneOf(Stream.class);
+        required.addAll(functionRequiredStreams);
+        required.add(Stream.ERRORS);
+        return Set.copyOf(required);
+    }
+
+    private Streams propagateInputErrors(Set<Stream> requestedStreams, List<Streams> inputs, Streams result, Mask mask)
+    {
+        if (!requestedStreams.contains(Stream.ERRORS)) {
+            return result;
+        }
+        Vector errors = result.getOrNull(Stream.ERRORS);
+        for (Streams input : inputs) {
+            errors = mergeOptionalBooleanStreams(input.getOrNull(Stream.ERRORS), errors, null, mask);
+        }
+        return errors == null ? result : result.with(Stream.ERRORS, errors);
     }
 
     private static boolean hasDictionaryValues(List<Streams> inputs)

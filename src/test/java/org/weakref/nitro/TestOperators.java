@@ -1095,6 +1095,10 @@ public class TestOperators
                 Batch batch = operator.next()) {
             batch.output(0).borrow(Stream.VALUES);
             assertThat(testAllocator.peakBytes(new Allocator.Context("FusedProjection"))).isZero();
+            Vector errors = batch.output(0).borrow(Stream.ERRORS);
+            assertThat(VectorAccess.booleanValues(errors).value(0)).isFalse();
+            assertThat(VectorAccess.booleanValues(errors).value(1)).isTrue();
+            assertThat(VectorAccess.booleanValues(errors).value(2)).isFalse();
         }
     }
 
