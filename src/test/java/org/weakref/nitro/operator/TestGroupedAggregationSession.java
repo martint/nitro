@@ -22,6 +22,7 @@ import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -30,6 +31,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.Arrays;
@@ -42,6 +44,39 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class TestGroupedAggregationSession
 {
+    @Test
+    void testBuildsInitialAggregationRowsWithoutGrouping()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
+                    allocator,
+                    Schema.unspecified(3),
+                    List.of(0),
+                    PhysicalAggregationProgram.independent(List.of(
+                            new CountAll(),
+                            new FilteredAccumulator(new CountAll(), 2))),
+                    resources.operatorResources());
+
+            assertThat(builder.outputSchema().size()).isEqualTo(3);
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {0, 2, 3}, 4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {11, 12, 13, 14}))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {101, 102, 103, 104}))),
+                    Output.of(Streams.ofValues(new BooleanVector(new boolean[] {true, true, false, true}))));
+                    Batch result = builder.build(input)) {
+                assertThat(result.borrowMask().all()).isTrue();
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(11, 13, 14);
+                assertThat(((I64Vector) result.output(1).borrow(Stream.VALUES)).values())
+                        .containsExactly(1, 1, 1);
+                assertThat(((I64Vector) result.output(2).borrow(Stream.VALUES)).values())
+                        .containsExactly(1, 0, 1);
+            }
+        }
+    }
+
     @Test
     void testAccumulatesGroupsAcrossIndependentlyScheduledBatches()
     {
