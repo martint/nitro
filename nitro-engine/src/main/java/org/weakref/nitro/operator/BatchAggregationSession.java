@@ -25,6 +25,16 @@ public interface BatchAggregationSession
 
     void addInput(Batch batch);
 
+    default boolean hasOutput()
+    {
+        return false;
+    }
+
+    default Batch getOutput()
+    {
+        throw new IllegalStateException("aggregation session has no output");
+    }
+
     Batch finish();
 
     @Override
