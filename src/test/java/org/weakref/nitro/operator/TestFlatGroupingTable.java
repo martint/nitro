@@ -779,6 +779,17 @@ class TestFlatGroupingTable
         unreused[6] = compactTestLongs(size, 10);
         unreused[7] = compactTestLongs(size, 100);
         assertThat(FlatKeyLayout.tryCreate(unreused, arrayPool, codeGeneration, flatKeyTablePolicy).usesCompactEmbeddedBinaryRecords()).isFalse();
+
+        Vector[] flat = {
+                utf8(compactTestFlatStrings("category-", size, 10)),
+                utf8(compactTestFlatStrings("class-", size, 20)),
+                utf8(compactTestFlatStrings("brand-", size, 64)),
+                utf8(compactTestFlatStrings("product-", size, size)),
+                utf8(compactTestFlatStrings("store-", size, 12)),
+                compactTestLongs(size, 1),
+                compactTestLongs(size, 10),
+                compactTestLongs(size, 100)};
+        assertThat(FlatKeyLayout.tryCreate(flat, arrayPool, codeGeneration, flatKeyTablePolicy).usesCompactEmbeddedBinaryRecords()).isFalse();
     }
 
     @Test
@@ -1217,6 +1228,15 @@ class TestFlatGroupingTable
         String[] values = new String[size];
         for (int index = 0; index < size; index++) {
             values[index] = prefix + index;
+        }
+        return values;
+    }
+
+    private static String[] compactTestFlatStrings(String prefix, int size, int cardinality)
+    {
+        String[] values = new String[size];
+        for (int position = 0; position < size; position++) {
+            values[position] = prefix + (position % cardinality);
         }
         return values;
     }

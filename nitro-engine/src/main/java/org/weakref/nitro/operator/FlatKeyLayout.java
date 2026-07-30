@@ -287,6 +287,7 @@ class FlatKeyLayout
         int nullByteCount = nullable ? Math.max(1, (values.length + Byte.SIZE - 1) / Byte.SIZE) : 0;
         boolean anyVariableWidth = false;
         int binaryFields = 0;
+        int idBackedBinaryFields = 0;
         for (int index = 0; index < values.length; index++) {
             FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index]);
             if (handler == null) {
@@ -296,16 +297,20 @@ class FlatKeyLayout
             handlers[index] = handler;
             anyVariableWidth |= handler.variableWidth();
             binaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY ? 1 : 0;
+            idBackedBinaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY &&
+                    values[index] instanceof DictionaryVector ? 1 : 0;
         }
         // A compact token is useful only when the first physical batch proves both reusable ids and enough possible
-        // groups to amortize its fallback sidecar. Sampled per-field distinctness is an encoding-independent reuse
-        // signal: require several fields below the reuse ceiling, one discriminating field, and a large product of
-        // distinct counts, so a tiny geographical cube does not optimize ten records. This decision depends only
-        // on batch/key shape.
+        // groups to amortize its fallback sidecar. Flat binary fields have no stable value ids: representing all of
+        // them as fallback ordinals merely moves the ordinary 12-byte metadata out of line, without reducing it.
+        // Require the same minimum reusable cohort to be physically id-backed before selecting this immutable
+        // layout. Sampled per-field distinctness then requires one discriminating field and a large product of
+        // distinct counts, so a tiny geographical cube does not optimize ten records.
         boolean compactEmbeddedBinaryRecords = layoutPolicy.compactEmbeddedBinaryRecords() &&
                 layoutPolicy.idOnlyBinaryRecords() &&
                 layoutPolicy.embedIdOnlyBinaryIds() &&
                 binaryFields >= layoutPolicy.compactBinaryMinFields() &&
+                idBackedBinaryFields >= layoutPolicy.compactBinaryMinReusableFields() &&
                 values.length > 0 &&
                 values[0].length() >= layoutPolicy.compactBinaryMinRows() &&
                 admitsCompactBinaryRecords(values, handlers, layoutPolicy);
