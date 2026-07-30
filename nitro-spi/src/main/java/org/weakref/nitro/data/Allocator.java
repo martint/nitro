@@ -941,6 +941,23 @@ public class Allocator
         state(context).retainedBytesChanged(vector, previousRetainedBytes);
     }
 
+    /**
+     * Sets the retained bytes for non-vector execution state owned by {@code owner}.
+     *
+     * <p>Owner identity is scoped to {@code context}. Repeated calls replace the previous amount, so callers can
+     * report a table or index after any representation change without calculating reservation deltas themselves.
+     * Setting zero removes the owner. Releasing the context also releases every remaining owner.
+     */
+    public void setRetainedBytes(Context context, Object owner, long retainedBytes)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(owner, "owner is null");
+        if (retainedBytes < 0) {
+            throw new IllegalArgumentException("retained bytes is negative");
+        }
+        state(context).setRetainedBytes(owner, retainedBytes);
+    }
+
     @Override
     public void close()
     {
@@ -1442,6 +1459,7 @@ public class Allocator
         private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
         private final Map<Object, Integer> inUseVectorCounts = new HashMap<>();
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
+        private final Map<Object, Long> retainedBytesByOwner = new IdentityHashMap<>();
         private Mask inUseMasksHead;
         private boolean borrowedVectorResident;
 
@@ -1562,6 +1580,29 @@ public class Allocator
             }
         }
 
+        private void setRetainedBytes(Object owner, long retainedBytes)
+        {
+            long previousRetainedBytes = retainedBytesByOwner.getOrDefault(owner, 0L);
+            if (retainedBytes == previousRetainedBytes) {
+                return;
+            }
+            if (retainedBytes == 0) {
+                retainedBytesByOwner.remove(owner);
+            }
+            else {
+                retainedBytesByOwner.put(owner, retainedBytes);
+            }
+            long delta = retainedBytes - previousRetainedBytes;
+            if (delta > 0) {
+                allocator.reserveResident(delta);
+                stats.acquire(delta, false);
+            }
+            else {
+                allocator.releaseResident(-delta);
+                stats.releaseBytes(-delta);
+            }
+        }
+
         public void discardVector(Vector vector)
         {
             if (!untrackVector(vector)) {
@@ -1664,7 +1705,7 @@ public class Allocator
             // The normal BatchBufferScope close path has already released every resolved output and its owned mask.
             // Avoid constructing an IdentityHashMap iterator for that overwhelmingly common empty generation; the
             // full sweep below remains the safety net for lazy or otherwise unexposed allocations.
-            if (inUseVectors.isEmpty() && inUseMasksHead == null) {
+            if (inUseVectors.isEmpty() && inUseMasksHead == null && retainedBytesByOwner.isEmpty()) {
                 stats.release();
                 return;
             }
@@ -1687,6 +1728,7 @@ public class Allocator
             inUseMasksHead = null;
             inUseVectors.clear();
             inUseVectorCounts.clear();
+            releaseRetainedBytes();
             stats.release();
         }
 
@@ -1705,7 +1747,18 @@ public class Allocator
             }
             inUseVectors.clear();
             inUseVectorCounts.clear();
+            releaseRetainedBytes();
             stats.release();
+        }
+
+        private void releaseRetainedBytes()
+        {
+            long retainedBytes = 0;
+            for (long bytes : retainedBytesByOwner.values()) {
+                retainedBytes = Math.addExact(retainedBytes, bytes);
+            }
+            retainedBytesByOwner.clear();
+            allocator.releaseResident(retainedBytes);
         }
 
         private boolean untrackVector(Vector vector)

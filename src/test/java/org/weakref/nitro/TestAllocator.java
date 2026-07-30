@@ -122,6 +122,33 @@ class TestAllocator
     }
 
     @Test
+    void testTracksNonVectorRetainedStateByOwner()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("index-state");
+        Object firstIndex = new Object();
+        Object secondIndex = new Object();
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            allocator.setRetainedBytes(context, firstIndex, 100);
+            allocator.setRetainedBytes(context, secondIndex, 25);
+            assertThat(allocator.residentBytes()).isEqualTo(125);
+            assertThat(allocator.currentBytes(context)).isEqualTo(125);
+            assertThat(memory.reservedBytes()).isEqualTo(125);
+
+            allocator.setRetainedBytes(context, firstIndex, 60);
+            allocator.setRetainedBytes(context, secondIndex, 0);
+            assertThat(allocator.residentBytes()).isEqualTo(60);
+            assertThat(allocator.currentBytes(context)).isEqualTo(60);
+            assertThat(memory.reservedBytes()).isEqualTo(60);
+
+            allocator.release(context);
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(allocator.currentBytes(context)).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
     void testClosingAllocatorReleasesResidentConstantsAndPools()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();
