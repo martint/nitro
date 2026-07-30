@@ -63,6 +63,17 @@ final class MembershipSet
                 keyType.orElseGet(() -> Schema.unspecified(1).field(0).type()));
     }
 
+    private MembershipSet(MembershipSet prepared, Index index)
+    {
+        this.allocator = prepared.allocator;
+        this.allocationContext = prepared.allocationContext;
+        this.operatorResources = prepared.operatorResources;
+        this.policy = prepared.policy;
+        this.keyType = prepared.keyType;
+        this.keyKernel = prepared.keyKernel;
+        this.index = requireNonNull(index, "index is null");
+    }
+
     void addBatch(Vector values, Vector nulls, Mask mask)
     {
         validateKeyType(values);
@@ -125,6 +136,14 @@ final class MembershipSet
         index.endProbeBatch();
     }
 
+    Optional<MembershipSet> newProbeView()
+    {
+        if (index == null) {
+            index = new EmptyIndex();
+        }
+        return index.newProbeView().map(view -> new MembershipSet(this, view));
+    }
+
     void releaseBuffers()
     {
         if (index != null) {
@@ -173,6 +192,11 @@ final class MembershipSet
 
         default void endProbeBatch() {}
 
+        default Optional<Index> newProbeView()
+        {
+            return Optional.empty();
+        }
+
         default void releaseBuffers() {}
     }
 
@@ -213,6 +237,12 @@ final class MembershipSet
             for (int position : mask) {
                 matches[position] = false;
             }
+        }
+
+        @Override
+        public Optional<Index> newProbeView()
+        {
+            return Optional.of(new EmptyIndex());
         }
     }
 
@@ -293,8 +323,9 @@ final class MembershipSet
         private final Allocator allocator;
         private final Allocator.Context allocationContext;
         private final StructuralKeyKernel kernel;
-        private final Set<StructuralMembershipKey> keys = new HashSet<>();
+        private final Set<StructuralMembershipKey> keys;
         private final StructuralMembershipKey probeKey;
+        private final boolean ownsStorage;
 
         private StructuralIndex(
                 Allocator allocator,
@@ -304,7 +335,19 @@ final class MembershipSet
             this.allocator = allocator;
             this.allocationContext = allocationContext;
             this.kernel = kernel;
+            this.keys = new HashSet<>();
             this.probeKey = new StructuralMembershipKey(kernel);
+            this.ownsStorage = true;
+        }
+
+        private StructuralIndex(StructuralIndex prepared)
+        {
+            this.allocator = prepared.allocator;
+            this.allocationContext = prepared.allocationContext;
+            this.kernel = prepared.kernel;
+            this.keys = prepared.keys;
+            this.probeKey = new StructuralMembershipKey(kernel);
+            this.ownsStorage = false;
         }
 
         @Override
@@ -346,9 +389,17 @@ final class MembershipSet
         }
 
         @Override
+        public Optional<Index> newProbeView()
+        {
+            return Optional.of(new StructuralIndex(this));
+        }
+
+        @Override
         public void releaseBuffers()
         {
-            keys.clear();
+            if (ownsStorage) {
+                keys.clear();
+            }
             probeKey.clear();
         }
     }
@@ -417,11 +468,13 @@ final class MembershipSet
         private LongOpenHashSet hash;
         private VectorAccess.LongValues probeValues;
         private VectorAccess.BooleanValues probeNulls;
+        private final boolean ownsStorage;
 
         private LongIndex(long base, int capacityBits, PrimitiveArrayPool arrayPool, MembershipSetPolicy policy)
         {
             this.arrayPool = arrayPool;
             this.policy = policy;
+            this.ownsStorage = true;
             allocateBits(base, capacityBits);
         }
 
@@ -430,6 +483,18 @@ final class MembershipSet
             this.arrayPool = arrayPool;
             this.policy = policy;
             this.hash = new LongOpenHashSet(Math.max(16, expectedSize));
+            this.ownsStorage = true;
+        }
+
+        private LongIndex(LongIndex prepared)
+        {
+            this.arrayPool = prepared.arrayPool;
+            this.policy = prepared.policy;
+            this.bits = prepared.bits;
+            this.base = prepared.base;
+            this.capacityBits = prepared.capacityBits;
+            this.hash = prepared.hash;
+            this.ownsStorage = false;
         }
 
         private static LongIndex tryCreate(
@@ -705,8 +770,19 @@ final class MembershipSet
         }
 
         @Override
+        public Optional<Index> newProbeView()
+        {
+            return Optional.of(new LongIndex(this));
+        }
+
+        @Override
         public void releaseBuffers()
         {
+            if (!ownsStorage) {
+                probeValues = null;
+                probeNulls = null;
+                return;
+            }
             arrayPool.release(bits);
             bits = null;
             hash = null;

@@ -18,6 +18,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.SemiJoinOperator.MatchOutputSemantics;
 
+import java.util.Optional;
 import java.util.function.UnaryOperator;
 
 import static java.util.Objects.requireNonNull;
@@ -60,6 +61,7 @@ public final class SemiJoinSession
                 includeMatches,
                 matchField,
                 matchOutputSemantics,
+                null,
                 UnaryOperator.identity());
     }
 
@@ -75,7 +77,107 @@ public final class SemiJoinSession
             MatchOutputSemantics matchOutputSemantics,
             UnaryOperator<Operator> outputPipeline)
     {
+        this(
+                operatorResources,
+                allocator,
+                probeSchema,
+                probeJoinColumn,
+                build,
+                buildJoinColumn,
+                includeMatches,
+                matchField,
+                matchOutputSemantics,
+                null,
+                outputPipeline);
+    }
+
+    public SemiJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int probeJoinColumn,
+            Operator build,
+            int buildJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
+            SemiJoinBuild preparedBuild)
+    {
+        this(
+                operatorResources,
+                allocator,
+                probeSchema,
+                probeJoinColumn,
+                build,
+                buildJoinColumn,
+                includeMatches,
+                matchField,
+                matchOutputSemantics,
+                requireNonNull(preparedBuild, "preparedBuild is null"),
+                UnaryOperator.identity());
+    }
+
+    public SemiJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int probeJoinColumn,
+            Operator build,
+            int buildJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
+            SemiJoinBuild preparedBuild,
+            UnaryOperator<Operator> outputPipeline)
+    {
         probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
+        SemiJoinOperator semiJoin = preparedBuild == null
+                ? new SemiJoinOperator(
+                        requireNonNull(allocator, "allocator is null"),
+                        probe,
+                        probeJoinColumn,
+                        requireNonNull(build, "build is null"),
+                        buildJoinColumn,
+                        includeMatches,
+                        requireNonNull(matchField, "matchField is null"),
+                        requireNonNull(matchOutputSemantics, "matchOutputSemantics is null"),
+                        requireNonNull(operatorResources, "operatorResources is null"))
+                : new SemiJoinOperator(
+                        requireNonNull(allocator, "allocator is null"),
+                        probe,
+                        probeJoinColumn,
+                        requireNonNull(build, "build is null"),
+                        buildJoinColumn,
+                        includeMatches,
+                        requireNonNull(matchField, "matchField is null"),
+                        requireNonNull(matchOutputSemantics, "matchOutputSemantics is null"),
+                        requireNonNull(operatorResources, "operatorResources is null"),
+                        preparedBuild);
+        try {
+            root = requireNonNull(
+                    requireNonNull(outputPipeline, "outputPipeline is null").apply(semiJoin),
+                    "outputPipeline returned null");
+        }
+        catch (RuntimeException | Error failure) {
+            semiJoin.close();
+            throw failure;
+        }
+    }
+
+    public static Optional<SemiJoinBuild> prepareBuild(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int probeJoinColumn,
+            Operator build,
+            int buildJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics)
+    {
+        ExternallyScheduledBatchFeed probe = new ExternallyScheduledBatchFeed(
+                requireNonNull(probeSchema, "probeSchema is null"));
+        probe.finish();
         SemiJoinOperator semiJoin = new SemiJoinOperator(
                 requireNonNull(allocator, "allocator is null"),
                 probe,
@@ -86,15 +188,11 @@ public final class SemiJoinSession
                 requireNonNull(matchField, "matchField is null"),
                 requireNonNull(matchOutputSemantics, "matchOutputSemantics is null"),
                 requireNonNull(operatorResources, "operatorResources is null"));
-        try {
-            root = requireNonNull(
-                    requireNonNull(outputPipeline, "outputPipeline is null").apply(semiJoin),
-                    "outputPipeline returned null");
-        }
-        catch (RuntimeException | Error failure) {
+        SemiJoinBuild prepared = semiJoin.prepareBuild();
+        if (prepared == null) {
             semiJoin.close();
-            throw failure;
         }
+        return Optional.ofNullable(prepared);
     }
 
     @Override

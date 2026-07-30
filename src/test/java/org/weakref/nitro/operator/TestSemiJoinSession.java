@@ -69,6 +69,65 @@ class TestSemiJoinSession
         }
     }
 
+    @Test
+    void testSharesPreparedMembershipAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Field matchField = new Field(Schema.unspecified(1).field(0).type(), true);
+            SemiJoinBuild build = SemiJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            0,
+                            nullableTable(2L, null, 1_000_000L),
+                            0,
+                            true,
+                            matchField,
+                            SemiJoinOperator.MatchOutputSemantics.SQL_IN)
+                    .orElseThrow();
+            try (build;
+                    SemiJoinSession first = new SemiJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            0,
+                            nullableTable(99L),
+                            0,
+                            true,
+                            matchField,
+                            SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                            build);
+                    SemiJoinSession second = new SemiJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            0,
+                            nullableTable(99L),
+                            0,
+                            true,
+                            matchField,
+                            SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                            build)) {
+                List<Boolean> firstValues = new ArrayList<>();
+                List<Boolean> firstNulls = new ArrayList<>();
+                List<Boolean> secondValues = new ArrayList<>();
+                List<Boolean> secondNulls = new ArrayList<>();
+
+                first.addInput(nullableBatch(2L, 3L));
+                second.addInput(nullableBatch(1_000_000L, null));
+                drain(first, firstValues, firstNulls);
+                drain(second, secondValues, secondNulls);
+
+                assertThat(firstValues).containsExactly(true, false);
+                assertThat(firstNulls).containsExactly(false, true);
+                assertThat(secondValues).containsExactly(true, false);
+                assertThat(secondNulls).containsExactly(false, true);
+            }
+        }
+    }
+
     private static void drain(SemiJoinSession session, List<Boolean> values, List<Boolean> nulls)
     {
         while (session.hasOutput()) {

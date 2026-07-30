@@ -175,6 +175,53 @@ class TestMembershipSet
     }
 
     @Test
+    void preparedLongMembershipSupportsIndependentProbeViews()
+    {
+        EngineResources engineResources = EngineResources.createDefault();
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("TestMembershipSet");
+        MembershipSet owner = new MembershipSet(
+                allocator,
+                allocationContext,
+                engineResources.operatorResources(),
+                engineResources.operatorResources().semiJoinPolicy().membershipSet(),
+                Optional.empty());
+        try {
+            owner.addBatch(new I64Vector(new long[] {10, 1_000_000, 20}), null, Mask.all(3));
+            MembershipSet first = owner.newProbeView().orElseThrow();
+            MembershipSet second = owner.newProbeView().orElseThrow();
+            try {
+                I64Vector firstProbe = new I64Vector(new long[] {10, 11});
+                I64Vector secondProbe = new I64Vector(new long[] {1_000_000, 2_000_000});
+                first.beginProbeBatch(firstProbe, null);
+                second.beginProbeBatch(secondProbe, null);
+                assertThat(first.contains(0)).isTrue();
+                assertThat(second.contains(0)).isTrue();
+                assertThat(first.contains(1)).isFalse();
+                assertThat(second.contains(1)).isFalse();
+                first.endProbeBatch();
+                second.endProbeBatch();
+            }
+            finally {
+                first.releaseBuffers();
+                second.releaseBuffers();
+            }
+
+            owner.beginProbeBatch(new I64Vector(new long[] {20}), null);
+            try {
+                assertThat(owner.contains(0)).isTrue();
+            }
+            finally {
+                owner.endProbeBatch();
+            }
+        }
+        finally {
+            owner.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void emptyBuildRejectsEveryProbe()
     {
         EngineResources engineResources = EngineResources.createDefault();

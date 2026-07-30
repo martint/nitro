@@ -119,7 +119,8 @@ public class SemiJoinOperator
                 outputMatches,
                 outputMatches ? new Field(Schema.unspecified(1).field(0).type(), false) : null,
                 MatchOutputSemantics.NULL_REJECTING,
-                operatorResources);
+                operatorResources,
+                null);
     }
 
     public SemiJoinOperator(
@@ -165,7 +166,8 @@ public class SemiJoinOperator
                 true,
                 matchField,
                 matchOutputSemantics,
-                operatorResources);
+                operatorResources,
+                null);
     }
 
     private SemiJoinOperator(
@@ -178,7 +180,8 @@ public class SemiJoinOperator
             boolean outputMatches,
             Field matchField,
             MatchOutputSemantics matchOutputSemantics,
-            OperatorResources operatorResources)
+            OperatorResources operatorResources,
+            SemiJoinBuild preparedBuild)
     {
         this.outer = outer;
         this.inner = inner;
@@ -201,13 +204,71 @@ public class SemiJoinOperator
             }
         }
         this.outputSchema = outputSchema(outer.outputSchema(), matchField);
-        this.membership = new MembershipSet(
-                allocator,
-                allocationContext,
-                operatorResources,
-                policy.membershipSet(),
-                joinType(outer.outputSchema(), outerJoinColumn, inner.outputSchema(), innerJoinColumn));
+        Optional<TypeBinding> joinType = joinType(outer.outputSchema(), outerJoinColumn, inner.outputSchema(), innerJoinColumn);
+        if (preparedBuild == null) {
+            this.membership = new MembershipSet(
+                    allocator,
+                    allocationContext,
+                    operatorResources,
+                    policy.membershipSet(),
+                    joinType);
+        }
+        else {
+            SemiJoinBuild.ProbeState probeState = preparedBuild.newProbeState();
+            this.membership = probeState.membership();
+            this.buildNonEmpty = probeState.buildNonEmpty();
+            this.buildContainsNull = probeState.buildContainsNull();
+            this.loaded = true;
+            inner.close();
+        }
         this.allowsLegacyKeyShortcuts = membership.allowsLegacyPhysicalShortcuts();
+    }
+
+    SemiJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int outerJoinColumn,
+            Operator inner,
+            int innerJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
+            OperatorResources operatorResources,
+            SemiJoinBuild preparedBuild)
+    {
+        this(
+                allocator,
+                outer,
+                outerJoinColumn,
+                inner,
+                innerJoinColumn,
+                includeMatches,
+                true,
+                matchField,
+                matchOutputSemantics,
+                operatorResources,
+                requireNonNull(preparedBuild, "preparedBuild is null"));
+    }
+
+    SemiJoinBuild prepareBuild()
+    {
+        loadInnerIfNecessary();
+        Optional<MembershipSet> probeView = membership.newProbeView();
+        if (probeView.isEmpty()) {
+            return null;
+        }
+        probeView.orElseThrow().releaseBuffers();
+        return new SemiJoinBuild(this);
+    }
+
+    SemiJoinBuild.ProbeState newPreparedProbeState()
+    {
+        if (!loaded) {
+            throw new IllegalStateException("Semi-join build is not prepared");
+        }
+        MembershipSet probeView = membership.newProbeView()
+                .orElseThrow(() -> new IllegalStateException("Semi-join membership does not support probe views"));
+        return new SemiJoinBuild.ProbeState(probeView, buildNonEmpty, buildContainsNull);
     }
 
     private static Optional<TypeBinding> joinType(
