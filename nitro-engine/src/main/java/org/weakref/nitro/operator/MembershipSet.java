@@ -425,6 +425,13 @@ final class MembershipSet
             allocateBits(base, capacityBits);
         }
 
+        private LongIndex(int expectedSize, PrimitiveArrayPool arrayPool, MembershipSetPolicy policy)
+        {
+            this.arrayPool = arrayPool;
+            this.policy = policy;
+            this.hash = new LongOpenHashSet(Math.max(16, expectedSize));
+        }
+
         private static LongIndex tryCreate(
                 Vector values,
                 Vector nulls,
@@ -457,7 +464,7 @@ final class MembershipSet
             if (required <= 0 ||
                     required > policy.denseLongMaxCapacityBits() ||
                     required > (long) observed * policy.denseLongMaxBitsPerObservedKey()) {
-                return null;
+                return new LongIndex(observed, arrayPool, policy);
             }
             return new LongIndex(alignedMin, bitCapacity(required, policy.denseLongMinCapacityBits()), arrayPool, policy);
         }
