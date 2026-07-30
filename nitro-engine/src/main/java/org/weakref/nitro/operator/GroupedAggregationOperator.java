@@ -525,10 +525,7 @@ public class GroupedAggregationOperator
         if (output < groupedResults.length) {
             throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
         }
-        PhysicalAggregationProgram.Output binding = program.outputs().get(output - groupedResults.length);
-        throw new IllegalStateException("Aggregation output %s (%s) does not support dense position copying".formatted(
-                output - groupedResults.length,
-                aggregations[binding.unit()]));
+        return null;
     }
 
     private void startInlineGrouping()
@@ -1262,6 +1259,7 @@ public class GroupedAggregationOperator
         private final int sourceStart;
         private final int size;
         private final Streams[] materialized = new Streams[outputCount()];
+        private final Streams[] fallbackSources = new Streams[program.outputs().size()];
         private Mask mask;
 
         private DenseBatchState(int sourceStart, int size, Mask mask)
@@ -1278,12 +1276,21 @@ public class GroupedAggregationOperator
                 return streams;
             }
             for (int outputPosition : mask) {
-                streams = copyDenseOutputPosition(
+                Streams copied = copyDenseOutputPosition(
                         output,
                         streams,
                         sourceStart + outputPosition,
                         outputPosition,
                         size);
+                if (copied == null) {
+                    copied = copyDenseFallbackPosition(
+                            output,
+                            streams,
+                            sourceStart + outputPosition,
+                            outputPosition,
+                            size);
+                }
+                streams = copied;
             }
             if (streams == null) {
                 streams = emptyDenseOutput(output);
@@ -1296,6 +1303,46 @@ public class GroupedAggregationOperator
         {
             this.mask = mask;
             Arrays.fill(materialized, null);
+        }
+
+        private Streams copyDenseFallbackPosition(
+                int output,
+                Streams existing,
+                int sourcePosition,
+                int outputPosition,
+                int size)
+        {
+            if (output < groupedResults.length) {
+                throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
+            }
+            int aggregationOutput = output - groupedResults.length;
+            Streams source = fallbackSources[aggregationOutput];
+            if (source == null) {
+                PhysicalAggregationProgram.Output binding = program.outputs().get(aggregationOutput);
+                source = aggregations[binding.unit()].result(
+                        binding.result(),
+                        maxGroup,
+                        states[binding.unit()],
+                        null,
+                        allocator,
+                        allocationContext);
+                fallbackSources[aggregationOutput] = source;
+            }
+
+            Streams.Builder copied = Streams.builder();
+            for (Stream stream : source.streams()) {
+                Vector existingVector = existing == null ? null : existing.getOrNull(stream);
+                copied.put(
+                        stream,
+                        source.get(stream).copySinglePositionInto(
+                                allocator,
+                                allocationContext,
+                                existingVector,
+                                sourcePosition,
+                                outputPosition,
+                                size));
+            }
+            return copied.build();
         }
     }
 

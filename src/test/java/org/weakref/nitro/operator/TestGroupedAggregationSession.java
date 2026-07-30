@@ -109,6 +109,49 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testFallsBackToFullAggregateResultWhenDensePositionCopyIsUnavailable()
+    {
+        CountAll aggregateWithoutPositionCopy = new CountAll()
+        {
+            @Override
+            public Streams copyResultPosition(
+                    int group,
+                    int maxGroup,
+                    Streams state,
+                    Streams output,
+                    int outputPosition,
+                    int size,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                return null;
+            }
+        };
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(aggregateWithoutPositionCopy)),
+                        resources.operatorResources(),
+                        null,
+                        4)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 10, 30, 40, 40, 40)) {
+                session.addInput(input);
+            }
+
+            try (Batch result = session.finish()) {
+                result.constrain(Mask.sparse(new int[] {1, 3}, 4));
+                assertThat(selectedLongValues(result, 0)).containsExactly(20, 40);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 3);
+            }
+        }
+    }
+
+    @Test
     void testRetainedBytesExcludeReleasedAllocatorPool()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();
