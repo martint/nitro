@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.jit.FusedProjectionCompiler.CompiledMultiProjection;
@@ -338,9 +339,9 @@ public class ProjectOperator
                         true);
     }
 
-    // Compute an output's whole stream bundle once: try the fused kernel (a single monomorphic loop over the source
-    // columns, no intermediate vectors), falling back to the interpreter if there is no kernel or the kernel bails on
-    // an unsupported runtime input layout (signalled by a null return).
+    // Compute an output's whole stream bundle once: try the fused kernel (a single monomorphic loop over source or
+    // staged inputs), falling back to the interpreter if there is no kernel or the kernel bails on an unsupported
+    // runtime input layout (signalled by a null return).
     private Streams evaluateBundle(BatchState batchState, Reference outputReference)
     {
         Integer ordinal = fusedOrdinal.get(outputReference.producer());
@@ -442,11 +443,33 @@ public class ProjectOperator
             if (!fusedResultsComputed) {
                 fusedResultsComputed = true;
                 if (fusedProjection != null && !mask.none()) {
-                    List<Streams> inputs = new ArrayList<>(fusedProjection.columns().size());
-                    for (int columnIndex : fusedProjection.columns()) {
-                        Output sourceOutput = sourceBatch.output(columnIndex);
-                        Vector values = sourceOutput.borrow(Stream.VALUES);
-                        Vector nulls = sourceOutput.borrowOrNull(Stream.NULLS);
+                    List<Streams> inputs = new ArrayList<>(fusedProjection.inputs().size());
+                    for (Reference reference : fusedProjection.inputs()) {
+                        Streams streams;
+                        if (reference.producer() instanceof Input input) {
+                            Output sourceOutput = sourceBatch.output(input.index());
+                            streams = Streams.of(
+                                    sourceOutput.borrow(Stream.VALUES),
+                                    sourceOutput.borrowOrNull(Stream.NULLS),
+                                    sourceOutput.borrowOrNull(Stream.ERRORS));
+                        }
+                        else {
+                            Vector values = planEvaluator.evaluate(reference, mask).values();
+                            Vector nulls = planEvaluator.evaluate(
+                                            new Reference(reference.producer(), Stream.NULLS),
+                                            mask)
+                                    .getOrNull(Stream.NULLS);
+                            Vector errors = planEvaluator.evaluate(
+                                            new Reference(reference.producer(), Stream.ERRORS),
+                                            mask)
+                                    .getOrNull(Stream.ERRORS);
+                            streams = Streams.of(values, nulls, errors);
+                        }
+                        if (!VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.ERRORS))) {
+                            return null;
+                        }
+                        Vector values = streams.values();
+                        Vector nulls = streams.getOrNull(Stream.NULLS);
                         inputs.add(nulls != null ? Streams.of(values, nulls, null) : Streams.ofValues(values));
                     }
                     fusedResults = fusedProjection.kernel().apply(inputs, mask, EnumSet.of(Stream.VALUES, Stream.NULLS), executionContext);

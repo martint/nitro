@@ -48,6 +48,7 @@ import org.weakref.nitro.data.VectorAllocator;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
+import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
 import org.weakref.nitro.jit.FusedProjectionCompiler;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
@@ -1007,6 +1008,131 @@ public class TestOperators
                 Batch batch = operator.next()) {
             assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
                     .containsExactly(21L, 0L, 0L, 0L);
+        }
+    }
+
+    @Test
+    void testFusedProjectionMaterializesUnsupportedSharedInputOnce()
+    {
+        PrimitiveRegistry registry = primitiveRegistry();
+        registry.register("boundary", new CastI64ToI64());
+        Variable one = new Variable(0);
+        Variable boundary = new Variable(1);
+        Variable incremented = new Variable(2);
+        Variable result = new Variable(3);
+        Reference boundaryReference = new Reference(boundary, Stream.VALUES);
+        Reference resultReference = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(boundary, new Call("boundary", List.of(
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(incremented, new Call("add", List.of(
+                                boundaryReference,
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(result, new Call("multiply", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                boundaryReference)), AllMask.ALL)),
+                List.of(resultReference));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            FusedProjectionCompiler.CompiledMultiProjection compiled = compiler.tryCompile(plan, registry, List.of(resultReference))
+                    .orElseThrow();
+            assertThat(compiled.inputs()).containsExactly(boundaryReference);
+        }
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))));
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(6L, 12L);
+        }
+    }
+
+    @Test
+    void testFusedProjectionFallsBackWhenStagedInputHasErrors()
+    {
+        PrimitiveRegistry registry = primitiveRegistry();
+        Variable quotient = new Variable(0);
+        Variable one = new Variable(1);
+        Variable incremented = new Variable(2);
+        Variable result = new Variable(3);
+        Reference quotientReference = new Reference(quotient, Stream.VALUES);
+        Reference resultReference = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(quotient, new Call("divide", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(incremented, new Call("add", List.of(
+                                quotientReference,
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(result, new Call("multiply", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                quotientReference)), AllMask.ALL)),
+                List.of(resultReference));
+
+        try (FusedProjectionCompiler compiler = new FusedProjectionCompiler()) {
+            FusedProjectionCompiler.CompiledMultiProjection compiled = compiler.tryCompile(plan, registry, List.of(resultReference))
+                    .orElseThrow();
+            assertThat(compiled.inputs()).containsExactly(quotientReference);
+        }
+        try (Allocator testAllocator = new Allocator(EngineResources.createDefault());
+                ProjectOperator operator = new ProjectOperator(
+                        testAllocator,
+                        plan,
+                        registry,
+                        new ConstantTableOperator(
+                                testAllocator,
+                                2,
+                                List.of(
+                                        row(20L, 5L),
+                                        row(21L, 0L),
+                                        row(22L, 2L))));
+                Batch batch = operator.next()) {
+            batch.output(0).borrow(Stream.VALUES);
+            assertThat(testAllocator.peakBytes(new Allocator.Context("FusedProjection"))).isZero();
+        }
+    }
+
+    @Test
+    void testFusedProjectionPreservesBoundaryComparison()
+    {
+        PrimitiveRegistry registry = primitiveRegistry();
+        registry.register("boundary", new CastI64ToI64());
+        Variable boundary = new Variable(0);
+        Variable limit = new Variable(1);
+        Variable condition = new Variable(2);
+        Variable one = new Variable(3);
+        Variable zero = new Variable(4);
+        Variable result = new Variable(5);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(boundary, new Call("boundary", List.of(
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(limit, new Literal(30L), AllMask.ALL),
+                        new Assignment(condition, new Call("lte_i64", List.of(
+                                new Reference(boundary, Stream.VALUES),
+                                new Reference(limit, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(one, new Literal(1L), AllMask.ALL),
+                        new Assignment(zero, new Literal(0L), AllMask.ALL),
+                        new Assignment(result, new Call("if_i64", List.of(
+                                new Reference(condition, Stream.VALUES),
+                                new Reference(one, Stream.VALUES),
+                                new Reference(zero, Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                registry,
+                new ConstantTableOperator(allocator, 1, List.of(row(29L), row(30L), row(31L), row((Object) null))));
+                Batch batch = operator.next()) {
+            assertThat(((I64Vector) batch.output(0).borrow(Stream.VALUES)).values())
+                    .containsExactly(1L, 1L, 0L, 0L);
         }
     }
 

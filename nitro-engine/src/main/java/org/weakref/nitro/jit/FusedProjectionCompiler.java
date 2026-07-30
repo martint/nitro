@@ -51,7 +51,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Compiles the fusible outputs of a {@link org.weakref.nitro.operator.ProjectOperator} into one
- * {@link FusedMultiProjection}: a single monomorphic loop over the source columns that reads each input once, computes
+ * {@link FusedMultiProjection}: a single monomorphic loop over source or staged inputs that reads each input once, computes
  * each shared subexpression once, and writes every output. Intermediate values live in local registers, so there is no
  * per-node megamorphic dispatch and no intermediate {@link org.weakref.nitro.data.Vector} -- the two costs the
  * interpreter pays walking a subtree and invoking one atomic batch primitive per node.
@@ -105,11 +105,11 @@ public final class FusedProjectionCompiler
     /** One shared assignment in the fused program: {@code step<id> = op(operands)}. */
     private record Step(int id, Program program, List<Operand> operands, PhysicalType type) {}
 
-    /** The compiled shape: the ordered source columns (with their Java type) to feed, the shared steps, the roots. */
-    private record Slice(List<Integer> columns, List<PhysicalType> columnTypes, List<Step> steps, List<Operand> roots) {}
+    /** The compiled shape: the ordered source or staged inputs (with their Java type), the shared steps, and the roots. */
+    private record Slice(List<Reference> inputs, List<PhysicalType> inputTypes, List<Step> steps, List<Operand> roots) {}
 
-    /** A fused multi-output kernel, the ordered source columns it expects, and the outputs it produces (in order). */
-    public record CompiledMultiProjection(FusedMultiProjection kernel, List<Integer> columns, List<Reference> outputs) {}
+    /** A fused multi-output kernel, the ordered source or staged inputs it expects, and its outputs (in order). */
+    public record CompiledMultiProjection(FusedMultiProjection kernel, List<Reference> inputs, List<Reference> outputs) {}
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
@@ -141,7 +141,7 @@ public final class FusedProjectionCompiler
                 Operand root = trial.operand(candidate, null);
                 PhysicalType rootType = operandType(root);
                 if ((rootType == PhysicalType.LONG || rootType == PhysicalType.DOUBLE || rootType == PhysicalType.UTF8) &&
-                        worthFusing(rootType, trial.steps(), trial.columnTypes())) {
+                        worthFusing(rootType, trial.steps(), trial.inputTypes())) {
                     fusible.add(candidate);
                 }
             }
@@ -158,7 +158,7 @@ public final class FusedProjectionCompiler
         for (Reference output : fusible) {
             roots.add(combined.operand(output, null));
         }
-        Slice slice = new Slice(combined.columns(), combined.columnTypes(), combined.steps(), roots);
+        Slice slice = new Slice(combined.inputs(), combined.inputTypes(), combined.steps(), roots);
 
         FusedMultiProjection kernel = cache.computeIfAbsent(render(slice, "K"), ignored -> {
             String simpleName = "FusedProj_" + counter.incrementAndGet();
@@ -171,7 +171,7 @@ public final class FusedProjectionCompiler
                 throw new IllegalStateException("Failed to instantiate fused projection:\n" + source, e);
             }
         });
-        return Optional.of(new CompiledMultiProjection(kernel, List.copyOf(slice.columns()), List.copyOf(fusible)));
+        return Optional.of(new CompiledMultiProjection(kernel, List.copyOf(slice.inputs()), List.copyOf(fusible)));
     }
 
     @Override
@@ -187,7 +187,7 @@ public final class FusedProjectionCompiler
     private static boolean worthFusing(
             PhysicalType rootType,
             List<Step> steps,
-            List<PhysicalType> columnTypes)
+            List<PhysicalType> inputTypes)
     {
         // A slice with a single operation writes one output from one primitive; the interpreter already does that with
         // no intermediate vector, so fusing only adds javac + call overhead. Two or more operations means the
@@ -204,7 +204,7 @@ public final class FusedProjectionCompiler
         // A two-step slice that reads only null streams saves one small boolean intermediate but pays for a generated
         // dense value loop. The interpreter's mask/null-stream path is cheaper at that size. Longer null-only slices
         // amortize the loop, and any value-consuming slice retains the existing two-step threshold.
-        return steps.size() >= 3 || columnTypes.stream().anyMatch(type -> type != PhysicalType.NULLS_ONLY);
+        return steps.size() >= 3 || inputTypes.stream().anyMatch(type -> type != PhysicalType.NULLS_ONLY);
     }
 
     private static final class Unsupported
@@ -221,9 +221,9 @@ public final class FusedProjectionCompiler
     {
         private final Map<Integer, Assignment> assignments;
         private final PrimitiveRegistry primitiveRegistry;
-        private final List<Integer> columns = new ArrayList<>();
-        private final Map<Integer, Integer> columnSlots = new LinkedHashMap<>();
-        private final Map<Integer, PhysicalType> columnTypeBySlot = new LinkedHashMap<>();
+        private final List<Reference> inputs = new ArrayList<>();
+        private final Map<Producer, Integer> inputSlots = new LinkedHashMap<>();
+        private final Map<Integer, PhysicalType> inputTypeBySlot = new LinkedHashMap<>();
         private final Map<Integer, Operand> variableSteps = new LinkedHashMap<>();
         private final List<Step> steps = new ArrayList<>();
         private final AtomicInteger nextStep = new AtomicInteger();
@@ -234,16 +234,16 @@ public final class FusedProjectionCompiler
             this.primitiveRegistry = primitiveRegistry;
         }
 
-        List<Integer> columns()
+        List<Reference> inputs()
         {
-            return columns;
+            return inputs;
         }
 
-        List<PhysicalType> columnTypes()
+        List<PhysicalType> inputTypes()
         {
-            List<PhysicalType> types = new ArrayList<>(columns.size());
-            for (int slot = 0; slot < columns.size(); slot++) {
-                types.add(columnTypeBySlot.get(slot));
+            List<PhysicalType> types = new ArrayList<>(inputs.size());
+            for (int slot = 0; slot < inputs.size(); slot++) {
+                types.add(inputTypeBySlot.get(slot));
             }
             return types;
         }
@@ -255,8 +255,8 @@ public final class FusedProjectionCompiler
 
         /**
          * Resolves a reference into an operand. {@code expected} is the type the consuming operator requires (null for a
-         * root, whose type is whatever its operator produces). An input column is typed by its consumer; if two
-         * consumers disagree on a column's type the slice is not fusible.
+         * root, whose type is whatever its operator produces). An input is typed by its consumer; if two consumers
+         * disagree on its type the slice is not fusible.
          */
         Operand operand(Reference reference, PhysicalType expected)
         {
@@ -264,30 +264,12 @@ public final class FusedProjectionCompiler
                 throw new Unsupported();
             }
             Producer producer = reference.producer();
-            if (producer instanceof Input input) {
-                if (expected == null || expected == PhysicalType.BOOL) {
-                    // A raw column can feed a numeric or UTF-8 operator; bool-typed column input is out of scope.
-                    throw new Unsupported();
-                }
-                int slot = columnSlots.computeIfAbsent(input.index(), index -> {
-                    columns.add(index);
-                    return columns.size() - 1;
-                });
-                PhysicalType existing = columnTypeBySlot.get(slot);
-                if (existing == null) {
-                    columnTypeBySlot.put(slot, expected);
-                }
-                else if (existing == PhysicalType.NULLS_ONLY) {
-                    columnTypeBySlot.put(slot, expected);
-                }
-                else if (expected != PhysicalType.NULLS_ONLY && existing != expected) {
-                    throw new Unsupported();
-                }
-                return new ColumnOperand(slot, expected);
+            if (producer instanceof Input) {
+                return columnOperand(reference, expected);
             }
             if (producer instanceof Variable variable) {
                 Operand existing = variableSteps.get(variable.id());
-                Operand built = existing != null ? existing : buildVariable(variable);
+                Operand built = existing != null ? existing : buildVariable(reference, variable, expected);
                 if (existing == null) {
                     variableSteps.put(variable.id(), built);
                 }
@@ -299,7 +281,7 @@ public final class FusedProjectionCompiler
             throw new Unsupported();
         }
 
-        private Operand buildVariable(Variable variable)
+        private Operand buildVariable(Reference reference, Variable variable, PhysicalType expected)
         {
             Assignment assignment = assignments.get(variable.id());
             if (assignment == null) {
@@ -313,13 +295,19 @@ public final class FusedProjectionCompiler
                 ProjectionCodeProvider provider = (call.resolvedCall() == null
                         ? primitiveRegistry.projectionCodeProvider(call.name())
                         : primitiveRegistry.projectionCodeProvider(call.resolvedCall()))
-                        .orElseThrow(Unsupported::new);
+                        .orElse(null);
+                if (provider == null) {
+                    return columnOperand(reference, expected);
+                }
                 ProjectionProgramBuilder builder = new ProjectionProgramBuilder();
                 List<ProjectionArgument> argumentShapes = call.arguments().stream()
                         .map(this::projectionArgument)
                         .toList();
                 ProjectionProgram generated = provider.generate(builder, argumentShapes)
-                        .orElseThrow(Unsupported::new);
+                        .orElse(null);
+                if (generated == null) {
+                    return columnOperand(reference, expected);
+                }
                 Program program = builder.requireProgram(generated);
                 List<PhysicalType> argumentTypes = program.argumentTypes().stream()
                         .map(FusedProjectionCompiler::physicalType)
@@ -337,6 +325,29 @@ public final class FusedProjectionCompiler
                 return new StepOperand(id, resultType);
             }
             throw new Unsupported();
+        }
+
+        private Operand columnOperand(Reference reference, PhysicalType expected)
+        {
+            if (expected == null || expected == PhysicalType.BOOL) {
+                // A raw value can feed a numeric or UTF-8 operator; bool-typed input is out of scope.
+                throw new Unsupported();
+            }
+            int slot = inputSlots.computeIfAbsent(reference.producer(), ignored -> {
+                inputs.add(reference);
+                return inputs.size() - 1;
+            });
+            PhysicalType existing = inputTypeBySlot.get(slot);
+            if (existing == null) {
+                inputTypeBySlot.put(slot, expected);
+            }
+            else if (existing == PhysicalType.NULLS_ONLY) {
+                inputTypeBySlot.put(slot, expected);
+            }
+            else if (expected != PhysicalType.NULLS_ONLY && existing != expected) {
+                throw new Unsupported();
+            }
+            return new ColumnOperand(slot, expected);
         }
 
         private ProjectionArgument projectionArgument(Reference reference)
@@ -540,8 +551,8 @@ public final class FusedProjectionCompiler
 
         if (policy.pooledDictionaryScratch()) {
             out.append("    var scratchContext = context.allocationContext(\"FusedProjectionScratch\");\n");
-            for (int slot = 0; slot < slice.columns().size(); slot++) {
-                if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE) {
+            for (int slot = 0; slot < slice.inputs().size(); slot++) {
+                if (slice.inputTypes().get(slot) == PhysicalType.DOUBLE) {
                     if (policy.mappedDictionaryDoubleInputs()) {
                         out.append("    I32Vector scratchIds").append(slot).append(" = null;\n");
                     }
@@ -549,8 +560,8 @@ public final class FusedProjectionCompiler
                         out.append("    F64Vector scratchValues").append(slot).append(" = null;\n");
                     }
                 }
-                else if (slice.columnTypes().get(slot) != PhysicalType.UTF8 &&
-                        slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
+                else if (slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
+                        slice.inputTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                     out.append("    I64Vector scratchValues").append(slot).append(" = null;\n");
                 }
                 out.append("    BooleanVector scratchNulls").append(slot).append(" = null;\n");
@@ -558,16 +569,16 @@ public final class FusedProjectionCompiler
             out.append("    try {\n");
         }
 
-        // Hoist each source column to a monomorphic long[]/double[] view once plus a nulls[]. If any input is an
+        // Hoist each source or staged input to a monomorphic long[]/double[] view once plus a nulls[]. If any input is an
         // unsupported flat layout, bail to null so the caller runs the interpreter for this batch.
-        for (int slot = 0; slot < slice.columns().size(); slot++) {
-            if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE) {
+        for (int slot = 0; slot < slice.inputs().size(); slot++) {
+            if (slice.inputTypes().get(slot) == PhysicalType.DOUBLE) {
                 appendDoubleColumn(out, slot);
             }
-            else if (slice.columnTypes().get(slot) == PhysicalType.UTF8) {
+            else if (slice.inputTypes().get(slot) == PhysicalType.UTF8) {
                 appendUtf8Column(out, slot);
             }
-            else if (slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
+            else if (slice.inputTypes().get(slot) != PhysicalType.NULLS_ONLY) {
                 appendLongColumn(out, slot);
             }
             // NULLS may arrive flat (BooleanVector) or, on a column carried through joins, dictionary-wrapped over a
@@ -657,10 +668,10 @@ public final class FusedProjectionCompiler
         out.append("    return result;\n");
         if (policy.pooledDictionaryScratch()) {
             out.append("    } finally {\n");
-            for (int slot = 0; slot < slice.columns().size(); slot++) {
-                if (slice.columnTypes().get(slot) != PhysicalType.UTF8 &&
-                        slice.columnTypes().get(slot) != PhysicalType.NULLS_ONLY) {
-                    if (slice.columnTypes().get(slot) == PhysicalType.DOUBLE && policy.mappedDictionaryDoubleInputs()) {
+            for (int slot = 0; slot < slice.inputs().size(); slot++) {
+                if (slice.inputTypes().get(slot) != PhysicalType.UTF8 &&
+                        slice.inputTypes().get(slot) != PhysicalType.NULLS_ONLY) {
+                    if (slice.inputTypes().get(slot) == PhysicalType.DOUBLE && policy.mappedDictionaryDoubleInputs()) {
                         out.append("      if (scratchIds").append(slot).append(" != null) { context.allocator().release(scratchContext, scratchIds").append(slot).append("); }\n");
                     }
                     else {
@@ -779,8 +790,8 @@ public final class FusedProjectionCompiler
     private String stepBody(Slice slice, Map<String, Integer> utf8Constants)
     {
         StringBuilder body = new StringBuilder();
-        for (int slot = 0; slot < slice.columnTypes().size(); slot++) {
-            if (slice.columnTypes().get(slot) == PhysicalType.UTF8) {
+        for (int slot = 0; slot < slice.inputTypes().size(); slot++) {
+            if (slice.inputTypes().get(slot) == PhysicalType.UTF8) {
                 body.append("        var bx").append(slot).append(" = bin").append(slot).append(".value(i);\n");
                 body.append("        byte[] bd").append(slot).append(" = bx").append(slot).append(".data();\n");
                 body.append("        int bs").append(slot).append(" = bx").append(slot).append(".offset();\n");
