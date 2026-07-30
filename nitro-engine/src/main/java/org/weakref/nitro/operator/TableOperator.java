@@ -28,18 +28,37 @@ public class TableOperator
 {
     private final Schema outputSchema;
     private final List<Page> pages;
+    private final boolean retainedBatches;
 
     private int currentPage = -1;
 
     public TableOperator(int columns, List<Page> pages)
     {
-        this(Schema.unspecified(columns), pages);
+        this(Schema.unspecified(columns), pages, false);
     }
 
     public TableOperator(Schema outputSchema, List<Page> pages)
     {
+        this(outputSchema, pages, false);
+    }
+
+    /**
+     * Creates a table over pages whose streams remain valid for the lifetime of this operator.
+     * <p>
+     * This capability allows buffering operators to retain the supplied vectors instead of copying
+     * them. The caller remains responsible for keeping the pages' underlying storage alive until
+     * every consumer of this operator has closed.
+     */
+    public static TableOperator retained(Schema outputSchema, List<Page> pages)
+    {
+        return new TableOperator(outputSchema, pages, true);
+    }
+
+    private TableOperator(Schema outputSchema, List<Page> pages, boolean retainedBatches)
+    {
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
         this.pages = pages;
+        this.retainedBatches = retainedBatches;
     }
 
     @Override
@@ -80,7 +99,7 @@ public class TableOperator
     @Override
     public boolean supportsRetainedBatches()
     {
-        return false;
+        return retainedBatches;
     }
 
     @Override
