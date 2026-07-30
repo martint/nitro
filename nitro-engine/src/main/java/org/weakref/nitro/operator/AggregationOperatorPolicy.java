@@ -20,6 +20,7 @@ import static com.google.common.base.Preconditions.checkArgument;
  */
 public record AggregationOperatorPolicy(
         boolean deferResultMaterialization,
+        int maxOutputBatchRows,
         int fuseGroupLimit,
         int fuseLocalGroupLimit,
         int fuseMappedOnlyGroupLimit,
@@ -37,6 +38,7 @@ public record AggregationOperatorPolicy(
 {
     public AggregationOperatorPolicy
     {
+        checkArgument(maxOutputBatchRows > 0, "maxOutputBatchRows must be positive");
         checkArgument(fuseGroupLimit > 0, "fuseGroupLimit must be positive");
         checkArgument(fuseLocalGroupLimit > 0, "fuseLocalGroupLimit must be positive");
         checkArgument(fuseMappedOnlyGroupLimit > 0, "fuseMappedOnlyGroupLimit must be positive");
@@ -47,6 +49,7 @@ public record AggregationOperatorPolicy(
     {
         return new AggregationOperatorPolicy(
                 true,
+                1 << 14,
                 1 << 15,
                 1 << 25,
                 1 << 16,
@@ -73,6 +76,7 @@ public record AggregationOperatorPolicy(
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.aggregate.deferResultMaterialization",
                         Boolean.toString(defaults.deferResultMaterialization()))),
+                Integer.getInteger("nitro.aggregate.maxOutputBatchRows", defaults.maxOutputBatchRows()),
                 Integer.getInteger("nitro.groupedAggregation.fuseGroupLimit", defaults.fuseGroupLimit()),
                 Integer.getInteger("nitro.groupedAggregation.fuseLocalGroupLimit", defaults.fuseLocalGroupLimit()),
                 Integer.getInteger("nitro.groupedAggregation.fuseMappedOnlyGroupLimit", defaults.fuseMappedOnlyGroupLimit()),

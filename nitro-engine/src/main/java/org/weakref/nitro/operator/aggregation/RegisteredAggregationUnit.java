@@ -197,6 +197,12 @@ public final class RegisteredAggregationUnit
         }
     }
 
+    @Override
+    public String toString()
+    {
+        return "%s[%s -> %s]".formatted(implementation.getClass().getName(), inputMode, outputMode);
+    }
+
     public enum InputMode
     {
         RAW,

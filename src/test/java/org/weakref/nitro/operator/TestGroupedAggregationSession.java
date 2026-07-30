@@ -46,6 +46,40 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestGroupedAggregationSession
 {
     @Test
+    void testStreamsFinalGroupsInBoundedBatches()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        2)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 30, 40, 50)) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(selectedLongValues(first, 0)).containsExactly(10, 20);
+            }
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch second = session.getOutput()) {
+                assertThat(selectedLongValues(second, 0)).containsExactly(30, 40);
+            }
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch third = session.getOutput()) {
+                assertThat(selectedLongValues(third, 0)).containsExactly(50);
+            }
+            assertThat(session.hasOutput()).isFalse();
+        }
+    }
+
+    @Test
     void testRetainedBytesExcludeReleasedAllocatorPool()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();
@@ -257,9 +291,13 @@ class TestGroupedAggregationSession
 
     private static long[] selectedLongValues(Batch batch, int output)
     {
-        return Arrays.copyOf(
-                ((I64Vector) batch.output(output).borrow(Stream.VALUES)).values(),
-                batch.borrowMask().count());
+        long[] values = ((I64Vector) batch.output(output).borrow(Stream.VALUES)).values();
+        long[] selected = new long[batch.borrowMask().count()];
+        int index = 0;
+        for (int position : batch.borrowMask()) {
+            selected[index++] = values[position];
+        }
+        return selected;
     }
 
     private static final class TestingPartialAggregationControl

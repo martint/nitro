@@ -925,6 +925,32 @@ public class Allocator
     }
 
     /**
+     * Releases all idle vectors and masks retained in this allocator's local reuse pools.
+     *
+     * <p>In-use allocations and shared immutable resources are unaffected. Hosts can use this at a phase boundary
+     * where lowering the current memory reservation is more important than preserving reuse across that boundary.
+     */
+    public void releasePooledMemory()
+    {
+        long releasedBytes = 0;
+        for (PoolState pool : pools.values()) {
+            releasedBytes = Math.addExact(releasedBytes, pool.vectorPoolBytes);
+            for (ArrayDeque<Mask> masks : pool.maskPool.values()) {
+                for (Mask mask : masks) {
+                    releasedBytes = Math.addExact(releasedBytes, maskBytes(mask));
+                    mask.clearResidentTracked();
+                }
+            }
+            pool.vectorPool.clear();
+            pool.vectorPoolOrder.clear();
+            pool.vectorPoolGlobalOrder.clear();
+            pool.vectorPoolBytes = 0;
+            pool.maskPool.clear();
+        }
+        releaseResident(releasedBytes);
+    }
+
+    /**
      * Accounts for a retained-size change made in place by an allocator-owned vector.
      *
      * <p>Callers must capture {@link Vector#retainedBytes()} before mutation and report it

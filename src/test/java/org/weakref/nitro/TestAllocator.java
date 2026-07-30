@@ -91,6 +91,26 @@ class TestAllocator
     }
 
     @Test
+    void testReleasesPooledMemoryWithoutDiscardingInUseVectors()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("test");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            I64Vector idle = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            I64Vector inUse = allocator.allocate(context, I64Vector.class, 16, I64Vector::new);
+            long inUseBytes = inUse.retainedBytes();
+            allocator.release(context, idle);
+
+            allocator.releasePooledMemory();
+
+            assertThat(allocator.residentBytes()).isEqualTo(inUseBytes);
+            assertThat(memory.reservedBytes()).isEqualTo(inUseBytes);
+            allocator.discard(context, inUse);
+            assertThat(allocator.residentBytes()).isZero();
+        }
+    }
+
+    @Test
     void testTracksInPlaceVectorRetainedSizeChanges()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();

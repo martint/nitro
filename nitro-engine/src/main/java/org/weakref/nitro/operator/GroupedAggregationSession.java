@@ -38,6 +38,7 @@ public final class GroupedAggregationSession
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
     private final PartialAggregationControl partialAggregationControl;
+    private final int maxFinalOutputBatchRows;
     private final InitialAggregationBatchBuilder initialAggregationBatchBuilder;
     private GroupedAggregationOperator currentAggregation;
     private GroupedAggregationOperator flushedAggregation;
@@ -56,7 +57,15 @@ public final class GroupedAggregationSession
             PhysicalAggregationProgram program,
             OperatorResources operatorResources)
     {
-        this(allocator, inputSchema, groupByColumns, groupedColumns, program, operatorResources, null);
+        this(
+                allocator,
+                inputSchema,
+                groupByColumns,
+                groupedColumns,
+                program,
+                operatorResources,
+                null,
+                operatorResources.aggregation().maxOutputBatchRows());
     }
 
     public GroupedAggregationSession(
@@ -68,6 +77,27 @@ public final class GroupedAggregationSession
             OperatorResources operatorResources,
             PartialAggregationControl partialAggregationControl)
     {
+        this(
+                allocator,
+                inputSchema,
+                groupByColumns,
+                groupedColumns,
+                program,
+                operatorResources,
+                partialAggregationControl,
+                operatorResources.aggregation().maxOutputBatchRows());
+    }
+
+    public GroupedAggregationSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            PartialAggregationControl partialAggregationControl,
+            int maxFinalOutputBatchRows)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.groupByColumns = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
@@ -75,6 +105,10 @@ public final class GroupedAggregationSession
         this.program = requireNonNull(program, "program is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         this.partialAggregationControl = partialAggregationControl;
+        if (maxFinalOutputBatchRows <= 0) {
+            throw new IllegalArgumentException("maxFinalOutputBatchRows must be positive");
+        }
+        this.maxFinalOutputBatchRows = maxFinalOutputBatchRows;
         initialAggregationBatchBuilder = partialAggregationControl == null ? null : new InitialAggregationBatchBuilder(
                 allocator,
                 inputSchema,
@@ -130,19 +164,23 @@ public final class GroupedAggregationSession
     @Override
     public boolean hasOutput()
     {
-        return pendingOutput != null;
+        return pendingOutput != null ||
+                (finished && currentAggregation != null && currentAggregation.hasSessionOutput());
     }
 
     @Override
     public Batch getOutput()
     {
         checkOpen();
-        if (pendingOutput == null) {
-            throw new IllegalStateException("grouped aggregation session has no output");
+        if (pendingOutput != null) {
+            Batch output = pendingOutput;
+            pendingOutput = null;
+            return output;
         }
-        Batch output = pendingOutput;
-        pendingOutput = null;
-        return output;
+        if (finished && currentAggregation != null && currentAggregation.hasSessionOutput()) {
+            return currentAggregation.getSessionOutput(maxFinalOutputBatchRows);
+        }
+        throw new IllegalStateException("grouped aggregation session has no output");
     }
 
     @Override
@@ -176,7 +214,7 @@ public final class GroupedAggregationSession
         finished = true;
         releaseFlushedAggregation();
         ensureAggregation();
-        return currentAggregation.finishInput();
+        return currentAggregation.finishInput(maxFinalOutputBatchRows);
     }
 
     private void checkAcceptingInput()

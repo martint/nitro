@@ -36,6 +36,11 @@ public final class AggregationOperatorResources
         return policy;
     }
 
+    public int maxOutputBatchRows()
+    {
+        return policy.maxOutputBatchRows();
+    }
+
     Object bufferPoolGroup()
     {
         return bufferPoolGroup;

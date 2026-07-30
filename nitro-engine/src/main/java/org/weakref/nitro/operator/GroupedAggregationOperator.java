@@ -37,7 +37,9 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
@@ -114,6 +116,7 @@ public class GroupedAggregationOperator
     private boolean debugFusedLimitPrinted;
     private boolean debugFusedReuseContinuationPrinted;
     private boolean debugFusedConstantRunsPrinted;
+    private int nextSessionOutputPosition;
 
     long retainedBytes()
     {
@@ -437,14 +440,106 @@ public class GroupedAggregationOperator
 
     Batch finishInput()
     {
+        return finishInput(Integer.MAX_VALUE);
+    }
+
+    Batch finishInput(int maxOutputRows)
+    {
         if (groupByColumns == null) {
             throw new IllegalStateException("incremental input requires inline grouping columns");
         }
         if (done) {
             throw new IllegalStateException("grouped aggregation is finished");
         }
+        if (maxOutputRows <= 0) {
+            throw new IllegalArgumentException("maxOutputRows must be positive");
+        }
         startInlineGrouping();
-        return outputBatch(finishInlineGrouping());
+        finishResults(maxObservedGroup);
+        return nextSessionOutputBatch(maxOutputRows);
+    }
+
+    boolean hasSessionOutput()
+    {
+        return done && nextSessionOutputPosition <= maxGroup;
+    }
+
+    Batch getSessionOutput(int maxOutputRows)
+    {
+        if (!hasSessionOutput()) {
+            throw new IllegalStateException("grouped aggregation has no session output");
+        }
+        return nextSessionOutputBatch(maxOutputRows);
+    }
+
+    private Batch nextSessionOutputBatch(int maxOutputRows)
+    {
+        if (maxGroup < 0) {
+            return outputBatch(allocator.allocateAllMask(allocationContext, 0));
+        }
+        if (maxOutputRows == Integer.MAX_VALUE) {
+            nextSessionOutputPosition = maxGroup + 1;
+            return outputBatch(allocator.allocateAllMask(allocationContext, maxGroup + 1));
+        }
+        int outputRows = Math.min(maxOutputRows, maxGroup + 1 - nextSessionOutputPosition);
+        int sourceStart = nextSessionOutputPosition;
+        nextSessionOutputPosition += outputRows;
+        return denseOutputBatch(sourceStart, outputRows);
+    }
+
+    private Batch denseOutputBatch(int sourceStart, int outputRows)
+    {
+        Mask mask = allocator.allocateAllMask(allocationContext, outputRows);
+        Streams[] denseResults = new Streams[outputCount()];
+        for (int output = 0; output < denseResults.length; output++) {
+            Streams streams = null;
+            for (int outputPosition = 0; outputPosition < outputRows; outputPosition++) {
+                int sourcePosition = sourceStart + outputPosition;
+                streams = output < groupedResults.length
+                        ? groupedKeyCopyPosition(output, streams, sourcePosition, outputPosition, outputRows)
+                        : aggregationCopyPosition(output - groupedResults.length, streams, sourcePosition, outputPosition, outputRows);
+                if (streams == null) {
+                    if (output < groupedResults.length) {
+                        throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
+                    }
+                    PhysicalAggregationProgram.Output binding = program.outputs().get(output - groupedResults.length);
+                    throw new IllegalStateException("Aggregation output %s (%s) does not support dense position copying".formatted(
+                            output - groupedResults.length,
+                            aggregations[binding.unit()]));
+                }
+            }
+            denseResults[output] = streams;
+        }
+
+        Set<Vector> transferred = Collections.newSetFromMap(new IdentityHashMap<>());
+        Output[] outputs = new Output[denseResults.length];
+        for (int output = 0; output < outputs.length; output++) {
+            Streams streams = denseResults[output];
+            outputs[output] = new Output(
+                    streams.streams(),
+                    streams::get,
+                    (_, vector) -> {
+                        transferred.add(vector);
+                        return allocator.transfer(allocationContext, vector);
+                    },
+                    (_, _) -> {});
+        }
+        return new Batch(
+                mask,
+                _ -> {},
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                releasedMask -> allocator.release(allocationContext, releasedMask),
+                () -> {
+                    for (Streams streams : denseResults) {
+                        for (int index = 0; index < streams.vectorCount(); index++) {
+                            Vector vector = streams.vectorAt(index);
+                            if (!transferred.contains(vector)) {
+                                allocator.release(allocationContext, vector);
+                            }
+                        }
+                    }
+                },
+                outputs);
     }
 
     private void startInlineGrouping()
