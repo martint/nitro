@@ -225,5 +225,7 @@ abstract class JoinIndex
         return 0;
     }
 
+    void releaseProbeBuffers() {}
+
     void releaseBuffers() {}
 }

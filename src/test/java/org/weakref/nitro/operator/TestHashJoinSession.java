@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -197,6 +198,47 @@ class TestHashJoinSession
         }
     }
 
+    @Test
+    void testSharesPreparedFlatBuildAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            binaryTable("alpha", "beta", "alpha"),
+                            new int[] {0},
+                            false,
+                            new int[] {0, 1})
+                    .orElseThrow();
+            try (build;
+                    HashJoinSession first = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            binaryTable("alpha", "beta", "alpha"),
+                            new int[] {0},
+                            false,
+                            build);
+                    HashJoinSession second = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            binaryTable("alpha", "beta", "alpha"),
+                            new int[] {0},
+                            false,
+                            build)) {
+                assertBinarySessionOutput(first, "alpha", 2);
+                assertBinarySessionOutput(second, "beta", 1);
+            }
+        }
+    }
+
     private static void assertSessionOutput(HashJoinSession session, long probeValue)
     {
         List<Long> probeValues = new ArrayList<>();
@@ -236,6 +278,24 @@ class TestHashJoinSession
         while (session.hasOutput()) {
             session.getOutput().close();
         }
+    }
+
+    private static void assertBinarySessionOutput(HashJoinSession session, String value, int expectedRows)
+    {
+        session.addInput(binaryBatch(value));
+        int rows = 0;
+        while (session.hasOutput()) {
+            try (Batch output = session.getOutput()) {
+                rows += output.borrowMask().size();
+            }
+        }
+        session.finish();
+        while (session.hasOutput()) {
+            try (Batch output = session.getOutput()) {
+                rows += output.borrowMask().size();
+            }
+        }
+        assertThat(rows).isEqualTo(expectedRows);
     }
 
     private static void drain(HashJoinSession session, List<Long> probeValues, List<Long> buildValues)
@@ -308,5 +368,42 @@ class TestHashJoinSession
                                 new I64Vector(second),
                                 new I64Vector(third)},
                         Mask.all(first.length))));
+    }
+
+    private static Batch binaryBatch(String... values)
+    {
+        return new Batch(
+                Mask.all(values.length),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(binaryVector(values))));
+    }
+
+    private static Operator binaryTable(String... values)
+    {
+        return new TableOperator(
+                Schema.unspecified(1),
+                List.of(TableOperator.Page.values(
+                        values.length,
+                        new org.weakref.nitro.data.Vector[] {binaryVector(values)},
+                        Mask.all(values.length))));
+    }
+
+    private static BinaryVector binaryVector(String... values)
+    {
+        byte[][] bytes = java.util.Arrays.stream(values)
+                .map(value -> value.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toArray(byte[][]::new);
+        int[] offsets = new int[values.length + 1];
+        int totalBytes = 0;
+        for (int position = 0; position < values.length; position++) {
+            totalBytes += bytes[position].length;
+            offsets[position + 1] = totalBytes;
+        }
+        byte[] data = new byte[totalBytes];
+        int offset = 0;
+        for (byte[] value : bytes) {
+            System.arraycopy(value, 0, data, offset, value.length);
+            offset += value.length;
+        }
+        return new BinaryVector(values.length, offsets, data);
     }
 }

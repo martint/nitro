@@ -41,6 +41,7 @@ final class FlatJoinIndex
     private boolean hasDuplicates;
     private long nextGroupId;
     private boolean debugProbeShapePrinted;
+    private final boolean ownsStorage;
 
     FlatJoinIndex(HashJoinIndexPolicy policy, FlatKeyLayout layout, int expectedSize)
     {
@@ -49,6 +50,7 @@ final class FlatJoinIndex
         this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
         int initialSize = Math.max(16, expectedSize);
         this.primitiveSingleRows = policy.flatPrimitiveSingleRows();
+        this.ownsStorage = true;
         this.table = new FlatGroupingTable(
                 layout,
                 primitiveSingleRows ? initialSize : policy.flatLegacyInitialCapacity(),
@@ -59,6 +61,26 @@ final class FlatJoinIndex
         else {
             this.legacyRowsByGroup = new LongArrayList[16];
         }
+    }
+
+    private FlatJoinIndex(FlatJoinIndex prepared)
+    {
+        this.policy = prepared.policy;
+        this.arrayPool = prepared.arrayPool;
+        this.table = prepared.table;
+        this.dictionaryProbeCache = new FlatJoinDictionaryProbeCache(arrayPool, policy);
+        this.primitiveSingleRows = prepared.primitiveSingleRows;
+        this.singleRows = prepared.singleRows;
+        this.duplicateRows = prepared.duplicateRows;
+        this.legacyRowsByGroup = prepared.legacyRowsByGroup;
+        this.hasDuplicates = prepared.hasDuplicates;
+        this.nextGroupId = prepared.nextGroupId;
+        this.ownsStorage = false;
+    }
+
+    FlatJoinIndex newProbeView()
+    {
+        return new FlatJoinIndex(this);
     }
 
     @Override
@@ -253,7 +275,11 @@ final class FlatJoinIndex
     @Override
     long retainedBytes()
     {
-        long bytes = table.retainedBytes() + dictionaryProbeCache.retainedBytes();
+        long bytes = dictionaryProbeCache.retainedBytes();
+        if (!ownsStorage) {
+            return bytes;
+        }
+        bytes += table.retainedBytes();
         bytes += singleRows == null ? 0 : (long) singleRows.length * Long.BYTES;
         bytes += listArrayBytes(duplicateRows);
         bytes += listArrayBytes(legacyRowsByGroup);
@@ -277,6 +303,10 @@ final class FlatJoinIndex
     @Override
     public void releaseBuffers()
     {
+        if (!ownsStorage) {
+            releaseProbeBuffers();
+            return;
+        }
         table.releaseBuffers();
         if (singleRows != null) {
             arrayPool.release(singleRows);
@@ -285,5 +315,11 @@ final class FlatJoinIndex
         singleRows = null;
         duplicateRows = null;
         legacyRowsByGroup = null;
+    }
+
+    @Override
+    void releaseProbeBuffers()
+    {
+        dictionaryProbeCache.release();
     }
 }

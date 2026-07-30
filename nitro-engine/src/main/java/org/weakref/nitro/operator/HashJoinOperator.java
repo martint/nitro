@@ -1978,6 +1978,9 @@ public class HashJoinOperator
             if (preparedBuild == null) {
                 joinIndex.releaseBuffers();
             }
+            else {
+                joinIndex.releaseProbeBuffers();
+            }
             joinIndex = null;
         }
         allocator.release(indexAllocationContext);
@@ -2015,7 +2018,8 @@ public class HashJoinOperator
         if (!(joinIndex instanceof LongJoinIndex) &&
                 !(joinIndex instanceof LongPairJoinIndex) &&
                 !(joinIndex instanceof LongTripleJoinIndex) &&
-                !(joinIndex instanceof StructuralHashJoinIndex)) {
+                !(joinIndex instanceof StructuralHashJoinIndex) &&
+                !(joinIndex instanceof FlatJoinIndex)) {
             return null;
         }
         if (joinIndex instanceof LongJoinIndex longJoinIndex) {
@@ -2037,6 +2041,9 @@ public class HashJoinOperator
         }
         if (joinIndex instanceof StructuralHashJoinIndex structuralHashJoinIndex) {
             return structuralHashJoinIndex.newProbeView();
+        }
+        if (joinIndex instanceof FlatJoinIndex flatJoinIndex) {
+            return flatJoinIndex.newProbeView();
         }
         throw new IllegalStateException("Hash join build is not prepared");
     }
