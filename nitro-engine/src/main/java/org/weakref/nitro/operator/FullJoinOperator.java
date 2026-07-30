@@ -13,7 +13,6 @@
  */
 package org.weakref.nitro.operator;
 
-import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -31,9 +30,7 @@ import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -311,36 +308,49 @@ public final class FullJoinOperator
             return;
         }
 
-        Map<StructuralRowKey, IntArrayList> innerMatches = new HashMap<>();
         int innerRowCount = countRows(innerInput.pages());
         long[] innerRowReferences = arrayPool.borrowLongs(innerRowCount);
+        int[] innerHashNext = arrayPool.borrowInts(innerRowCount);
         boolean[] matchedInnerRows = arrayPool.borrowBooleans(innerRowCount);
+        int[] innerHashHeads = arrayPool.borrowInts(hashTableSize(innerRowCount));
+        Arrays.fill(innerHashHeads, NO_MATCH);
         Arrays.fill(matchedInnerRows, false);
         try {
-            indexInnerRows(innerInput.pages(), innerMatches, innerRowReferences);
+            indexInnerRows(
+                    innerInput.pages(),
+                    innerRowReferences,
+                    innerHashHeads,
+                    innerHashNext);
 
             try (JoinedRows joinedRows = new JoinedRows(arrayPool)) {
                 for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
                     TableOperator.Page page = outerInput.pages().get(outerPageIndex);
-                    StructuralRowKey reusableKey = new StructuralRowKey(
-                            outerJoinColumns, keyKernels, page.columns(), 0);
                     for (int position = 0; position < page.rows(); position++) {
                         long outerRowReference = packRowReference(outerPageIndex, position);
-                        StructuralRowKey key = probeKey(
-                                page.columns(), outerJoinColumns, position, reusableKey);
-                        if (key == null) {
+                        if (keyHasNull(page.columns(), position, outerJoinColumns)) {
                             joinedRows.add(outerRowReference, NO_MATCH);
                             continue;
                         }
-                        IntArrayList matches = innerMatches.get(key);
-                        if (matches == null || matches.isEmpty()) {
-                            joinedRows.add(outerRowReference, NO_MATCH);
-                            continue;
+                        int innerOrdinal = innerHashHeads[
+                                hashKey(page.columns(), outerJoinColumns, position) &
+                                        (innerHashHeads.length - 1)];
+                        boolean matched = false;
+                        while (innerOrdinal != NO_MATCH) {
+                            if (equalKeys(
+                                    outerInput.pages(),
+                                    outerRowReference,
+                                    outerJoinColumns,
+                                    innerInput.pages(),
+                                    innerRowReferences[innerOrdinal],
+                                    innerJoinColumns)) {
+                                matched = true;
+                                matchedInnerRows[innerOrdinal] = true;
+                                joinedRows.add(outerRowReference, innerOrdinal);
+                            }
+                            innerOrdinal = innerHashNext[innerOrdinal];
                         }
-                        for (int index = 0; index < matches.size(); index++) {
-                            int innerOrdinal = matches.getInt(index);
-                            matchedInnerRows[innerOrdinal] = true;
-                            joinedRows.add(outerRowReference, innerOrdinal);
+                        if (!matched) {
+                            joinedRows.add(outerRowReference, NO_MATCH);
                         }
                     }
                 }
@@ -356,7 +366,9 @@ public final class FullJoinOperator
         }
         finally {
             arrayPool.release(innerRowReferences);
+            arrayPool.release(innerHashNext);
             arrayPool.release(matchedInnerRows);
+            arrayPool.release(innerHashHeads);
         }
     }
 
@@ -473,7 +485,10 @@ public final class FullJoinOperator
         for (int keyIndex = 0; keyIndex < leftColumns.length; keyIndex++) {
             Streams leftKey = left[leftColumns[keyIndex]];
             Streams rightKey = right[rightColumns[keyIndex]];
-            if (!comparisonKernels[keyIndex].identical(
+            StructuralIdentityKernel identity = sortedInputs
+                    ? comparisonKernels[keyIndex]
+                    : keyKernels[keyIndex];
+            if (!identity.identical(
                     leftKey.values(), leftKey.getOrNull(Stream.NULLS), leftPosition,
                     rightKey.values(), rightKey.getOrNull(Stream.NULLS), rightPosition)) {
                 return false;
@@ -485,7 +500,11 @@ public final class FullJoinOperator
     private static boolean keyHasNull(List<TableOperator.Page> pages, long reference, int[] joinColumns)
     {
         Streams[] columns = columns(pages, reference);
-        int position = unpackPosition(reference);
+        return keyHasNull(columns, unpackPosition(reference), joinColumns);
+    }
+
+    private static boolean keyHasNull(Streams[] columns, int position, int[] joinColumns)
+    {
         for (int joinColumn : joinColumns) {
             if (OperatorVectorSupport.isNull(columns[joinColumn].getOrNull(Stream.NULLS), position)) {
                 return true;
@@ -516,41 +535,55 @@ public final class FullJoinOperator
 
     private void indexInnerRows(
             List<TableOperator.Page> pages,
-            Map<StructuralRowKey, IntArrayList> innerMatches,
-            long[] innerRowReferences)
+            long[] innerRowReferences,
+            int[] hashHeads,
+            int[] hashNext)
     {
         int innerOrdinal = 0;
         for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
             TableOperator.Page page = pages.get(pageIndex);
             for (int position = 0; position < page.rows(); position++) {
-                innerRowReferences[innerOrdinal] = packRowReference(pageIndex, position);
-                StructuralRowKey key = probeKey(page.columns(), innerJoinColumns, position, null);
-                if (key != null) {
-                    innerMatches.computeIfAbsent(key, ignored -> new IntArrayList())
-                            .add(innerOrdinal);
-                }
-                innerOrdinal++;
+                innerRowReferences[innerOrdinal++] = packRowReference(pageIndex, position);
             }
+        }
+
+        // Insert in reverse row order so each bucket chain preserves the source's
+        // ascending row order, including duplicate-key multiplicity.
+        for (innerOrdinal = innerRowReferences.length - 1; innerOrdinal >= 0; innerOrdinal--) {
+            long reference = innerRowReferences[innerOrdinal];
+            Streams[] columns = columns(pages, reference);
+            int position = unpackPosition(reference);
+            if (keyHasNull(columns, position, innerJoinColumns)) {
+                hashNext[innerOrdinal] = NO_MATCH;
+                continue;
+            }
+            int bucket = hashKey(columns, innerJoinColumns, position) & (hashHeads.length - 1);
+            hashNext[innerOrdinal] = hashHeads[bucket];
+            hashHeads[bucket] = innerOrdinal;
         }
     }
 
-    private StructuralRowKey probeKey(
-            Streams[] columns,
-            int[] joinColumns,
-            int position,
-            StructuralRowKey reusable)
+    private int hashKey(Streams[] columns, int[] joinColumns, int position)
     {
+        int hash = 1;
         for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
-            Streams column = columns[joinColumns[keyIndex]];
-            if (OperatorVectorSupport.isNull(column.getOrNull(Stream.NULLS), position)) {
-                return null;
-            }
+            Streams key = columns[joinColumns[keyIndex]];
+            hash = 31 * hash + Long.hashCode(
+                    keyKernels[keyIndex].hash(key.values(), key.getOrNull(Stream.NULLS), position));
         }
-        if (reusable == null) {
-            return new StructuralRowKey(joinColumns, keyKernels, columns, position);
+        return hash ^ (hash >>> 16);
+    }
+
+    private static int hashTableSize(int rowCount)
+    {
+        int target = Math.max(1, rowCount);
+        if (target == 1) {
+            return 1;
         }
-        reusable.set(columns, position);
-        return reusable;
+        if (target >= (1 << 30)) {
+            return 1 << 30;
+        }
+        return Integer.highestOneBit(target - 1) << 1;
     }
 
     private Streams materializeOutputColumn(Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
@@ -688,68 +721,6 @@ public final class FullJoinOperator
     private static int unpackPosition(long rowReference)
     {
         return (int) rowReference;
-    }
-
-    private static final class StructuralRowKey
-    {
-        private final int[] joinColumns;
-        private final StructuralKeyKernel[] kernels;
-        private Streams[] columns;
-        private int position;
-        private int hash;
-
-        private StructuralRowKey(
-                int[] joinColumns,
-                StructuralKeyKernel[] kernels,
-                Streams[] columns,
-                int position)
-        {
-            this.joinColumns = joinColumns;
-            this.kernels = kernels;
-            set(columns, position);
-        }
-
-        private void set(Streams[] columns, int position)
-        {
-            this.columns = columns;
-            this.position = position;
-            int result = 1;
-            for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
-                Streams key = columns[joinColumns[keyIndex]];
-                result = 31 * result + Long.hashCode(
-                        kernels[keyIndex].hash(key.values(), key.getOrNull(Stream.NULLS), position));
-            }
-            hash = result;
-        }
-
-        @Override
-        public boolean equals(Object object)
-        {
-            if (this == object) {
-                return true;
-            }
-            if (!(object instanceof StructuralRowKey other) ||
-                    kernels != other.kernels ||
-                    joinColumns.length != other.joinColumns.length) {
-                return false;
-            }
-            for (int keyIndex = 0; keyIndex < joinColumns.length; keyIndex++) {
-                Streams left = columns[joinColumns[keyIndex]];
-                Streams right = other.columns[other.joinColumns[keyIndex]];
-                if (!kernels[keyIndex].identical(
-                        left.values(), left.getOrNull(Stream.NULLS), position,
-                        right.values(), right.getOrNull(Stream.NULLS), other.position)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return hash;
-        }
     }
 
     private record MaterializedInput(Streams[] schema, List<TableOperator.Page> pages) {}

@@ -579,6 +579,35 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testFullJoinOperatorPreservesDuplicateMultiplicityAndSourceOrder()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+
+        try (Operator operator = new FullJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 10L),
+                        row(1L, 11L),
+                        row(null, 90L))),
+                new int[] {0},
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row(1L, 30L),
+                        row(1L, 31L),
+                        row(null, 91L))),
+                new int[] {0},
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 10L, 1L, 30L),
+                            row(1L, 10L, 1L, 31L),
+                            row(1L, 11L, 1L, 30L),
+                            row(1L, 11L, 1L, 31L),
+                            row(null, 90L, null, null),
+                            row(null, null, null, 91L));
+        }
+    }
+
+    @Test
     void testFullJoinOperatorCrossesPooledRowReferenceChunkBoundary()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
