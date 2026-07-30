@@ -154,6 +154,27 @@ public final class RegisteredMultiAggregationUnit
         return implementation.result(output, maxGroup, state, existing, allocator, allocationContext);
     }
 
+    @Override
+    public Streams copyResultPosition(
+            int output,
+            int group,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        requireOutput(output);
+        if (outputModes.get(output) == OutputMode.INTERMEDIATE) {
+            return implementation.copyIntermediatePosition(
+                    output, group, maxGroup, state, existing, outputPosition, size, allocator, allocationContext);
+        }
+        return implementation.copyResultPosition(
+                output, group, maxGroup, state, existing, outputPosition, size, allocator, allocationContext);
+    }
+
     private AggregationInput input(StreamAccessor streams)
     {
         return (input, stream) -> {

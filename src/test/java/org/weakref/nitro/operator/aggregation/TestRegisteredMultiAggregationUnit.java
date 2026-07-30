@@ -60,6 +60,10 @@ class TestRegisteredMultiAggregationUnit
                 .isSameAs(implementation.intermediate);
         assertThat(unit.result(1, 0, state, Streams.empty(), null, null))
                 .isSameAs(implementation.result);
+        assertThat(unit.copyResultPosition(0, 3, 7, state, null, 1, 2, null, null))
+                .isSameAs(implementation.copiedIntermediate);
+        assertThat(unit.copyResultPosition(1, 3, 7, state, null, 1, 2, null, null))
+                .isSameAs(implementation.copiedResult);
     }
 
     private static final class TrackingImplementation
@@ -67,6 +71,8 @@ class TestRegisteredMultiAggregationUnit
     {
         private final Streams intermediate = Streams.ofValues(new I64Vector(1));
         private final Streams result = Streams.ofValues(new I64Vector(1));
+        private final Streams copiedIntermediate = Streams.ofValues(new I64Vector(2));
+        private final Streams copiedResult = Streams.ofValues(new I64Vector(2));
         private Vector firstInput;
         private Vector secondInput;
 
@@ -117,6 +123,36 @@ class TestRegisteredMultiAggregationUnit
         public Streams result(int output, int maxGroup, Object state, Streams existing, Allocator allocator, Allocator.Context allocationContext)
         {
             return result;
+        }
+
+        @Override
+        public Streams copyIntermediatePosition(
+                int output,
+                int group,
+                int maxGroup,
+                Object state,
+                Streams existing,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return copiedIntermediate;
+        }
+
+        @Override
+        public Streams copyResultPosition(
+                int output,
+                int group,
+                int maxGroup,
+                Object state,
+                Streams existing,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return copiedResult;
         }
     }
 }

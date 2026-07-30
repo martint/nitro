@@ -88,4 +88,40 @@ public interface AggregationImplementation
     {
         return result(maxGroup, state, existing, allocator, allocationContext);
     }
+
+    /**
+     * Copies one intermediate result position without materializing every group.
+     *
+     * <p>Returning {@code null} requests the engine's full-result fallback.
+     */
+    default Streams copyIntermediatePosition(
+            int group,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
+    /**
+     * Copies one final result position without materializing every group.
+     *
+     * <p>Returning {@code null} requests the engine's full-result fallback.
+     */
+    default Streams copyResultPosition(
+            int group,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
 }

@@ -58,6 +58,8 @@ class TestRegisteredAggregationUnit
         assertThat(implementation.secondInput).isSameAs(first);
         assertThat(rawIntermediate.result(0, 0, state, Streams.empty(), null, null))
                 .isSameAs(implementation.intermediate);
+        assertThat(rawIntermediate.copyResultPosition(0, 3, 7, state, null, 1, 2, null, null))
+                .isSameAs(implementation.copiedIntermediate);
 
         implementation.reset();
         RegisteredAggregationUnit intermediateFinal = new RegisteredAggregationUnit(
@@ -71,6 +73,8 @@ class TestRegisteredAggregationUnit
         assertThat(implementation.firstInput).isSameAs(first);
         assertThat(intermediateFinal.result(0, 0, state, mask, Streams.empty(), null, null))
                 .isSameAs(implementation.result);
+        assertThat(intermediateFinal.copyResultPosition(0, 3, 7, state, null, 1, 2, null, null))
+                .isSameAs(implementation.copiedResult);
     }
 
     @Test
@@ -100,6 +104,8 @@ class TestRegisteredAggregationUnit
     {
         private final Streams intermediate = Streams.ofValues(new I64Vector(1));
         private final Streams result = Streams.ofValues(new I64Vector(1));
+        private final Streams copiedIntermediate = Streams.ofValues(new I64Vector(2));
+        private final Streams copiedResult = Streams.ofValues(new I64Vector(2));
         private boolean raw;
         private boolean intermediateInput;
         private Vector firstInput;
@@ -176,6 +182,34 @@ class TestRegisteredAggregationUnit
                 Allocator.Context allocationContext)
         {
             return result;
+        }
+
+        @Override
+        public Streams copyIntermediatePosition(
+                int group,
+                int maxGroup,
+                Object state,
+                Streams existing,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return copiedIntermediate;
+        }
+
+        @Override
+        public Streams copyResultPosition(
+                int group,
+                int maxGroup,
+                Object state,
+                Streams existing,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            return copiedResult;
         }
 
         private void reset()

@@ -90,4 +90,32 @@ public interface MultiAggregationImplementation
     {
         return result(output, maxGroup, state, existing, allocator, allocationContext);
     }
+
+    default Streams copyIntermediatePosition(
+            int output,
+            int group,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
+    default Streams copyResultPosition(
+            int output,
+            int group,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputPosition,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
 }
