@@ -46,7 +46,8 @@ class TestSemiJoinSession
                         0,
                         true,
                         new Field(Schema.unspecified(1).field(0).type(), true),
-                        SemiJoinOperator.MatchOutputSemantics.SQL_IN)) {
+                        SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                        source -> new LimitOperator(allocator, 3, source))) {
             allocator.beginExecution();
 
             List<Boolean> values = new ArrayList<>();
@@ -57,8 +58,8 @@ class TestSemiJoinSession
             drain(session, values, nulls);
             session.finish();
 
-            assertThat(values).containsExactly(false, true, false, false);
-            assertThat(nulls).containsExactly(true, false, true, true);
+            assertThat(values).containsExactly(false, true, false);
+            assertThat(nulls).containsExactly(true, false, true);
             assertThat(session.isFinished()).isTrue();
             try (Batch late = nullableBatch(4L)) {
                 assertThatIllegalStateException()

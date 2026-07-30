@@ -18,6 +18,8 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.operator.SemiJoinOperator.MatchOutputSemantics;
 
+import java.util.function.UnaryOperator;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -31,7 +33,7 @@ public final class SemiJoinSession
         implements JoinSession
 {
     private final ExternallyScheduledBatchFeed probe;
-    private final SemiJoinOperator semiJoin;
+    private final Operator root;
 
     private Batch output;
     private boolean finishing;
@@ -48,8 +50,33 @@ public final class SemiJoinSession
             Field matchField,
             MatchOutputSemantics matchOutputSemantics)
     {
+        this(
+                operatorResources,
+                allocator,
+                probeSchema,
+                probeJoinColumn,
+                build,
+                buildJoinColumn,
+                includeMatches,
+                matchField,
+                matchOutputSemantics,
+                UnaryOperator.identity());
+    }
+
+    public SemiJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int probeJoinColumn,
+            Operator build,
+            int buildJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
+            UnaryOperator<Operator> outputPipeline)
+    {
         probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
-        semiJoin = new SemiJoinOperator(
+        SemiJoinOperator semiJoin = new SemiJoinOperator(
                 requireNonNull(allocator, "allocator is null"),
                 probe,
                 probeJoinColumn,
@@ -59,12 +86,21 @@ public final class SemiJoinSession
                 requireNonNull(matchField, "matchField is null"),
                 requireNonNull(matchOutputSemantics, "matchOutputSemantics is null"),
                 requireNonNull(operatorResources, "operatorResources is null"));
+        try {
+            root = requireNonNull(
+                    requireNonNull(outputPipeline, "outputPipeline is null").apply(semiJoin),
+                    "outputPipeline returned null");
+        }
+        catch (RuntimeException | Error failure) {
+            semiJoin.close();
+            throw failure;
+        }
     }
 
     @Override
     public Schema outputSchema()
     {
-        return semiJoin.outputSchema();
+        return root.outputSchema();
     }
 
     /**
@@ -92,8 +128,8 @@ public final class SemiJoinSession
         if (!probe.hasInput()) {
             return false;
         }
-        if (semiJoin.hasNext()) {
-            Batch candidate = semiJoin.next();
+        if (root.hasNext()) {
+            Batch candidate = root.next();
             if (!candidate.borrowMask().none()) {
                 output = candidate;
                 return true;
@@ -165,6 +201,6 @@ public final class SemiJoinSession
             output.close();
             output = null;
         }
-        semiJoin.close();
+        root.close();
     }
 }
