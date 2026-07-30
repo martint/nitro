@@ -46,6 +46,12 @@ public final class DistinctPhysicalAggregationUnit
     }
 
     @Override
+    public int stateCapacity(int requiredGroups, int defaultCapacity)
+    {
+        return delegate.stateCapacity(requiredGroups, defaultCapacity);
+    }
+
+    @Override
     public int[] distinctInputColumns()
     {
         return distinctInputColumns.clone();

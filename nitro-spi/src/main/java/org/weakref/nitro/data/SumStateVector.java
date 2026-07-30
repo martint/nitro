@@ -20,9 +20,13 @@ import java.util.Arrays;
 public final class SumStateVector
         implements FlatVector, LongStateUpdate
 {
+    private static final int CHUNK_SHIFT = 10;
+    private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
+    private static final int CHUNK_MASK = CHUNK_SIZE - 1;
+
     private final int length;
-    private final long[] sums;
-    private final boolean[] nulls;
+    private final long[][] sums;
+    private final boolean[][] nulls;
     private final long retainedBytes;
     // Number of slots in [0, length) whose nulls entry is currently true — i.e. groups that
     // are either uninitialised or have only received null-valued inputs so far. Maintained
@@ -34,38 +38,71 @@ public final class SumStateVector
     public SumStateVector(int length)
     {
         this.length = length;
-        this.sums = new long[length];
-        this.nulls = new boolean[length];
-        Arrays.fill(nulls, true);
-        this.retainedBytes = (long) length * Long.BYTES + length;
+        this.sums = new long[chunkCount(length)][];
+        this.nulls = new boolean[sums.length][];
+        long retainedBytes = 0;
+        for (int index = 0; index < sums.length; index++) {
+            int chunkLength = chunkLength(length, index);
+            sums[index] = new long[chunkLength];
+            nulls[index] = new boolean[chunkLength];
+            Arrays.fill(nulls[index], true);
+            retainedBytes += (long) chunkLength * Long.BYTES + chunkLength;
+        }
+        this.retainedBytes = retainedBytes;
         this.nullGroupCount = length;
     }
 
-    private SumStateVector(int length, long[] sums, boolean[] nulls)
+    private SumStateVector(int length, long[][] sums, boolean[][] nulls, long retainedBytes)
     {
         this.length = length;
         this.sums = sums;
         this.nulls = nulls;
-        this.retainedBytes = (long) sums.length * Long.BYTES + nulls.length;
+        this.retainedBytes = retainedBytes;
     }
 
     public static SumStateVector grow(SumStateVector previous, int length)
     {
-        if (length <= previous.sums.length) {
-            // The backing arrays already cover the requested length; widen the logical view.
-            // Slots in [previous.length, length) were filled true (uninitialised) at allocation
-            // time, so they are correctly counted as null groups here.
-            SumStateVector expanded = new SumStateVector(length, previous.sums, previous.nulls);
+        if (previous.length == 0) {
+            return new SumStateVector(length);
+        }
+        int requiredChunkCount = chunkCount(length);
+        if (previous.length < CHUNK_SIZE && length <= CHUNK_SIZE) {
+            long[][] sums = {Arrays.copyOf(previous.sums[0], length)};
+            boolean[][] nulls = {Arrays.copyOf(previous.nulls[0], length)};
+            Arrays.fill(nulls[0], previous.length, length, true);
+            SumStateVector grown = new SumStateVector(length, sums, nulls, (long) length * Long.BYTES + length);
+            grown.nullGroupCount = previous.nullGroupCount + Math.max(0, length - previous.length);
+            return grown;
+        }
+
+        if (requiredChunkCount <= previous.sums.length) {
+            SumStateVector expanded = new SumStateVector(length, previous.sums, previous.nulls, previous.retainedBytes);
             expanded.nullGroupCount = previous.nullGroupCount + Math.max(0, length - previous.length);
             return expanded;
         }
 
-        long[] sums = Arrays.copyOf(previous.sums, length);
-        boolean[] nulls = Arrays.copyOf(previous.nulls, length);
-        // copyOf zero-fills the boolean tail (false); the freshly grown range is uninitialised and
-        // must read as null until initialize() or a non-null input touches it.
-        Arrays.fill(nulls, previous.sums.length, length, true);
-        SumStateVector grown = new SumStateVector(length, sums, nulls);
+        long[][] sums = new long[requiredChunkCount][];
+        boolean[][] nulls = new boolean[requiredChunkCount][];
+        long retainedBytes = 0;
+        int firstNewChunk = 0;
+        if (previous.length >= CHUNK_SIZE) {
+            System.arraycopy(previous.sums, 0, sums, 0, previous.sums.length);
+            System.arraycopy(previous.nulls, 0, nulls, 0, previous.nulls.length);
+            retainedBytes = previous.retainedBytes;
+            firstNewChunk = previous.sums.length;
+        }
+        for (int index = firstNewChunk; index < sums.length; index++) {
+            int chunkLength = chunkLength(length, index);
+            sums[index] = new long[chunkLength];
+            nulls[index] = new boolean[chunkLength];
+            Arrays.fill(nulls[index], true);
+            retainedBytes += (long) chunkLength * Long.BYTES + chunkLength;
+        }
+        if (previous.length < CHUNK_SIZE) {
+            System.arraycopy(previous.sums[0], 0, sums[0], 0, previous.length);
+            System.arraycopy(previous.nulls[0], 0, nulls[0], 0, previous.length);
+        }
+        SumStateVector grown = new SumStateVector(length, sums, nulls, retainedBytes);
         grown.nullGroupCount = previous.nullGroupCount + Math.max(0, length - previous.length);
         return grown;
     }
@@ -85,7 +122,15 @@ public final class SumStateVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        SumStateVector copy = new SumStateVector(length, Arrays.copyOf(sums, sums.length), Arrays.copyOf(nulls, nulls.length));
+        long[][] sums = new long[this.sums.length][];
+        boolean[][] nulls = new boolean[this.nulls.length][];
+        long retainedBytes = 0;
+        for (int index = 0; index < sums.length; index++) {
+            sums[index] = Arrays.copyOf(this.sums[index], this.sums[index].length);
+            nulls[index] = Arrays.copyOf(this.nulls[index], this.nulls[index].length);
+            retainedBytes += (long) sums[index].length * Long.BYTES + nulls[index].length;
+        }
+        SumStateVector copy = new SumStateVector(length, sums, nulls, retainedBytes);
         copy.nullGroupCount = nullGroupCount;
         return allocator.adopt(allocationContext, copy);
     }
@@ -97,9 +142,9 @@ public final class SumStateVector
         int nullCount = 0;
         for (int index = 0; index < positions.length; index++) {
             int position = positions[index];
-            copy.sums[index] = sums[position];
-            boolean isNull = nulls[position];
-            copy.nulls[index] = isNull;
+            copy.setSum(index, sum(position));
+            boolean isNull = isNull(position);
+            copy.setNull(index, isNull);
             if (!isNull) {
                 nullCount++;
             }
@@ -111,8 +156,10 @@ public final class SumStateVector
     @Override
     public void clearForReuse()
     {
-        Arrays.fill(sums, 0);
-        Arrays.fill(nulls, true);
+        for (int index = 0; index < sums.length; index++) {
+            Arrays.fill(sums[index], 0);
+            Arrays.fill(nulls[index], true);
+        }
         nullGroupCount = length;
     }
 
@@ -136,9 +183,11 @@ public final class SumStateVector
 
     public void increment(int index, long value)
     {
-        sums[index] += value;
-        if (nulls[index]) {
-            nulls[index] = false;
+        int chunk = index >> CHUNK_SHIFT;
+        int offset = index & CHUNK_MASK;
+        sums[chunk][offset] += value;
+        if (nulls[chunk][offset]) {
+            nulls[chunk][offset] = false;
             nullGroupCount--;
         }
     }
@@ -151,24 +200,23 @@ public final class SumStateVector
 
     public long sum(int index)
     {
-        return sums[index];
+        return sums[index >> CHUNK_SHIFT][index & CHUNK_MASK];
     }
 
     public boolean isNull(int index)
     {
-        return nulls[index];
+        return nulls[index >> CHUNK_SHIFT][index & CHUNK_MASK];
     }
 
     public void initialize(int offset, int length)
     {
         int end = offset + length;
-        Arrays.fill(sums, offset, end, 0);
-        // Only count transitions from false to true; if the slot was already null, we do not
-        // double-count it (e.g., when initialize() is called over a range that overlaps with the
-        // fresh-array region populated by the constructor/grow()).
         for (int slot = offset; slot < end; slot++) {
-            if (!nulls[slot]) {
-                nulls[slot] = true;
+            int chunk = slot >> CHUNK_SHIFT;
+            int chunkOffset = slot & CHUNK_MASK;
+            sums[chunk][chunkOffset] = 0;
+            if (!nulls[chunk][chunkOffset]) {
+                nulls[chunk][chunkOffset] = true;
                 nullGroupCount++;
             }
         }
@@ -191,8 +239,14 @@ public final class SumStateVector
     public void copySumsTo(I64Vector output, int count)
     {
         int copyLength = Math.min(count, length);
-        if (copyLength > 0) {
-            System.arraycopy(sums, 0, output.values(), 0, copyLength);
+        int outputOffset = 0;
+        for (long[] chunk : sums) {
+            int chunkLength = Math.min(chunk.length, copyLength - outputOffset);
+            if (chunkLength <= 0) {
+                break;
+            }
+            System.arraycopy(chunk, 0, output.values(), outputOffset, chunkLength);
+            outputOffset += chunkLength;
         }
     }
 
@@ -204,8 +258,37 @@ public final class SumStateVector
     public void copyNullsTo(BooleanVector output, int count)
     {
         int copyLength = Math.min(count, length);
-        if (copyLength > 0) {
-            System.arraycopy(nulls, 0, output.values(), 0, copyLength);
+        int outputOffset = 0;
+        for (boolean[] chunk : nulls) {
+            int chunkLength = Math.min(chunk.length, copyLength - outputOffset);
+            if (chunkLength <= 0) {
+                break;
+            }
+            System.arraycopy(chunk, 0, output.values(), outputOffset, chunkLength);
+            outputOffset += chunkLength;
         }
+    }
+
+    private void setSum(int index, long value)
+    {
+        sums[index >> CHUNK_SHIFT][index & CHUNK_MASK] = value;
+    }
+
+    private void setNull(int index, boolean value)
+    {
+        nulls[index >> CHUNK_SHIFT][index & CHUNK_MASK] = value;
+    }
+
+    private static int chunkCount(int length)
+    {
+        return (length + CHUNK_MASK) >> CHUNK_SHIFT;
+    }
+
+    private static int chunkLength(int length, int chunk)
+    {
+        if (length <= CHUNK_SIZE) {
+            return length;
+        }
+        return CHUNK_SIZE;
     }
 }

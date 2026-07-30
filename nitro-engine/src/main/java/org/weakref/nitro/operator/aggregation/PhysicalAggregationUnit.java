@@ -30,6 +30,11 @@ public interface PhysicalAggregationUnit
 {
     int outputCount();
 
+    default int stateCapacity(int requiredGroups, int defaultCapacity)
+    {
+        return defaultCapacity;
+    }
+
     default int[] distinctInputColumns()
     {
         return null;

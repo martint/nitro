@@ -51,6 +51,7 @@ class TestRegisteredAggregationUnit
                 new int[] {7, 2},
                 5);
         assertThat(rawIntermediate.filterInputColumn()).isEqualTo(5);
+        assertThat(rawIntermediate.stateCapacity(17, 32)).isEqualTo(18);
         rawIntermediate.accumulate(state, 3, mask, inputs);
         assertThat(implementation.raw).isTrue();
         assertThat(implementation.firstInput).isSameAs(second);
@@ -103,6 +104,12 @@ class TestRegisteredAggregationUnit
         private boolean intermediateInput;
         private Vector firstInput;
         private Vector secondInput;
+
+        @Override
+        public int stateCapacity(int requiredGroups, int defaultCapacity)
+        {
+            return requiredGroups + 1;
+        }
 
         @Override
         public Object allocate(AggregationExecution execution, int groups)

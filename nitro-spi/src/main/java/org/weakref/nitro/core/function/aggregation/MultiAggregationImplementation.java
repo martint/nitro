@@ -29,6 +29,18 @@ public interface MultiAggregationImplementation
 {
     int outputCount();
 
+    /**
+     * Selects the logical state capacity for a required group count.
+     *
+     * <p>The default preserves the engine's amortized-growth capacity. Implementations backed by
+     * incrementally allocated storage may return {@code requiredGroups} to avoid unused geometric
+     * headroom and whole-state copy peaks.
+     */
+    default int stateCapacity(int requiredGroups, int defaultCapacity)
+    {
+        return defaultCapacity;
+    }
+
     Object allocate(AggregationExecution execution, int groups);
 
     Object grow(Allocator allocator, Allocator.Context allocationContext, Object state, int groups);

@@ -79,6 +79,12 @@ public final class RegisteredAggregationUnit
     }
 
     @Override
+    public int stateCapacity(int requiredGroups, int defaultCapacity)
+    {
+        return implementation.stateCapacity(requiredGroups, defaultCapacity);
+    }
+
+    @Override
     public Object allocate(AggregationExecutionContext context, int size)
     {
         return implementation.allocate(

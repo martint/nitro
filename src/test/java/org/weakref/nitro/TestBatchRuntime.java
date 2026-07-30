@@ -21,6 +21,7 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
+import org.weakref.nitro.data.DoubleStateVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -698,19 +699,42 @@ public class TestBatchRuntime
     @Test
     void testSumStateVectorGrowPreservesValuesWithoutFlatCopy()
     {
-        SumStateVector state = new SumStateVector(4);
+        SumStateVector state = new SumStateVector(1024);
         state.increment(0, 10);
-        state.increment(3, 40);
+        state.increment(1023, 40);
 
-        SumStateVector grown = SumStateVector.grow(state, 8);
+        SumStateVector grown = SumStateVector.grow(state, 1025);
 
-        assertThat(grown.length()).isEqualTo(8);
+        assertThat(grown.length()).isEqualTo(1025);
+        assertThat(grown.retainedBytes()).isEqualTo(state.retainedBytes() * 2);
         assertThat(grown.sum(0)).isEqualTo(10);
         assertThat(grown.isNull(0)).isFalse();
-        assertThat(grown.sum(3)).isEqualTo(40);
-        assertThat(grown.isNull(3)).isFalse();
-        assertThat(grown.sum(7)).isZero();
-        assertThat(grown.isNull(7)).isTrue();
+        assertThat(grown.sum(1023)).isEqualTo(40);
+        assertThat(grown.isNull(1023)).isFalse();
+        assertThat(grown.sum(1024)).isZero();
+        assertThat(grown.isNull(1024)).isTrue();
+
+        state.increment(0, 1);
+        assertThat(grown.sum(0)).isEqualTo(11);
+    }
+
+    @Test
+    void testDoubleStateVectorGrowsBySharingExistingChunks()
+    {
+        DoubleStateVector state = new DoubleStateVector(1024);
+        state.set(0, 1.5);
+        state.set(1023, 4.5);
+
+        DoubleStateVector grown = DoubleStateVector.grow(state, 1025);
+
+        assertThat(grown.length()).isEqualTo(1025);
+        assertThat(grown.retainedBytes()).isEqualTo(state.retainedBytes() * 2);
+        assertThat(grown.get(0)).isEqualTo(1.5);
+        assertThat(grown.get(1023)).isEqualTo(4.5);
+        assertThat(grown.get(1024)).isZero();
+
+        state.add(0, 0.5);
+        assertThat(grown.get(0)).isEqualTo(2.0);
     }
 
     @Test

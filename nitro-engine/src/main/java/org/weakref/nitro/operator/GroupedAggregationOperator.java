@@ -492,7 +492,16 @@ public class GroupedAggregationOperator
         // so use it directly instead of a separate O(rows) scan of the just-assigned group vector.
         maxObservedGroup = inlineGroupingState.groupCount() - 1;
 
-        int newCapacity = Allocator.computeCapacity(toIntExact(maxObservedGroup + 1));
+        int requiredCapacity = toIntExact(maxObservedGroup + 1);
+        int defaultCapacity = Allocator.computeCapacity(requiredCapacity);
+        int newCapacity = requiredCapacity;
+        for (PhysicalAggregationUnit aggregation : aggregations) {
+            int preferredCapacity = aggregation.stateCapacity(requiredCapacity, defaultCapacity);
+            if (preferredCapacity < requiredCapacity) {
+                throw new IllegalArgumentException("aggregation state capacity is less than required group count");
+            }
+            newCapacity = Math.max(newCapacity, preferredCapacity);
+        }
         var streamAccessor = StreamAccessors.forBatch(batch);
         prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
         accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
