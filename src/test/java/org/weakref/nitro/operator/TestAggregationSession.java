@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.DistinctPhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.List;
@@ -75,5 +76,37 @@ class TestAggregationSession
                         .containsExactly(0);
             }
         }
+    }
+
+    @Test
+    void testDistinctAggregationAcrossBatches()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                AggregationSession session = new AggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        PhysicalAggregationProgram.singleUnit(
+                                new DistinctPhysicalAggregationUnit(new CountAll(), new int[] {0})),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            try (Batch first = values(11, 12, 11);
+                    Batch second = values(12, 13, 13)) {
+                session.addInput(first);
+                session.addInput(second);
+            }
+
+            try (Batch result = session.finish()) {
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(3);
+            }
+        }
+    }
+
+    private static Batch values(long... values)
+    {
+        return new Batch(
+                Mask.all(values.length),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(values))));
     }
 }

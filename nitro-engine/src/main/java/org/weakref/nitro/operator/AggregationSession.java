@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
@@ -41,13 +42,17 @@ public final class AggregationSession
     private final Allocator allocator;
     private final Allocator.Context allocationContext;
     private final AggregationExecutionContext aggregationExecutionContext;
+    private final OperatorResources operatorResources;
     private final boolean deferResultMaterialization;
     private final PhysicalAggregationProgram program;
     private final List<PhysicalAggregationUnit> units;
+    private final PhysicalAggregationUnit[] unitArray;
+    private final DistinctAggregationPlan distinctAggregationPlan;
     private final int[][] outputsByUnit;
     private final Streams[] reusableResults;
 
     private Object[] state;
+    private I64Vector singleGroupIds;
     private boolean materialized;
     private boolean finished;
     private boolean closed;
@@ -60,7 +65,7 @@ public final class AggregationSession
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.program = requireNonNull(program, "program is null");
-        operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         AggregationOperatorResources aggregationResources = operatorResources.aggregation();
         allocationContext = new Allocator.Context(
                 "AggregationSession",
@@ -75,6 +80,8 @@ public final class AggregationSession
                 requireNonNull(inputSchema, "inputSchema is null"));
         deferResultMaterialization = aggregationResources.policy().deferResultMaterialization();
         units = program.units();
+        unitArray = units.toArray(PhysicalAggregationUnit[]::new);
+        distinctAggregationPlan = DistinctAggregationPlan.plan(unitArray, false, inputSchema);
         outputsByUnit = outputsByUnit(program);
         reusableResults = new Streams[program.outputs().size()];
     }
@@ -93,21 +100,65 @@ public final class AggregationSession
         if (mask.none()) {
             return;
         }
-        for (int unit = 0; unit < units.size(); unit++) {
-            PhysicalAggregationUnit aggregationUnit = units.get(unit);
+        var streamAccessor = StreamAccessors.forBatch(batch);
+        for (int unit : distinctAggregationPlan.plainAggregationIndexes()) {
+            PhysicalAggregationUnit aggregationUnit = unitArray[unit];
+            aggregationUnit.accumulate(state[unit], 0, mask, streamAccessor);
+        }
+        for (int unit : distinctAggregationPlan.filteredAggregationIndexes()) {
+            PhysicalAggregationUnit aggregationUnit = unitArray[unit];
             int filterColumn = aggregationUnit.filterInputColumn();
-            Mask aggregationMask = filterColumn < 0 ? mask : filterMask(batch, filterColumn, mask);
+            Mask aggregationMask = filterMask(batch, filterColumn, mask);
             try {
-                aggregationUnit.accumulate(state[unit], 0, aggregationMask, StreamAccessors.forBatch(batch));
+                aggregationUnit.accumulate(state[unit], 0, aggregationMask, streamAccessor);
             }
             finally {
                 if (aggregationMask != mask) {
                     allocator.release(allocationContext, aggregationMask);
                 }
             }
-            if (!deferResultMaterialization) {
-                materializeUnitResults(unit);
+        }
+        if (distinctAggregationPlan.distinctAggregationGroups().length > 0) {
+            singleGroupIds = allocator.allocateOrGrow(
+                    allocationContext,
+                    singleGroupIds,
+                    I64Vector.class,
+                    mask.size(),
+                    I64Vector::new);
+            for (DistinctAggregationPlan.Group distinctGroup : distinctAggregationPlan.distinctAggregationGroups()) {
+                Mask distinctMask = distinctGroup.select(
+                        singleGroupIds,
+                        mask,
+                        streamAccessor,
+                        1,
+                        allocator,
+                        allocationContext,
+                        operatorResources.codeGeneration(),
+                        operatorResources.distinctKeySetPolicy(),
+                        operatorResources.adaptiveLongGroupingPolicy(),
+                        operatorResources.flatKeyTablePolicy());
+                try {
+                    for (int unit : distinctGroup.aggregationIndexes()) {
+                        PhysicalAggregationUnit aggregationUnit = unitArray[unit];
+                        int filterColumn = aggregationUnit.filterInputColumn();
+                        Mask aggregationMask = filterColumn < 0 ? distinctMask : filterMask(batch, filterColumn, distinctMask);
+                        try {
+                            aggregationUnit.accumulateDistinctSelected(state[unit], 0, aggregationMask, streamAccessor);
+                        }
+                        finally {
+                            if (aggregationMask != distinctMask) {
+                                allocator.release(allocationContext, aggregationMask);
+                            }
+                        }
+                    }
+                }
+                finally {
+                    allocator.release(allocationContext, distinctMask);
+                }
             }
+        }
+        if (!deferResultMaterialization) {
+            materializeResults();
         }
     }
 
@@ -227,6 +278,7 @@ public final class AggregationSession
             return;
         }
         closed = true;
+        distinctAggregationPlan.releaseBuffers();
         allocator.release(allocationContext);
     }
 }

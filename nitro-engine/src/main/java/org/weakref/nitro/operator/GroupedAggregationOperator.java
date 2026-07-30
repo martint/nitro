@@ -23,7 +23,6 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
-import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -39,9 +38,7 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import static java.lang.Math.toIntExact;
@@ -85,7 +82,7 @@ public class GroupedAggregationOperator
     private final PhysicalAggregationUnit[] aggregations;
     private final int[] plainAggregationIndexes;
     private final int[] filteredAggregationIndexes;
-    private final DistinctAggregationGroup[] distinctAggregationGroups;
+    private final DistinctAggregationPlan.Group[] distinctAggregationGroups;
     private final Operator source;
     private final Streams[] groupedResults;
     private final Streams[] result;
@@ -277,7 +274,7 @@ public class GroupedAggregationOperator
         this.program = requireNonNull(program, "program is null");
         this.outputSchema = outputSchema(source.outputSchema(), this.groupedColumns, program.outputSchema());
         this.aggregations = program.units().toArray(PhysicalAggregationUnit[]::new);
-        DistinctAggregationPlan distinctAggregationPlan = planDistinctAggregations(
+        DistinctAggregationPlan distinctAggregationPlan = DistinctAggregationPlan.plan(
                 this.aggregations,
                 groupPartitionedLongDistinct,
                 source.outputSchema());
@@ -913,7 +910,7 @@ public class GroupedAggregationOperator
 
     private void accumulateDistinctGroupedRows(Batch batch, I64Vector groups, Mask mask, org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor, int groupCount)
     {
-        for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
+        for (DistinctAggregationPlan.Group distinctAggregationGroup : distinctAggregationGroups) {
             Mask distinctMask = distinctAggregationGroup.select(
                     groups,
                     mask,
@@ -1178,7 +1175,7 @@ public class GroupedAggregationOperator
         if (inlineGroupingState != null) {
             inlineGroupingState.releaseBuffers();
         }
-        for (DistinctAggregationGroup distinctAggregationGroup : distinctAggregationGroups) {
+        for (DistinctAggregationPlan.Group distinctAggregationGroup : distinctAggregationGroups) {
             distinctAggregationGroup.releaseBuffers();
         }
         if (inlineGroupValues != null) {
@@ -1207,186 +1204,5 @@ public class GroupedAggregationOperator
             indexes[outputIndex] = groupedKeyIndex;
         }
         return indexes;
-    }
-
-    private static DistinctAggregationPlan planDistinctAggregations(
-            PhysicalAggregationUnit[] aggregations,
-            boolean groupPartitionedLongDistinct,
-            Schema sourceSchema)
-    {
-        List<Integer> plainAggregationIndexes = new ArrayList<>();
-        List<Integer> filteredAggregationIndexes = new ArrayList<>();
-        Map<DistinctSignature, List<Integer>> aggregationIndexesBySignature = new LinkedHashMap<>();
-        for (int aggregationIndex = 0; aggregationIndex < aggregations.length; aggregationIndex++) {
-            int[] distinctInputColumns = aggregations[aggregationIndex].distinctInputColumns();
-            if (distinctInputColumns == null || distinctInputColumns.length == 0) {
-                if (aggregations[aggregationIndex].filterInputColumn() < 0) {
-                    plainAggregationIndexes.add(aggregationIndex);
-                }
-                else {
-                    filteredAggregationIndexes.add(aggregationIndex);
-                }
-                continue;
-            }
-            aggregationIndexesBySignature.computeIfAbsent(new DistinctSignature(distinctInputColumns), _ -> new ArrayList<>())
-                    .add(aggregationIndex);
-        }
-
-        DistinctAggregationGroup[] distinctAggregationGroups = aggregationIndexesBySignature.entrySet().stream()
-                .map(entry -> new DistinctAggregationGroup(
-                        entry.getKey().inputColumns(),
-                        entry.getValue().stream().mapToInt(Integer::intValue).toArray(),
-                        groupPartitionedLongDistinct,
-                        distinctTypes(sourceSchema, entry.getKey().inputColumns())))
-                .toArray(DistinctAggregationGroup[]::new);
-
-        return new DistinctAggregationPlan(
-                plainAggregationIndexes.stream().mapToInt(Integer::intValue).toArray(),
-                filteredAggregationIndexes.stream().mapToInt(Integer::intValue).toArray(),
-                distinctAggregationGroups);
-    }
-
-    private record DistinctAggregationPlan(int[] plainAggregationIndexes, int[] filteredAggregationIndexes, DistinctAggregationGroup[] distinctAggregationGroups) {}
-
-    private static List<TypeBinding> distinctTypes(Schema schema, int[] inputColumns)
-    {
-        for (int column : inputColumns) {
-            if (column < 0 || column >= schema.size()) {
-                return List.of();
-            }
-        }
-        return Arrays.stream(inputColumns)
-                .mapToObj(column -> schema.field(column).type())
-                .toList();
-    }
-
-    private record DistinctSignature(int[] inputColumns)
-    {
-        private DistinctSignature
-        {
-            inputColumns = inputColumns.clone();
-        }
-
-        @Override
-        public boolean equals(Object other)
-        {
-            return other instanceof DistinctSignature signature && java.util.Arrays.equals(inputColumns, signature.inputColumns);
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return java.util.Arrays.hashCode(inputColumns);
-        }
-    }
-
-    private static final class DistinctAggregationGroup
-    {
-        private static final int[] EMPTY_POSITIONS = new int[0];
-        private final int[] inputColumns;
-        private final int[] aggregationIndexes;
-        private final boolean groupPartitionedLongDistinct;
-        private final List<TypeBinding> inputTypes;
-        private final Vector[] values;
-        private final Vector[] nulls;
-        private DistinctKeySet distinctKeySet;
-        private PrimitiveArrayPool arrayPool;
-        private int[] distinctPositions = EMPTY_POSITIONS;
-
-        private DistinctAggregationGroup(
-                int[] inputColumns,
-                int[] aggregationIndexes,
-                boolean groupPartitionedLongDistinct,
-                List<TypeBinding> inputTypes)
-        {
-            this.inputColumns = inputColumns.clone();
-            this.aggregationIndexes = aggregationIndexes;
-            this.groupPartitionedLongDistinct = groupPartitionedLongDistinct;
-            this.inputTypes = List.copyOf(inputTypes);
-            this.values = new Vector[inputColumns.length + 1];
-            this.nulls = new Vector[inputColumns.length + 1];
-        }
-
-        public int[] aggregationIndexes()
-        {
-            return aggregationIndexes;
-        }
-
-        public Mask select(
-                I64Vector groups,
-                Mask mask,
-                org.weakref.nitro.operator.aggregation.StreamAccessor streamAccessor,
-                int groupCount,
-                Allocator allocator,
-                Allocator.Context allocationContext,
-                OperatorCodeGenerationResources codeGeneration,
-                DistinctKeySetPolicy distinctKeySetPolicy,
-                AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy,
-                FlatKeyTablePolicy flatKeyTablePolicy)
-        {
-            arrayPool = allocator.primitiveArrays();
-            if (mask.none()) {
-                return allocator.allocateSparseMask(allocationContext, EMPTY_POSITIONS, mask.size());
-            }
-
-            values[0] = groups;
-            if (distinctPositions.length < mask.selectedCount()) {
-                int[] previous = distinctPositions;
-                distinctPositions = arrayPool.borrowInts(mask.selectedCount());
-                arrayPool.release(previous);
-            }
-
-            try {
-                for (int index = 0; index < inputColumns.length; index++) {
-                    values[index + 1] = streamAccessor.values(inputColumns[index]);
-                    nulls[index + 1] = streamAccessor.nulls(inputColumns[index]);
-                }
-                if (distinctKeySet == null) {
-                    distinctKeySet = groupPartitionedLongDistinct && inputColumns.length == 1
-                            ? DistinctKeySet.createGroupedLong(
-                                    values,
-                                    inputTypes,
-                                    allocator,
-                                    allocationContext,
-                                    arrayPool,
-                                    codeGeneration,
-                                    distinctKeySetPolicy,
-                                    adaptiveLongGroupingPolicy,
-                                    flatKeyTablePolicy)
-                            : DistinctKeySet.createWithUnboundPrefix(
-                                    values,
-                                    false,
-                                    1,
-                                    inputTypes,
-                                    allocator,
-                                    allocationContext,
-                                    arrayPool,
-                                    codeGeneration,
-                                    distinctKeySetPolicy,
-                                    adaptiveLongGroupingPolicy,
-                                    flatKeyTablePolicy);
-                }
-                int selectedCount = distinctKeySet.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
-                return allocator.allocateSparseMask(allocationContext, distinctPositions, selectedCount, mask.size());
-            }
-            finally {
-                Arrays.fill(values, null);
-                Arrays.fill(nulls, null);
-            }
-        }
-
-        private void releaseBuffers()
-        {
-            if (distinctKeySet != null) {
-                distinctKeySet.releaseBuffers();
-                distinctKeySet = null;
-            }
-            if (arrayPool != null) {
-                arrayPool.release(distinctPositions);
-            }
-            distinctPositions = EMPTY_POSITIONS;
-            Arrays.fill(values, null);
-            Arrays.fill(nulls, null);
-        }
     }
 }
