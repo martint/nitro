@@ -71,8 +71,12 @@ public final class IfUtf8
         int totalBytes = 0;
         if (requestedStreams.contains(Stream.VALUES)) {
             for (int position : mask) {
-                VectorAccess.BinaryValues selected = conditionValue(conditionValues, conditionNulls, position) ? trueBranchValues : falseBranchValues;
-                totalBytes += selected.value(position).length();
+                boolean takeTrue = conditionValue(conditionValues, conditionNulls, position);
+                Vector selectedNulls = takeTrue ? trueNulls : falseNulls;
+                if (!VectorAccess.isNull(selectedNulls, position)) {
+                    VectorAccess.BinaryValues selected = takeTrue ? trueBranchValues : falseBranchValues;
+                    totalBytes = Math.addExact(totalBytes, selected.value(position).length());
+                }
             }
         }
 

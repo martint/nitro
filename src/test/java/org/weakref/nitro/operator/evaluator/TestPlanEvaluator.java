@@ -1034,6 +1034,48 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testIfUtf8DoesNotSizeOutputFromNullBranchPayload()
+    {
+        Variable selected = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(selected, new Call("if_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(new Reference(selected, Stream.VALUES)));
+
+        BinaryVector trueValues = new BinaryVector(
+                2,
+                new int[] {0, 5, 5},
+                "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        trueValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        // Bytes under a null position are semantically undefined. A lazy producer is therefore allowed to leave
+        // offsets that cannot be used as a value; IF must inspect the selected null stream before sizing its output.
+        BinaryVector falseValues = new BinaryVector(
+                2,
+                new int[] {0, 5, 0},
+                new byte[5]);
+        falseValues.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(2),
+                        new Reference(new Input(1), Stream.VALUES), trueValues,
+                        new Reference(new Input(1), Stream.NULLS), new BooleanVector(2),
+                        new Reference(new Input(2), Stream.VALUES), falseValues,
+                        new Reference(new Input(2), Stream.NULLS), new BooleanVector(new boolean[] {false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        BinaryVector values = (BinaryVector) evaluator.evaluate(new Reference(selected, Stream.VALUES), Mask.all(2)).values();
+        assertThat(utf8(values, 0)).isEqualTo("alpha");
+        assertThat(values.length(1)).isZero();
+    }
+
+    @Test
     void testExtractHostUtf8SparseMaskKeepsOffsetsAligned()
     {
         Variable host = new Variable(0);
