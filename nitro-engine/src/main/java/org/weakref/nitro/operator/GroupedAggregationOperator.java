@@ -115,6 +115,11 @@ public class GroupedAggregationOperator
     private boolean debugFusedReuseContinuationPrinted;
     private boolean debugFusedConstantRunsPrinted;
 
+    long retainedBytes()
+    {
+        return allocator.currentBytes(allocationContext);
+    }
+
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
     {
         this(allocator, groupColumn, PhysicalAggregationProgram.independent(aggregations), source, EngineResources.from(allocator).operatorResources());

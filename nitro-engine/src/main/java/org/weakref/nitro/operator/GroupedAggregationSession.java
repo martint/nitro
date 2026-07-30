@@ -89,6 +89,18 @@ public final class GroupedAggregationSession
         return currentAggregation != null ? currentAggregation.outputSchema() : initialAggregationBatchBuilder.outputSchema();
     }
 
+    @Override
+    public long retainedBytes()
+    {
+        if (currentAggregation != null) {
+            return currentAggregation.retainedBytes();
+        }
+        if (flushedAggregation != null) {
+            return flushedAggregation.retainedBytes();
+        }
+        return 0;
+    }
+
     public void addInput(Batch batch)
     {
         addInput(batch, 0);

@@ -91,6 +91,12 @@ public final class AggregationSession
         return program.outputSchema();
     }
 
+    @Override
+    public long retainedBytes()
+    {
+        return allocator.currentBytes(allocationContext);
+    }
+
     public void addInput(Batch batch)
     {
         requireNonNull(batch, "batch is null");

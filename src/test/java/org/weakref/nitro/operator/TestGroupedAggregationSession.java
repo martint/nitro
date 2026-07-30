@@ -38,12 +38,46 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class TestGroupedAggregationSession
 {
+    @Test
+    void testRetainedBytesExcludeReleasedAllocatorPool()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch input = batch(LongStream.range(0, 100_000).toArray())) {
+                session.addInput(input);
+            }
+            long firstAggregationBytes = session.retainedBytes();
+            assertThat(firstAggregationBytes).isPositive();
+            session.flush();
+            try (Batch ignored = session.getOutput()) {
+                // Closing the output permits the flushed aggregation to be released by the next input.
+            }
+
+            try (Batch input = batch(1)) {
+                session.addInput(input);
+            }
+            assertThat(session.retainedBytes()).isLessThan(firstAggregationBytes);
+            assertThat(allocator.residentBytes()).isGreaterThan(session.retainedBytes());
+        }
+    }
+
     @Test
     void testAdaptivePartialAggregationFlushAndPassthrough()
     {

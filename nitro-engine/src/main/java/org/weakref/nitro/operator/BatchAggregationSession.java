@@ -45,6 +45,11 @@ public interface BatchAggregationSession
         throw new UnsupportedOperationException("aggregation session cannot flush");
     }
 
+    /**
+     * Bytes retained by live aggregation state, excluding reusable allocator pools.
+     */
+    long retainedBytes();
+
     Batch finish();
 
     @Override
