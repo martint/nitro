@@ -46,7 +46,9 @@ class TestRegisteredMultiAggregationUnit
         RegisteredMultiAggregationUnit unit = new RegisteredMultiAggregationUnit(
                 implementation,
                 List.of(INTERMEDIATE, FINAL),
-                new int[] {7, 2});
+                new int[] {7, 2},
+                4);
+        assertThat(unit.filterInputColumn()).isEqualTo(4);
         Object state = new Object();
 
         unit.accumulate(state, 3, Mask.all(1), inputs);

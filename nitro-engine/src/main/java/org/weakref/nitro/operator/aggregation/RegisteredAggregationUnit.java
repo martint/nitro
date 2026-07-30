@@ -35,6 +35,7 @@ public final class RegisteredAggregationUnit
     private final InputMode inputMode;
     private final OutputMode outputMode;
     private final int[] inputColumns;
+    private final int filterInputColumn;
 
     public RegisteredAggregationUnit(
             AggregationImplementation implementation,
@@ -42,13 +43,33 @@ public final class RegisteredAggregationUnit
             OutputMode outputMode,
             int[] inputColumns)
     {
+        this(implementation, inputMode, outputMode, inputColumns, -1);
+    }
+
+    public RegisteredAggregationUnit(
+            AggregationImplementation implementation,
+            InputMode inputMode,
+            OutputMode outputMode,
+            int[] inputColumns,
+            int filterInputColumn)
+    {
         this.implementation = requireNonNull(implementation, "implementation is null");
         this.inputMode = requireNonNull(inputMode, "inputMode is null");
         this.outputMode = requireNonNull(outputMode, "outputMode is null");
         this.inputColumns = requireNonNull(inputColumns, "inputColumns is null").clone();
+        this.filterInputColumn = filterInputColumn;
+        if (filterInputColumn < -1) {
+            throw new IllegalArgumentException("filter input column is less than -1");
+        }
         if (Arrays.stream(this.inputColumns).anyMatch(column -> column < 0)) {
             throw new IllegalArgumentException("input column is negative");
         }
+    }
+
+    @Override
+    public int filterInputColumn()
+    {
+        return filterInputColumn;
     }
 
     @Override

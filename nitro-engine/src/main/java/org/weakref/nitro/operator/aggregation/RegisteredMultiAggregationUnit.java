@@ -35,17 +35,31 @@ public final class RegisteredMultiAggregationUnit
     private final MultiAggregationImplementation implementation;
     private final List<OutputMode> outputModes;
     private final int[] inputColumns;
+    private final int filterInputColumn;
 
     public RegisteredMultiAggregationUnit(
             MultiAggregationImplementation implementation,
             List<OutputMode> outputModes,
             int[] inputColumns)
     {
+        this(implementation, outputModes, inputColumns, -1);
+    }
+
+    public RegisteredMultiAggregationUnit(
+            MultiAggregationImplementation implementation,
+            List<OutputMode> outputModes,
+            int[] inputColumns,
+            int filterInputColumn)
+    {
         this.implementation = requireNonNull(implementation, "implementation is null");
         this.outputModes = requireNonNull(outputModes, "outputModes is null").stream()
                 .map(mode -> requireNonNull(mode, "outputModes contains null"))
                 .toList();
         this.inputColumns = requireNonNull(inputColumns, "inputColumns is null").clone();
+        this.filterInputColumn = filterInputColumn;
+        if (filterInputColumn < -1) {
+            throw new IllegalArgumentException("filter input column is less than -1");
+        }
         if (implementation.outputCount() < 1) {
             throw new IllegalArgumentException("implementation has no outputs");
         }
@@ -55,6 +69,12 @@ public final class RegisteredMultiAggregationUnit
         if (Arrays.stream(this.inputColumns).anyMatch(column -> column < 0)) {
             throw new IllegalArgumentException("input column is negative");
         }
+    }
+
+    @Override
+    public int filterInputColumn()
+    {
+        return filterInputColumn;
     }
 
     @Override

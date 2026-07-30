@@ -48,7 +48,9 @@ class TestRegisteredAggregationUnit
                 implementation,
                 RAW,
                 RegisteredAggregationUnit.OutputMode.INTERMEDIATE,
-                new int[] {7, 2});
+                new int[] {7, 2},
+                5);
+        assertThat(rawIntermediate.filterInputColumn()).isEqualTo(5);
         rawIntermediate.accumulate(state, 3, mask, inputs);
         assertThat(implementation.raw).isTrue();
         assertThat(implementation.firstInput).isSameAs(second);
@@ -62,6 +64,7 @@ class TestRegisteredAggregationUnit
                 RegisteredAggregationUnit.InputMode.INTERMEDIATE,
                 FINAL,
                 new int[] {2});
+        assertThat(intermediateFinal.filterInputColumn()).isEqualTo(-1);
         intermediateFinal.accumulate(state, new I64Vector(new long[] {0}), mask, inputs);
         assertThat(implementation.intermediateInput).isTrue();
         assertThat(implementation.firstInput).isSameAs(first);
