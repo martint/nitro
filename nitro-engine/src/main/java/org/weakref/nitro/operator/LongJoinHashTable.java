@@ -105,6 +105,16 @@ final class LongJoinHashTable
         return duplicates;
     }
 
+    long retainedBytes()
+    {
+        long bytes = keys == null ? 0 : (long) keys.length * Long.BYTES;
+        bytes += tags == null ? 0 : tags.length;
+        bytes += heads == null ? 0 : (long) heads.length * Integer.BYTES;
+        bytes += tails == null ? 0 : (long) tails.length * Integer.BYTES;
+        bytes += counts == null ? 0 : (long) counts.length * Integer.BYTES;
+        return bytes;
+    }
+
     int findSlot(long key)
     {
         ensureAllocated();

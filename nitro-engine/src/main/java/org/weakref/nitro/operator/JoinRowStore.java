@@ -74,6 +74,14 @@ final class JoinRowStore
         return referencesFit32;
     }
 
+    long retainedBytes()
+    {
+        long bytes = references == null ? 0 : (long) references.length * Long.BYTES;
+        bytes += compactReferences == null ? 0 : (long) compactReferences.length * Integer.BYTES;
+        bytes += next == null ? 0 : (long) next.length * Integer.BYTES;
+        return bytes;
+    }
+
     void observeReference(long reference)
     {
         if (!referencesFit32) {

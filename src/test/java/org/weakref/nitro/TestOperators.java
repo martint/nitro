@@ -5100,6 +5100,26 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinAccountsScratchAndSingleLongIndexMemory()
+    {
+        Allocator.Context operatorContext = new Allocator.Context("HashJoinOperator");
+        Allocator.Context indexContext = new Allocator.Context("HashJoinOperatorIndex");
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(4L))),
+                0)) {
+            assertThat(allocator.currentBytes(operatorContext)).isPositive();
+            try (Batch ignored = join.next()) {
+                assertThat(allocator.peakBytes(indexContext)).isPositive();
+            }
+        }
+        assertThat(allocator.currentBytes(operatorContext)).isZero();
+        assertThat(allocator.currentBytes(indexContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();

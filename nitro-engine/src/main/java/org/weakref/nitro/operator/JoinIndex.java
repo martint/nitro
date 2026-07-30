@@ -220,5 +220,10 @@ abstract class JoinIndex
         throw new UnsupportedOperationException();
     }
 
+    long retainedBytes()
+    {
+        return 0;
+    }
+
     void releaseBuffers() {}
 }

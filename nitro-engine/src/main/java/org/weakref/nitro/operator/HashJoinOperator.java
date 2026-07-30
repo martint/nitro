@@ -143,6 +143,7 @@ public class HashJoinOperator
     // contexts by this stable name. Build ownership is still isolated below by a distinct scope and name.
     private final Allocator.Context allocationContext;
     private final Allocator.Context buildAllocationContext;
+    private final Allocator.Context indexAllocationContext;
     private final VectorAllocator typeVectorAllocator;
     private final Operator outer;
     private Operator probeSource;
@@ -421,9 +422,14 @@ public class HashJoinOperator
                 "HashJoinOperatorBuild",
                 allocationPoolGroup,
                 allocationCompatibilityGroup);
+        this.indexAllocationContext = new Allocator.Context(
+                "HashJoinOperatorIndex",
+                allocationPoolGroup,
+                allocationCompatibilityGroup);
         this.arrayPool = allocator.primitiveArrays();
         allocator.register(allocationContext);
         allocator.register(buildAllocationContext);
+        allocator.register(indexAllocationContext);
         this.typeVectorAllocator = allocator.vectorAllocator(allocationContext);
         this.outer = outer;
         this.probeSource = outer;
@@ -500,6 +506,7 @@ public class HashJoinOperator
         this.preparedSingleRefs32 = joinScratch.preparedSingleRefs32;
         this.preparedRangeStarts = joinScratch.preparedRangeStarts;
         this.preparedRangeCounts = joinScratch.preparedRangeCounts;
+        accountJoinScratch();
         this.preparedOuterMatches = new LongList[maxBatchRows];
         this.currentOutputs = new Streams[totalOutputCount];
         this.buildKeysViable = allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
@@ -851,6 +858,7 @@ public class HashJoinOperator
                             preparedOuterPositions, preparedOuterCount, preparedRangeStarts, preparedRangeCounts)) {
                         throw new IllegalStateException("Compacted range index stopped supporting row ranges");
                     }
+                    accountJoinIndex();
                 }
                 currentOuterPosition = preparedOuterPositions[preparedOuterIndex];
                 currentMatchRangeStart = preparedRangeStarts[preparedOuterIndex];
@@ -919,6 +927,7 @@ public class HashJoinOperator
                 outputOuterPositions,
                 outputInnerLogicalPositions,
                 outputPosition);
+        accountJoinIndex();
         currentOuterMaskIndex += probeCount;
         outerRemaining -= probeCount;
         return emitted;
@@ -957,6 +966,7 @@ public class HashJoinOperator
         else {
             joinIndex.matchRows(currentOuterJoinValues, currentOuterJoinNulls, currentOuterJoinHasNulls, preparedOuterPositions, preparedOuterCount, preparedOuterMatches, preparedSingleMatches());
         }
+        accountJoinIndex();
         cacheOrderedInnerFilterPayload();
     }
 
@@ -1439,6 +1449,7 @@ public class HashJoinOperator
                         hasNulls,
                         mask,
                         batchIndex)) {
+                    accountJoinIndex();
                     batchIndex++;
                     continue;
                 }
@@ -1456,6 +1467,7 @@ public class HashJoinOperator
                         collectKeys = !buildKeysAbandoned;
                     }
                 }
+                accountJoinIndex();
                 batchIndex++;
             }
         }
@@ -1808,6 +1820,7 @@ public class HashJoinOperator
                 startPosition,
                 length,
                 batchIndex)) {
+            accountJoinIndex();
             return;
         }
         for (int position = startPosition; position < startPosition + length; position++) {
@@ -1822,6 +1835,14 @@ public class HashJoinOperator
                 collectBuildKeys(buildKeyAccessors, joinNulls, hasNulls, sourcePosition);
                 collectKeys = !buildKeysAbandoned;
             }
+        }
+        accountJoinIndex();
+    }
+
+    private void accountJoinIndex()
+    {
+        if (joinIndex != null) {
+            allocator.setRetainedBytes(indexAllocationContext, joinIndex, joinIndex.retainedBytes());
         }
     }
 
@@ -1927,6 +1948,7 @@ public class HashJoinOperator
             joinIndex.releaseBuffers();
             joinIndex = null;
         }
+        allocator.release(indexAllocationContext);
         bufferedInner.releaseBuffers();
         for (BuildDictionary dictionary : buildDictionaries.values()) {
             releaseBuildDictionaryIds(dictionary.idByPosition());
@@ -2201,6 +2223,7 @@ public class HashJoinOperator
     {
         if (joinScratch.outputInnerSourcePositions == null) {
             joinScratch.outputInnerSourcePositions = new int[executionPolicy.maxBatchRows()];
+            accountJoinScratch();
         }
         return joinScratch.outputInnerSourcePositions;
     }
@@ -2209,6 +2232,7 @@ public class HashJoinOperator
     {
         if (joinScratch.outputInnerUniqueSourcePositions == null) {
             joinScratch.outputInnerUniqueSourcePositions = new int[executionPolicy.maxBatchRows()];
+            accountJoinScratch();
         }
         return joinScratch.outputInnerUniqueSourcePositions;
     }
@@ -2217,8 +2241,14 @@ public class HashJoinOperator
     {
         if (joinScratch.retainedInnerMaskPositionsScratch == null) {
             joinScratch.retainedInnerMaskPositionsScratch = new int[executionPolicy.maxBatchRows()];
+            accountJoinScratch();
         }
         return joinScratch.retainedInnerMaskPositionsScratch;
+    }
+
+    private void accountJoinScratch()
+    {
+        allocator.setRetainedBytes(allocationContext, joinScratch, joinScratch.retainedBytes());
     }
 
     private Streams materializeOutput(int outputIndex)
@@ -3735,6 +3765,12 @@ public class HashJoinOperator
                 directBuild.initialize(directCapacity);
                 denseSequence.disableKeyCandidate();
             }
+        }
+
+        @Override
+        long retainedBytes()
+        {
+            return Math.addExact(hashTable.retainedBytes(), rows.retainedBytes());
         }
 
         @Override
