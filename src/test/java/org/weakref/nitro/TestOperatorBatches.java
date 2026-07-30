@@ -723,6 +723,46 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorOrdersAndMaterializesAcrossInputPages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator source = new TableOperator(
+                3,
+                List.of(
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2, 1, 1}),
+                                        new I64Vector(new long[] {2, 2, 1}),
+                                        new I64Vector(new long[] {20, 12, 11})},
+                                Mask.all(3)),
+                        TableOperator.Page.values(
+                                3,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2, 1, 2}),
+                                        new I64Vector(new long[] {1, 2, 2}),
+                                        new I64Vector(new long[] {21, 13, 22})},
+                                Mask.all(3))));
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                List.of(new RunningSumI64WindowFunction(2)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, 1L, 11L, 11L),
+                            row(1L, 2L, 12L, 23L),
+                            row(1L, 2L, 13L, 36L),
+                            row(2L, 1L, 21L, 21L),
+                            row(2L, 2L, 20L, 41L),
+                            row(2L, 2L, 22L, 63L));
+        }
+    }
+
+    @Test
     void testWindowOperatorProducesPartitionAverageWithoutOrdering()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

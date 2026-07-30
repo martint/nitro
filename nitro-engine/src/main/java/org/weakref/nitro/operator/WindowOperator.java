@@ -54,10 +54,11 @@ public final class WindowOperator
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
-    private List<RowReference> rows;
+    // Multi-page order is one packed page/position long per row. This avoids one RowReference object per row
+    // and makes the retained ordering footprint exact and host-visible.
+    private long[] rowReferences;
     // A retained upstream aggregation commonly produces one large page. Keep its sort order as
-    // primitive positions instead of allocating one RowReference object per row; this also keeps
-    // comparator traffic in two compact int arrays rather than pointer-chasing the Java heap.
+    // primitive positions; this also keeps comparator traffic in two compact int arrays.
     private int[] singlePageOrder;
     private boolean singlePage;
     private boolean singlePageIdentityOrder;
@@ -359,6 +360,8 @@ public final class WindowOperator
         allocator.release(allocationContext);
         arrayPool.release(singlePageOrder);
         singlePageOrder = null;
+        arrayPool.release(rowReferences);
+        rowReferences = null;
         singlePage = false;
         singlePageIdentityOrder = false;
         singlePageRowCount = 0;
@@ -421,10 +424,11 @@ public final class WindowOperator
             }
         }
         else {
-            rows = rows(pages);
-            rows.sort(this::compareRows);
+            rowReferences = rowReferences(pages);
+            stableSortRowReferences(rowReferences);
+            accountRetainedArrays();
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-                windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex), rows);
+                windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex));
             }
         }
     }
@@ -491,7 +495,7 @@ public final class WindowOperator
 
     private int rowCount()
     {
-        return singlePage ? singlePageRowCount : rows.size();
+        return singlePage ? singlePageRowCount : rowReferences.length;
     }
 
     private int[] selectedPositions(TableOperator.Page page)
@@ -1002,29 +1006,36 @@ public final class WindowOperator
                 streams.values(), streams.getOrNull(Stream.NULLS), rightPosition);
     }
 
-    private Streams materializeWindow(RunningWindowFunction function, List<RowReference> rows)
+    private Streams materializeWindow(RunningWindowFunction function)
     {
-        Streams output = function.emptyOutput(allocator, allocationContext, rows.size());
-        RowReference previous = null;
+        Streams output = function.emptyOutput(allocator, allocationContext, rowReferences.length);
+        long previous = -1;
         function.reset();
         int partitionStart = 0;
-        for (int outputPosition = 0; outputPosition < rows.size(); outputPosition++) {
-            RowReference row = rows.get(outputPosition);
-            if (previous != null && !samePartition(previous, row)) {
+        for (int outputPosition = 0; outputPosition < rowReferences.length; outputPosition++) {
+            long row = rowReferences[outputPosition];
+            if (previous != -1 && !samePartition(previous, row)) {
                 output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
                 function.reset();
                 partitionStart = outputPosition;
             }
-            output = function.append(allocator, allocationContext, output, row.page().columns(), row.position(), outputPosition, rows.size());
+            output = function.append(
+                    allocator,
+                    allocationContext,
+                    output,
+                    pages.get(pageIndex(row)).columns(),
+                    pagePosition(row),
+                    outputPosition,
+                    rowReferences.length);
             previous = row;
         }
-        if (!rows.isEmpty()) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rows.size());
+        if (rowReferences.length > 0) {
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rowReferences.length);
         }
         return output;
     }
 
-    private int compareRows(RowReference left, RowReference right)
+    private int compareRows(long left, long right)
     {
         for (int partitionColumn : partitionColumns) {
             int comparison = compareColumn(partitionColumn, left, right);
@@ -1044,13 +1055,13 @@ public final class WindowOperator
         return 0;
     }
 
-    private boolean samePartition(RowReference left, RowReference right)
+    private boolean samePartition(long left, long right)
     {
         for (int partitionColumn : partitionColumns) {
-            Streams leftStreams = left.page().columns()[partitionColumn];
-            Streams rightStreams = right.page().columns()[partitionColumn];
-            boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
-            boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+            Streams leftStreams = pages.get(pageIndex(left)).columns()[partitionColumn];
+            Streams rightStreams = pages.get(pageIndex(right)).columns()[partitionColumn];
+            boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), pagePosition(left));
+            boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), pagePosition(right));
             if (leftNull || rightNull) {
                 // PARTITION BY groups all null keys together: two nulls share a partition, a null and a
                 // non-null do not.
@@ -1062,27 +1073,27 @@ public final class WindowOperator
             if (!comparisonKernels[partitionColumn].identical(
                     leftStreams.values(),
                     leftStreams.getOrNull(Stream.NULLS),
-                    left.position(),
+                    pagePosition(left),
                     rightStreams.values(),
                     rightStreams.getOrNull(Stream.NULLS),
-                    right.position())) {
+                    pagePosition(right))) {
                 return false;
             }
         }
         return true;
     }
 
-    private int compareColumn(int column, RowReference left, RowReference right)
+    private int compareColumn(int column, long left, long right)
     {
-        Streams leftStreams = left.page().columns()[column];
-        Streams rightStreams = right.page().columns()[column];
+        Streams leftStreams = pages.get(pageIndex(left)).columns()[column];
+        Streams rightStreams = pages.get(pageIndex(right)).columns()[column];
         return comparisonKernels[column].compare(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
-                left.position(),
+                pagePosition(left),
                 rightStreams.values(),
                 rightStreams.getOrNull(Stream.NULLS),
-                right.position());
+                pagePosition(right));
     }
 
     private Streams materializeSourceColumnBatch(int outputIndex, int startPosition, int batchSize)
@@ -1093,29 +1104,29 @@ public final class WindowOperator
             Vector result = null;
             int outputPosition = 0;
             while (outputPosition < batchSize) {
-                RowReference firstRow = rows.get(startPosition + outputPosition);
-                Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
+                long firstRow = rowReferences[startPosition + outputPosition];
+                Streams sourceStreams = pages.get(pageIndex(firstRow)).columns()[outputIndex];
                 if (!sourceStreams.has(stream)) {
                     outputPosition++;
                     continue;
                 }
 
                 int groupStart = outputPosition;
-                int groupPageIndex = firstRow.pageIndex();
-                while (outputPosition < batchSize && rows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+                int groupPageIndex = pageIndex(firstRow);
+                while (outputPosition < batchSize && pageIndex(rowReferences[startPosition + outputPosition]) == groupPageIndex) {
                     outputPosition++;
                 }
 
                 int groupSize = outputPosition - groupStart;
-                int[] positions = new int[groupSize];
+                ensureBatchPositions(groupSize);
                 for (int index = 0; index < groupSize; index++) {
-                    positions[index] = rows.get(startPosition + groupStart + index).position();
+                    batchPositions[index] = pagePosition(rowReferences[startPosition + groupStart + index]);
                 }
                 result = sourceStreams.get(stream).copyPositionsInto(
                         allocator,
                         allocationContext,
                         result,
-                        positions,
+                        batchPositions,
                         groupSize,
                         groupStart,
                         batchSize);
@@ -1182,29 +1193,29 @@ public final class WindowOperator
         Vector result = null;
         int outputPosition = 0;
         while (outputPosition < batchSize) {
-            RowReference firstRow = rows.get(startPosition + outputPosition);
-            Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
+            long firstRow = rowReferences[startPosition + outputPosition];
+            Streams sourceStreams = pages.get(pageIndex(firstRow)).columns()[outputIndex];
             if (!sourceStreams.has(stream)) {
                 outputPosition++;
                 continue;
             }
 
             int groupStart = outputPosition;
-            int groupPageIndex = firstRow.pageIndex();
-            while (outputPosition < batchSize && rows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+            int groupPageIndex = pageIndex(firstRow);
+            while (outputPosition < batchSize && pageIndex(rowReferences[startPosition + outputPosition]) == groupPageIndex) {
                 outputPosition++;
             }
 
             int groupSize = outputPosition - groupStart;
-            int[] groupPositions = new int[groupSize];
+            ensureBatchPositions(groupSize);
             for (int index = 0; index < groupSize; index++) {
-                groupPositions[index] = rows.get(startPosition + groupStart + index).position();
+                batchPositions[index] = pagePosition(rowReferences[startPosition + groupStart + index]);
             }
             result = sourceStreams.get(stream).copyPositionsInto(
                     allocator,
                     allocationContext,
                     result,
-                    groupPositions,
+                    batchPositions,
                     groupSize,
                     groupStart,
                     batchSize);
@@ -1329,25 +1340,88 @@ public final class WindowOperator
                 allocationContext,
                 this,
                 (singlePageOrder == null ? 0 : (long) singlePageOrder.length * Integer.BYTES) +
-                        (batchPositions == null ? 0 : (long) batchPositions.length * Integer.BYTES));
+                        (batchPositions == null ? 0 : (long) batchPositions.length * Integer.BYTES) +
+                        (rowReferences == null ? 0 : (long) rowReferences.length * Long.BYTES));
     }
 
-    private List<RowReference> rows(List<TableOperator.Page> pages)
+    private long[] rowReferences(List<TableOperator.Page> pages)
     {
-        List<RowReference> rows = new ArrayList<>();
+        int rowCount = 0;
+        for (TableOperator.Page page : pages) {
+            rowCount = Math.addExact(rowCount, page.mask().count());
+        }
+        long[] rows = arrayPool.borrowLongs(rowCount);
+        int rowIndex = 0;
         for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
             TableOperator.Page page = pages.get(pageIndex);
             if (page.mask().all()) {
                 for (int position = 0; position < page.rows(); position++) {
-                    rows.add(new RowReference(pageIndex, page, position));
+                    rows[rowIndex++] = rowReference(pageIndex, position);
                 }
                 continue;
             }
             for (int index = 0; index < page.mask().selectedCount(); index++) {
-                rows.add(new RowReference(pageIndex, page, page.mask().position(index)));
+                rows[rowIndex++] = rowReference(pageIndex, page.mask().position(index));
             }
         }
         return rows;
+    }
+
+    private void stableSortRowReferences(long[] rows)
+    {
+        if (rows.length < 2) {
+            return;
+        }
+        long[] scratch = arrayPool.borrowLongs(rows.length);
+        try {
+            long[] source = rows;
+            long[] target = scratch;
+            for (int width = 1; width < rows.length; width = width > rows.length / 2 ? rows.length : width * 2) {
+                int step = width > rows.length - width ? rows.length : width * 2;
+                for (int start = 0; start < rows.length; start += step) {
+                    int middle = start + Math.min(width, rows.length - start);
+                    int end = start + Math.min(step, rows.length - start);
+                    int left = start;
+                    int right = middle;
+                    int output = start;
+                    while (left < middle && right < end) {
+                        target[output++] = compareRows(source[left], source[right]) <= 0
+                                ? source[left++]
+                                : source[right++];
+                    }
+                    while (left < middle) {
+                        target[output++] = source[left++];
+                    }
+                    while (right < end) {
+                        target[output++] = source[right++];
+                    }
+                }
+                long[] swap = source;
+                source = target;
+                target = swap;
+            }
+            if (source != rows) {
+                System.arraycopy(source, 0, rows, 0, rows.length);
+            }
+        }
+        finally {
+            arrayPool.release(scratch);
+        }
+    }
+
+    private static long rowReference(int pageIndex, int position)
+    {
+        return ((long) pageIndex << Integer.SIZE) | Integer.toUnsignedLong(position);
+    }
+
+    private static int pageIndex(long rowReference)
+    {
+        return (int) (rowReference >>> Integer.SIZE);
+    }
+
+    private static int pagePosition(long rowReference)
+    {
+        return (int) rowReference;
     }
 
     private Streams emptyStreamsLike(Output output)
@@ -1378,6 +1452,4 @@ public final class WindowOperator
     }
 
     private record FlatIntegerOrderKey(long[] longs, int[] integers, boolean[] nulls, boolean descending) {}
-
-    private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
 }
