@@ -1193,6 +1193,37 @@ final class FlatGroupingTable
         return variableWidthArena;
     }
 
+    long retainedBytes()
+    {
+        long bytes = layout.retainedBytes();
+        bytes += control == null ? 0 : control.length;
+        bytes += intArrayBytes(groupIdsByHash);
+        bytes += intArrayBytes(recordIndexesByHash);
+        bytes += longArrayBytes(hashRecordsByHash);
+        bytes += intArrayBytes(recordIndexByGroupId);
+        bytes += intArrayBytes(compositeCache);
+        bytes += longArrayBytes(sparseCompositeKeys);
+        bytes += intArrayBytes(sparseCompositeGroups);
+        bytes += longArrayBytes(batchHashes);
+        bytes += longArrayBytes(batchNormalizedFirst);
+        bytes += longArrayBytes(batchNormalizedSecond);
+        bytes += batchNormalizedValid == null ? 0 : batchNormalizedValid.length;
+        bytes += longArrayBytes(normalizedFirstByRecord);
+        bytes += longArrayBytes(normalizedSecondByRecord);
+        bytes += longArrayBytes(normalizedValidByRecord);
+        bytes += longArrayBytes(singleDictionaryGroups);
+        if (fixedRecordChunks != null) {
+            bytes += (long) fixedRecordChunks.length * Long.BYTES;
+            for (byte[] chunk : fixedRecordChunks) {
+                bytes += chunk == null ? 0 : chunk.length;
+            }
+        }
+        if (variableWidthArena != null) {
+            bytes += variableWidthArena.retainedBytes();
+        }
+        return bytes;
+    }
+
     void releaseBuffers()
     {
         if (policy.debugNormalizedIntKey() && normalizedInputCount > 0) {
@@ -1272,6 +1303,16 @@ final class FlatGroupingTable
         return ((value & 0xFFL) * 0x01_01_01_01_01_01_01_01L);
     }
 
+    private static long intArrayBytes(int[] values)
+    {
+        return values == null ? 0 : (long) values.length * Integer.BYTES;
+    }
+
+    private static long longArrayBytes(long[] values)
+    {
+        return values == null ? 0 : (long) values.length * Long.BYTES;
+    }
+
     private static int packedTableHash(long hash)
     {
         return (int) hash;
@@ -1330,6 +1371,18 @@ final class FlatGroupingTable
         public byte[] chunk(int index)
         {
             return chunks[index];
+        }
+
+        private long retainedBytes()
+        {
+            if (chunks == null) {
+                return 0;
+            }
+            long bytes = (long) chunks.length * Long.BYTES;
+            for (byte[] chunk : chunks) {
+                bytes += chunk == null ? 0 : chunk.length;
+            }
+            return bytes;
         }
 
         private void releaseBuffers()

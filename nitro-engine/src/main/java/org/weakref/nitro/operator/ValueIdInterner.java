@@ -103,6 +103,18 @@ final class ValueIdInterner
         return overflowed;
     }
 
+    long retainedBytes()
+    {
+        long bytes = (long) slots.length * Integer.BYTES;
+        bytes += slotTags.length;
+        bytes += data.length;
+        bytes += (long) valueOffset.length * Integer.BYTES;
+        bytes += (long) valueLength.length * Integer.BYTES;
+        bytes += (long) valueHash.length * Long.BYTES;
+        bytes += (long) valueGroupingHash.length * Integer.BYTES;
+        return bytes;
+    }
+
     /**
      * The dense id for {@code value[offset, offset + length)}, assigning a new one (the next ordinal) on first
      * sight. Returns {@link #TOO_MANY} once assigning would exceed the configured ceiling; the interner then

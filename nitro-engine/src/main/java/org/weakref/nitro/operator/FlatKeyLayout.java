@@ -2669,6 +2669,58 @@ class FlatKeyLayout
         }
     }
 
+    long retainedBytes()
+    {
+        long bytes = referenceArrayBytes(fields);
+        bytes += intArrayBytes(inputChannels);
+        bytes += referenceArrayBytes(handlers);
+        bytes += intArrayBytes(fixedOffsets);
+        bytes += intArrayBytes(comparisonOrder);
+        bytes += nestedIntArrayBytes(dictionaryHashedIds);
+        bytes += nestedLongArrayBytes(dictionaryEntryHashes);
+        bytes += referenceArrayBytes(dictionaryHashedValues);
+        bytes += longArrayBytes(dictionaryHashedGenerations);
+        bytes += referenceArrayBytes(boundDictionary);
+        bytes += nestedIntArrayBytes(batchDictionaryIds);
+        bytes += booleanArrayBytes(fieldIdComparable);
+        bytes += nestedIntArrayBytes(recordDictionaryIds);
+        bytes += intArrayBytes(packedRecordDictionaryIds);
+        bytes += intArrayBytes(packedDictionaryFieldIndex);
+        bytes += booleanArrayBytes(batchFieldNullFree);
+        bytes += booleanArrayBytes(batchFieldAllNull);
+        bytes += referenceArrayBytes(fieldInterners);
+        if (fieldInterners != null) {
+            for (ValueIdInterner interner : fieldInterners) {
+                bytes += interner == null ? 0 : interner.retainedBytes();
+            }
+        }
+        bytes += nestedIntArrayBytes(batchEntryGlobalId);
+        bytes += referenceArrayBytes(batchEntryGlobalIdDict);
+        bytes += longArrayBytes(batchEntryGlobalIdGeneration);
+        bytes += nestedIntArrayBytes(batchPositionGlobalId);
+        bytes += referenceArrayBytes(fieldDictionaryMapping);
+        bytes += referenceArrayBytes(batchPositionDictionaryMapping);
+        bytes += booleanArrayBytes(fieldLazyIntern);
+        bytes += booleanArrayBytes(fieldUsesIdOnlyRecords);
+        bytes += nestedLongArrayBytes(compactBinaryFallbacks);
+        bytes += intArrayBytes(compactBinaryFallbackCounts);
+        bytes += intArrayBytes(compositeOrder);
+        bytes += intArrayBytes(compactCompositeRadix);
+        bytes += longArrayBytes(compactLongBase);
+        bytes += booleanArrayBytes(compactLongBaseSet);
+        bytes += booleanArrayBytes(compactLongDomainRejected);
+        bytes += referenceArrayBytes(fieldKinds);
+        bytes += referenceArrayBytes(fieldLong);
+        bytes += referenceArrayBytes(fieldBinaryBase);
+        bytes += nestedIntArrayBytes(fieldBinaryIds);
+        bytes += longArrayBytes(fieldBinaryConstantHash);
+        bytes += intArrayBytes(fieldBinaryConstantGlobalId);
+        bytes += nestedIntArrayBytes(composedDictionaryIds);
+        bytes += nestedIntArrayBytes(composedNullDictionaryIds);
+        bytes += referenceArrayBytes(fieldNullAccess);
+        return bytes;
+    }
+
     void releaseBuffers()
     {
         if (dictionaryEntryHashes != null) {
@@ -2796,6 +2848,48 @@ class FlatKeyLayout
     {
         long bytes = (long) length * Long.BYTES;
         return policy.poolScratch() && arrayPool.isRetainable(bytes) ? arrayPool.borrowLongs(length) : new long[length];
+    }
+
+    private static long booleanArrayBytes(boolean[] values)
+    {
+        return values == null ? 0 : values.length;
+    }
+
+    private static long intArrayBytes(int[] values)
+    {
+        return values == null ? 0 : (long) values.length * Integer.BYTES;
+    }
+
+    private static long longArrayBytes(long[] values)
+    {
+        return values == null ? 0 : (long) values.length * Long.BYTES;
+    }
+
+    private static long referenceArrayBytes(Object[] values)
+    {
+        return values == null ? 0 : (long) values.length * Long.BYTES;
+    }
+
+    private static long nestedIntArrayBytes(int[][] values)
+    {
+        long bytes = referenceArrayBytes(values);
+        if (values != null) {
+            for (int[] value : values) {
+                bytes += intArrayBytes(value);
+            }
+        }
+        return bytes;
+    }
+
+    private static long nestedLongArrayBytes(long[][] values)
+    {
+        long bytes = referenceArrayBytes(values);
+        if (values != null) {
+            for (long[] value : values) {
+                bytes += longArrayBytes(value);
+            }
+        }
+        return bytes;
     }
 
     private void release(int[] array)

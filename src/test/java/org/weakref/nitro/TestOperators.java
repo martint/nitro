@@ -5149,6 +5149,23 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinAccountsFlatIndexMemory()
+    {
+        Allocator.Context indexContext = new Allocator.Context("HashJoinOperatorIndex");
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"), row("beta"), row("missing"))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"), row("beta"), row("beta"))),
+                0)) {
+            try (Batch ignored = join.next()) {
+                assertThat(allocator.peakBytes(indexContext)).isPositive();
+            }
+        }
+        assertThat(allocator.currentBytes(indexContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();

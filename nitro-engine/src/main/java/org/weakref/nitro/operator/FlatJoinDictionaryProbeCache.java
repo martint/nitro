@@ -98,6 +98,11 @@ final class FlatJoinDictionaryProbeCache
         return groups;
     }
 
+    long retainedBytes()
+    {
+        return groups == null ? 0 : (long) groups.length * Integer.BYTES;
+    }
+
     void release()
     {
         arrayPool.release(groups);

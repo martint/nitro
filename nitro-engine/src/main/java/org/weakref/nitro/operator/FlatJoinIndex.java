@@ -251,6 +251,30 @@ final class FlatJoinIndex
     }
 
     @Override
+    long retainedBytes()
+    {
+        long bytes = table.retainedBytes() + dictionaryProbeCache.retainedBytes();
+        bytes += singleRows == null ? 0 : (long) singleRows.length * Long.BYTES;
+        bytes += listArrayBytes(duplicateRows);
+        bytes += listArrayBytes(legacyRowsByGroup);
+        return bytes;
+    }
+
+    private static long listArrayBytes(LongArrayList[] rowsByGroup)
+    {
+        if (rowsByGroup == null) {
+            return 0;
+        }
+        long bytes = (long) rowsByGroup.length * Long.BYTES;
+        for (LongArrayList rows : rowsByGroup) {
+            if (rows != null) {
+                bytes += (long) rows.elements().length * Long.BYTES;
+            }
+        }
+        return bytes;
+    }
+
+    @Override
     public void releaseBuffers()
     {
         table.releaseBuffers();
