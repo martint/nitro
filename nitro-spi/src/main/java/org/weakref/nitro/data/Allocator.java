@@ -924,6 +924,23 @@ public class Allocator
         return residentBytes;
     }
 
+    /**
+     * Accounts for a retained-size change made in place by an allocator-owned vector.
+     *
+     * <p>Callers must capture {@link Vector#retainedBytes()} before mutation and report it
+     * immediately afterward. This keeps host memory reservations and allocator statistics
+     * synchronized for opaque state vectors whose payload grows without replacing the vector.
+     */
+    public void retainedBytesChanged(Context context, Vector vector, long previousRetainedBytes)
+    {
+        requireNonNull(context, "context is null");
+        requireNonNull(vector, "vector is null");
+        if (previousRetainedBytes < 0) {
+            throw new IllegalArgumentException("previous retained bytes is negative");
+        }
+        state(context).retainedBytesChanged(vector, previousRetainedBytes);
+    }
+
     @Override
     public void close()
     {
@@ -1524,6 +1541,25 @@ public class Allocator
                 return;
             }
             addVectorToPool(family, vector.poolCapacity(), maxRetained(vector), vector);
+        }
+
+        private void retainedBytesChanged(Vector vector, long previousRetainedBytes)
+        {
+            long delta = vector.retainedBytes() - previousRetainedBytes;
+            if (delta == 0) {
+                return;
+            }
+            if (allocator.memoryReservation != null && !inUseVectors.contains(vector)) {
+                throw new IllegalArgumentException("vector is not owned by allocation context");
+            }
+            if (delta > 0) {
+                allocator.reserveResident(delta);
+                stats.acquire(delta, false);
+            }
+            else if (delta < 0) {
+                allocator.releaseResident(-delta);
+                stats.releaseBytes(-delta);
+            }
         }
 
         public void discardVector(Vector vector)

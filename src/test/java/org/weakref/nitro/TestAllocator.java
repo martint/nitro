@@ -23,6 +23,7 @@ import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.MinUtf8StateVector;
 import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Streams;
@@ -84,6 +85,37 @@ class TestAllocator
             assertThat(memory.reservedBytes()).isEqualTo(bytes);
 
             allocator.discard(context, reused);
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testTracksInPlaceVectorRetainedSizeChanges()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("variable-state");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            MinUtf8StateVector state = allocator.allocate(
+                    context,
+                    MinUtf8StateVector.class,
+                    2,
+                    MinUtf8StateVector::new);
+            long initialBytes = state.retainedBytes();
+
+            long previousBytes = state.retainedBytes();
+            state.setValue(0, new byte[17]);
+            allocator.retainedBytesChanged(context, state, previousBytes);
+            assertThat(allocator.residentBytes()).isEqualTo(initialBytes + 17);
+            assertThat(memory.reservedBytes()).isEqualTo(initialBytes + 17);
+
+            previousBytes = state.retainedBytes();
+            state.setValue(0, new byte[5]);
+            allocator.retainedBytesChanged(context, state, previousBytes);
+            assertThat(allocator.residentBytes()).isEqualTo(initialBytes + 5);
+            assertThat(memory.reservedBytes()).isEqualTo(initialBytes + 5);
+
+            allocator.discard(context, state);
             assertThat(allocator.residentBytes()).isZero();
             assertThat(memory.reservedBytes()).isZero();
         }
