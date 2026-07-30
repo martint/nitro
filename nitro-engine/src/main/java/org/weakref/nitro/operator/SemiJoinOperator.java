@@ -45,6 +45,12 @@ import static java.util.Objects.requireNonNull;
 public class SemiJoinOperator
         implements Operator
 {
+    public enum MatchOutputSemantics
+    {
+        NULL_REJECTING,
+        SQL_IN
+    }
+
     private final Operator outer;
     private final Operator inner;
     private final int outerJoinColumn;
@@ -53,6 +59,7 @@ public class SemiJoinOperator
     private final Allocator.Context allocationContext;
     private final boolean includeMatches;
     private final boolean outputMatches;
+    private final MatchOutputSemantics matchOutputSemantics;
     private final MembershipSet membership;
     private final PositionScratch selectionScratch;
     private final SemiJoinOperatorPolicy policy;
@@ -61,6 +68,8 @@ public class SemiJoinOperator
     private final boolean allowsLegacyKeyShortcuts;
 
     private boolean loaded;
+    private boolean buildNonEmpty;
+    private boolean buildContainsNull;
     private BatchState currentBatchState;
     private it.unimi.dsi.fastutil.longs.LongOpenHashSet dynamicFilterValues;
     private boolean dynamicFilterAbandoned;
@@ -109,6 +118,7 @@ public class SemiJoinOperator
                 includeMatches,
                 outputMatches,
                 outputMatches ? new Field(Schema.unspecified(1).field(0).type(), false) : null,
+                MatchOutputSemantics.NULL_REJECTING,
                 operatorResources);
     }
 
@@ -129,8 +139,32 @@ public class SemiJoinOperator
                 inner,
                 innerJoinColumn,
                 includeMatches,
+                matchField,
+                MatchOutputSemantics.NULL_REJECTING,
+                operatorResources);
+    }
+
+    public SemiJoinOperator(
+            Allocator allocator,
+            Operator outer,
+            int outerJoinColumn,
+            Operator inner,
+            int innerJoinColumn,
+            boolean includeMatches,
+            Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
+            OperatorResources operatorResources)
+    {
+        this(
+                allocator,
+                outer,
+                outerJoinColumn,
+                inner,
+                innerJoinColumn,
+                includeMatches,
                 true,
                 matchField,
+                matchOutputSemantics,
                 operatorResources);
     }
 
@@ -143,6 +177,7 @@ public class SemiJoinOperator
             boolean includeMatches,
             boolean outputMatches,
             Field matchField,
+            MatchOutputSemantics matchOutputSemantics,
             OperatorResources operatorResources)
     {
         this.outer = outer;
@@ -158,8 +193,12 @@ public class SemiJoinOperator
         this.dynamicFilterPolicy = operatorResources.dynamicFilterPolicy();
         this.includeMatches = includeMatches;
         this.outputMatches = outputMatches;
+        this.matchOutputSemantics = requireNonNull(matchOutputSemantics, "matchOutputSemantics is null");
         if (outputMatches) {
             requireNonNull(matchField, "matchField is null");
+            if (matchOutputSemantics == MatchOutputSemantics.SQL_IN && !matchField.nullable()) {
+                throw new IllegalArgumentException("SQL IN match field is not nullable");
+            }
         }
         this.outputSchema = outputSchema(outer.outputSchema(), matchField);
         this.membership = new MembershipSet(
@@ -255,38 +294,44 @@ public class SemiJoinOperator
                     sourceOutput::copySinglePosition);
         }
         if (outputMatches) {
+            Set<Stream> matchStreams = matchOutputSemantics == MatchOutputSemantics.SQL_IN
+                    ? Set.of(Stream.VALUES, Stream.NULLS)
+                    : Set.of(Stream.VALUES);
             outputs[outer.outputCount()] = new Output(
-                    Set.of(Stream.VALUES),
-                    stream -> {
-                        if (stream != Stream.VALUES) {
-                            throw new IllegalArgumentException("Unsupported stream: " + stream);
-                        }
-                        return batchState.borrowMatchValues(this);
-                    },
-                    (stream, mask) -> {
-                        if (stream != Stream.VALUES) {
-                            throw new IllegalArgumentException("Unsupported stream: " + stream);
-                        }
-                        return batchState.borrowMatchValues(this, mask);
-                    },
+                    matchStreams,
+                    stream -> batchState.borrowMatchVector(this, stream, null),
+                    (stream, mask) -> batchState.borrowMatchVector(this, stream, mask),
                     (stream, mask, selectTrue, resultAllocator, resultAllocationContext) -> {
-                        if (stream != Stream.VALUES) {
-                            throw new IllegalArgumentException("Unsupported stream: " + stream);
+                        if (stream == Stream.VALUES) {
+                            return selectRows(sourceBatch, mask, selectTrue, resultAllocator, resultAllocationContext);
                         }
-                        return batchState.borrowMatchMask(this, mask, selectTrue, resultAllocator, resultAllocationContext);
+                        BooleanVector values = (BooleanVector) batchState.borrowMatchVector(this, stream, mask);
+                        return selectTrue
+                                ? resultAllocator.intersectMask(resultAllocationContext, mask, values)
+                                : resultAllocator.differenceMask(resultAllocationContext, mask, values);
                     },
                     (stream, vector) -> vector,
                     (stream, vector) -> allocator.release(allocationContext, vector),
                     null,
                     (existing, sourcePosition, outputPosition, size) -> {
-                        BooleanVector matchValues = batchState.borrowMatchValues(this);
+                        BooleanVector matchValues = (BooleanVector) batchState.borrowMatchVector(this, Stream.VALUES, null);
                         BooleanVector outputValues = VectorAccess.writableBooleanVector(
                                 allocator,
                                 allocationContext,
                                 existing == null ? null : existing.getOrNull(Stream.VALUES),
                                 size);
                         outputValues.values()[outputPosition] = matchValues.values()[sourcePosition];
-                        return Streams.ofValues(outputValues);
+                        if (matchOutputSemantics != MatchOutputSemantics.SQL_IN) {
+                            return Streams.ofValues(outputValues);
+                        }
+                        BooleanVector matchNulls = (BooleanVector) batchState.borrowMatchVector(this, Stream.NULLS, null);
+                        BooleanVector outputNulls = VectorAccess.writableBooleanVector(
+                                allocator,
+                                allocationContext,
+                                existing == null ? null : existing.getOrNull(Stream.NULLS),
+                                size);
+                        outputNulls.values()[outputPosition] = matchNulls.values()[sourcePosition];
+                        return Streams.ofValuesAndNulls(outputValues, outputNulls);
                     });
         }
         return new Batch(
@@ -379,6 +424,16 @@ public class SemiJoinOperator
                 Output output = batch.output(innerJoinColumn);
                 Vector values = output.borrow(Stream.VALUES);
                 Vector nulls = output.borrowOrNull(Stream.NULLS);
+                buildNonEmpty = true;
+                if (!buildContainsNull && !VectorAccess.isAllFalseNulls(nulls)) {
+                    VectorAccess.BooleanValues nullValues = VectorAccess.booleanValues(nulls);
+                    for (int position : mask) {
+                        if (nullValues.value(position)) {
+                            buildContainsNull = true;
+                            break;
+                        }
+                    }
+                }
                 collectDynamicFilterValues(values, nulls, mask);
                 collectSmallBinaryMembership(values, nulls, mask);
                 membership.addBatch(values, nulls, mask);
@@ -508,7 +563,7 @@ public class SemiJoinOperator
 
     private BooleanVector computeMatchValues(BatchState batchState, BooleanVector matchValues, Mask requestedMask)
     {
-        if (requestedMask.none()) {
+        if (requestedMask.none() || !buildNonEmpty) {
             return matchValues;
         }
 
@@ -523,6 +578,25 @@ public class SemiJoinOperator
 
         membership.writeMatches(values, nulls, requestedMask, matchValues.values());
         return matchValues;
+    }
+
+    private BooleanVector computeMatchNulls(
+            BatchState batchState,
+            BooleanVector matchValues,
+            BooleanVector matchNulls,
+            Mask requestedMask)
+    {
+        if (requestedMask.none() || !buildNonEmpty) {
+            return matchNulls;
+        }
+        Output output = batchState.sourceBatch().output(outerJoinColumn);
+        VectorAccess.BooleanValues probeNulls = VectorAccess.booleanValues(output.borrowOrNull(Stream.NULLS));
+        boolean[] matches = matchValues.values();
+        boolean[] nulls = matchNulls.values();
+        for (int position : requestedMask) {
+            nulls[position] = probeNulls.value(position) || (!matches[position] && buildContainsNull);
+        }
+        return matchNulls;
     }
 
     private static final class PositionScratch
@@ -1100,7 +1174,8 @@ public class SemiJoinOperator
         private final Batch sourceBatch;
         private final Mask[] maskHolder;
         private BooleanVector matchValues;
-        private boolean matchValuesComplete;
+        private BooleanVector matchNulls;
+        private boolean matchVectorsComplete;
 
         private BatchState(Batch sourceBatch, Mask mask)
         {
@@ -1124,34 +1199,30 @@ public class SemiJoinOperator
             return maskHolder[0];
         }
 
-        private BooleanVector borrowMatchValues(SemiJoinOperator operator)
+        private Vector borrowMatchVector(SemiJoinOperator operator, Stream stream, Mask requestedMask)
         {
-            return borrowMatchValues(operator, null);
-        }
-
-        private BooleanVector borrowMatchValues(SemiJoinOperator operator, Mask requestedMask)
-        {
+            if (stream != Stream.VALUES &&
+                    (stream != Stream.NULLS || operator.matchOutputSemantics != MatchOutputSemantics.SQL_IN)) {
+                throw new IllegalArgumentException("Unsupported stream: " + stream);
+            }
             Mask effectiveMask = requestedMask == null ? mask() : requestedMask;
             if (matchValues == null) {
                 matchValues = operator.allocator.allocate(operator.allocationContext, BooleanVector.class, mask().size(), BooleanVector::new);
             }
-            if (matchValuesComplete) {
-                return matchValues;
+            if (operator.matchOutputSemantics == MatchOutputSemantics.SQL_IN && matchNulls == null) {
+                matchNulls = operator.allocator.allocate(operator.allocationContext, BooleanVector.class, mask().size(), BooleanVector::new);
             }
-            if (effectiveMask.none()) {
-                return matchValues;
+            if (!matchVectorsComplete && !effectiveMask.none()) {
+                boolean computesCurrentMask = effectiveMask.containsAll(mask());
+                operator.computeMatchValues(this, matchValues, effectiveMask);
+                if (matchNulls != null) {
+                    operator.computeMatchNulls(this, matchValues, matchNulls, effectiveMask);
+                }
+                if (computesCurrentMask) {
+                    matchVectorsComplete = true;
+                }
             }
-            boolean computesCurrentMask = effectiveMask.containsAll(mask());
-            BooleanVector result = operator.computeMatchValues(this, matchValues, effectiveMask);
-            if (computesCurrentMask) {
-                matchValuesComplete = true;
-            }
-            return result;
-        }
-
-        private Mask borrowMatchMask(SemiJoinOperator operator, Mask requestedMask, boolean selectTrue, Allocator resultAllocator, Allocator.Context resultAllocationContext)
-        {
-            return operator.selectRows(sourceBatch, requestedMask, selectTrue, resultAllocator, resultAllocationContext);
+            return stream == Stream.VALUES ? matchValues : matchNulls;
         }
     }
 }

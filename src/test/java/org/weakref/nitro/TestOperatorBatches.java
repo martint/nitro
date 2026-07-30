@@ -2298,6 +2298,62 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSemiJoinOperatorCanProjectSqlInNullSemantics()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Field matchField = new Field(Schema.unspecified(1).field(0).type(), true);
+        try (Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(10L),
+                        row(20L),
+                        row((Object) null),
+                        row(30L))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(20L),
+                        row((Object) null))),
+                0,
+                true,
+                matchField,
+                SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                EngineResources.from(allocator).operatorResources())) {
+            Batch batch = operator.next();
+            assertThat(booleanValues(batch.output(1).borrow(Stream.VALUES), 4))
+                    .containsExactly(false, true, false, false);
+            assertThat(booleanValues(batch.output(1).borrow(Stream.NULLS), 4))
+                    .containsExactly(true, false, true, true);
+            batch.close();
+        }
+    }
+
+    @Test
+    void testSemiJoinOperatorSqlInEmptyBuildIsNeverNull()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Field matchField = new Field(Schema.unspecified(1).field(0).type(), true);
+        try (Operator operator = new SemiJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row(10L),
+                        row((Object) null))),
+                0,
+                new ConstantTableOperator(allocator, 1, List.of()),
+                0,
+                true,
+                matchField,
+                SemiJoinOperator.MatchOutputSemantics.SQL_IN,
+                EngineResources.from(allocator).operatorResources())) {
+            Batch batch = operator.next();
+            assertThat(booleanValues(batch.output(1).borrow(Stream.VALUES), 2))
+                    .containsExactly(false, false);
+            assertThat(booleanValues(batch.output(1).borrow(Stream.NULLS), 2))
+                    .containsExactly(false, false);
+            batch.close();
+        }
+    }
+
+    @Test
     void testGroupIdOperatorExpandsGroupingSets()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
