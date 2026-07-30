@@ -409,6 +409,7 @@ public final class WindowOperator
             if (!singlePageIdentityOrder) {
                 singlePageOrder = selectedPositions(pages.getFirst());
                 stableSortSinglePagePositions(singlePageOrder);
+                accountRetainedArrays();
             }
             if (policy.fusedFunctions() && windowFunctions.size() > 1) {
                 materializeSinglePageWindows();
@@ -1318,7 +1319,17 @@ public final class WindowOperator
             int[] previous = batchPositions;
             batchPositions = arrayPool.borrowInts(size);
             arrayPool.release(previous);
+            accountRetainedArrays();
         }
+    }
+
+    private void accountRetainedArrays()
+    {
+        allocator.setRetainedBytes(
+                allocationContext,
+                this,
+                (singlePageOrder == null ? 0 : (long) singlePageOrder.length * Integer.BYTES) +
+                        (batchPositions == null ? 0 : (long) batchPositions.length * Integer.BYTES));
     }
 
     private List<RowReference> rows(List<TableOperator.Page> pages)

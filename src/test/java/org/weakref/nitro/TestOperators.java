@@ -5211,6 +5211,36 @@ public class TestOperators
     }
 
     @Test
+    void testSortAndWindowAccountPrimitiveRetainedState()
+    {
+        Allocator.Context sortContext = new Allocator.Context("SortOperator", SortOperator.class);
+        try (SortOperator sort = new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                new ConstantTableOperator(allocator, 1, List.of(row(3L), row(1L), row(2L))))) {
+            try (Batch ignored = sort.next()) {
+                assertThat(allocator.currentBytes(sortContext)).isGreaterThan(4_000);
+            }
+        }
+        assertThat(allocator.currentBytes(sortContext)).isZero();
+
+        Allocator.Context windowContext = new Allocator.Context("WindowOperator");
+        try (WindowOperator window = new WindowOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(3L), row(1L), row(2L))),
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new PartitionSumI64WindowFunction(0)))) {
+            try (Batch ignored = window.next()) {
+                assertThat(allocator.currentBytes(windowContext)).isPositive();
+            }
+        }
+        assertThat(allocator.currentBytes(windowContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();

@@ -238,6 +238,7 @@ public class SortOperator
         arrayPool.release(oldOrdered);
         arrayPool.release(oldScratch);
         arrayPool.release(oldKeys);
+        accountRetainedArrays();
     }
 
     private void stableSort(int[] values, int[] scratch, int count)
@@ -254,6 +255,7 @@ public class SortOperator
     {
         if (radixCounts.length == 0) {
             radixCounts = arrayPool.borrowInts(256);
+            accountRetainedArrays();
         }
         for (int index = 0; index < count; index++) {
             int slot = values[index];
@@ -319,5 +321,16 @@ public class SortOperator
         sortScratch = new int[0];
         sortKeys = new long[0];
         radixCounts = new int[0];
+    }
+
+    private void accountRetainedArrays()
+    {
+        allocator.setRetainedBytes(
+                allocationContext,
+                this,
+                (long) orderedSlots.length * Integer.BYTES +
+                        (long) sortScratch.length * Integer.BYTES +
+                        (long) sortKeys.length * Long.BYTES +
+                        (long) radixCounts.length * Integer.BYTES);
     }
 }
