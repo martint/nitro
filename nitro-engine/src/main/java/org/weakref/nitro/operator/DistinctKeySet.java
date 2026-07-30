@@ -167,7 +167,12 @@ final class DistinctKeySet
                     keyTypes,
                     1);
         }
-        return new DistinctKeySet(new GroupedLongDistinctIndex(arrayPool, policy), keyTypes, 1);
+        return new DistinctKeySet(
+                new GroupedLongDistinctIndex(arrayPool, policy),
+                keyTypes,
+                1,
+                allocator,
+                allocationContext);
     }
 
     /**
@@ -886,6 +891,16 @@ final class DistinctKeySet
                 pooledKeys = null;
             }
         }
+
+        @Override
+        public long retainedBytes()
+        {
+            long bytes = pooledKeys == null ? 0 : pooledKeys.retainedBytes();
+            if (bitmapPages != null) {
+                bytes += (long) bitmapPages.size() * PAGE_WORDS * Long.BYTES;
+            }
+            return bytes;
+        }
     }
 
     private static final class FlatDistinctIndex
@@ -1151,6 +1166,12 @@ final class DistinctKeySet
             table.releaseBuffers();
             Arrays.fill(keyAccessors, null);
             Arrays.fill(nullAccessors, null);
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes();
         }
     }
 
@@ -1612,6 +1633,15 @@ final class DistinctKeySet
             cachedSharedDictionaryNullGenerations = null;
             Arrays.fill(keyAccessors, null);
             Arrays.fill(nullAccessors, null);
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes() +
+                    (long) nonNullPositions.length * Integer.BYTES +
+                    (long) assignedGroups.length * Long.BYTES +
+                    (long) processedBasePositions.length * Long.BYTES;
         }
     }
 
@@ -2103,6 +2133,18 @@ final class DistinctKeySet
             tags = null;
         }
 
+        @Override
+        public long retainedBytes()
+        {
+            if (adaptiveDelegate != null) {
+                return adaptiveDelegate.retainedBytes();
+            }
+            return (firstKeys == null ? 0 : (long) firstKeys.length * Long.BYTES) +
+                    (secondKeys == null ? 0 : (long) secondKeys.length * Long.BYTES) +
+                    (occupied == null ? 0 : occupied.length) +
+                    (tags == null ? 0 : tags.length);
+        }
+
         private static int mix(long first, long second)
         {
             return (int) hash64(first, second);
@@ -2383,6 +2425,19 @@ final class DistinctKeySet
             containsZero = new boolean[0];
             inlineChunks = new long[0][];
         }
+
+        @Override
+        public long retainedBytes()
+        {
+            long bytes = (long) sizes.length * Integer.BYTES + containsZero.length;
+            for (long[] table : tables) {
+                bytes += table == null ? 0 : (long) table.length * Long.BYTES;
+            }
+            for (long[] chunk : inlineChunks) {
+                bytes += chunk == null ? 0 : (long) chunk.length * Long.BYTES;
+            }
+            return bytes;
+        }
     }
 
     private static final class LongTripleDistinctIndex
@@ -2538,6 +2593,24 @@ final class DistinctKeySet
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
             return (int) hash;
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            firstKeys = null;
+            secondKeys = null;
+            thirdKeys = null;
+            occupied = null;
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return (firstKeys == null ? 0 : (long) firstKeys.length * Long.BYTES) +
+                    (secondKeys == null ? 0 : (long) secondKeys.length * Long.BYTES) +
+                    (thirdKeys == null ? 0 : (long) thirdKeys.length * Long.BYTES) +
+                    (occupied == null ? 0 : occupied.length);
         }
     }
 
@@ -2706,6 +2779,26 @@ final class DistinctKeySet
             hash *= 0xC4CEB9FE1A85EC53L;
             hash ^= hash >>> 33;
             return (int) hash;
+        }
+
+        @Override
+        public void releaseBuffers()
+        {
+            firstKeys = null;
+            secondKeys = null;
+            thirdKeys = null;
+            fourthKeys = null;
+            occupied = null;
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return (firstKeys == null ? 0 : (long) firstKeys.length * Long.BYTES) +
+                    (secondKeys == null ? 0 : (long) secondKeys.length * Long.BYTES) +
+                    (thirdKeys == null ? 0 : (long) thirdKeys.length * Long.BYTES) +
+                    (fourthKeys == null ? 0 : (long) fourthKeys.length * Long.BYTES) +
+                    (occupied == null ? 0 : occupied.length);
         }
     }
 

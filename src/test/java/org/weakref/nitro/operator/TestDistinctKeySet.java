@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -24,6 +25,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,6 +36,66 @@ class TestDistinctKeySet
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testPrimitiveRepresentationsReportAndReleaseRetainedMemory()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            for (int arity : new int[] {1, 2, 3, 5}) {
+                Allocator.Context context = new Allocator.Context("distinct-" + arity);
+                Vector[] values = new Vector[arity];
+                Vector[] nulls = new Vector[arity];
+                for (int column = 0; column < arity; column++) {
+                    values[column] = new I64Vector(new long[] {column, column + 10, column + 20});
+                    nulls[column] = new BooleanVector(new boolean[3]);
+                }
+                DistinctKeySet keys = DistinctKeySet.create(
+                        values,
+                        List.of(),
+                        allocator,
+                        context,
+                        allocator.primitiveArrays(),
+                        EngineResources.from(allocator).operatorCodeGeneration(),
+                        DistinctKeySetPolicy.defaults(),
+                        EngineResources.from(allocator).operatorResources().adaptiveLongGroupingPolicy(),
+                        EngineResources.from(allocator).operatorResources().flatKeyTablePolicy());
+                try {
+                    assertThat(keys.addBatch(values, nulls, Mask.all(3), new int[3])).isEqualTo(3);
+                    assertThat(allocator.currentBytes(context)).isPositive();
+                }
+                finally {
+                    keys.releaseBuffers();
+                }
+                assertThat(allocator.currentBytes(context)).isZero();
+            }
+
+            Allocator.Context groupedContext = new Allocator.Context("grouped-distinct");
+            Vector[] groupedValues = {
+                    new I64Vector(new long[] {0, 0, 1}),
+                    new I64Vector(new long[] {10, 20, 30})};
+            Vector[] groupedNulls = {
+                    new BooleanVector(new boolean[3]),
+                    new BooleanVector(new boolean[3])};
+            DistinctKeySet groupedKeys = DistinctKeySet.createGroupedLong(
+                    groupedValues,
+                    List.of(),
+                    allocator,
+                    groupedContext,
+                    allocator.primitiveArrays(),
+                    EngineResources.from(allocator).operatorCodeGeneration(),
+                    DistinctKeySetPolicy.defaults(),
+                    EngineResources.from(allocator).operatorResources().adaptiveLongGroupingPolicy(),
+                    EngineResources.from(allocator).operatorResources().flatKeyTablePolicy());
+            try {
+                assertThat(groupedKeys.addGroupedBatch(groupedValues, groupedNulls, Mask.all(3), 2, new int[3])).isEqualTo(3);
+                assertThat(allocator.currentBytes(groupedContext)).isPositive();
+            }
+            finally {
+                groupedKeys.releaseBuffers();
+            }
+            assertThat(allocator.currentBytes(groupedContext)).isZero();
+        }
+    }
 
     @Test
     void testAdaptiveLongPairMigratesAndPromotesExactly()

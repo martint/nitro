@@ -162,6 +162,12 @@ final class PooledLongHashSet
         return size;
     }
 
+    long retainedBytes()
+    {
+        return (keys == null ? 0 : (long) keys.length * Long.BYTES) +
+                (tags == null ? 0 : tags.length);
+    }
+
     void enableVectorTags()
     {
         if (policy.debug() && !admissionReported) {
