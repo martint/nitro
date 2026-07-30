@@ -38,12 +38,26 @@ final class DistinctKeySet
     private final DistinctIndex index;
     private final List<TypeBinding> keyTypes;
     private final int unboundKeyPrefix;
+    private final Allocator allocator;
+    private final Allocator.Context allocationContext;
 
     private DistinctKeySet(DistinctIndex index, List<TypeBinding> keyTypes, int unboundKeyPrefix)
+    {
+        this(index, keyTypes, unboundKeyPrefix, null, null);
+    }
+
+    private DistinctKeySet(
+            DistinctIndex index,
+            List<TypeBinding> keyTypes,
+            int unboundKeyPrefix,
+            Allocator allocator,
+            Allocator.Context allocationContext)
     {
         this.index = index;
         this.keyTypes = List.copyOf(keyTypes);
         this.unboundKeyPrefix = unboundKeyPrefix;
+        this.allocator = allocator;
+        this.allocationContext = allocationContext;
     }
 
     /**
@@ -248,7 +262,7 @@ final class DistinctKeySet
         if (retainNulls) {
             index = new RetainNullsDistinctIndex(index, samples.length, arrayPool, policy);
         }
-        return new DistinctKeySet(index, keyTypes, unboundKeyPrefix);
+        return new DistinctKeySet(index, keyTypes, unboundKeyPrefix, allocator, allocationContext);
     }
 
     private static StructuralKeyKernel[] structuralKeyKernels(
@@ -364,20 +378,35 @@ final class DistinctKeySet
 
     public boolean add(Vector[] values, Vector[] nulls, int position)
     {
-        return index.add(values, nulls, position);
+        try {
+            return index.add(values, nulls, position);
+        }
+        finally {
+            accountRetainedBytes();
+        }
     }
 
     public int addBatch(Vector[] values, Vector[] nulls, Mask mask, int[] distinctPositions)
     {
         validateKeyVectors(values);
-        return index.addBatch(values, nulls, mask, distinctPositions);
+        try {
+            return index.addBatch(values, nulls, mask, distinctPositions);
+        }
+        finally {
+            accountRetainedBytes();
+        }
     }
 
     /** Adds a grouped batch whose first key is a dense group id in {@code [0, groupCount)}. */
     public int addGroupedBatch(Vector[] values, Vector[] nulls, Mask mask, int groupCount, int[] distinctPositions)
     {
         validateKeyVectors(values);
-        return index.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
+        try {
+            return index.addGroupedBatch(values, nulls, mask, groupCount, distinctPositions);
+        }
+        finally {
+            accountRetainedBytes();
+        }
     }
 
     void validateKeyVectors(Vector[] values)
@@ -407,11 +436,20 @@ final class DistinctKeySet
     public void reserveAdditional(int additionalEntries)
     {
         index.reserveAdditional(additionalEntries);
+        accountRetainedBytes();
     }
 
     public void releaseBuffers()
     {
         index.releaseBuffers();
+        accountRetainedBytes();
+    }
+
+    private void accountRetainedBytes()
+    {
+        if (allocator != null) {
+            allocator.setRetainedBytes(allocationContext, index, index.retainedBytes());
+        }
     }
 
     private interface DistinctIndex
@@ -471,6 +509,11 @@ final class DistinctKeySet
         default void reserveAdditional(int additionalEntries) {}
 
         default void releaseBuffers() {}
+
+        default long retainedBytes()
+        {
+            return 0;
+        }
     }
 
     private static final class LongDistinctIndex
@@ -987,6 +1030,13 @@ final class DistinctKeySet
                 }
             }
             return false;
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return table.retainedBytes() +
+                    (probePositions == null ? 0 : (long) probePositions.length * Integer.BYTES);
         }
 
         @Override
@@ -3027,6 +3077,12 @@ final class DistinctKeySet
             arrayPool.release(nonNullDistinctPositions);
             nonNullDistinctPositions = EMPTY_POSITIONS;
             Arrays.fill(nullAccessors, null);
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return delegate.retainedBytes() + (long) nonNullDistinctPositions.length * Integer.BYTES;
         }
 
         private static boolean hasNullStream(Vector[] nulls)

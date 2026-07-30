@@ -651,6 +651,22 @@ final class GroupingState
             boolean moreInputExpected,
             boolean blockingAggregation)
     {
+        try {
+            assignGroupsInternal(values, nulls, mask, result, moreInputExpected, blockingAggregation);
+        }
+        finally {
+            accountFlatGroupingState();
+        }
+    }
+
+    private void assignGroupsInternal(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            boolean moreInputExpected,
+            boolean blockingAggregation)
+    {
         moreInputExpectedForCurrentBatch = moreInputExpected;
         blockingAggregationForCurrentBatch = blockingAggregation;
         if (!initialized && allowsLegacyKeyShortcuts) {
@@ -722,6 +738,13 @@ final class GroupingState
                 probeKeys[keyIndex] = OperatorKeySemantics.probeKey(values[keyIndex], nulls[keyIndex], position, reusableProbeKeys[keyIndex]);
             }
             result.values()[position] = groupForKeys(probeKeys);
+        }
+    }
+
+    private void accountFlatGroupingState()
+    {
+        if (allocator != null && flatGroupingTable != null) {
+            allocator.setRetainedBytes(allocationContext, flatGroupingTable, flatGroupingTable.retainedBytes());
         }
     }
 

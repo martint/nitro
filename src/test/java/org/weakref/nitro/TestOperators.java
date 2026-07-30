@@ -5166,6 +5166,32 @@ public class TestOperators
     }
 
     @Test
+    void testGroupingAndDistinctAccountSharedFlatKeyState()
+    {
+        Allocator.Context groupContext = new Allocator.Context("GroupOperator");
+        assertThat(operator(new GroupOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"), row("beta"), row("alpha"))))))
+                .matchesExactly(List.of(
+                        row(0L, "alpha"),
+                        row(1L, "beta"),
+                        row(0L, "alpha")));
+        assertThat(allocator.peakBytes(groupContext)).isGreaterThan(1_000_000);
+        assertThat(allocator.currentBytes(groupContext)).isZero();
+
+        Allocator.Context distinctContext = new Allocator.Context("MarkDistinctOperator");
+        assertThat(operator(new MarkDistinctOperator(
+                allocator,
+                0,
+                new ConstantTableOperator(allocator, 1, List.of(row("alpha"), row("beta"), row("alpha"))),
+                EngineResources.from(allocator).operatorResources())))
+                .matchesExactly(List.of(row("alpha"), row("beta")));
+        assertThat(allocator.peakBytes(distinctContext)).isGreaterThan(1_000_000);
+        assertThat(allocator.currentBytes(distinctContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();
