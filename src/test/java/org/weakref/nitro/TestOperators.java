@@ -5376,6 +5376,27 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinOutputSingleAdmittedMatch()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(row(1L, 10L))),
+                        0,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(row(1L, 10L), row(1L, 30L))),
+                        0,
+                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))
+                        .withOutputSingleMatch()))
+                .matchesExactly(List.of(row(1L, 10L, 1L, 30L)));
+    }
+
+    @Test
     void testHashJoinLongBitwiseOverlapResidualFilter()
     {
         assertThat(operator(

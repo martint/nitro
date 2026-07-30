@@ -71,6 +71,13 @@ public final class HashJoinSession
         return this;
     }
 
+    public HashJoinSession withOutputSingleMatch()
+    {
+        checkAcceptingInput();
+        join.withOutputSingleMatch();
+        return this;
+    }
+
     /**
      * Transfers ownership of the next probe batch to this session.
      *

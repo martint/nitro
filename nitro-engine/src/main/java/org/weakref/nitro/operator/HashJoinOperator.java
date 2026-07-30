@@ -231,6 +231,7 @@ public class HashJoinOperator
     private boolean singleMatchProbe;
     private boolean singleMatchPositionProbe;
     private boolean compactSingleMatchProbe;
+    private boolean outputSingleMatch;
     private int currentMatchRangeStart;
     private long currentMatchRef;
     private int currentMatchPosition;
@@ -658,7 +659,7 @@ public class HashJoinOperator
                 done = true;
                 probeOutputMode = 3;
             }
-            else if (!probeOuterJoin && joinFilters.length == 0 &&
+            else if (!probeOuterJoin && joinFilters.length == 0 && !outputSingleMatch &&
                     !joinIndex.supportsSingleMatchRefs() && joinIndex.supportsRowRanges()) {
                 probeOutputMode = 2;
             }
@@ -783,6 +784,9 @@ public class HashJoinOperator
                     logicalPositionsReady = false;
                 }
                 outputPosition++;
+                if (outputSingleMatch) {
+                    currentMatchIndex = currentMatchCount;
+                }
             }
 
             if (currentMatchIndex == currentMatchCount) {
@@ -1966,6 +1970,17 @@ public class HashJoinOperator
         }
         this.outputChannels = selected;
         this.outputSchema = selectOutputs(fullOutputSchema, selected);
+        return this;
+    }
+
+    /**
+     * Emits at most one admitted build match for each probe row. This is valid when the physical
+     * plan is insensitive to duplicate build matches and no projected build payload can distinguish
+     * those matches.
+     */
+    public HashJoinOperator withOutputSingleMatch()
+    {
+        this.outputSingleMatch = true;
         return this;
     }
 
