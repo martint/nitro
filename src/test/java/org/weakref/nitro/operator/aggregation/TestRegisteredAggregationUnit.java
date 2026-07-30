@@ -72,6 +72,28 @@ class TestRegisteredAggregationUnit
                 .isSameAs(implementation.result);
     }
 
+    @Test
+    void testDistinctIdentityDecoratesRegisteredUnit()
+    {
+        TrackingImplementation implementation = new TrackingImplementation();
+        RegisteredAggregationUnit registered = new RegisteredAggregationUnit(
+                implementation,
+                RAW,
+                FINAL,
+                new int[] {7, 2});
+        int[] distinctColumns = {2, 7};
+        DistinctPhysicalAggregationUnit distinct = new DistinctPhysicalAggregationUnit(registered, distinctColumns);
+
+        distinctColumns[0] = 99;
+        assertThat(distinct.distinctInputColumns()).containsExactly(2, 7);
+        assertThat(distinct.filterInputColumn()).isEqualTo(-1);
+
+        StreamAccessor inputs = (column, stream) -> new I64Vector(new long[] {column});
+        distinct.accumulateDistinctSelected(new Object(), 0, Mask.all(1), inputs);
+        assertThat(implementation.raw).isTrue();
+        assertThat(((I64Vector) implementation.firstInput).values()).containsExactly(7);
+    }
+
     private static final class TrackingImplementation
             implements AggregationImplementation
     {
