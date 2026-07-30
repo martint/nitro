@@ -45,6 +45,62 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestGroupedAggregationSession
 {
     @Test
+    void testAdaptivePartialAggregationFlushAndPassthrough()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch input = batch(1, 1, 2)) {
+                session.addInput(input, 30);
+            }
+            session.flush();
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch result = session.getOutput()) {
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(1, 2);
+                assertThat(selectedLongValues(result, 1))
+                        .containsExactly(2, 1);
+            }
+            assertThat(control.aggregatedFlushes).isEqualTo(1);
+            assertThat(control.inputBytes).isEqualTo(30);
+            assertThat(control.inputRows).isEqualTo(3);
+            assertThat(control.outputRows).isEqualTo(2);
+
+            control.enabled = false;
+            try (Batch input = batch(3, 3);
+                    Batch result = addAndGetOutput(session, input, 20)) {
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(3, 3);
+                assertThat(selectedLongValues(result, 1))
+                        .containsExactly(1, 1);
+            }
+            assertThat(control.passthroughFlushes).isEqualTo(1);
+            assertThat(control.inputBytes).isEqualTo(50);
+            assertThat(control.inputRows).isEqualTo(5);
+
+            control.enabled = true;
+            try (Batch input = batch(4, 4)) {
+                session.addInput(input, 20);
+            }
+            try (Batch result = session.finish()) {
+                assertThat(((I64Vector) result.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(4);
+                assertThat(selectedLongValues(result, 1))
+                        .containsExactly(2);
+            }
+        }
+    }
+
+    @Test
     void testBuildsInitialAggregationRowsWithoutGrouping()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -156,6 +212,54 @@ class TestGroupedAggregationSession
         return new Batch(
                 Mask.all(values.length),
                 Output.of(Streams.ofValues(new I64Vector(values))));
+    }
+
+    private static Batch addAndGetOutput(GroupedAggregationSession session, Batch input, long inputBytes)
+    {
+        session.addInput(input, inputBytes);
+        assertThat(session.hasOutput()).isTrue();
+        return session.getOutput();
+    }
+
+    private static long[] selectedLongValues(Batch batch, int output)
+    {
+        return Arrays.copyOf(
+                ((I64Vector) batch.output(output).borrow(Stream.VALUES)).values(),
+                batch.borrowMask().count());
+    }
+
+    private static final class TestingPartialAggregationControl
+            implements PartialAggregationControl
+    {
+        private boolean enabled = true;
+        private int aggregatedFlushes;
+        private int passthroughFlushes;
+        private long inputBytes;
+        private long inputRows;
+        private long outputRows;
+
+        @Override
+        public boolean aggregationEnabled()
+        {
+            return enabled;
+        }
+
+        @Override
+        public void onAggregatedFlush(long inputBytes, long inputRows, long outputRows)
+        {
+            aggregatedFlushes++;
+            this.inputBytes += inputBytes;
+            this.inputRows += inputRows;
+            this.outputRows += outputRows;
+        }
+
+        @Override
+        public void onPassthroughFlush(long inputBytes, long inputRows)
+        {
+            passthroughFlushes++;
+            this.inputBytes += inputBytes;
+            this.inputRows += inputRows;
+        }
     }
 
     private static TypeBinding binaryType()

@@ -25,6 +25,11 @@ public interface BatchAggregationSession
 
     void addInput(Batch batch);
 
+    default void addInput(Batch batch, long inputBytes)
+    {
+        addInput(batch);
+    }
+
     default boolean hasOutput()
     {
         return false;
@@ -33,6 +38,11 @@ public interface BatchAggregationSession
     default Batch getOutput()
     {
         throw new IllegalStateException("aggregation session has no output");
+    }
+
+    default void flush()
+    {
+        throw new UnsupportedOperationException("aggregation session cannot flush");
     }
 
     Batch finish();

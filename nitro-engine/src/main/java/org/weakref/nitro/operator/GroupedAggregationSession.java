@@ -31,7 +31,20 @@ import static java.util.Objects.requireNonNull;
 public final class GroupedAggregationSession
         implements BatchAggregationSession
 {
-    private final GroupedAggregationOperator aggregation;
+    private final Allocator allocator;
+    private final Schema inputSchema;
+    private final List<Integer> groupByColumns;
+    private final List<Integer> groupedColumns;
+    private final PhysicalAggregationProgram program;
+    private final OperatorResources operatorResources;
+    private final PartialAggregationControl partialAggregationControl;
+    private final InitialAggregationBatchBuilder initialAggregationBatchBuilder;
+    private GroupedAggregationOperator currentAggregation;
+    private GroupedAggregationOperator flushedAggregation;
+    private Batch pendingOutput;
+    private boolean aggregatedInput;
+    private long inputBytes;
+    private long inputRows;
     private boolean finished;
     private boolean closed;
 
@@ -43,25 +56,100 @@ public final class GroupedAggregationSession
             PhysicalAggregationProgram program,
             OperatorResources operatorResources)
     {
-        requireNonNull(inputSchema, "inputSchema is null");
-        aggregation = new GroupedAggregationOperator(
-                requireNonNull(allocator, "allocator is null"),
-                List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null")),
-                List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null")),
-                requireNonNull(program, "program is null"),
-                new SchemaSource(inputSchema),
-                requireNonNull(operatorResources, "operatorResources is null"));
+        this(allocator, inputSchema, groupByColumns, groupedColumns, program, operatorResources, null);
+    }
+
+    public GroupedAggregationSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            PartialAggregationControl partialAggregationControl)
+    {
+        this.allocator = requireNonNull(allocator, "allocator is null");
+        this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
+        this.groupByColumns = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
+        this.groupedColumns = List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null"));
+        this.program = requireNonNull(program, "program is null");
+        this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.partialAggregationControl = partialAggregationControl;
+        initialAggregationBatchBuilder = partialAggregationControl == null ? null : new InitialAggregationBatchBuilder(
+                allocator,
+                inputSchema,
+                groupedColumns,
+                program,
+                operatorResources);
+        currentAggregation = createAggregation();
     }
 
     public Schema outputSchema()
     {
-        return aggregation.outputSchema();
+        return currentAggregation != null ? currentAggregation.outputSchema() : initialAggregationBatchBuilder.outputSchema();
     }
 
     public void addInput(Batch batch)
     {
+        addInput(batch, 0);
+    }
+
+    @Override
+    public void addInput(Batch batch, long inputBytes)
+    {
         checkAcceptingInput();
-        aggregation.addInput(requireNonNull(batch, "batch is null"));
+        requireNonNull(batch, "batch is null");
+        if (inputBytes < 0) {
+            throw new IllegalArgumentException("inputBytes is negative");
+        }
+        releaseFlushedAggregation();
+        if (partialAggregationControl != null && !partialAggregationControl.aggregationEnabled()) {
+            pendingOutput = initialAggregationBatchBuilder.build(batch);
+            partialAggregationControl.onPassthroughFlush(inputBytes, batch.borrowMask().count());
+            return;
+        }
+        ensureAggregation();
+        currentAggregation.addInput(batch);
+        aggregatedInput = true;
+        this.inputBytes += inputBytes;
+        inputRows += batch.borrowMask().count();
+    }
+
+    @Override
+    public boolean hasOutput()
+    {
+        return pendingOutput != null;
+    }
+
+    @Override
+    public Batch getOutput()
+    {
+        checkOpen();
+        if (pendingOutput == null) {
+            throw new IllegalStateException("grouped aggregation session has no output");
+        }
+        Batch output = pendingOutput;
+        pendingOutput = null;
+        return output;
+    }
+
+    @Override
+    public void flush()
+    {
+        checkAcceptingInput();
+        if (partialAggregationControl == null) {
+            throw new UnsupportedOperationException("grouped aggregation session is not adaptive");
+        }
+        if (!aggregatedInput) {
+            return;
+        }
+        pendingOutput = currentAggregation.finishInput();
+        flushedAggregation = currentAggregation;
+        currentAggregation = null;
+        partialAggregationControl.onAggregatedFlush(inputBytes, inputRows, pendingOutput.borrowMask().count());
+        aggregatedInput = false;
+        inputBytes = 0;
+        inputRows = 0;
     }
 
     public Batch finish()
@@ -70,8 +158,13 @@ public final class GroupedAggregationSession
         if (finished) {
             throw new IllegalStateException("grouped aggregation session is already finished");
         }
+        if (pendingOutput != null) {
+            throw new IllegalStateException("grouped aggregation session has pending output");
+        }
         finished = true;
-        return aggregation.finishInput();
+        releaseFlushedAggregation();
+        ensureAggregation();
+        return currentAggregation.finishInput();
     }
 
     private void checkAcceptingInput()
@@ -79,6 +172,9 @@ public final class GroupedAggregationSession
         checkOpen();
         if (finished) {
             throw new IllegalStateException("grouped aggregation session is finished");
+        }
+        if (pendingOutput != null) {
+            throw new IllegalStateException("grouped aggregation session has pending output");
         }
     }
 
@@ -96,7 +192,41 @@ public final class GroupedAggregationSession
             return;
         }
         closed = true;
-        aggregation.close();
+        if (pendingOutput != null) {
+            pendingOutput.close();
+            pendingOutput = null;
+        }
+        if (currentAggregation != null) {
+            currentAggregation.close();
+            currentAggregation = null;
+        }
+        releaseFlushedAggregation();
+    }
+
+    private GroupedAggregationOperator createAggregation()
+    {
+        return new GroupedAggregationOperator(
+                allocator,
+                groupByColumns,
+                groupedColumns,
+                program,
+                new SchemaSource(inputSchema),
+                operatorResources);
+    }
+
+    private void ensureAggregation()
+    {
+        if (currentAggregation == null) {
+            currentAggregation = createAggregation();
+        }
+    }
+
+    private void releaseFlushedAggregation()
+    {
+        if (flushedAggregation != null) {
+            flushedAggregation.close();
+            flushedAggregation = null;
+        }
     }
 
     private static final class SchemaSource
