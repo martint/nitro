@@ -268,6 +268,11 @@ final class BufferedJoinInput
             if (mask.none()) {
                 continue;
             }
+            if (mask.all()) {
+                rowCount += mask.count();
+                batches.add(InnerBatch.retained(batch, mask.count()));
+                continue;
+            }
             if (!mask.all()) {
                 Streams[] columns = new Streams[columnCount];
                 compactionPositions.reset();
@@ -310,7 +315,8 @@ final class BufferedJoinInput
             int[] sourcePositions = null;
             for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
                 if (batch.retained()) {
-                    columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], batch.positions(), batch.length(), outputStart, size);
+                    int[] positions = batch.positions() == null ? densePositions(batch.length()) : batch.positions();
+                    columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], positions, batch.length(), outputStart, size);
                 }
                 else if (policy.coalesceRangeSelection() && buffers.canCopyRangeWithoutMaterializing(batch.columns()[columnIndex])) {
                     columns[columnIndex] = buffers.copyPositions(columns[columnIndex], batch.columns()[columnIndex], sourceRange, outputStart, size);
@@ -554,6 +560,11 @@ final class BufferedJoinInput
         public static InnerBatch retained(Batch batch, int[] positions)
         {
             return new InnerBatch(null, positions.length, batch, positions);
+        }
+
+        public static InnerBatch retained(Batch batch, int length)
+        {
+            return new InnerBatch(null, length, batch, null);
         }
 
         public static InnerBatch deferred(Batch batch, int[] positions)
