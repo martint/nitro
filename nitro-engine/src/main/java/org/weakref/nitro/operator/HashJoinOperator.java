@@ -256,6 +256,7 @@ public class HashJoinOperator
     private int currentMatchCount;
     private boolean currentOuterJoinHasNulls;
     private int currentMatchIndex;
+    private boolean currentOuterMatchEmitted;
     private int currentOutputCount;
     // 0 = not inspected for this output batch, 1 = contains a match, 2 = entirely unmatched.
     private byte allRowsNoMatchState;
@@ -375,9 +376,6 @@ public class HashJoinOperator
         }
         if (outerJoinColumns.length == 0) {
             throw new IllegalArgumentException("Hash join requires at least one join key");
-        }
-        if (probeOuterJoin && joinFilters.length != 0) {
-            throw new IllegalArgumentException("Join filters are not yet supported for probe outer joins");
         }
         Schema outerSchema = outer.outputSchema();
         Schema innerSchema = inner.outputSchema();
@@ -738,6 +736,7 @@ public class HashJoinOperator
                 preparedOuterIndex++;
                 currentOuterPositionReady = true;
                 currentMatchIndex = 0;
+                currentOuterMatchEmitted = false;
                 cacheCurrentOuterFilterValue();
             }
 
@@ -784,12 +783,18 @@ public class HashJoinOperator
                     logicalPositionsReady = false;
                 }
                 outputPosition++;
+                currentOuterMatchEmitted = true;
                 if (outputSingleMatch) {
                     currentMatchIndex = currentMatchCount;
                 }
             }
 
             if (currentMatchIndex == currentMatchCount) {
+                if (probeOuterJoin && !currentOuterMatchEmitted) {
+                    outputOuterPositions[outputPosition] = currentOuterPosition;
+                    outputInnerRows[outputPosition] = NO_MATCH_ROW_REFERENCE;
+                    outputPosition++;
+                }
                 outerRemaining--;
                 currentOuterPositionReady = false;
                 currentMatches = LongLists.emptyList();

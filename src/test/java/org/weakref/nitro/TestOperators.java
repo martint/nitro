@@ -5594,6 +5594,40 @@ public class TestOperators
     }
 
     @Test
+    void testLeftHashJoinResidualFilterNullExtendsOnlyWhenEveryCandidateIsRejected()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        EngineResources.from(allocator).operatorResources(),
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(1L, 20L),
+                                        row(2L, 30L),
+                                        row(3L, 40L))),
+                        new int[] {0},
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(
+                                        row(1L, 10L),
+                                        row(1L, 30L),
+                                        row(2L, 30L))),
+                        new int[] {0},
+                        true,
+                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))))
+                .matchesExactly(List.of(
+                        row(1L, 10L, 1L, 30L),
+                        row(1L, 20L, 1L, 10L),
+                        row(1L, 20L, 1L, 30L),
+                        row(2L, 30L, null, null),
+                        row(3L, 40L, null, null)));
+    }
+
+    @Test
     void testHashJoinOutputSingleAdmittedMatch()
     {
         assertThat(operator(
