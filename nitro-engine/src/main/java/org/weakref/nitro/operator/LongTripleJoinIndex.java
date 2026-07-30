@@ -296,6 +296,22 @@ final class LongTripleJoinIndex
         rowsBySlot = null;
     }
 
+    @Override
+    long retainedBytes()
+    {
+        long bytes = tags == null ? 0 : tags.length;
+        bytes += entries == null ? 0 : (long) entries.length * Long.BYTES;
+        if (rowsBySlot != null) {
+            bytes += (long) rowsBySlot.length * Long.BYTES;
+            for (LongArrayList rows : rowsBySlot) {
+                if (rows != null) {
+                    bytes += (long) rows.elements().length * Long.BYTES;
+                }
+            }
+        }
+        return bytes;
+    }
+
     private void releaseRowsBySlot(LongArrayList[] rows)
     {
         if (rows == null) {

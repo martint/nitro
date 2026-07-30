@@ -968,6 +968,25 @@ final class LongPairJoinIndex
         keyOnlyCounts = null;
     }
 
+    @Override
+    long retainedBytes()
+    {
+        long bytes = tags == null ? 0 : tags.length;
+        bytes += entries == null ? 0 : (long) entries.length * Long.BYTES;
+        bytes += entryIds == null ? 0 : (long) entryIds.length * Integer.BYTES;
+        bytes += denseKeys == null ? 0 : (long) denseKeys.length * Long.BYTES;
+        bytes += denseRowStates32 == null ? 0 : (long) denseRowStates32.length * Integer.BYTES;
+        bytes += denseRowStates == null ? 0 : (long) denseRowStates.length * Long.BYTES;
+        bytes += keyOnlyCounts == null ? 0 : (long) keyOnlyCounts.length * Integer.BYTES;
+        bytes += duplicateHead == null ? 0 : (long) duplicateHead.length * Integer.BYTES;
+        bytes += duplicateTail == null ? 0 : (long) duplicateTail.length * Integer.BYTES;
+        bytes += duplicateCount == null ? 0 : (long) duplicateCount.length * Integer.BYTES;
+        bytes += duplicateNext == null ? 0 : (long) duplicateNext.length * Integer.BYTES;
+        bytes += duplicateRows32 == null ? 0 : (long) duplicateRows32.length * Integer.BYTES;
+        bytes += duplicateRows == null ? 0 : (long) duplicateRows.length * Long.BYTES;
+        return Math.addExact(bytes, matchScratch.retainedBytes());
+    }
+
     private void appendDuplicateRow(int slot, long existingRowReference, long rowReference)
     {
         if (denseCompactEntries) {

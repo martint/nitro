@@ -43,4 +43,9 @@ final class JoinMatchScratch
     {
         return batchChains[index];
     }
+
+    long retainedBytes()
+    {
+        return batchChains == null ? 0 : (long) batchChains.length * Long.BYTES;
+    }
 }

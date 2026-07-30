@@ -5120,6 +5120,35 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinAccountsPrimitiveCompositeIndexMemory()
+    {
+        Allocator.Context indexContext = new Allocator.Context("HashJoinOperatorIndex");
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L), row(2L, 20L), row(3L, 30L))),
+                new int[] {0, 1},
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L), row(2L, 20L), row(4L, 40L))),
+                new int[] {0, 1})) {
+            try (Batch ignored = join.next()) {
+                assertThat(allocator.peakBytes(indexContext)).isPositive();
+            }
+        }
+        assertThat(allocator.currentBytes(indexContext)).isZero();
+
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 3, List.of(row(1L, 10L, 100L), row(2L, 20L, 200L), row(3L, 30L, 300L))),
+                new int[] {0, 1, 2},
+                new ConstantTableOperator(allocator, 3, List.of(row(1L, 10L, 100L), row(2L, 20L, 200L), row(4L, 40L, 400L))),
+                new int[] {0, 1, 2})) {
+            try (Batch ignored = join.next()) {
+                assertThat(allocator.peakBytes(indexContext)).isPositive();
+            }
+        }
+        assertThat(allocator.currentBytes(indexContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();
