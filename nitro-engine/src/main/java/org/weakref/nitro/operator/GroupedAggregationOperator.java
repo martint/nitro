@@ -1259,7 +1259,6 @@ public class GroupedAggregationOperator
         private final int sourceStart;
         private final int size;
         private final Streams[] materialized = new Streams[outputCount()];
-        private final Streams[] fallbackSources = new Streams[program.outputs().size()];
         private Mask mask;
 
         private DenseBatchState(int sourceStart, int size, Mask mask)
@@ -1316,7 +1315,7 @@ public class GroupedAggregationOperator
                 throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
             }
             int aggregationOutput = output - groupedResults.length;
-            Streams source = fallbackSources[aggregationOutput];
+            Streams source = result[aggregationOutput];
             if (source == null) {
                 PhysicalAggregationProgram.Output binding = program.outputs().get(aggregationOutput);
                 source = aggregations[binding.unit()].result(
@@ -1326,7 +1325,7 @@ public class GroupedAggregationOperator
                         null,
                         allocator,
                         allocationContext);
-                fallbackSources[aggregationOutput] = source;
+                result[aggregationOutput] = source;
             }
 
             Streams.Builder copied = Streams.builder();

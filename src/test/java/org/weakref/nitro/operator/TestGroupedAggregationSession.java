@@ -38,6 +38,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -111,8 +112,21 @@ class TestGroupedAggregationSession
     @Test
     void testFallsBackToFullAggregateResultWhenDensePositionCopyIsUnavailable()
     {
+        AtomicInteger materializations = new AtomicInteger();
         CountAll aggregateWithoutPositionCopy = new CountAll()
         {
+            @Override
+            public Streams result(
+                    int maxGroup,
+                    Streams state,
+                    Streams output,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                materializations.incrementAndGet();
+                return super.result(maxGroup, state, output, allocator, allocationContext);
+            }
+
             @Override
             public Streams copyResultPosition(
                     int group,
@@ -137,17 +151,27 @@ class TestGroupedAggregationSession
                         PhysicalAggregationProgram.independent(List.of(aggregateWithoutPositionCopy)),
                         resources.operatorResources(),
                         null,
-                        4)) {
+                        2)) {
             allocator.beginExecution();
-            try (Batch input = batch(10, 20, 10, 30, 40, 40, 40)) {
+            try (Batch input = batch(10, 20, 10, 30, 40, 40, 40, 50)) {
                 session.addInput(input);
             }
 
-            try (Batch result = session.finish()) {
-                result.constrain(Mask.sparse(new int[] {1, 3}, 4));
-                assertThat(selectedLongValues(result, 0)).containsExactly(20, 40);
-                assertThat(selectedLongValues(result, 1)).containsExactly(1, 3);
+            try (Batch first = session.finish()) {
+                first.constrain(Mask.sparse(new int[] {1}, 2));
+                assertThat(selectedLongValues(first, 0)).containsExactly(20);
+                assertThat(selectedLongValues(first, 1)).containsExactly(1);
             }
+            try (Batch second = session.getOutput()) {
+                second.constrain(Mask.sparse(new int[] {1}, 2));
+                assertThat(selectedLongValues(second, 0)).containsExactly(40);
+                assertThat(selectedLongValues(second, 1)).containsExactly(3);
+            }
+            try (Batch third = session.getOutput()) {
+                assertThat(selectedLongValues(third, 0)).containsExactly(50);
+                assertThat(selectedLongValues(third, 1)).containsExactly(1);
+            }
+            assertThat(materializations).hasValue(1);
         }
     }
 
