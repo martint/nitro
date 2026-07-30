@@ -147,6 +147,56 @@ class TestHashJoinSession
         }
     }
 
+    @Test
+    void testSharesPreparedTripleBuildAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1, 2},
+                            tripleTable(
+                                    new long[] {2, 3, 2},
+                                    new long[] {20, 30, 21},
+                                    new long[] {200, 300, 201}),
+                            new int[] {0, 1, 2},
+                            false,
+                            new int[] {0, 1, 2, 3, 4, 5})
+                    .orElseThrow();
+            try (build;
+                    HashJoinSession first = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1, 2},
+                            tripleTable(
+                                    new long[] {2, 3, 2},
+                                    new long[] {20, 30, 21},
+                                    new long[] {200, 300, 201}),
+                            new int[] {0, 1, 2},
+                            false,
+                            build);
+                    HashJoinSession second = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1, 2},
+                            tripleTable(
+                                    new long[] {2, 3, 2},
+                                    new long[] {20, 30, 21},
+                                    new long[] {200, 300, 201}),
+                            new int[] {0, 1, 2},
+                            false,
+                            build)) {
+                assertTripleSessionOutput(first, 2, 21, 201);
+                assertTripleSessionOutput(second, 3, 30, 300);
+            }
+        }
+    }
+
     private static void assertSessionOutput(HashJoinSession session, long probeValue)
     {
         List<Long> probeValues = new ArrayList<>();
@@ -169,6 +219,23 @@ class TestHashJoinSession
         drain(session, probeValues, buildValues);
         assertThat(probeValues).containsExactly(first);
         assertThat(buildValues).containsExactly(second);
+    }
+
+    private static void assertTripleSessionOutput(HashJoinSession session, long first, long second, long third)
+    {
+        session.addInput(tripleBatch(
+                new long[] {first},
+                new long[] {second},
+                new long[] {third}));
+        assertThat(session.hasOutput()).isTrue();
+        try (Batch output = session.getOutput()) {
+            assertThat(VectorAccess.longValues(output.output(0).borrow(Stream.VALUES)).value(0)).isEqualTo(first);
+            assertThat(VectorAccess.longValues(output.output(5).borrow(Stream.VALUES)).value(0)).isEqualTo(third);
+        }
+        session.finish();
+        while (session.hasOutput()) {
+            session.getOutput().close();
+        }
     }
 
     private static void drain(HashJoinSession session, List<Long> probeValues, List<Long> buildValues)
@@ -218,6 +285,28 @@ class TestHashJoinSession
                 List.of(TableOperator.Page.values(
                         first.length,
                         new org.weakref.nitro.data.Vector[] {new I64Vector(first), new I64Vector(second)},
+                        Mask.all(first.length))));
+    }
+
+    private static Batch tripleBatch(long[] first, long[] second, long[] third)
+    {
+        return new Batch(
+                Mask.all(first.length),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(first))),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(second))),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(third))));
+    }
+
+    private static Operator tripleTable(long[] first, long[] second, long[] third)
+    {
+        return new TableOperator(
+                Schema.unspecified(3),
+                List.of(TableOperator.Page.values(
+                        first.length,
+                        new org.weakref.nitro.data.Vector[] {
+                                new I64Vector(first),
+                                new I64Vector(second),
+                                new I64Vector(third)},
                         Mask.all(first.length))));
     }
 }

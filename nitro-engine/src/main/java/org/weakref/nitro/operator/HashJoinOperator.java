@@ -2012,7 +2012,10 @@ public class HashJoinOperator
             throw new IllegalStateException("Cannot prepare an already prepared hash join");
         }
         loadInnerIfNecessary();
-        if (!(joinIndex instanceof LongJoinIndex) && !(joinIndex instanceof LongPairJoinIndex)) {
+        if (!(joinIndex instanceof LongJoinIndex) &&
+                !(joinIndex instanceof LongPairJoinIndex) &&
+                !(joinIndex instanceof LongTripleJoinIndex) &&
+                !(joinIndex instanceof StructuralHashJoinIndex)) {
             return null;
         }
         if (joinIndex instanceof LongJoinIndex longJoinIndex) {
@@ -2028,6 +2031,12 @@ public class HashJoinOperator
         }
         if (joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
             return longPairJoinIndex.newProbeView();
+        }
+        if (joinIndex instanceof LongTripleJoinIndex longTripleJoinIndex) {
+            return longTripleJoinIndex.newProbeView();
+        }
+        if (joinIndex instanceof StructuralHashJoinIndex structuralHashJoinIndex) {
+            return structuralHashJoinIndex.newProbeView();
         }
         throw new IllegalStateException("Hash join build is not prepared");
     }

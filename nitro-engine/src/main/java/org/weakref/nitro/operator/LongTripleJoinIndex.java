@@ -53,16 +53,37 @@ final class LongTripleJoinIndex
     private int size;
     private boolean tripleHasDuplicates;
     private final SingleLongList singleMatch = new SingleLongList();
+    private final boolean ownsStorage;
 
     LongTripleJoinIndex(HashJoinExecutionPolicy executionPolicy, PrimitiveArrayPool arrayPool, int expectedSize)
     {
         this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
         this.arrayPool = arrayPool;
+        this.ownsStorage = true;
         int capacity = GROUP;
         while (capacity < expectedSize / LOAD_FACTOR) {
             capacity <<= 1;
         }
         allocate(capacity);
+    }
+
+    private LongTripleJoinIndex(LongTripleJoinIndex prepared)
+    {
+        this.executionPolicy = prepared.executionPolicy;
+        this.arrayPool = prepared.arrayPool;
+        this.tags = prepared.tags;
+        this.entries = prepared.entries;
+        this.rowsBySlot = prepared.rowsBySlot;
+        this.mask = prepared.mask;
+        this.maxFill = prepared.maxFill;
+        this.size = prepared.size;
+        this.tripleHasDuplicates = prepared.tripleHasDuplicates;
+        this.ownsStorage = false;
+    }
+
+    LongTripleJoinIndex newProbeView()
+    {
+        return new LongTripleJoinIndex(this);
     }
 
     private void allocate(int capacity)
@@ -288,6 +309,9 @@ final class LongTripleJoinIndex
     @Override
     public void releaseBuffers()
     {
+        if (!ownsStorage) {
+            return;
+        }
         arrayPool.release(tags);
         tags = null;
         arrayPool.release(entries);
@@ -299,6 +323,9 @@ final class LongTripleJoinIndex
     @Override
     long retainedBytes()
     {
+        if (!ownsStorage) {
+            return 0;
+        }
         long bytes = tags == null ? 0 : tags.length;
         bytes += entries == null ? 0 : (long) entries.length * Long.BYTES;
         if (rowsBySlot != null) {

@@ -24,14 +24,30 @@ import java.util.Map;
 final class StructuralHashJoinIndex
         extends JoinIndex
 {
-    private final Map<StructuralHashRowKey, LongArrayList> rowsByKey = new HashMap<>();
+    private final Map<StructuralHashRowKey, LongArrayList> rowsByKey;
     private final StructuralKeyKernel[] kernels;
     private final StructuralHashRowKey reusableProbeKey;
+    private final boolean ownsStorage;
 
     StructuralHashJoinIndex(StructuralKeyKernel[] kernels)
     {
         this.kernels = kernels;
+        this.rowsByKey = new HashMap<>();
         this.reusableProbeKey = new StructuralHashRowKey(kernels);
+        this.ownsStorage = true;
+    }
+
+    private StructuralHashJoinIndex(StructuralHashJoinIndex prepared)
+    {
+        this.kernels = prepared.kernels;
+        this.rowsByKey = prepared.rowsByKey;
+        this.reusableProbeKey = new StructuralHashRowKey(kernels);
+        this.ownsStorage = false;
+    }
+
+    StructuralHashJoinIndex newProbeView()
+    {
+        return new StructuralHashJoinIndex(this);
     }
 
     @Override
@@ -60,6 +76,27 @@ final class StructuralHashJoinIndex
         reusableProbeKey.set(values, nulls, position);
         LongArrayList rows = rowsByKey.get(reusableProbeKey);
         return rows == null ? LongLists.emptyList() : rows;
+    }
+
+    @Override
+    long retainedBytes()
+    {
+        if (!ownsStorage) {
+            return 0;
+        }
+        long bytes = 0;
+        for (LongArrayList rows : rowsByKey.values()) {
+            bytes += (long) rows.elements().length * Long.BYTES;
+        }
+        return bytes;
+    }
+
+    @Override
+    void releaseBuffers()
+    {
+        if (ownsStorage) {
+            rowsByKey.clear();
+        }
     }
 
     private static boolean hasNull(Vector[] values, Vector[] nulls, int position)
