@@ -80,6 +80,35 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testNarrowsBoundedFinalBatchBeforeMaterializingOutputs()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        4)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 30, 40)) {
+                session.addInput(input);
+            }
+
+            try (Batch result = session.finish()) {
+                Mask selected = Mask.sparse(new int[] {1, 3}, 4);
+                result.constrain(selected);
+                assertThat(selectedLongValues(result, 0)).containsExactly(20, 40);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 1);
+                assertThat(result.takeMask()).isSameAs(selected);
+            }
+        }
+    }
+
+    @Test
     void testRetainedBytesExcludeReleasedAllocatorPool()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();

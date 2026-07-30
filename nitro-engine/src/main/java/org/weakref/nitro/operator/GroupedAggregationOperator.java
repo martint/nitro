@@ -37,9 +37,7 @@ import org.weakref.nitro.operator.aggregation.StreamAccessors;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumSet;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
@@ -490,56 +488,47 @@ public class GroupedAggregationOperator
     private Batch denseOutputBatch(int sourceStart, int outputRows)
     {
         Mask mask = allocator.allocateAllMask(allocationContext, outputRows);
-        Streams[] denseResults = new Streams[outputCount()];
-        for (int output = 0; output < denseResults.length; output++) {
-            Streams streams = null;
-            for (int outputPosition = 0; outputPosition < outputRows; outputPosition++) {
-                int sourcePosition = sourceStart + outputPosition;
-                streams = output < groupedResults.length
-                        ? groupedKeyCopyPosition(output, streams, sourcePosition, outputPosition, outputRows)
-                        : aggregationCopyPosition(output - groupedResults.length, streams, sourcePosition, outputPosition, outputRows);
-                if (streams == null) {
-                    if (output < groupedResults.length) {
-                        throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
-                    }
-                    PhysicalAggregationProgram.Output binding = program.outputs().get(output - groupedResults.length);
-                    throw new IllegalStateException("Aggregation output %s (%s) does not support dense position copying".formatted(
-                            output - groupedResults.length,
-                            aggregations[binding.unit()]));
-                }
-            }
-            denseResults[output] = streams;
-        }
-
-        Set<Vector> transferred = Collections.newSetFromMap(new IdentityHashMap<>());
-        Output[] outputs = new Output[denseResults.length];
+        DenseBatchState batchState = new DenseBatchState(sourceStart, outputRows, mask);
+        Output[] outputs = new Output[outputCount()];
         for (int output = 0; output < outputs.length; output++) {
-            Streams streams = denseResults[output];
+            int outputIndex = output;
             outputs[output] = new Output(
-                    streams.streams(),
-                    streams::get,
-                    (_, vector) -> {
-                        transferred.add(vector);
-                        return allocator.transfer(allocationContext, vector);
-                    },
-                    (_, _) -> {});
+                    EnumSet.of(Stream.VALUES, Stream.NULLS),
+                    stream -> batchState.output(outputIndex).get(stream),
+                    (_, vector) -> allocator.transfer(allocationContext, vector),
+                    (_, vector) -> allocator.release(allocationContext, vector),
+                    (existing, sourcePosition, outputPosition, size) -> copyDenseOutputPosition(
+                            outputIndex,
+                            existing,
+                            batchState.sourceStart + sourcePosition,
+                            outputPosition,
+                            size))
+                    .withConstraintSensitiveResolution();
         }
         return new Batch(
                 mask,
-                _ -> {},
+                batchState::constrain,
                 takenMask -> allocator.transfer(allocationContext, takenMask),
                 releasedMask -> allocator.release(allocationContext, releasedMask),
-                () -> {
-                    for (Streams streams : denseResults) {
-                        for (int index = 0; index < streams.vectorCount(); index++) {
-                            Vector vector = streams.vectorAt(index);
-                            if (!transferred.contains(vector)) {
-                                allocator.release(allocationContext, vector);
-                            }
-                        }
-                    }
-                },
+                () -> {},
                 outputs);
+    }
+
+    private Streams copyDenseOutputPosition(int output, Streams existing, int sourcePosition, int outputPosition, int size)
+    {
+        Streams streams = output < groupedResults.length
+                ? groupedKeyCopyPosition(output, existing, sourcePosition, outputPosition, size)
+                : aggregationCopyPosition(output - groupedResults.length, existing, sourcePosition, outputPosition, size);
+        if (streams != null) {
+            return streams;
+        }
+        if (output < groupedResults.length) {
+            throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
+        }
+        PhysicalAggregationProgram.Output binding = program.outputs().get(output - groupedResults.length);
+        throw new IllegalStateException("Aggregation output %s (%s) does not support dense position copying".formatted(
+                output - groupedResults.length,
+                aggregations[binding.unit()]));
     }
 
     private void startInlineGrouping()
@@ -1266,6 +1255,64 @@ public class GroupedAggregationOperator
         {
             this.mask = mask;
         }
+    }
+
+    private final class DenseBatchState
+    {
+        private final int sourceStart;
+        private final int size;
+        private final Streams[] materialized = new Streams[outputCount()];
+        private Mask mask;
+
+        private DenseBatchState(int sourceStart, int size, Mask mask)
+        {
+            this.sourceStart = sourceStart;
+            this.size = size;
+            this.mask = mask;
+        }
+
+        private Streams output(int output)
+        {
+            Streams streams = materialized[output];
+            if (streams != null) {
+                return streams;
+            }
+            for (int outputPosition : mask) {
+                streams = copyDenseOutputPosition(
+                        output,
+                        streams,
+                        sourceStart + outputPosition,
+                        outputPosition,
+                        size);
+            }
+            if (streams == null) {
+                streams = emptyDenseOutput(output);
+            }
+            materialized[output] = streams;
+            return streams;
+        }
+
+        private void constrain(Mask mask)
+        {
+            this.mask = mask;
+            Arrays.fill(materialized, null);
+        }
+    }
+
+    private Streams emptyDenseOutput(int output)
+    {
+        TypeBinding type = outputSchema.field(output).type();
+        Vector values = !type.isSpecified()
+                ? allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new)
+                : type.vectorFactory()
+                        .orElseThrow(() -> new IllegalStateException("Output type does not provide a vector factory"))
+                        .nullValues(allocator.vectorAllocator(allocationContext), 0);
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                null,
+                0);
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     @Override

@@ -25,7 +25,7 @@ public final class SingleBatchOperator
 {
     private final Schema outputSchema;
     private final Supplier<Output[]> outputsSupplier;
-    private final Batch delegate;
+    private Batch delegate;
     private Mask currentMask;
     private boolean emitted;
     private boolean closed;
@@ -52,9 +52,51 @@ public final class SingleBatchOperator
     public SingleBatchOperator(Schema outputSchema, Batch batch)
     {
         this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
-        this.delegate = requireNonNull(batch, "batch is null");
-        this.currentMask = batch.borrowMask();
+        this.delegate = null;
         this.outputsSupplier = null;
+        addInput(batch);
+    }
+
+    /**
+     * Creates a reusable feed for host-scheduled native batches.
+     */
+    public SingleBatchOperator(Schema outputSchema)
+    {
+        this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        this.delegate = null;
+        this.outputsSupplier = null;
+    }
+
+    /**
+     * Offers the next native batch. Ownership transfers to this operator.
+     */
+    public void addInput(Batch batch)
+    {
+        checkOpen();
+        if (outputsSupplier != null) {
+            throw new IllegalStateException("operator does not accept input");
+        }
+        if (delegate != null) {
+            throw new IllegalStateException("operator already has input");
+        }
+        delegate = requireNonNull(batch, "batch is null");
+        currentMask = batch.borrowMask();
+        emitted = false;
+    }
+
+    /**
+     * Releases the consumed input and makes this operator ready for another batch.
+     */
+    public void finishInput()
+    {
+        checkOpen();
+        if (delegate == null || !emitted) {
+            throw new IllegalStateException("operator has no consumed input");
+        }
+        delegate.close();
+        delegate = null;
+        currentMask = null;
+        emitted = false;
     }
 
     @Override
@@ -72,7 +114,7 @@ public final class SingleBatchOperator
     @Override
     public boolean hasNext()
     {
-        return !emitted;
+        return !closed && !emitted && (outputsSupplier != null || delegate != null);
     }
 
     @Override
@@ -120,11 +162,19 @@ public final class SingleBatchOperator
         closed = true;
         if (delegate != null) {
             delegate.close();
+            delegate = null;
         }
     }
 
     public Mask currentMask()
     {
         return currentMask;
+    }
+
+    private void checkOpen()
+    {
+        if (closed) {
+            throw new IllegalStateException("operator is closed");
+        }
     }
 }

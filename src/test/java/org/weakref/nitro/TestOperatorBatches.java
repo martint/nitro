@@ -3130,6 +3130,31 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSingleBatchOperatorAcceptsSequentialNativeBatches()
+    {
+        try (SingleBatchOperator operator = new SingleBatchOperator(Schema.unspecified(1))) {
+            operator.addInput(new Batch(
+                    Mask.all(2),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {11, 12})))));
+            try (Batch first = operator.next()) {
+                assertThat(((I64Vector) first.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(11, 12);
+            }
+            operator.finishInput();
+
+            operator.addInput(new Batch(
+                    Mask.all(1),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {21})))));
+            try (Batch second = operator.next()) {
+                assertThat(((I64Vector) second.output(0).borrow(Stream.VALUES)).values())
+                        .containsExactly(21);
+            }
+            operator.finishInput();
+            assertThat(operator.hasNext()).isFalse();
+        }
+    }
+
+    @Test
     void testTopNOperatorMaterializesOnlyConstrainedPayloadRows()
     {
         BinaryVector payloads = new BinaryVector(3, 16);
