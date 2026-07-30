@@ -65,6 +65,112 @@ class TestHashJoinSession
         }
     }
 
+    @Test
+    void testSharesPreparedBuildAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(2, 3, 2),
+                            new int[] {0},
+                            false,
+                            new int[] {0, 1})
+                    .orElseThrow();
+            try (build;
+                    HashJoinSession first = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(2, 3, 2),
+                            new int[] {0},
+                            false,
+                            build);
+                    HashJoinSession second = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(2, 3, 2),
+                            new int[] {0},
+                            false,
+                            build)) {
+                assertSessionOutput(first, 2);
+                assertSessionOutput(second, 3);
+            }
+        }
+    }
+
+    @Test
+    void testSharesPreparedPairBuildAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(2),
+                            new int[] {0, 1},
+                            pairTable(new long[] {2, 3, 2}, new long[] {20, 30, 21}),
+                            new int[] {0, 1},
+                            false,
+                            new int[] {0, 1, 2, 3})
+                    .orElseThrow();
+            try (build;
+                    HashJoinSession first = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(2),
+                            new int[] {0, 1},
+                            pairTable(new long[] {2, 3, 2}, new long[] {20, 30, 21}),
+                            new int[] {0, 1},
+                            false,
+                            build);
+                    HashJoinSession second = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(2),
+                            new int[] {0, 1},
+                            pairTable(new long[] {2, 3, 2}, new long[] {20, 30, 21}),
+                            new int[] {0, 1},
+                            false,
+                            build)) {
+                assertPairSessionOutput(first, 2, 21);
+                assertPairSessionOutput(second, 3, 30);
+            }
+        }
+    }
+
+    private static void assertSessionOutput(HashJoinSession session, long probeValue)
+    {
+        List<Long> probeValues = new ArrayList<>();
+        List<Long> buildValues = new ArrayList<>();
+        session.addInput(batch(probeValue));
+        drain(session, probeValues, buildValues);
+        session.finish();
+        drain(session, probeValues, buildValues);
+        assertThat(probeValues).allMatch(value -> value == probeValue);
+        assertThat(buildValues).allMatch(value -> value == probeValue);
+    }
+
+    private static void assertPairSessionOutput(HashJoinSession session, long first, long second)
+    {
+        List<Long> probeValues = new ArrayList<>();
+        List<Long> buildValues = new ArrayList<>();
+        session.addInput(pairBatch(new long[] {first}, new long[] {second}));
+        drain(session, probeValues, buildValues);
+        session.finish();
+        drain(session, probeValues, buildValues);
+        assertThat(probeValues).containsExactly(first);
+        assertThat(buildValues).containsExactly(second);
+    }
+
     private static void drain(HashJoinSession session, List<Long> probeValues, List<Long> buildValues)
     {
         while (session.hasOutput()) {
@@ -95,5 +201,23 @@ class TestHashJoinSession
                         values.length,
                         new org.weakref.nitro.data.Vector[] {new I64Vector(values)},
                         Mask.all(values.length))));
+    }
+
+    private static Batch pairBatch(long[] first, long[] second)
+    {
+        return new Batch(
+                Mask.all(first.length),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(first))),
+                Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(second))));
+    }
+
+    private static Operator pairTable(long[] first, long[] second)
+    {
+        return new TableOperator(
+                Schema.unspecified(2),
+                List.of(TableOperator.Page.values(
+                        first.length,
+                        new org.weakref.nitro.data.Vector[] {new I64Vector(first), new I64Vector(second)},
+                        Mask.all(first.length))));
     }
 }

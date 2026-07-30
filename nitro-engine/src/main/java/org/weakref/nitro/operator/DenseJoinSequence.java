@@ -142,6 +142,11 @@ final class DenseJoinSequence
         return positions;
     }
 
+    long retainedBytes()
+    {
+        return dictionaryPositionScratch == null ? 0 : (long) dictionaryPositionScratch.length * Integer.BYTES;
+    }
+
     void release()
     {
         arrayPool.release(dictionaryPositionScratch);

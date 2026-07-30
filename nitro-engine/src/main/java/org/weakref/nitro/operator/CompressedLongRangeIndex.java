@@ -157,6 +157,11 @@ final class CompressedLongRangeIndex
         return entry >>> 24;
     }
 
+    long retainedBytes()
+    {
+        return entries == null ? 0 : (long) entries.length * Integer.BYTES;
+    }
+
     void release()
     {
         arrayPool.release(entries);

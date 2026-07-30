@@ -206,6 +206,7 @@ public class HashJoinOperator
     private final JoinBufferSupport buffers;
     private final PrimitiveArrayPool arrayPool;
     private final BufferedJoinInput bufferedInner;
+    private final HashJoinBuild preparedBuild;
     private final Streams[] outerSchema;
     private final Streams[] innerSchema;
     private final Vector[] currentOuterJoinValues;
@@ -372,6 +373,29 @@ public class HashJoinOperator
             boolean probeOuterJoin,
             JoinFilter... joinFilters)
     {
+        this(
+                operatorResources,
+                allocator,
+                outer,
+                outerJoinColumns,
+                inner,
+                innerJoinColumns,
+                probeOuterJoin,
+                null,
+                joinFilters);
+    }
+
+    HashJoinOperator(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Operator outer,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            boolean probeOuterJoin,
+            HashJoinBuild preparedBuild,
+            JoinFilter... joinFilters)
+    {
         if (outerJoinColumns.length != innerJoinColumns.length) {
             throw new IllegalArgumentException("Join key counts must match");
         }
@@ -483,6 +507,7 @@ public class HashJoinOperator
                 operatorResources.bufferedJoinInputPolicy(),
                 new JoinBufferSupport(joinBufferPolicy, allocator, buildAllocationContext),
                 innerOutputCount);
+        this.preparedBuild = preparedBuild;
         this.outerSchema = new Streams[outerOutputCount];
         this.innerSchema = new Streams[innerOutputCount];
         int effectiveJoinKeyCount = outerJoinColumns.length + (promotedBinaryEqualityFilter ? 1 : 0);
@@ -509,7 +534,7 @@ public class HashJoinOperator
         accountJoinScratch();
         this.preparedOuterMatches = new LongList[maxBatchRows];
         this.currentOutputs = new Streams[totalOutputCount];
-        this.buildKeysViable = allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
+        this.buildKeysViable = preparedBuild == null && allowsLegacyKeyShortcuts && dynamicFilterPolicy.enabled() && !probeOuterJoin
                 && (innerJoinColumns.length == 1 || dynamicFilterPolicy.multiKey());
         Arrays.fill(retainedConstraintCountsByBatch, -1);
     }
@@ -1326,6 +1351,11 @@ public class HashJoinOperator
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         copySchema(bufferedInner.schema(), innerSchema);
         cacheInnerFilterInputs();
+        if (preparedBuild != null) {
+            joinIndex = preparedBuild.newProbeIndex();
+            expectedIndexedInnerRows = (int) Math.min(Integer.MAX_VALUE, bufferedInner.rowCount());
+            return;
+        }
         if (buildPolicy.pruneZeroBitwiseOverlapRows() && singleLongBitwiseOverlapJoinFilter) {
             expectedIndexedInnerRows = (int) Math.min(Integer.MAX_VALUE, bufferedInner.rowCount());
         }
@@ -1945,7 +1975,9 @@ public class HashJoinOperator
         probeSource.close();
         inner.close();
         if (joinIndex != null) {
-            joinIndex.releaseBuffers();
+            if (preparedBuild == null) {
+                joinIndex.releaseBuffers();
+            }
             joinIndex = null;
         }
         allocator.release(indexAllocationContext);
@@ -1972,6 +2004,32 @@ public class HashJoinOperator
             joinScratchReleased = true;
             arrayPool.retain(JoinScratch.class, executionPolicy.maxBatchRows(), joinScratch.retainedBytes(), joinScratch);
         }
+    }
+
+    HashJoinBuild prepareBuild()
+    {
+        if (preparedBuild != null) {
+            throw new IllegalStateException("Cannot prepare an already prepared hash join");
+        }
+        loadInnerIfNecessary();
+        if (!(joinIndex instanceof LongJoinIndex) && !(joinIndex instanceof LongPairJoinIndex)) {
+            return null;
+        }
+        if (joinIndex instanceof LongJoinIndex longJoinIndex) {
+            longJoinIndex.finalizeForProbe(executionPolicy.maxBatchRows());
+        }
+        return new HashJoinBuild(this);
+    }
+
+    JoinIndex newPreparedProbeIndex()
+    {
+        if (joinIndex instanceof LongJoinIndex longJoinIndex && longJoinIndex.finalized) {
+            return new LongJoinIndex(longJoinIndex);
+        }
+        if (joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
+            return longPairJoinIndex.newProbeView();
+        }
+        throw new IllegalStateException("Hash join build is not prepared");
     }
 
     public HashJoinOperator withProfileName(String profileName)
@@ -3649,7 +3707,7 @@ public class HashJoinOperator
         // Build rows are indexed by a dense ordinal. The row store owns both their adaptive reference
         // representation and the flat insertion-ordered duplicate chain.
         private final JoinRowStore rows;
-        private final LongJoinBuildCardinality buildCardinality = new LongJoinBuildCardinality();
+        private final LongJoinBuildCardinality buildCardinality;
         private final boolean buildRowReferencesUnused;
         private final boolean batchBuild;
         // Array-mode (Velox kArray-style direct addressing): when the build keys are unique and form a
@@ -3677,6 +3735,7 @@ public class HashJoinOperator
         // count in 8 bits, preserving the same insertion-ordered slices as the ordinary compacted hash representation.
         private final CompressedLongRangeIndex compressedRanges;
         private final JoinMatchScratch matchScratch = new JoinMatchScratch();
+        private final boolean ownsStorage;
 
         private LongJoinIndex(
                 HashJoinIndexPolicy policy,
@@ -3697,6 +3756,7 @@ public class HashJoinOperator
             this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
             this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
             this.arrayPool = arrayPool;
+            this.buildCardinality = new LongJoinBuildCardinality();
             this.sparseMembership = new SparseLongRangeMembership(policy, arrayPool);
             this.compressedRanges = new CompressedLongRangeIndex(
                     arrayPool,
@@ -3751,6 +3811,7 @@ public class HashJoinOperator
                     EMPTY);
             this.buildRowReferencesUnused = buildRowReferencesUnused;
             this.batchBuild = batchBuild;
+            this.ownsStorage = true;
             if (policy.debugJoinIndex() && keyOnlyDirectRangeBuild) {
                 System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
             }
@@ -3767,10 +3828,45 @@ public class HashJoinOperator
             }
         }
 
+        private LongJoinIndex(LongJoinIndex prepared)
+        {
+            this.policy = prepared.policy;
+            this.outputPolicy = prepared.outputPolicy;
+            this.executionPolicy = prepared.executionPolicy;
+            this.arrayPool = prepared.arrayPool;
+            this.hashTable = prepared.hashTable;
+            this.rows = prepared.rows;
+            this.buildCardinality = prepared.buildCardinality;
+            this.buildRowReferencesUnused = prepared.buildRowReferencesUnused;
+            this.batchBuild = prepared.batchBuild;
+            this.minKey = prepared.minKey;
+            this.maxKey = prepared.maxKey;
+            this.finalized = prepared.finalized;
+            this.directLookup = prepared.directLookup;
+            this.sparseMembership = prepared.sparseMembership;
+            this.denseSequence = prepared.denseSequence;
+            this.compactChains = prepared.compactChains;
+            this.compressDuplicateReferences = prepared.compressDuplicateReferences;
+            this.expectedBuildRows = prepared.expectedBuildRows;
+            this.directBuild = prepared.directBuild;
+            this.compactedRows = prepared.compactedRows;
+            this.compressedRanges = prepared.compressedRanges;
+            this.ownsStorage = false;
+        }
+
         @Override
         long retainedBytes()
         {
-            return Math.addExact(hashTable.retainedBytes(), rows.retainedBytes());
+            if (!ownsStorage) {
+                return 0;
+            }
+            long bytes = Math.addExact(hashTable.retainedBytes(), rows.retainedBytes());
+            bytes = Math.addExact(bytes, directLookup.retainedBytes());
+            bytes = Math.addExact(bytes, sparseMembership.retainedBytes());
+            bytes = Math.addExact(bytes, denseSequence.retainedBytes());
+            bytes = Math.addExact(bytes, directBuild.retainedBytes());
+            bytes = Math.addExact(bytes, compactedRows.retainedBytes());
+            return Math.addExact(bytes, compressedRanges.retainedBytes());
         }
 
         @Override
@@ -5832,6 +5928,9 @@ public class HashJoinOperator
         @Override
         public void releaseBuffers()
         {
+            if (!ownsStorage) {
+                return;
+            }
             releaseHashTable();
             releaseRowArrays();
             releaseDirectBuildArrays();

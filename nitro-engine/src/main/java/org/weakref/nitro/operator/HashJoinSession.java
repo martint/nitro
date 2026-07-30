@@ -16,6 +16,8 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 
+import java.util.Optional;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -46,6 +48,29 @@ public final class HashJoinSession
             boolean probeOuterJoin,
             HashJoinOperator.JoinFilter... joinFilters)
     {
+        this(
+                operatorResources,
+                allocator,
+                probeSchema,
+                probeJoinColumns,
+                build,
+                buildJoinColumns,
+                probeOuterJoin,
+                null,
+                joinFilters);
+    }
+
+    public HashJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int[] probeJoinColumns,
+            Operator build,
+            int[] buildJoinColumns,
+            boolean probeOuterJoin,
+            HashJoinBuild preparedBuild,
+            HashJoinOperator.JoinFilter... joinFilters)
+    {
         probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
         join = new HashJoinOperator(
                 requireNonNull(operatorResources, "operatorResources is null"),
@@ -55,7 +80,39 @@ public final class HashJoinSession
                 requireNonNull(build, "build is null"),
                 buildJoinColumns.clone(),
                 probeOuterJoin,
+                preparedBuild,
                 joinFilters.clone());
+    }
+
+    public static Optional<HashJoinBuild> prepareBuild(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int[] probeJoinColumns,
+            Operator build,
+            int[] buildJoinColumns,
+            boolean probeOuterJoin,
+            int[] outputChannels,
+            HashJoinOperator.JoinFilter... joinFilters)
+    {
+        ExternallyScheduledBatchFeed probe = new ExternallyScheduledBatchFeed(
+                requireNonNull(probeSchema, "probeSchema is null"));
+        probe.finish();
+        HashJoinOperator join = new HashJoinOperator(
+                requireNonNull(operatorResources, "operatorResources is null"),
+                requireNonNull(allocator, "allocator is null"),
+                probe,
+                probeJoinColumns.clone(),
+                requireNonNull(build, "build is null"),
+                buildJoinColumns.clone(),
+                probeOuterJoin,
+                joinFilters.clone())
+                .withOutputs(outputChannels.clone());
+        HashJoinBuild prepared = join.prepareBuild();
+        if (prepared == null) {
+            join.close();
+        }
+        return Optional.ofNullable(prepared);
     }
 
     @Override

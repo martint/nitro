@@ -95,6 +95,12 @@ final class DirectLongJoinLookup
         return references[ordinal];
     }
 
+    long retainedBytes()
+    {
+        long bytes = references == null ? 0 : (long) references.length * Long.BYTES;
+        return bytes + (compactReferences == null ? 0 : (long) compactReferences.length * Integer.BYTES);
+    }
+
     void release()
     {
         arrayPool.release(references);

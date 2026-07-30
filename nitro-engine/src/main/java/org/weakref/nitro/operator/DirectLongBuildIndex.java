@@ -179,6 +179,13 @@ final class DirectLongBuildIndex
         arrayPool.release(previousHeads);
     }
 
+    long retainedBytes()
+    {
+        long bytes = heads == null ? 0 : (long) heads.length * Integer.BYTES;
+        bytes += denseDuplicates.retainedBytes();
+        return bytes + sparseDuplicates.retainedBytes();
+    }
+
     void release()
     {
         arrayPool.release(heads);

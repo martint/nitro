@@ -116,6 +116,13 @@ final class SparseDirectLongDuplicateState
         return groupCount;
     }
 
+    long retainedBytes()
+    {
+        long bytes = heads == null ? 0 : (long) heads.length * Integer.BYTES;
+        bytes += tails == null ? 0 : (long) tails.length * Integer.BYTES;
+        return bytes + (counts == null ? 0 : (long) counts.length * Integer.BYTES);
+    }
+
     void release()
     {
         arrayPool.release(heads);

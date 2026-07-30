@@ -110,6 +110,12 @@ final class DenseDirectLongDuplicateState
         arrayPool.release(previousCounts);
     }
 
+    long retainedBytes()
+    {
+        long bytes = tails == null ? 0 : (long) tails.length * Integer.BYTES;
+        return bytes + (counts == null ? 0 : (long) counts.length * Integer.BYTES);
+    }
+
     void release()
     {
         arrayPool.release(tails);

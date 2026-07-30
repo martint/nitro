@@ -113,6 +113,7 @@ final class LongPairJoinIndex
     private int size;
     private boolean pairHasDuplicates;
     private final JoinMatchScratch matchScratch = new JoinMatchScratch();
+    private final boolean ownsStorage;
 
     LongPairJoinIndex(
             HashJoinIndexPolicy policy,
@@ -131,6 +132,7 @@ final class LongPairJoinIndex
         this.denseRowsSingleBatch = policy.compactDensePairSingleBatchRowReferences();
         this.keyOnlyBuild = keyOnlyBuild && policy.compactKeyOnlyLongPairBuild();
         this.batchBuild = batchBuild;
+        this.ownsStorage = true;
         this.initialDuplicateRowCapacity = capInitialHash ? expectedSize : Math.min(expectedSize, policy.initialHashExpectedCap());
         int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
         this.initialDenseEntryCapacity = Math.max(16, initialExpectedSize);
@@ -143,6 +145,53 @@ final class LongPairJoinIndex
                         (policy.denseCompactSparsePairEntries() && capacity >= policy.denseCompactSparsePairMinCapacity() &&
                                 expectedSize <= capacity / 2));
         allocate(capacity);
+    }
+
+    private LongPairJoinIndex(LongPairJoinIndex prepared)
+    {
+        this.policy = prepared.policy;
+        this.executionPolicy = prepared.executionPolicy;
+        this.arrayPool = prepared.arrayPool;
+        this.tags = prepared.tags;
+        this.entries = prepared.entries;
+        this.entryIds = prepared.entryIds;
+        this.denseKeys = prepared.denseKeys;
+        this.denseRowStates32 = prepared.denseRowStates32;
+        this.denseRowStates = prepared.denseRowStates;
+        this.denseRowsFit32 = prepared.denseRowsFit32;
+        this.denseRowsSingleBatch = prepared.denseRowsSingleBatch;
+        this.denseRowsBatchIndex = prepared.denseRowsBatchIndex;
+        this.denseCompactEntries = prepared.denseCompactEntries;
+        this.denseEntryCount = prepared.denseEntryCount;
+        this.denseEntryCapacity = prepared.denseEntryCapacity;
+        this.initialDenseEntryCapacity = prepared.initialDenseEntryCapacity;
+        this.compactKeys = prepared.compactKeys;
+        this.keyOnlyBuild = prepared.keyOnlyBuild;
+        this.batchBuild = prepared.batchBuild;
+        this.keyOnlyCounts = prepared.keyOnlyCounts;
+        this.duplicateHead = prepared.duplicateHead;
+        this.duplicateTail = prepared.duplicateTail;
+        this.duplicateCount = prepared.duplicateCount;
+        this.duplicateNext = prepared.duplicateNext;
+        this.duplicateRows32 = prepared.duplicateRows32;
+        this.duplicateRows = prepared.duplicateRows;
+        this.duplicateRowCount = prepared.duplicateRowCount;
+        this.duplicateRowCapacity = prepared.duplicateRowCapacity;
+        this.duplicateGroupCount = prepared.duplicateGroupCount;
+        this.duplicateGroupCapacity = prepared.duplicateGroupCapacity;
+        this.duplicateRowsFit32 = prepared.duplicateRowsFit32;
+        this.initialDuplicateRowCapacity = prepared.initialDuplicateRowCapacity;
+        this.expectedBuildRows = prepared.expectedBuildRows;
+        this.mask = prepared.mask;
+        this.maxFill = prepared.maxFill;
+        this.size = prepared.size;
+        this.pairHasDuplicates = prepared.pairHasDuplicates;
+        this.ownsStorage = false;
+    }
+
+    LongPairJoinIndex newProbeView()
+    {
+        return new LongPairJoinIndex(this);
     }
 
     private void allocate(int capacity)
@@ -940,6 +989,9 @@ final class LongPairJoinIndex
     @Override
     public void releaseBuffers()
     {
+        if (!ownsStorage) {
+            return;
+        }
         arrayPool.release(tags);
         tags = null;
         arrayPool.release(entries);
@@ -971,6 +1023,9 @@ final class LongPairJoinIndex
     @Override
     long retainedBytes()
     {
+        if (!ownsStorage) {
+            return matchScratch.retainedBytes();
+        }
         long bytes = tags == null ? 0 : tags.length;
         bytes += entries == null ? 0 : (long) entries.length * Long.BYTES;
         bytes += entryIds == null ? 0 : (long) entryIds.length * Integer.BYTES;

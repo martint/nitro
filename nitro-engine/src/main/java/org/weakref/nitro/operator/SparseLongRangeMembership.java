@@ -83,6 +83,11 @@ final class SparseLongRangeMembership
         return DynamicFilter.fromExactBitset(probeColumn, min, max, words, distinctSize);
     }
 
+    long retainedBytes()
+    {
+        return words == null ? 0 : (long) words.length * Long.BYTES;
+    }
+
     void release()
     {
         arrayPool.release(words);

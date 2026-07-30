@@ -128,6 +128,12 @@ final class CompactedJoinRows
         return payload;
     }
 
+    long retainedBytes()
+    {
+        long bytes = orderedReferences == null ? 0 : (long) orderedReferences.length * Long.BYTES;
+        return bytes + (rangeStarts == null ? 0 : (long) rangeStarts.length * Integer.BYTES);
+    }
+
     void release()
     {
         arrayPool.release(orderedReferences);
