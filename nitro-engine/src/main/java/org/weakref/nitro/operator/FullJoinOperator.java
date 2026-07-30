@@ -429,10 +429,26 @@ public final class FullJoinOperator
         int rowCount = joinedRows.size();
         materialized = new Streams[outputCount()];
         for (int outputIndex = 0; outputIndex < outer.outputCount(); outputIndex++) {
-            materialized[outputIndex] = materializeOutputColumn(outerInput.schema()[outputIndex], outerInput.pages(), joinedRows, rowCount, true, outputIndex, innerRowReferences);
+            materialized[outputIndex] = materializeOutputColumn(
+                    outputSchema.field(outputIndex).type(),
+                    outerInput.schema()[outputIndex],
+                    outerInput.pages(),
+                    joinedRows,
+                    rowCount,
+                    true,
+                    outputIndex,
+                    innerRowReferences);
         }
         for (int outputIndex = 0; outputIndex < inner.outputCount(); outputIndex++) {
-            materialized[outer.outputCount() + outputIndex] = materializeOutputColumn(innerInput.schema()[outputIndex], innerInput.pages(), joinedRows, rowCount, false, outputIndex, innerRowReferences);
+            materialized[outer.outputCount() + outputIndex] = materializeOutputColumn(
+                    outputSchema.field(outer.outputCount() + outputIndex).type(),
+                    innerInput.schema()[outputIndex],
+                    innerInput.pages(),
+                    joinedRows,
+                    rowCount,
+                    false,
+                    outputIndex,
+                    innerRowReferences);
         }
         outputMask = allocator.allocateRangeMask(allocationContext, 0, rowCount);
     }
@@ -586,9 +602,9 @@ public final class FullJoinOperator
         return Integer.highestOneBit(target - 1) << 1;
     }
 
-    private Streams materializeOutputColumn(Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
+    private Streams materializeOutputColumn(TypeBinding type, Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
     {
-        Vector values = valuesLike(schema.values(), rowCount);
+        Vector values = null;
         BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
         BooleanVector errors = schema.has(Stream.ERRORS) ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
 
@@ -611,6 +627,9 @@ public final class FullJoinOperator
             }
         }
 
+        if (values == null) {
+            values = nullValues(type, schema.values(), rowCount);
+        }
         Streams.Builder builder = Streams.builder()
                 .put(Stream.VALUES, values)
                 .put(Stream.NULLS, nulls);
@@ -687,7 +706,25 @@ public final class FullJoinOperator
         return builder.build();
     }
 
-    private Vector valuesLike(Vector schemaValues, int size)
+    private Vector nullValues(TypeBinding type, Vector schemaValues, int size)
+    {
+        if (type.isSpecified() && type.vectorFactory().isPresent()) {
+            Vector values = type.vectorFactory().orElseThrow()
+                    .nullValues(allocator.vectorAllocator(allocationContext), size);
+            if (values.length() != size) {
+                throw new IllegalArgumentException("Type vector factory returned length %s for requested length %s"
+                        .formatted(values.length(), size));
+            }
+            if (!type.supportsVector(values)) {
+                throw new IllegalArgumentException("Type %s does not support factory result %s"
+                        .formatted(type.identity(), values.getClass().getName()));
+            }
+            return values;
+        }
+        return legacyNullValuesLike(schemaValues, size);
+    }
+
+    private Vector legacyNullValuesLike(Vector schemaValues, int size)
     {
         return switch (schemaValues) {
             case I64Vector _ -> allocator.allocate(allocationContext, I64Vector.class, size, I64Vector::new);

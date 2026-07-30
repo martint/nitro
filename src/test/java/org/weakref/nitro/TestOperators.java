@@ -42,6 +42,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.data.VectorAllocator;
@@ -1808,6 +1809,93 @@ public class TestOperators
             assertThat(join.outputSchema().fields()).extracting(Field::nullable)
                     .containsExactly(true, true, true);
             assertThat(join.outputSchema().field(1)).isSameAs(outerValue);
+        }
+    }
+
+    @Test
+    void testFullJoinUsesTypeFactoryForStructuralNullPlaceholders()
+    {
+        AtomicInteger nullValueConstructions = new AtomicInteger();
+        TypeBinding structuralType = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:structural");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return Object.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<TypeVectorFactory> vectorFactory()
+            {
+                return Optional.of(new TypeVectorFactory()
+                {
+                    @Override
+                    public Vector constant(VectorAllocator allocator, Object value, int length)
+                    {
+                        throw new AssertionError("constant construction is not expected");
+                    }
+
+                    @Override
+                    public Vector nullValues(VectorAllocator allocator, int length)
+                    {
+                        nullValueConstructions.incrementAndGet();
+                        StructVector values = allocator.allocate(StructVector.class, length, StructVector::new);
+                        values.setField("0", Streams.ofValues(allocator.allocate(I64Vector.class, length, I64Vector::new)));
+                        return values;
+                    }
+                });
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(StructVector.class);
+            }
+        };
+        TypeBinding keyType = Schema.unspecified(1).field(0).type();
+        Schema outerSchema = new Schema(List.of(
+                new Field(keyType, false),
+                new Field(structuralType, false)));
+        Schema innerSchema = new Schema(List.of(new Field(keyType, false)));
+        StructVector payload = new StructVector(0);
+        payload.setField("0", Streams.ofValues(new I64Vector(0)));
+
+        try (Operator join = new FullJoinOperator(
+                allocator,
+                typedTable(
+                        outerSchema,
+                        TableOperator.Page.values(
+                                0,
+                                new Vector[] {new I64Vector(0), payload},
+                                Mask.all(0))),
+                new int[] {0},
+                typedTable(
+                        innerSchema,
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {2})},
+                                Mask.all(1))),
+                new int[] {0},
+                EngineResources.from(allocator).operatorResources().fullJoinPolicy());
+                Batch batch = join.next()) {
+            assertThat(batch.borrowMask().selectedCount()).isEqualTo(1);
+            assertThat(batch.output(1).borrow(Stream.VALUES))
+                    .isInstanceOfSatisfying(StructVector.class, values ->
+                            assertThat(((I64Vector) values.fieldValues("0")).values()).containsExactly(0));
+            assertThat(VectorAccess.booleanValues(batch.output(1).borrow(Stream.NULLS)).value(0)).isTrue();
+            assertThat(nullValueConstructions).hasValue(1);
         }
     }
 
