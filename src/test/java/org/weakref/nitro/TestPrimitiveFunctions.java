@@ -61,6 +61,7 @@ import org.weakref.nitro.function.scalar.builtin.LessThanF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualF64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualUtf8;
 import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8;
 import org.weakref.nitro.function.scalar.builtin.LikeUtf8Policy;
@@ -126,6 +127,7 @@ public final class TestPrimitiveFunctions
                 LessThanF64.class,
                 LessThanOrEqualF64.class,
                 LessThanOrEqualI64.class,
+                LessThanOrEqualUtf8.class,
                 MultiplyF64.class,
                 SubtractF64.class,
                 AddF64.class,
@@ -189,6 +191,7 @@ public final class TestPrimitiveFunctions
         }
         if (functionClass == EqualUtf8.class ||
                 functionClass == LessThanUtf8.class ||
+                functionClass == LessThanOrEqualUtf8.class ||
                 functionClass == StartsWithUtf8.class ||
                 functionClass == ContainsUtf8.class ||
                 functionClass == InUtf8.class) {
@@ -197,6 +200,9 @@ public final class TestPrimitiveFunctions
             }
             if (functionClass == LessThanUtf8.class) {
                 return scalarLoader.load(new LessThanUtf8(utf8Policy));
+            }
+            if (functionClass == LessThanOrEqualUtf8.class) {
+                return scalarLoader.load(new LessThanOrEqualUtf8(utf8Policy));
             }
             if (functionClass == StartsWithUtf8.class) {
                 return scalarLoader.load(new StartsWithUtf8(utf8Policy));

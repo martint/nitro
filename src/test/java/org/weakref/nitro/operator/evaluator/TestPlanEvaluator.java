@@ -3446,6 +3446,42 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryLiteralLessThanOrEqualIncludesEqualValues()
+    {
+        Variable literal = new Variable(0);
+        Variable lessThanOrEqual = new Variable(1);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literal, new Literal("z"), AllMask.ALL),
+                        new Assignment(
+                                lessThanOrEqual,
+                                new Call("lte_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literal, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of(new Reference(lessThanOrEqual, Stream.VALUES)));
+
+        BinaryVector dictionary = new BinaryVector(3, 32);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING);
+        dictionary.addTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY);
+        dictionary.setBytes(0, "iphone".getBytes(UTF_8));
+        dictionary.setBytes(1, "z".getBytes(UTF_8));
+        dictionary.setBytes(2, "é".getBytes(UTF_8));
+
+        DictionaryVector values = DictionaryVector.wrap(new int[] {0, 1, 2}, dictionary);
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(new Reference(new Input(0), Stream.VALUES), values)),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(new Reference(lessThanOrEqual, Stream.VALUES), Mask.all(3));
+        DictionaryVector encoded = (DictionaryVector) result.values();
+        BooleanVector dictionaryValues = (BooleanVector) encoded.values();
+        assertThat(dictionaryValues.values()).containsExactly(true, true, false);
+    }
+
+    @Test
     void testInUtf8OversizedDictionaryLiteralReferenceMaskFallsBackToActiveRows()
     {
         Variable firstLiteral = new Variable(0);

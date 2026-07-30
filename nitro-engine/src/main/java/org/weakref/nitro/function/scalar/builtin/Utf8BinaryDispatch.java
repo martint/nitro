@@ -62,6 +62,11 @@ public final class Utf8BinaryDispatch
         return apply(functionName, allocationContext, Operation.LESS_THAN, inputs, mask, requestedStreams, output, context);
     }
 
+    public Streams applyLessThanOrEqual(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+    {
+        return apply(functionName, allocationContext, Operation.LESS_THAN_OR_EQUAL, inputs, mask, requestedStreams, output, context);
+    }
+
     public Streams applyStartsWith(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return apply(functionName, allocationContext, Operation.STARTS_WITH, inputs, mask, requestedStreams, output, context);
@@ -514,6 +519,7 @@ public final class Utf8BinaryDispatch
         return switch (operation) {
             case EQUALS -> binarySliceEquals(left, right);
             case LESS_THAN -> binarySliceCompare(left, right) < 0;
+            case LESS_THAN_OR_EQUAL -> binarySliceCompare(left, right) <= 0;
             case STARTS_WITH -> binarySliceStartsWith(left, right);
             case CONTAINS -> binarySliceContains(left, right);
         };
@@ -1584,6 +1590,7 @@ public final class Utf8BinaryDispatch
         return switch (operation) {
             case EQUALS -> compareEquals(functionName, left, leftPosition, right, rightPosition);
             case LESS_THAN -> compareLessThan(functionName, left, leftPosition, right, rightPosition);
+            case LESS_THAN_OR_EQUAL -> compareLessThanOrEqual(functionName, left, leftPosition, right, rightPosition);
             case STARTS_WITH -> compareStartsWith(functionName, left, leftPosition, right, rightPosition);
             case CONTAINS -> compareContains(functionName, left, leftPosition, right, rightPosition);
         };
@@ -1598,6 +1605,11 @@ public final class Utf8BinaryDispatch
     private boolean compareLessThan(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
     {
         return binaryCompare(left, leftPosition, right, rightPosition) < 0;
+    }
+
+    private boolean compareLessThanOrEqual(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
+    {
+        return binaryCompare(left, leftPosition, right, rightPosition) <= 0;
     }
 
     private boolean compareStartsWith(String functionName, BinaryVector left, int leftPosition, BinaryVector right, int rightPosition)
@@ -1802,7 +1814,7 @@ public final class Utf8BinaryDispatch
         int leftStart = left.startOffset(leftPosition);
         int rightStart = right.startOffset(rightPosition);
         for (int index = 0; index < compareLength; index++) {
-            int comparison = Byte.compare(leftData[leftStart + index], rightData[rightStart + index]);
+            int comparison = Byte.compareUnsigned(leftData[leftStart + index], rightData[rightStart + index]);
             if (comparison != 0) {
                 return comparison;
             }
@@ -1878,7 +1890,7 @@ public final class Utf8BinaryDispatch
     {
         int compareLength = Math.min(left.length(), right.length());
         for (int index = 0; index < compareLength; index++) {
-            int comparison = Byte.compare(left.data()[left.offset() + index], right.data()[right.offset() + index]);
+            int comparison = Byte.compareUnsigned(left.data()[left.offset() + index], right.data()[right.offset() + index]);
             if (comparison != 0) {
                 return comparison;
             }
@@ -2203,6 +2215,7 @@ public final class Utf8BinaryDispatch
     {
         EQUALS,
         LESS_THAN,
+        LESS_THAN_OR_EQUAL,
         STARTS_WITH,
         CONTAINS,
     }
