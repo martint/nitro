@@ -27,7 +27,7 @@ import static java.util.Objects.requireNonNull;
  * offered probe batch.
  */
 public final class HashJoinSession
-        implements AutoCloseable
+        implements JoinSession
 {
     private final ExternallyScheduledBatchFeed probe;
     private final HashJoinOperator join;
@@ -58,6 +58,7 @@ public final class HashJoinSession
                 joinFilters.clone());
     }
 
+    @Override
     public Schema outputSchema()
     {
         return join.outputSchema();
@@ -75,6 +76,7 @@ public final class HashJoinSession
      *
      * <p>The previous input must be fully drained first.
      */
+    @Override
     public void addInput(Batch batch)
     {
         checkAcceptingInput();
@@ -87,6 +89,7 @@ public final class HashJoinSession
     /**
      * Returns whether a joined output batch is ready for the current probe input.
      */
+    @Override
     public boolean hasOutput()
     {
         checkOpen();
@@ -118,6 +121,7 @@ public final class HashJoinSession
      *
      * <p>Ownership transfers to the caller.
      */
+    @Override
     public Batch getOutput()
     {
         checkOpen();
@@ -132,6 +136,7 @@ public final class HashJoinSession
     /**
      * Signals that no more probe batches will be offered.
      */
+    @Override
     public void finish()
     {
         checkOpen();
@@ -139,6 +144,7 @@ public final class HashJoinSession
         probe.finish();
     }
 
+    @Override
     public boolean isFinished()
     {
         checkOpen();

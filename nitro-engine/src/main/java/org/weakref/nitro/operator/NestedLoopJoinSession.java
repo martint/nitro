@@ -25,7 +25,7 @@ import static java.util.Objects.requireNonNull;
  * session and each batch is closed after all of its cross-product output is drained.
  */
 public final class NestedLoopJoinSession
-        implements AutoCloseable
+        implements JoinSession
 {
     private final ExternallyScheduledBatchFeed outer;
     private final NestedLoopJoinOperator join;
@@ -48,11 +48,13 @@ public final class NestedLoopJoinSession
                 requireNonNull(inner, "inner is null"));
     }
 
+    @Override
     public Schema outputSchema()
     {
         return join.outputSchema();
     }
 
+    @Override
     public void addInput(Batch batch)
     {
         checkAcceptingInput();
@@ -62,6 +64,7 @@ public final class NestedLoopJoinSession
         outer.addInput(requireNonNull(batch, "batch is null"));
     }
 
+    @Override
     public boolean hasOutput()
     {
         checkOpen();
@@ -88,6 +91,7 @@ public final class NestedLoopJoinSession
         return false;
     }
 
+    @Override
     public Batch getOutput()
     {
         checkOpen();
@@ -99,6 +103,7 @@ public final class NestedLoopJoinSession
         return result;
     }
 
+    @Override
     public void finish()
     {
         checkOpen();
@@ -106,6 +111,7 @@ public final class NestedLoopJoinSession
         outer.finish();
     }
 
+    @Override
     public boolean isFinished()
     {
         checkOpen();
