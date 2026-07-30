@@ -655,7 +655,7 @@ final class GroupingState
             assignGroupsInternal(values, nulls, mask, result, moreInputExpected, blockingAggregation);
         }
         finally {
-            accountFlatGroupingState();
+            accountRetainedState();
         }
     }
 
@@ -741,11 +741,48 @@ final class GroupingState
         }
     }
 
-    private void accountFlatGroupingState()
+    private void accountRetainedState()
     {
-        if (allocator != null && flatGroupingTable != null) {
-            allocator.setRetainedBytes(allocationContext, flatGroupingTable, flatGroupingTable.retainedBytes());
+        if (allocator != null) {
+            allocator.setRetainedBytes(allocationContext, this, retainedBytes());
         }
+    }
+
+    private long retainedBytes()
+    {
+        long bytes = longArrayBytes(longGroupKeys);
+        bytes += intArrayBytes(longGroupIds);
+        bytes += referenceArrayBytes(reusableProbeKeys);
+        bytes += referenceArrayBytes(keyHandlers);
+        bytes += referenceArrayBytes(binaryTraits);
+        bytes += longArrayBytes(longKeysByGroup);
+        bytes += longArrayBytes(dictionaryGroupsById);
+        bytes += intArrayBytes(dictionaryGenerations);
+        bytes += referenceArrayBytes(cachedSharedDictionaryValues);
+        bytes += longArrayBytes(sharedDictionaryEntriesById);
+        bytes += packedIntPairControl == null ? 0 : packedIntPairControl.length;
+        bytes += intArrayBytes(packedIntTripleThirdByGroup);
+        bytes += packedIntTripleNullMasksByGroup.length;
+        bytes += intArrayBytes(packedIntTripleTailByGroup);
+        bytes += intArrayBytes(densePositionsCache);
+        bytes += multiLongTable == null ? 0 : multiLongTable.retainedBytes();
+        bytes += flatGroupingTable == null ? 0 : flatGroupingTable.retainedBytes();
+        return bytes;
+    }
+
+    private static long intArrayBytes(int[] values)
+    {
+        return values == null ? 0 : (long) values.length * Integer.BYTES;
+    }
+
+    private static long longArrayBytes(long[] values)
+    {
+        return values == null ? 0 : (long) values.length * Long.BYTES;
+    }
+
+    private static long referenceArrayBytes(Object[] values)
+    {
+        return values == null ? 0 : (long) values.length * Long.BYTES;
     }
 
     private void reserveFlatGroupingLookahead(int selectedRows, long newGroups)

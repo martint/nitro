@@ -844,6 +844,28 @@ class AdaptiveLongGroupingTable
         promotedAssignedGroups = new long[0];
     }
 
+    @Override
+    public long retainedBytes()
+    {
+        long bytes = slots == null ? 0 : (long) slots.length * Integer.BYTES;
+        if (keyPairsByGroup != null) {
+            bytes += (long) keyPairsByGroup.length * Long.BYTES;
+            for (long[] keys : keyPairsByGroup) {
+                bytes += keys == null ? 0 : (long) keys.length * Long.BYTES;
+            }
+        }
+        bytes += tailKeysByGroup == null ? 0 : (long) tailKeysByGroup.length * Integer.BYTES;
+        bytes += nullMasksByGroup == null ? 0 : nullMasksByGroup.length;
+        bytes += (long) batchKeys.length * Integer.BYTES;
+        bytes += batchNullMasks.length;
+        bytes += (long) batchHashes.length * Integer.BYTES;
+        bytes += (long) densePositions.length * Integer.BYTES;
+        bytes += (long) promotedAssignedGroups.length * Long.BYTES;
+        bytes += reusedTerminalSlots == null ? 0 : (long) reusedTerminalSlots.length * Integer.BYTES;
+        bytes += promoted == null ? 0 : promoted.retainedBytes();
+        return bytes;
+    }
+
     private void releaseCompactState()
     {
         arrayPool.release(slots);

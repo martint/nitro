@@ -250,6 +250,22 @@ abstract class AbstractMultiLongGroupingTable
     }
 
     @Override
+    public final long retainedBytes()
+    {
+        long bytes = entries == null ? 0 : (long) entries.length * Long.BYTES;
+        bytes += nullMasks == null ? 0 : nullMasks.length;
+        bytes += control == null ? 0 : control.length;
+        if (keysByGroup != null) {
+            bytes += (long) keysByGroup.length * Long.BYTES;
+            for (long[] keys : keysByGroup) {
+                bytes += keys == null ? 0 : (long) keys.length * Long.BYTES;
+            }
+        }
+        bytes += nullMasksByGroup == null ? 0 : nullMasksByGroup.length;
+        return bytes;
+    }
+
+    @Override
     public final void releaseBuffers()
     {
         if (debugTableShapes && storesGroupIds) {

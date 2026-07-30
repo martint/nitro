@@ -50,5 +50,10 @@ interface LongGroupingTable
 
     boolean groupedValueIsNull(int column, int groupId);
 
+    default long retainedBytes()
+    {
+        return 0;
+    }
+
     void releaseBuffers();
 }

@@ -5192,6 +5192,25 @@ public class TestOperators
     }
 
     @Test
+    void testGroupingAccountsPrimitiveTableState()
+    {
+        Allocator.Context groupContext = new Allocator.Context("GroupOperator");
+        assertThat(operator(new GroupOperator(
+                allocator,
+                new int[] {0, 1},
+                new ConstantTableOperator(
+                        allocator,
+                        2,
+                        List.of(row(1L, 10L), row(2L, 20L), row(1L, 10L))))))
+                .matchesExactly(List.of(
+                        row(0L, 1L, 10L),
+                        row(1L, 2L, 20L),
+                        row(0L, 1L, 10L)));
+        assertThat(allocator.peakBytes(groupContext)).isGreaterThan(300);
+        assertThat(allocator.currentBytes(groupContext)).isZero();
+    }
+
+    @Test
     void testHashJoinRejectsLaterBuildVectorOutsidePlanTimeTypeBinding()
     {
         TypeBinding i32Only = i32OnlyType();
