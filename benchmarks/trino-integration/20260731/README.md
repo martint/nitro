@@ -92,3 +92,24 @@ The operator benchmark and Trino integration are not identical workloads or exec
 2. Diagnose elapsed/CPU divergence for TPC-DS q08/q09 and ClickBench q05/q06/q24.
 3. Check join/grouping cardinality, input/output positions, driver concurrency, and materialization boundaries before changing kernels.
 4. Re-run the affected query and its closest operator benchmark after each fix.
+
+## ClickBench q30 follow-up
+
+The first investigation found that the isolated operator workload did not preserve the SQL expression's logical
+integer arithmetic. It benchmarked already-widened, unchecked long additions, while the Trino plan performs checked
+`INTEGER + INTEGER` and only then widens the result for `sum`. The integration adapter also recognized only flat
+`I64Vector` inputs for its column/constant fast path, but the native Parquet reader correctly produces the compact
+`I32Vector` representation for this column. The resulting generic null/error loop accounted for the original
+regression.
+
+Trino integration commit `f076a2dd` accepts either legal flat representation, specializes compact checked arithmetic
+without per-position carrier conversion, and retains lazy overflow-error materialization. The focused correctness
+suite passed 51 tests. A one-warmup, three-measurement Nitro run after the final specialization reported 1.471 s wall
+and 8.200 CPU-s. Against the interleaved Trino reference above (3.239 s and 20.837 CPU-s), this is approximately 0.45x
+wall and 0.39x CPU. Thus q30 changed from the baseline's 3.71x wall / 4.03x CPU regression to a clear Nitro win.
+
+The residual difference from the isolated 0.277x duration ratio is now explained rather than an unidentified engine
+loss: the isolated Nitro expression uses unchecked generated arithmetic, while the SQL expression requires checked
+overflow semantics. Nitro's current projection-code SPI can describe value and null programs but cannot describe
+error-producing operations. A future reusable extension should let registry-owned function providers contribute
+generated error-aware projections without teaching the engine about Trino functions or arithmetic semantics.
