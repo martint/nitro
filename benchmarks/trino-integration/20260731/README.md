@@ -150,3 +150,33 @@ scan/join envelope rather than function adaptation or aggregation work amplifica
 This slice exposed two reusable abstraction requirements. A host-fed Nitro pipeline needs an explicit distinction
 between temporary input exhaustion and terminal completion, and an expanding native pipeline must report logical
 output work to host-owned adaptive controls instead of charging only its first output batch.
+
+## TPC-DS q51 follow-up
+
+The q51 regression was concentrated in cumulative decimal windows. The generic registered window adapter originally
+materialized a one-row aggregation result and copied it for every output position, and it updated state through a
+one-row mask for every input position. Nitro commit `09caf819` adds optional, function-owned position update and
+direct result-copy capabilities to the classloader-neutral aggregation SPI. Trino commit `d9fddf81` implements those
+capabilities for decimal sum and extrema without exposing decimal semantics to the Nitro engine. This reduced a
+Nitro-only q51 run from approximately 13.70 s wall / 28.72 CPU-s to 8.26 s wall / 18.58 CPU-s.
+
+The remaining difference was an execution-shape mismatch with the isolated operator benchmark. That benchmark gave
+the window operator one dense page and therefore used Nitro's primitive radix sort. Trino feeds a window through
+many native pages, for which Nitro retained packed page/position references but used a comparison merge sort. Nitro
+commit `41ccaf31` extends the existing stable radix algorithm to those packed references for general flat integer
+partition and ordering keys. It preserves signed, nullable, ascending, descending, and stable ordering semantics and
+does not compact or duplicate the buffered pages. The full Nitro suite passed 1,566 tests with no failures or errors
+and 566 skips.
+
+A correctness-checked, interleaved run with no warmup and two measurements reported:
+
+| Engine | Wall p50 | CPU p50 | Native sources |
+|---|---:|---:|---:|
+| Trino | 3.250 s | 7.561 CPU-s | 0 |
+| Nitro | 4.272 s | 9.758 CPU-s | 19 |
+
+The final ratios are 1.315x wall and 1.291x p50 CPU (1.273x mean CPU), down from the baseline's 4.611x wall and
+3.415x CPU. Across the two measured executions, Nitro's three window nodes used about 1.77, 0.72, and 2.53 CPU-s,
+versus Trino's 1.42, 0.70, and 2.13 CPU-s. The isolated operator advantage still does not transfer literally because
+the integrated workload retains multi-page indirection and decimal SQL semantics, but the large reversal is now
+accounted for rather than being caused by function adaptation or an avoidable comparison-sort path.
