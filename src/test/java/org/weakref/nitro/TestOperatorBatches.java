@@ -763,6 +763,47 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowOperatorRadixOrdersNullableDescendingKeysAcrossInputPages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator source = new TableOperator(
+                3,
+                List.of(
+                        new TableOperator.Page(
+                                3,
+                                new Streams[] {
+                                        Streams.ofValues(new I64Vector(new long[] {1, 2, 1})),
+                                        Streams.ofValuesAndNulls(
+                                                new I64Vector(new long[] {-3, 9, 0}),
+                                                new BooleanVector(new boolean[] {false, false, true})),
+                                        Streams.ofValues(new I64Vector(new long[] {4, 8, 5}))},
+                                Mask.all(3)),
+                        TableOperator.Page.values(
+                                2,
+                                new Vector[] {
+                                        new I64Vector(new long[] {2, 1}),
+                                        new I64Vector(new long[] {-8, 2}),
+                                        new I64Vector(new long[] {7, 6})},
+                                Mask.all(2))));
+
+        try (Operator operator = new WindowOperator(
+                allocator,
+                source,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {true},
+                List.of(new RunningSumI64WindowFunction(2)))) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, null, 5L, 5L),
+                            row(1L, 2L, 6L, 11L),
+                            row(1L, -3L, 4L, 15L),
+                            row(2L, 9L, 8L, 8L),
+                            row(2L, -8L, 7L, 15L));
+        }
+    }
+
+    @Test
     void testWindowOperatorProducesPartitionAverageWithoutOrdering()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

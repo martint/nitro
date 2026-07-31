@@ -1372,6 +1372,9 @@ public final class WindowOperator
         if (rows.length < 2) {
             return;
         }
+        if (policy.radixSort() && tryStableRadixSortRowReferences(rows)) {
+            return;
+        }
         long[] scratch = arrayPool.borrowLongs(rows.length);
         try {
             long[] source = rows;
@@ -1406,6 +1409,127 @@ public final class WindowOperator
         }
         finally {
             arrayPool.release(scratch);
+        }
+    }
+
+    /** Stable LSD radix ordering over packed page/position references for flat integer window keys. */
+    private boolean tryStableRadixSortRowReferences(long[] rows)
+    {
+        if (!allowsLegacyOrderingShortcuts) {
+            return false;
+        }
+        for (TableOperator.Page page : pages) {
+            for (int column : partitionColumns) {
+                if (!isFlatIntegerSortKey(page.columns()[column])) {
+                    return false;
+                }
+            }
+            for (int column : orderingColumns) {
+                if (!isFlatIntegerSortKey(page.columns()[column])) {
+                    return false;
+                }
+            }
+        }
+
+        long[] scratch = arrayPool.borrowLongs(rows.length);
+        try {
+            for (int index = orderingColumns.length - 1; index >= 0; index--) {
+                stableRadixSortRowReferenceColumn(rows, scratch, orderingColumns[index], descendingByColumn[index]);
+            }
+            for (int index = partitionColumns.length - 1; index >= 0; index--) {
+                stableRadixSortRowReferenceColumn(rows, scratch, partitionColumns[index], false);
+            }
+        }
+        finally {
+            arrayPool.release(scratch);
+        }
+        return true;
+    }
+
+    private void stableRadixSortRowReferenceColumn(long[] rows, long[] scratch, int column, boolean descending)
+    {
+        int bytes = pages.getFirst().columns()[column].values() instanceof I64Vector ? Long.BYTES : Integer.BYTES;
+        long firstKey = 0;
+        long varyingBytes = 0;
+        boolean first = true;
+        boolean hasNull = false;
+        for (long row : rows) {
+            Streams streams = pages.get(pageIndex(row)).columns()[column];
+            int position = pagePosition(row);
+            if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), position)) {
+                hasNull = true;
+                continue;
+            }
+            long key = integerSortKey(streams.values(), position, descending);
+            if (first) {
+                firstKey = key;
+                first = false;
+            }
+            else {
+                varyingBytes |= firstKey ^ key;
+            }
+        }
+        if (first) {
+            return;
+        }
+
+        long[] source = rows;
+        long[] target = scratch;
+        for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
+            int shift = byteIndex * Byte.SIZE;
+            if (((varyingBytes >>> shift) & 0xFF) == 0) {
+                continue;
+            }
+            java.util.Arrays.fill(radixCounts, 0);
+            for (long row : source) {
+                Streams streams = pages.get(pageIndex(row)).columns()[column];
+                int position = pagePosition(row);
+                int bucket = OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), position)
+                        ? 0
+                        : integerSortByte(streams.values(), position, shift, descending);
+                radixCounts[bucket]++;
+            }
+            int offset = 0;
+            for (int bucket = 0; bucket < radixCounts.length; bucket++) {
+                int count = radixCounts[bucket];
+                radixCounts[bucket] = offset;
+                offset += count;
+            }
+            for (long row : source) {
+                Streams streams = pages.get(pageIndex(row)).columns()[column];
+                int position = pagePosition(row);
+                int bucket = OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), position)
+                        ? 0
+                        : integerSortByte(streams.values(), position, shift, descending);
+                target[radixCounts[bucket]++] = row;
+            }
+            long[] swap = source;
+            source = target;
+            target = swap;
+        }
+        if (hasNull) {
+            int nullCount = 0;
+            for (long row : source) {
+                Streams streams = pages.get(pageIndex(row)).columns()[column];
+                if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), pagePosition(row))) {
+                    nullCount++;
+                }
+            }
+            int nullOffset = descending ? 0 : source.length - nullCount;
+            int valueOffset = descending ? nullCount : 0;
+            for (long row : source) {
+                Streams streams = pages.get(pageIndex(row)).columns()[column];
+                if (OperatorVectorSupport.isNull(streams.getOrNull(Stream.NULLS), pagePosition(row))) {
+                    target[nullOffset++] = row;
+                }
+                else {
+                    target[valueOffset++] = row;
+                }
+            }
+            source = target;
+        }
+        if (source != rows) {
+            System.arraycopy(source, 0, rows, 0, rows.length);
         }
     }
 
