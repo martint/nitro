@@ -49,7 +49,6 @@ public final class GroupIdOperator
     private boolean currentSourceDense;
     private int currentGroupingSet;
     private Batch stagedBatch;
-    private boolean done;
 
     public GroupIdOperator(Allocator allocator, Operator source, int[][] groupingSetInputs, GroupIdOperatorPolicy policy)
     {
@@ -93,7 +92,7 @@ public final class GroupIdOperator
     @Override
     public boolean hasNext()
     {
-        if (stagedBatch == null && !done) {
+        if (stagedBatch == null) {
             stagedBatch = loadNextBatch();
         }
         return stagedBatch != null;
@@ -132,7 +131,6 @@ public final class GroupIdOperator
         while (true) {
             if (currentSourceBatch == null) {
                 if (!loadNextSourceBatch()) {
-                    done = true;
                     return null;
                 }
             }

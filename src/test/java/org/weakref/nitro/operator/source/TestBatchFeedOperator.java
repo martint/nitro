@@ -26,9 +26,12 @@ import org.weakref.nitro.core.source.SourceColumnHandle;
 import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
+import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.Output;
 
 import java.util.List;
@@ -79,6 +82,40 @@ class TestBatchFeedOperator
             assertThat(secondClosed).isTrue();
             assertThat(adaptations).hasValue(2);
         }
+    }
+
+    @Test
+    void testGroupIdPipelineResumesForNextExternallyScheduledBatch()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        AtomicBoolean firstClosed = new AtomicBoolean();
+        AtomicBoolean secondClosed = new AtomicBoolean();
+        try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, new TestingIngress(
+                new AtomicInteger(),
+                new AtomicReference<>()));
+                GroupIdOperator groupId = new GroupIdOperator(
+                        allocator,
+                        feed,
+                        new int[][] {{}},
+                        EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
+            feed.addInput(new TestingSourceBatch(firstClosed));
+            try (Batch ignored = groupId.next()) {
+                assertThat(ignored.borrowMask().count()).isEqualTo(3);
+            }
+            assertThat(groupId.hasNext()).isFalse();
+            feed.finishInput();
+
+            feed.addInput(new TestingSourceBatch(secondClosed));
+            assertThat(groupId.hasNext()).isTrue();
+            try (Batch ignored = groupId.next()) {
+                assertThat(ignored.borrowMask().count()).isEqualTo(3);
+            }
+            assertThat(groupId.hasNext()).isFalse();
+            feed.finishInput();
+        }
+
+        assertThat(firstClosed).isTrue();
+        assertThat(secondClosed).isTrue();
     }
 
     @Test
