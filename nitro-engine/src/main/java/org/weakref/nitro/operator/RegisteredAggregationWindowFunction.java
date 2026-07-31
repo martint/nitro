@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.AggregationPositionAccumulator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
@@ -44,6 +45,9 @@ public final class RegisteredAggregationWindowFunction
 
     private Object state;
     private Streams result;
+    private Streams[] boundSourceColumns;
+    private AggregationInput boundInput;
+    private AggregationPositionAccumulator boundPositionAccumulator;
 
     public RegisteredAggregationWindowFunction(
             AggregationImplementation implementation,
@@ -96,21 +100,50 @@ public final class RegisteredAggregationWindowFunction
             int outputPosition,
             int outputSize)
     {
-        activePosition[0] = inputPosition;
-        int inputSize = inputSize(sourceColumns, inputPosition);
-        Mask mask = Mask.sparse(activePosition, inputSize);
-        AggregationInput input = (argument, stream) -> {
+        bindInput(sourceColumns);
+        if (boundPositionAccumulator != null) {
+            boundPositionAccumulator.add(inputPosition);
+        }
+        else {
+            activePosition[0] = inputPosition;
+            implementation.addRawInput(
+                    state,
+                    0,
+                    Mask.sparse(activePosition, inputSize(sourceColumns, inputPosition)),
+                    boundInput);
+        }
+        if (frame == Frame.RUNNING_ROWS) {
+            Streams direct = implementation.copyResultPosition(
+                    0,
+                    0,
+                    state,
+                    output,
+                    outputPosition,
+                    outputSize,
+                    allocator,
+                    allocationContext);
+            if (direct != null) {
+                return direct;
+            }
+            result = implementation.result(0, state, result, allocator, allocationContext);
+            output = copyResultPosition(allocator, allocationContext, result, output, outputPosition, outputSize);
+        }
+        return output;
+    }
+
+    private void bindInput(Streams[] sourceColumns)
+    {
+        if (sourceColumns == boundSourceColumns) {
+            return;
+        }
+        boundSourceColumns = sourceColumns;
+        boundInput = (argument, stream) -> {
             if (argument < 0 || argument >= inputColumns.length) {
                 throw new IndexOutOfBoundsException("aggregate input: " + argument);
             }
             return sourceColumns[inputColumns[argument]].getOrNull(stream);
         };
-        implementation.addRawInput(state, 0, mask, input);
-        if (frame == Frame.RUNNING_ROWS) {
-            result = implementation.result(0, state, result, allocator, allocationContext);
-            output = copyResultPosition(allocator, allocationContext, result, output, outputPosition, outputSize);
-        }
-        return output;
+        boundPositionAccumulator = implementation.bindRawInputPosition(state, 0, boundInput);
     }
 
     @Override

@@ -49,6 +49,17 @@ public interface AggregationImplementation
 
     void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input);
 
+    /**
+     * Optionally binds a direct single-position update to one physical input batch.
+     *
+     * <p>Window execution uses this capability for running frames. Returning {@code null} retains the ordinary
+     * mask-based update. The implementation, rather than the engine, owns physical type and function semantics.
+     */
+    default AggregationPositionAccumulator bindRawInputPosition(Object state, int group, AggregationInput input)
+    {
+        return null;
+    }
+
     void addIntermediate(Object state, int group, Mask mask, AggregationInput input);
 
     void addIntermediate(Object state, Vector groups, Mask mask, AggregationInput input);

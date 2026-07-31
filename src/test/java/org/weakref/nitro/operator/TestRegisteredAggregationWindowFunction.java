@@ -18,6 +18,7 @@ import org.weakref.nitro.OperatorAssertions;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.AggregationPositionAccumulator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
@@ -47,6 +48,8 @@ class TestRegisteredAggregationWindowFunction
                 row(2L, 1L, (Object) null),
                 row(1L, 3L, (Object) null),
                 row(2L, 2L, 7L)));
+        NullableSum running = new NullableSum(true);
+        NullableSum partition = new NullableSum(false);
 
         try (Operator operator = new WindowOperator(
                 allocator,
@@ -56,12 +59,12 @@ class TestRegisteredAggregationWindowFunction
                 new boolean[] {false},
                 List.of(
                         new RegisteredAggregationWindowFunction(
-                                new NullableSum(),
+                                running,
                                 source.outputSchema(),
                                 new int[] {2},
                                 RUNNING_ROWS),
                         new RegisteredAggregationWindowFunction(
-                                new NullableSum(),
+                                partition,
                                 source.outputSchema(),
                                 new int[] {2},
                                 FULL_PARTITION)))) {
@@ -73,11 +76,23 @@ class TestRegisteredAggregationWindowFunction
                             row(2L, 1L, null, null, 7L),
                             row(2L, 2L, 7L, 7L, 7L));
         }
+        assertThat(running.copyResultCalls).isEqualTo(5);
+        assertThat(running.boundPositionCalls).isEqualTo(5);
+        assertThat(partition.copyResultCalls).isZero();
     }
 
     private static final class NullableSum
             implements AggregationImplementation
     {
+        private final boolean directCopy;
+        private int copyResultCalls;
+        private int boundPositionCalls;
+
+        private NullableSum(boolean directCopy)
+        {
+            this.directCopy = directCopy;
+        }
+
         @Override
         public Object allocate(AggregationExecution execution, int groups)
         {
@@ -116,6 +131,24 @@ class TestRegisteredAggregationWindowFunction
         public void addRawInput(Object state, Vector groups, Mask mask, AggregationInput input)
         {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public AggregationPositionAccumulator bindRawInputPosition(Object state, int group, AggregationInput input)
+        {
+            if (!directCopy) {
+                return null;
+            }
+            State sum = (State) state;
+            VectorAccess.LongValues values = VectorAccess.longValues(input.stream(0, Stream.VALUES));
+            VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(input.stream(0, Stream.NULLS));
+            return position -> {
+                boundPositionCalls++;
+                if (!nulls.value(position)) {
+                    sum.value += values.value(position);
+                    sum.hasValue = true;
+                }
+            };
         }
 
         @Override
@@ -164,6 +197,39 @@ class TestRegisteredAggregationWindowFunction
                     BooleanVector::new);
             values.values()[0] = sum.value;
             nulls.values()[0] = !sum.hasValue;
+            return Streams.ofValuesAndNulls(values, nulls);
+        }
+
+        @Override
+        public Streams copyResultPosition(
+                int group,
+                int maxGroup,
+                Object state,
+                Streams existing,
+                int outputPosition,
+                int size,
+                Allocator allocator,
+                Allocator.Context allocationContext)
+        {
+            if (!directCopy) {
+                return null;
+            }
+            copyResultCalls++;
+            State sum = (State) state;
+            I64Vector values = allocator.allocateOrGrow(
+                    allocationContext,
+                    existing == null ? null : (I64Vector) existing.getOrNull(Stream.VALUES),
+                    I64Vector.class,
+                    size,
+                    I64Vector::new);
+            BooleanVector nulls = allocator.allocateOrGrow(
+                    allocationContext,
+                    existing == null ? null : (BooleanVector) existing.getOrNull(Stream.NULLS),
+                    BooleanVector.class,
+                    size,
+                    BooleanVector::new);
+            values.values()[outputPosition] = sum.value;
+            nulls.values()[outputPosition] = !sum.hasValue;
             return Streams.ofValuesAndNulls(values, nulls);
         }
 
