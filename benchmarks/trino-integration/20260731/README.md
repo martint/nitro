@@ -113,3 +113,40 @@ loss: the isolated Nitro expression uses unchecked generated arithmetic, while t
 overflow semantics. Nitro's current projection-code SPI can describe value and null programs but cannot describe
 error-producing operations. A future reusable extension should let registry-owned function providers contribute
 generated error-aware projections without teaching the engine about Trino functions or arithmetic semantics.
+
+## TPC-DS q22 follow-up
+
+The q22 regression came primarily from an integration boundary between `GroupId` and partial aggregation. Trino
+materialized all five grouping-set expansions as Blocks, and the aggregation adapter immediately converted those
+Blocks back into Nitro vectors. Nitro commit `f88c68fb` first made dense grouping-set value expansion share immutable
+dictionary views. Commit `9a55c87e` then made a GroupId pipeline distinguish temporary exhaustion of an externally
+scheduled `BatchFeedOperator` from permanent source completion. The full Nitro suite passed 1,565 tests with no
+failures or errors and 566 skips.
+
+Trino integration commit `91809c72` fuses GroupId into the Nitro aggregation pipeline. It also accounts logical input
+bytes for every pipeline output batch and prevents adaptive partial aggregation from passing expanded grouping-set
+rows directly to the exchange. Without those controls, q22 emitted 14--48 million partial rows depending on driver
+timing and could exceed the 4 GB query-memory limit.
+
+Nitro's composite string grouping state needs slightly more than Trino's default 16 MB partial-aggregation buffer to
+retain q22's complete local group domain. Controlled runs at 20, 24, 32, and 64 MB all emitted exactly 407,521
+aggregation rows, matching Trino; 16 MB caused repeated flushes and work amplification. Trino commit `fd50465f`
+therefore adds an immutable, composition-owned `TrinoNitroAggregationExecutionPolicy` and uses its default 2x memory
+scale when adapting Trino's partial-aggregation limit. This is an engine-layout capacity adapter, not a query-specific
+setting, and periodic adaptive flushes continue to bound each operator instance.
+
+The final correctness-checked, interleaved run used one warmup and three measurements:
+
+| Engine | Wall p50 | CPU p50 | Aggregation output rows |
+|---|---:|---:|---:|
+| Trino | 6.145 s | 16.505 CPU-s | 407,521 |
+| Nitro | 7.953 s | 16.649 CPU-s | 407,521 |
+
+The final Nitro/Trino ratios are 1.294x wall and 1.009x CPU, down from the baseline's 3.288x wall and 2.732x CPU.
+Aggregation CPU is now close to parity (10.26--10.40 CPU-s for Nitro versus 9.95--10.03 CPU-s for Trino). The
+remaining elapsed-time gap, despite equal total CPU, points to driver scheduling, pipeline concurrency, and the
+scan/join envelope rather than function adaptation or aggregation work amplification.
+
+This slice exposed two reusable abstraction requirements. A host-fed Nitro pipeline needs an explicit distinction
+between temporary input exhaustion and terminal completion, and an expanding native pipeline must report logical
+output work to host-owned adaptive controls instead of charging only its first output batch.
