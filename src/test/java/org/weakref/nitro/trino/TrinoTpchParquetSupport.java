@@ -1364,10 +1364,28 @@ public final class TrinoTpchParquetSupport
 
         List<String> partsuppColumns = List.of("ps_partkey", "ps_suppkey", "ps_supplycost");
         List<Type> partsuppTypes = tableColumnTypes(tables, "partsupp", partsuppColumns);
+        PipelinePlan partsupp = relationPlan(
+                tables,
+                "partsupp",
+                partsuppColumns,
+                Optional.empty(),
+                identityProjections(partsuppTypes),
+                partsuppTypes,
+                "q09.scan.partsupp",
+                "q09.sink.partsupp");
 
         List<String> ordersColumns = List.of("o_orderkey", "o_orderdate");
         List<Type> ordersTypes = tableColumnTypes(tables, "orders", ordersColumns);
         Type orderDateType = ordersTypes.get(1);
+        PipelinePlan orders = relationPlan(
+                tables,
+                "orders",
+                ordersColumns,
+                Optional.empty(),
+                identityProjections(ordersTypes),
+                ordersTypes,
+                "q09.scan.orders",
+                "q09.sink.orders");
 
         List<String> nationColumns = List.of("n_nationkey", "n_name");
         List<Type> nationTypes = tableColumnTypes(tables, "nation", nationColumns);
@@ -1384,8 +1402,8 @@ public final class TrinoTpchParquetSupport
 
         List<String> lineitemColumns = List.of("l_partkey", "l_orderkey", "l_suppkey", "l_quantity", "l_extendedprice", "l_discount");
         List<Type> lineitemTypes = tableColumnTypes(tables, "lineitem", lineitemColumns);
-        // Match the Velox physical shape exactly.  First build the filtered lineitem intermediate,
-        // retaining only the six lineitem values plus s_nationkey consumed downstream.
+        // Match Trino's SQL physical shape. First retain the six lineitem values plus s_nationkey
+        // consumed downstream, then use that stream as the probe for partsupp and orders.
         List<Type> lineitemWithNationTypes = concatTypes(lineitemTypes, List.of(supplierTypes.get(1)));
         PipelinePlan filteredLineitem = new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("lineitem"), lineitemColumns, "q09.scan.lineitem"),
@@ -1412,7 +1430,7 @@ public final class TrinoTpchParquetSupport
                 "q09.sink.filtered_lineitem",
                 lineitemWithNationTypes);
 
-        // Stream the 8M-row partsupp table over the smaller filtered-lineitem build.  The projected
+        // The filtered-lineitem stream probes the 8M-row partsupp build. The projected
         // layout is [extendedprice, discount, quantity, orderkey, nationkey, supplycost].
         List<Type> withPartsuppTypes = List.of(
                 lineitemTypes.get(4),
@@ -1421,31 +1439,31 @@ public final class TrinoTpchParquetSupport
                 lineitemTypes.get(1),
                 supplierTypes.get(1),
                 partsuppTypes.get(2));
-        PipelinePlan partsuppJoined = new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles("partsupp"), partsuppColumns, "q09.scan.partsupp"),
+        PipelinePlan partsuppJoined = appendPlan(
+                filteredLineitem,
                 List.of(
                         namedHashJoinStep("q09.join.partsupp", new HashJoinSpec(
                                 9_4,
-                                partsuppTypes,
-                                List.of(1, 0),
-                                filteredLineitem,
                                 lineitemWithNationTypes,
-                                List.of(2, 0))),
+                                List.of(2, 0),
+                                partsupp,
+                                partsuppTypes,
+                                List.of(1, 0))),
                         namedFactoryStep("q09.project.after_partsupp", filterAndProjectFactory(
                                 9_5,
                                 Optional.empty(),
                                 List.of(
-                                        field(7, lineitemTypes.get(4)),
-                                        field(8, lineitemTypes.get(5)),
-                                        field(6, lineitemTypes.get(3)),
-                                        field(4, lineitemTypes.get(1)),
-                                        field(9, supplierTypes.get(1)),
-                                        field(2, partsuppTypes.get(2))),
+                                        field(4, lineitemTypes.get(4)),
+                                        field(5, lineitemTypes.get(5)),
+                                        field(3, lineitemTypes.get(3)),
+                                        field(1, lineitemTypes.get(1)),
+                                        field(6, supplierTypes.get(1)),
+                                        field(9, partsuppTypes.get(2))),
                                 withPartsuppTypes))),
                 "q09.sink.partsupp_joined",
                 withPartsuppTypes);
 
-        // Stream the 15M-row orders table over that build and retain the same six values as Velox.
+        // That intermediate probes Trino's 15M-row orders build and retains the SQL plan's six live values.
         List<Type> withOrdersTypes = List.of(
                 lineitemTypes.get(4),
                 lineitemTypes.get(5),
@@ -1456,20 +1474,20 @@ public final class TrinoTpchParquetSupport
         // [nation, o_year, amount]
         List<Type> groupedTypes = List.of(nationNameType, BIGINT, DOUBLE);
         List<Type> outputTypes = query09OutputTypes(tables);
-        return new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles("orders"), ordersColumns, "q09.scan.orders"),
+        return appendPlan(
+                partsuppJoined,
                 List.of(
-                        namedHashJoinStep("q09.join.orders", new HashJoinSpec(9_6, ordersTypes, List.of(0), partsuppJoined, withPartsuppTypes, List.of(3))),
+                        namedHashJoinStep("q09.join.orders", new HashJoinSpec(9_6, withPartsuppTypes, List.of(3), orders, ordersTypes, List.of(0))),
                         namedFactoryStep("q09.project.after_orders", filterAndProjectFactory(
                                 9_7,
                                 Optional.empty(),
                                 List.of(
-                                        field(2, lineitemTypes.get(4)),
-                                        field(3, lineitemTypes.get(5)),
-                                        field(4, lineitemTypes.get(3)),
-                                        field(6, supplierTypes.get(1)),
-                                        field(7, partsuppTypes.get(2)),
-                                        field(1, orderDateType)),
+                                        field(0, lineitemTypes.get(4)),
+                                        field(1, lineitemTypes.get(5)),
+                                        field(2, lineitemTypes.get(3)),
+                                        field(4, supplierTypes.get(1)),
+                                        field(5, partsuppTypes.get(2)),
+                                        field(7, orderDateType)),
                                 withOrdersTypes)),
                         namedHashJoinStep("q09.join.nation", new HashJoinSpec(9_8, withOrdersTypes, List.of(3), nation, nationTypes, List.of(0))),
                         // amount = disc_price - ps_supplycost * l_quantity

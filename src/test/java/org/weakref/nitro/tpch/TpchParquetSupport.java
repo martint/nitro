@@ -1023,23 +1023,21 @@ final class TpchParquetSupport
                 ? supplierJoin.withOutputs(0, 1, 2, 3, 4, 5, 7)
                 : projectInputs(allocator, primitiveRegistry, supplierJoin, 0, 1, 2, 3, 4, 5, 7));
         Operator partsupp = profiled(profile, "q09.scan.partsupp", scannedTable(allocator, tables, "partsupp", "ps_partkey", "ps_suppkey", "ps_supplycost"));
-        // Match Velox's build/probe shape: the filtered lineitem intermediate is the build and the 8M-row
-        // partsupp table streams as the probe. Retain only the six columns consumed by the next stages.
-        HashJoinOperator partsuppJoin = new HashJoinOperator(allocator, partsupp, new int[] {1, 0}, joined, new int[] {2, 0})
-                .withProfileName("q09.join.partsupp")
-                .withDirectBoundedBuildCoalescing();
+        // Match Trino's SQL plan: the filtered lineitem intermediate probes the 8M-row partsupp build.
+        // Retain only the six columns consumed by the next stages.
+        HashJoinOperator partsuppJoin = new HashJoinOperator(allocator, joined, new int[] {2, 0}, partsupp, new int[] {1, 0})
+                .withProfileName("q09.join.partsupp");
         joined = profiled(profile, "q09.join.partsupp", integratedJoinOutputs
-                ? partsuppJoin.withOutputs(7, 8, 6, 4, 9, 2)
-                : projectInputs(allocator, primitiveRegistry, partsuppJoin, 7, 8, 6, 4, 9, 2));
+                ? partsuppJoin.withOutputs(4, 5, 3, 1, 6, 9)
+                : projectInputs(allocator, primitiveRegistry, partsuppJoin, 4, 5, 3, 1, 6, 9));
         Operator orders = profiled(profile, "q09.scan.orders", scannedTable(allocator, tables, "orders", "o_orderkey", "o_orderdate"));
-        // Likewise stream the 15M-row orders table over the smaller build, retaining
+        // The resulting intermediate probes Trino's 15M-row orders build, retaining
         // [extendedprice, discount, quantity, nationkey, supplycost, orderdate].
-        HashJoinOperator ordersJoin = new HashJoinOperator(allocator, orders, 0, joined, 3)
-                .withProfileName("q09.join.orders")
-                .withDirectBoundedBuildCoalescing();
+        HashJoinOperator ordersJoin = new HashJoinOperator(allocator, joined, 3, orders, 0)
+                .withProfileName("q09.join.orders");
         joined = profiled(profile, "q09.join.orders", integratedJoinOutputs
-                ? ordersJoin.withOutputs(2, 3, 4, 6, 7, 1)
-                : projectInputs(allocator, primitiveRegistry, ordersJoin, 2, 3, 4, 6, 7, 1));
+                ? ordersJoin.withOutputs(0, 1, 2, 4, 5, 7)
+                : projectInputs(allocator, primitiveRegistry, ordersJoin, 0, 1, 2, 4, 5, 7));
         Operator nation = profiled(profile, "q09.scan.nation", scannedTable(allocator, tables, "nation", "n_nationkey", "n_name"));
         // + [n_nationkey, n_name -> 6,7]
         HashJoinOperator nationJoin = new HashJoinOperator(allocator, joined, 3, nation, 0)
