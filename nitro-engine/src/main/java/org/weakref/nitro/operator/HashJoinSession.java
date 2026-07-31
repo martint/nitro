@@ -17,6 +17,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 
 import static java.util.Objects.requireNonNull;
 
@@ -71,11 +72,49 @@ public final class HashJoinSession
             HashJoinBuild preparedBuild,
             HashJoinOperator.JoinFilter... joinFilters)
     {
+        this(
+                operatorResources,
+                allocator,
+                probeSchema,
+                probeJoinColumns,
+                build,
+                buildJoinColumns,
+                probeOuterJoin,
+                preparedBuild,
+                UnaryOperator.identity(),
+                joinFilters);
+    }
+
+    public HashJoinSession(
+            OperatorResources operatorResources,
+            Allocator allocator,
+            Schema probeSchema,
+            int[] probeJoinColumns,
+            Operator build,
+            int[] buildJoinColumns,
+            boolean probeOuterJoin,
+            HashJoinBuild preparedBuild,
+            UnaryOperator<Operator> probePipeline,
+            HashJoinOperator.JoinFilter... joinFilters)
+    {
         probe = new ExternallyScheduledBatchFeed(requireNonNull(probeSchema, "probeSchema is null"));
+        Operator transformedProbe;
+        try {
+            transformedProbe = requireNonNull(
+                    requireNonNull(probePipeline, "probePipeline is null").apply(probe),
+                    "probePipeline returned null");
+        }
+        catch (RuntimeException | Error failure) {
+            probe.close();
+            throw failure;
+        }
+        Operator scheduledProbe = transformedProbe == probe
+                ? probe
+                : new ExternallyScheduledOperator(transformedProbe, probe::isFinished);
         join = new HashJoinOperator(
                 requireNonNull(operatorResources, "operatorResources is null"),
                 requireNonNull(allocator, "allocator is null"),
-                probe,
+                scheduledProbe,
                 probeJoinColumns.clone(),
                 requireNonNull(build, "build is null"),
                 buildJoinColumns.clone(),

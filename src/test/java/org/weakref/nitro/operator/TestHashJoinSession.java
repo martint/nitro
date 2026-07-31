@@ -67,6 +67,38 @@ class TestHashJoinSession
     }
 
     @Test
+    void testPreservesExternalSchedulingAcrossProbePipeline()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        table(2, 3, 2),
+                        new int[] {0},
+                        false,
+                        null,
+                        CountingNextOperator::new)) {
+            allocator.beginExecution();
+
+            List<Long> probeValues = new ArrayList<>();
+            List<Long> buildValues = new ArrayList<>();
+            session.addInput(batch(1, 2));
+            drain(session, probeValues, buildValues);
+            session.addInput(batch(3, 2));
+            drain(session, probeValues, buildValues);
+            session.finish();
+            drain(session, probeValues, buildValues);
+
+            assertThat(probeValues).containsExactly(2L, 2L, 3L, 2L, 2L);
+            assertThat(buildValues).containsExactly(2L, 2L, 3L, 2L, 2L);
+            assertThat(session.isFinished()).isTrue();
+        }
+    }
+
+    @Test
     void testSharesPreparedBuildAcrossProbeSessions()
     {
         try (EngineResources resources = EngineResources.createDefault();
