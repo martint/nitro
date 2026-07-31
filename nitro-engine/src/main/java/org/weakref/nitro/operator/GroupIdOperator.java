@@ -231,9 +231,9 @@ public final class GroupIdOperator
      * Selects {@code positions} out of {@code source} for one grouping-set expansion. A
      * dictionary-encoded column is carried through by reference: only its id array is remapped to the
      * selected positions while the underlying dictionary values are shared across every grouping set.
-     * This avoids copying the (often variable-width) values N times for an N-way rollup and, crucially,
-     * keeps the same dictionary instance flowing into grouping so {@link FlatGroupingTable} can hash
-     * by id rather than by raw bytes. All other shapes fall back to a dense copy.
+     * Dense flat inputs use the same identity-dictionary view. This avoids copying values N times for an
+     * N-way rollup and, crucially, keeps the same mapping identity flowing into grouping so
+     * {@link FlatGroupingTable} can reuse dictionary-derived work.
      */
     private Vector selectValues(Vector source, int[] positions, int outputIndex)
     {
@@ -263,6 +263,21 @@ public final class GroupIdOperator
                 ids[index] = sourceIds[positions[index]];
             }
             return allocator.allocateDictionary(allocationContext, ids, dictionary.values());
+        }
+        if (policy.shareDenseDictionaryIds() && currentSourceDense) {
+            DictionaryVector selected;
+            if (shouldPropagateMappingIdentity()) {
+                selected = currentDenseDictionaryMappings[outputIndex];
+                if (selected == null) {
+                    selected = DictionaryVector.wrap(currentSourcePositions, currentSourcePositions.length, source);
+                    currentDenseDictionaryMappings[outputIndex] = selected;
+                }
+                selected = selected.sharedMappingView();
+            }
+            else {
+                selected = DictionaryVector.wrap(currentSourcePositions, currentSourcePositions.length, source);
+            }
+            return allocator.adopt(allocationContext, selected);
         }
         return copySelectedVector(source);
     }
@@ -307,7 +322,9 @@ public final class GroupIdOperator
     private Output resultOutput(Streams streams)
     {
         Set<Stream> exposedStreams = streams.streams();
-        return new Output(exposedStreams, streams::get, (stream, vector) -> allocator.transfer(allocationContext, vector));
+        // Encoded outputs can borrow their value vector from the source batch. Transfer only buffers owned by this
+        // operator so taking a dictionary/RLE wrapper does not steal the borrowed child from its upstream owner.
+        return new Output(exposedStreams, streams::get, (stream, vector) -> allocator.transferOwned(allocationContext, vector));
     }
 
     private BooleanVector booleanVector(int size, boolean value)

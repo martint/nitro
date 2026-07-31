@@ -2419,6 +2419,23 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupIdOperatorSharesDenseExpansionValues()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row("detail", 10L), row("other", 20L))),
+                new int[][] {
+                        {-1, 1},
+                        {0, 1}},
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
+            Batch batch = operator.next();
+            assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+            batch.close();
+        }
+    }
+
+    @Test
     void testGroupIdOperatorUsesMappedTypeForNullExtendedOutput()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
