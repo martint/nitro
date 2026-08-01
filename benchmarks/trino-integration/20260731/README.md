@@ -180,3 +180,21 @@ The final ratios are 1.315x wall and 1.291x p50 CPU (1.273x mean CPU), down from
 versus Trino's 1.42, 0.70, and 2.13 CPU-s. The isolated operator advantage still does not transfer literally because
 the integrated workload retains multi-page indirection and decimal SQL semantics, but the large reversal is now
 accounted for rather than being caused by function adaptation or an avoidable comparison-sort path.
+
+## TPC-H q21 native adaptive-partial accounting
+
+The source-fused partial aggregation received zero input bytes from native
+`BatchSource` batches. Trino's adaptive controller is byte-sampled, so it never
+disabled a near-identity partial aggregation and Nitro repeatedly hashed 1.58
+million rows per flush. The Trino boundary now supplies a conservative logical
+size from the projected flat row layout, using connector completed-byte deltas
+when those are larger. This accounting does not inspect query, table, column,
+function, or cardinality identities.
+
+The exact q21 audit passes with 100 rows, 65 native source creations, and zero
+fallbacks. One warmup and three measurements improved Nitro from 2,656.731 ms
+wall / 9,846 ms query CPU to 2,392.646 ms / 8,231 ms. The fused scan/partial
+aggregation fell from about 2.94 CPU-s to 0.86--0.88 CPU-s, now below Trino's
+roughly 0.95 CPU-s scan-plus-aggregation stage. Current Trino q21 remains
+1,901.301 ms / 6,750 ms; the remaining gap is concentrated in the subsequent
+60-million-row join.
