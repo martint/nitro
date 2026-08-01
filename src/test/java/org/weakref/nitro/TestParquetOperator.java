@@ -305,6 +305,32 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourcePrunesMixedPayloadRowGroups()
+            throws IOException
+    {
+        java.nio.file.Path first = writeIntStringParquetFile("mixed-row-group-first.parquet", List.of(1, 2, 3));
+        java.nio.file.Path second = writeIntStringParquetFile("mixed-row-group-second.parquet", List.of(100, 101, 102));
+
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                NitroParquetScanResources.createDefault(),
+                new Allocator(EngineResources.createDefault()),
+                List.of(first, second),
+                List.of("value", "payload"))) {
+            assertThat(scan.supportsDynamicFilterPushdown(0)).isTrue();
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 102));
+
+            List<Integer> values = new ArrayList<>();
+            while (scan.hasNext()) {
+                try (Batch batch = scan.next()) {
+                    I32Vector vector = (I32Vector) batch.output(0).borrow(Stream.VALUES);
+                    batch.borrowMask().forEach(position -> values.add(vector.values()[position]));
+                }
+            }
+            assertThat(values).containsExactly(100, 101, 102);
+        }
+    }
+
+    @Test
     void testNitroParquetSourceWidensInt32ForLongLogicalBinding()
             throws IOException
     {
@@ -3041,6 +3067,28 @@ public class TestParquetOperator
                 .build()) {
             for (int value : values) {
                 writer.write(groups.newGroup().append("value", value));
+            }
+        }
+        return file;
+    }
+
+    private java.nio.file.Path writeIntStringParquetFile(String name, List<Integer> values)
+            throws IOException
+    {
+        java.nio.file.Path file = tempDirectory.resolve(name);
+        MessageType schema = Types.buildMessage()
+                .required(INT32).named("value")
+                .required(BINARY).as(stringType()).named("payload")
+                .named("nitro_int_string_test");
+
+        SimpleGroupFactory groups = new SimpleGroupFactory(schema);
+        try (ParquetWriter<Group> writer = ExampleParquetWriter.builder(new LocalOutputFile(file))
+                .withType(schema)
+                .build()) {
+            for (int value : values) {
+                writer.write(groups.newGroup()
+                        .append("value", value)
+                        .append("payload", "payload-" + value));
             }
         }
         return file;

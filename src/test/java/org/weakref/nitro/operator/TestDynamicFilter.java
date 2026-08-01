@@ -107,6 +107,11 @@ class TestDynamicFilter
         assertThat(filter.accepts(10)).isTrue();
         assertThat(filter.accepts(12)).isTrue();
         assertThat(filter.accepts(13)).isFalse();
+        assertThat(filter.mayOverlap(9, 9)).isFalse();
+        assertThat(filter.mayOverlap(9, 10)).isTrue();
+        assertThat(filter.mayOverlap(11, 11)).isTrue();
+        assertThat(filter.mayOverlap(12, 13)).isTrue();
+        assertThat(filter.mayOverlap(13, 20)).isFalse();
     }
 
     @Test
@@ -116,6 +121,7 @@ class TestDynamicFilter
 
         assertThat(filter.isEmpty()).isTrue();
         assertThat(filter.accepts(11)).isFalse();
+        assertThat(filter.mayOverlap(Long.MIN_VALUE, Long.MAX_VALUE)).isFalse();
     }
 
     @Test

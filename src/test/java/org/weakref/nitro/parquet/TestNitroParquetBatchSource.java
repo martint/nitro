@@ -18,9 +18,15 @@ import org.apache.parquet.format.ColumnMetaData;
 import org.apache.parquet.format.CompressionCodec;
 import org.apache.parquet.format.Encoding;
 import org.apache.parquet.format.RowGroup;
+import org.apache.parquet.format.Statistics;
 import org.apache.parquet.format.Type;
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.operator.DynamicFilter;
 
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -65,6 +71,32 @@ class TestNitroParquetBatchSource
         assertArrayEquals(new int[] {2, 0}, establishedOrder);
     }
 
+    @Test
+    void testNumericChunkStatisticsRejectDisjointDomain()
+    {
+        ColumnMetaData metadata = new ColumnMetaData(
+                Type.INT32,
+                List.of(Encoding.PLAIN),
+                List.of("value"),
+                CompressionCodec.UNCOMPRESSED,
+                100,
+                400,
+                400,
+                0);
+        metadata.setStatistics(new Statistics()
+                .setMin_value(littleEndianInt(10))
+                .setMax_value(littleEndianInt(19)));
+
+        try (PrimitiveArrayPool arrays = new PrimitiveArrayPool(0, 0);
+                ColumnReader reader = new ColumnReader(Type.INT32, false, 0, false, null, arrays, ParquetReaderPolicy.defaults())) {
+            reader.addChunk(MemorySegment.NULL, metadata, 100);
+
+            assertFalse(reader.chunkMayMatch(0, DynamicFilter.fromRange(0, 20, 30)));
+            assertTrue(reader.chunkMayMatch(0, DynamicFilter.fromRange(0, 19, 30)));
+            assertTrue(reader.chunkMayMatch(0, DynamicFilter.fromRange(0, 0, 10)));
+        }
+    }
+
     private static boolean admits(int selected, int total, int scanColumns, int payloadColumns)
     {
         return ParquetLateMaterializationPolicy.defaults()
@@ -88,5 +120,10 @@ class TestNitroParquetBatchSource
         ColumnChunk column = new ColumnChunk();
         column.setMeta_data(metadata);
         return new RowGroup(List.of(column), 8, 1);
+    }
+
+    private static byte[] littleEndianInt(int value)
+    {
+        return ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array();
     }
 }

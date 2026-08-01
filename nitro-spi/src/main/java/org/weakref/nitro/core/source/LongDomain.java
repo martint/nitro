@@ -29,4 +29,13 @@ public interface LongDomain
 
     /// Conservative fraction of the domain's numeric range that is accepted.
     double rangeDensity();
+
+    /// Whether this domain can contain a value in the inclusive physical range.
+    ///
+    /// Sources may use this conservative proof to reject storage units from metadata. Implementations that do not
+    /// expose bounds retain every unit by default.
+    default boolean mayOverlap(long minimum, long maximum)
+    {
+        return true;
+    }
 }

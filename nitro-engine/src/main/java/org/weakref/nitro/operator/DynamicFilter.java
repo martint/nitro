@@ -176,6 +176,12 @@ public final class DynamicFilter
         return Math.min(1.0, (double) distinctSize / span);
     }
 
+    @Override
+    public boolean mayOverlap(long minimum, long maximum)
+    {
+        return distinctSize != 0 && minimum <= max && maximum >= min;
+    }
+
     /** Whether {@code value} can join: a range gate, then a bitset read (small domains) or hash-set probe. */
     public boolean accepts(long value)
     {

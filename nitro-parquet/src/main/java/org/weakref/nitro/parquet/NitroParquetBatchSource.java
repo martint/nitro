@@ -45,6 +45,7 @@ import org.weakref.nitro.data.VectorSourceBatch;
 
 import java.lang.foreign.Arena;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -157,6 +158,7 @@ public final class NitroParquetBatchSource
     private final boolean[] intOutputAsLong;
     private final long totalRows;
     private final long totalCompressedBytes;
+    private final long[] rowGroupRows;
 
     private final boolean allNumeric;
     private int filterWindow;
@@ -164,9 +166,15 @@ public final class NitroParquetBatchSource
     private final boolean adaptiveNarrowFilterWindowCandidate;
     private boolean adaptiveNarrowFilterWindowDecided;
     private final LongDomain[] filtersByColumn;
+    private final LongDomain[] rowGroupFiltersByColumn;
     private final VersionedLongPredicate[] filterVersionsByColumn;
     private boolean hasFilters;
+    private boolean hasRowGroupFilters;
     private boolean filtersPruned;
+    private int rowGroupIndex;
+    private long rowGroupRemaining;
+    private boolean rowGroupTracking;
+    private long prunedRows;
     // Per-column decode scratch (grows to high-water mark; reused across batches). A column is decoded into
     // colLong or colInt (by kind) at whatever survivor set it is read at; readPositions records that set so the
     // final emit gathers each column to the surviving rows. Filter columns are read progressively: the most
@@ -428,10 +436,12 @@ public final class NitroParquetBatchSource
         }
         long rows = 0;
         long compressedBytes = 0;
+        List<Long> rowsByGroup = new ArrayList<>();
         for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
             ParquetFile file = files[fileIndex];
             Split split = splits.get(fileIndex);
             List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
+            rowGroups.forEach(rowGroup -> rowsByGroup.add(rowGroup.num_rows));
             for (int c = 0; c < columnCount; c++) {
                 ParquetFile.Column column = file.column(columns.get(c), columnNameMatching);
                 DecompressedPageCache.Source source = decompressedPages == null
@@ -452,6 +462,7 @@ public final class NitroParquetBatchSource
         }
         this.totalRows = rows;
         this.totalCompressedBytes = compressedBytes;
+        this.rowGroupRows = rowsByGroup.stream().mapToLong(Long::longValue).toArray();
 
         int intColumns = 0;
         for (ColumnReader reader : readers) {
@@ -473,6 +484,7 @@ public final class NitroParquetBatchSource
         this.adaptiveNarrowFilterWindowCandidate =
                 adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
         this.filtersByColumn = new LongDomain[columnCount];
+        this.rowGroupFiltersByColumn = new LongDomain[columnCount];
         this.filterVersionsByColumn = new VersionedLongPredicate[columnCount];
         this.colLong = new long[columnCount][];
         this.colInt = new int[columnCount][];
@@ -490,12 +502,21 @@ public final class NitroParquetBatchSource
 
     private void pushLongDomain(int column, LongDomain filter)
     {
-        // Only all-numeric scans take the skip-decode DF path (mirrors SkipDecodeScanOperator's eligibility):
-        // the survivor payload is then guaranteed INT/LONG, so readSelectedInts/Longs cover it.
-        if (!allNumeric) {
+        if (column < 0 || column >= readers.length) {
             return;
         }
-        if (column < 0 || column >= readers.length) {
+        if (readers[column].kind() == ColumnReader.Kind.BINARY || readers[column].isDouble()) {
+            return;
+        }
+        LongDomain existingRowGroupFilter = rowGroupFiltersByColumn[column];
+        if (existingRowGroupFilter == null || filter.size() < existingRowGroupFilter.size()) {
+            rowGroupFiltersByColumn[column] = filter;
+            hasRowGroupFilters = true;
+        }
+        // Only all-numeric scans take the row-level skip-decode path: the survivor payload is then guaranteed
+        // INT/LONG, so readSelectedInts/Longs cover it. Mixed scans still retain the domain above for metadata-only
+        // row-group rejection and keep the executable filter as a residual operator predicate.
+        if (!allNumeric) {
             return;
         }
         // Several joins can push a filter on the same probe column (e.g. this scan's own dimension join and a
@@ -545,11 +566,11 @@ public final class NitroParquetBatchSource
         if (deferredFilteredPayload) {
             return allNumeric
                     ? Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER, SourceCapability.CONSTRAINED_REBORROW)
-                    : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.CONSTRAINED_REBORROW);
+                    : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER, SourceCapability.CONSTRAINED_REBORROW);
         }
         return allNumeric
                 ? Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER)
-                : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN);
+                : Set.of(SourceCapability.LAZY_COLUMNS, SourceCapability.SELECTION_PUSHDOWN, SourceCapability.RUNTIME_FILTER);
     }
 
     @Override
@@ -573,7 +594,7 @@ public final class NitroParquetBatchSource
                 @Override
                 public OptionalLong completedPositions()
                 {
-                    return OptionalLong.of(nextRow);
+                    return OptionalLong.of(nextRow - prunedRows);
                 }
 
                 @Override
@@ -591,6 +612,7 @@ public final class NitroParquetBatchSource
     public SourcePoll poll()
     {
         checkOpen();
+        advancePastRejectedRowGroups();
         if (!(filtersActive() ? ensureWindow() : nextRow < totalRows)) {
             return SourcePoll.Finished.FINISHED;
         }
@@ -601,6 +623,10 @@ public final class NitroParquetBatchSource
             return new SourcePoll.Ready(emitSlice());
         }
         int count = toIntExact(Math.min(batchPolicy.maxRows(), totalRows - nextRow));
+        if (rowGroupTracking) {
+            count = toIntExact(Math.min(count, rowGroupRemaining));
+            consumeRowGroupRows(count);
+        }
         nextRow += count;
         return new SourcePoll.Ready(lateMaterializationPolicy.enabled() ? lazyBatch(count) : fullBatch(count));
     }
@@ -611,7 +637,7 @@ public final class NitroParquetBatchSource
         checkOpen();
         requireNonNull(filter, "filter is null");
         int column = columnIndex(filter.column());
-        if (column < 0 || !allNumeric) {
+        if (column < 0) {
             return RuntimeFilterAcceptance.REJECTED;
         }
         LongDomain domain = filter.domain().capability(LongDomainCapability.LONG_DOMAIN).orElse(null);
@@ -625,7 +651,83 @@ public final class NitroParquetBatchSource
     @Override
     public boolean supportsRuntimeFilter(SourceColumnHandle column)
     {
-        return allNumeric && columnIndex(requireNonNull(column, "column is null")) >= 0;
+        int index = columnIndex(requireNonNull(column, "column is null"));
+        return index >= 0 && readers[index].kind() != ColumnReader.Kind.BINARY && !readers[index].isDouble();
+    }
+
+    /** Reject mixed-payload row groups from numeric min/max metadata before any column page is visited. */
+    private void advancePastRejectedRowGroups()
+    {
+        // All-numeric scans already apply these domains row by row in the filter-window path. Keep that mature
+        // lifecycle unchanged in this slice; metadata rejection primarily closes the mixed-payload SPI gap.
+        if (allNumeric || !hasRowGroupFilters || nextRow >= totalRows) {
+            return;
+        }
+        closeCurrentBatch();
+        initializeRowGroupTracking();
+        while (rowGroupIndex < rowGroupRows.length && rowGroupRemaining == rowGroupRows[rowGroupIndex]) {
+            if (rowGroupMayMatch(rowGroupIndex)) {
+                return;
+            }
+            long rows = rowGroupRemaining;
+            deferOrSkipRows(rows);
+            nextRow += rows;
+            prunedRows += rows;
+            rowGroupIndex++;
+            rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] : 0;
+        }
+    }
+
+    private void initializeRowGroupTracking()
+    {
+        if (rowGroupTracking) {
+            return;
+        }
+        long position = nextRow;
+        while (rowGroupIndex < rowGroupRows.length && position >= rowGroupRows[rowGroupIndex]) {
+            position -= rowGroupRows[rowGroupIndex++];
+        }
+        rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] - position : 0;
+        rowGroupTracking = true;
+    }
+
+    private boolean rowGroupMayMatch(int index)
+    {
+        for (int column = 0; column < rowGroupFiltersByColumn.length; column++) {
+            LongDomain filter = rowGroupFiltersByColumn[column];
+            if (filter != null && !readers[column].chunkMayMatch(index, filter)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void deferOrSkipRows(long rows)
+    {
+        for (int column = 0; column < readers.length; column++) {
+            if (lazyPendingAdvance == null) {
+                readers[column].skip(rows);
+            }
+            else {
+                lazyPendingAdvance[column] += rows;
+            }
+            if (nullReaders[column] == null) {
+                directNullPendingAdvance[column] += rows;
+            }
+            else {
+                nullReaders[column].skipNulls(directNullPendingAdvance[column] + rows);
+                directNullPendingAdvance[column] = 0;
+            }
+        }
+    }
+
+    private void consumeRowGroupRows(int rows)
+    {
+        rowGroupRemaining -= rows;
+        if (rowGroupRemaining == 0) {
+            rowGroupIndex++;
+            rowGroupRemaining = rowGroupIndex < rowGroupRows.length ? rowGroupRows[rowGroupIndex] : 0;
+        }
     }
 
     private boolean directNumericBatchDecodeConfigured;

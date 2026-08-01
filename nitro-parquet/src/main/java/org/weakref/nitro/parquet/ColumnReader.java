@@ -23,6 +23,7 @@ import org.apache.parquet.format.PageType;
 import org.apache.parquet.format.Type;
 import org.apache.parquet.format.Util;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.Mask;
@@ -33,6 +34,8 @@ import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -2923,6 +2926,37 @@ public final class ColumnReader
         }
         cachedDictionarySize = max;
         return cachedDictionarySize;
+    }
+
+    /** Whether a numeric row-group chunk can overlap a pushed long domain according to Parquet min/max metadata. */
+    public boolean chunkMayMatch(int index, LongDomain domain)
+    {
+        requireNonNull(domain, "domain is null");
+        if (index < 0 || index >= chunks.size()) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        if (kind == Kind.BINARY || physicalType == Type.DOUBLE || flbaDecimal) {
+            return true;
+        }
+        var statistics = chunks.get(index).metadata().statistics;
+        if (statistics == null) {
+            return true;
+        }
+        byte[] minimumBytes = statistics.isSetMin_value() ? statistics.getMin_value() : statistics.getMin();
+        byte[] maximumBytes = statistics.isSetMax_value() ? statistics.getMax_value() : statistics.getMax();
+        int width = kind == Kind.INT ? Integer.BYTES : Long.BYTES;
+        if (minimumBytes == null || maximumBytes == null || minimumBytes.length != width || maximumBytes.length != width) {
+            return true;
+        }
+        long minimum = numericStatistic(minimumBytes);
+        long maximum = numericStatistic(maximumBytes);
+        return minimum <= maximum && domain.mayOverlap(minimum, maximum);
+    }
+
+    private long numericStatistic(byte[] value)
+    {
+        ByteBuffer buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN);
+        return kind == Kind.INT ? buffer.getInt() : buffer.getLong();
     }
 
     /**
