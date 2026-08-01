@@ -353,3 +353,25 @@ positions through the Nitro source, while the Trino Parquet path reports about 1
 after predicate/statistics pruning. Their large ratio reversals therefore compare different scan work. Static filter
 domains need an explicit optimizer-to-connector SPI path so Nitro Parquet can prune row groups without teaching the
 connector about SQL expressions or benchmark queries.
+
+## ClickBench q37--43 static-domain follow-up
+
+Nitro commit `cfd0912e` gives connector-neutral long domains a conservative row-group overlap capability and lets the
+Parquet connector reject disjoint INT32/INT64 row groups. Trino commit `5da7da15` passes the Hive table handle's compact
+effective predicate into each native Nitro source independently of the completed dynamic-filter snapshot. This is a
+host/connector boundary change: neither the execution engine nor an operator recognizes SQL expressions, Hive,
+ClickBench, tables, or columns.
+
+The first end-to-end pass closed the physical-work mismatch for mixed-payload q37--40. It also showed that all-numeric
+q41--43 still took the row-level filter-window path without consulting row-group metadata. Nitro commit `7dd2a8e8`
+now applies row-group rejection before those windows and aligns each accepted window to a row-group boundary. The
+variable window sizes exposed and fixed a stale nullable-payload scratch reference when a later row group was larger
+than the first. Focused Parquet tests pass 83/83, including explicit pruning and growing-scratch regressions; Nitro's
+full suite passes 1,582 tests with no failures or errors and 566 skips.
+
+All q37--43 queries now report the same 1,406,798 input positions for Nitro and Trino. Selected controlled results are:
+q37 uses less Nitro CPU (287 versus 347 CPU-ms) despite 1.514x wall time; q41 is approximately CPU parity; q42 remains
+1.737x CPU; and q43 reports 262.271 ms / 178 CPU-ms for Nitro versus 176.837 ms / 151 CPU-ms for Trino (1.483x wall,
+1.179x CPU). q39 remains the dominant outlier at roughly 13.9x CPU in the short screen. Because scan work is now equal,
+q39 and then q42 are valid downstream profiling targets. No downstream operator change is justified until their exact
+plan-node CPU and lifecycle are compared with the corresponding operator fixtures.
