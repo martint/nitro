@@ -269,3 +269,21 @@ The correctness-checked interleaved q67 rerun reports Trino at 5,789.327 ms /
 CPU. The CPU ratio improves from 1.216x to 1.133x. Nitro's full suite passes 1,576
 tests with no failures or errors and 566 skips; the complete Trino Nitro core
 cohort passes 163 tests.
+
+Long-decimal ordering exposed a separate provider-boundary cost. The structural
+kernel SPI previously required operators to read an `Int128` carrier for both
+sides of every comparison. Nitro commit `212d530c` adds optional provider-owned
+direct vector identity, hash, and comparison handles while keeping operators
+logical-type agnostic. Trino commit `0f2fba71` supplies allocation-free two-limb
+identity and ordering for long decimals; Top-N itself is unchanged.
+
+The focused operator test proves that ordering uses the direct handles without
+calling the carrier reader, Nitro's full suite passes 1,577 tests with 566 skips,
+and Trino's Nitro core cohort passes 164 tests. With a 4 GB query cap to avoid
+q67's unstable 2 GB boundary, the correctness-checked one-warmup/three-measurement
+run reports Trino at 5,764.279 ms / 21,798 CPU-ms and Nitro at 7,837.931 ms /
+23,500 CPU-ms: 1.360x wall and 1.078x CPU. Cold plan-node accounting shows the
+large ranking node's add-input CPU falling from about 553 ms to 454 ms, versus
+about 347 ms for Trino. Its roughly one-second Nitro get-output phase remains;
+the carrier materialization hypothesis therefore explains only part of the
+ranking gap, and the next investigation must follow the exact ranking lifecycle.
