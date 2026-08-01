@@ -440,7 +440,8 @@ and can select the registry-provided UTF-8 literal mask directly, including the 
 The controlled q26 confirmation with one warmup and five interleaved measurements reports Nitro at 329.175 ms /
 1,547 CPU-ms and Trino at 368.625 ms / 2,100 CPU-ms: 0.893x wall and 0.737x CPU. The preceding stale-artifact run
 was 1.482x wall / 1.714x CPU. The same lowering changes q11, q12, q25, q27, q28, and q30 from CPU regressions to CPU
-wins. `clickbench-mask-regexp-targeted.csv` contains the one-warmup, three-measurement follow-up rows.
+wins. The later q31/q32 confirmation reports 0.792x/0.850x median CPU, removing the next two stale board
+regressions. `clickbench-mask-regexp-targeted.csv` contains the one-warmup, three-measurement follow-up rows.
 
 ## ClickBench q29 bound-regexp adaptation
 
