@@ -205,6 +205,18 @@ public class GroupedAggregationOperator
             Operator source,
             OperatorResources operatorResources)
     {
+        this(allocator, groupByColumns, groupedColumns, program, source, operatorResources, operatorResources.grouping());
+    }
+
+    public GroupedAggregationOperator(
+            Allocator allocator,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources)
+    {
         this(
                 allocator,
                 -1,
@@ -214,7 +226,8 @@ public class GroupedAggregationOperator
                 toArray(groupByColumns),
                 mapGroupedKeyIndexes(groupByColumns, groupedColumns),
                 groupingTypes(source.outputSchema(), groupByColumns),
-                requireNonNull(operatorResources, "operatorResources is null"));
+                requireNonNull(operatorResources, "operatorResources is null"),
+                requireNonNull(groupingResources, "groupingResources is null"));
     }
 
     private static List<TypeBinding> groupingTypes(Schema sourceSchema, List<Integer> groupByColumns)
@@ -237,6 +250,31 @@ public class GroupedAggregationOperator
             int[] groupedKeyIndexes,
             List<TypeBinding> inlineGroupingTypes,
             OperatorResources operatorResources)
+    {
+        this(
+                allocator,
+                groupColumn,
+                groupedColumns,
+                program,
+                source,
+                groupByColumns,
+                groupedKeyIndexes,
+                inlineGroupingTypes,
+                operatorResources,
+                operatorResources.grouping());
+    }
+
+    private GroupedAggregationOperator(
+            Allocator allocator,
+            int groupColumn,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            int[] groupByColumns,
+            int[] groupedKeyIndexes,
+            List<TypeBinding> inlineGroupingTypes,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources)
     {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
@@ -293,7 +331,7 @@ public class GroupedAggregationOperator
                 : new GroupingState(
                         allocator.primitiveArrays(),
                         operatorResources.codeGeneration(),
-                        operatorResources.grouping(),
+                        groupingResources,
                         operatorResources.adaptiveLongGroupingPolicy(),
                         operatorResources.flatKeyTablePolicy(),
                         inlineGroupingTypes,

@@ -114,6 +114,44 @@ public record CompositeGroupingPolicy(
                 20);
     }
 
+    public CompositeGroupingPolicy withAdaptiveFlatLookaheadBatches(int batches)
+    {
+        return new CompositeGroupingPolicy(
+                debugGroupingShapes,
+                debugFlatPackedIdentity,
+                sharedDictionaryComposite,
+                sharedDictionaryMaxFields,
+                sharedDictionarySampleSize,
+                sharedDictionaryMaxDistinctPercent,
+                sharedDictionaryFlatBacking,
+                sharedDictionaryFlatBackingMinFields,
+                sharedDictionaryFlatBackingMinRows,
+                packedIntPair,
+                packedIntTriple,
+                packedIntTripleCombinedControl,
+                packedIntTriplePackedTail,
+                adaptiveCompactLong,
+                generatedCompactLongPair,
+                generatedCompactLongMinArity,
+                earlyRejectMixedComposite,
+                flatSingleKeyRecordIdentity,
+                flatSingleKeyRecordIdentityMinBatchRows,
+                flatSingleKeyRecordIdentitySampleSize,
+                flatSingleKeyRecordIdentityMinDistinctPercent,
+                packedFlatIdentitySlots,
+                packedFlatIdentityMaxFields,
+                packedFlatIdentityMinBatchRows,
+                packedFlatIdentityBlockingMinBatchRows,
+                packedFlatIdentityMinDistinctPercent,
+                fullWidthPairPackedIdentity,
+                fullWidthPairPackedIdentityMinBatchRows,
+                adaptiveFlatLookahead,
+                adaptiveFlatLookaheadStartBatch,
+                batches,
+                adaptiveFlatLookaheadMinRows,
+                adaptiveFlatLookaheadMinNewPercent);
+    }
+
     public static CompositeGroupingPolicy fromSystemProperties()
     {
         CompositeGroupingPolicy defaults = defaults();

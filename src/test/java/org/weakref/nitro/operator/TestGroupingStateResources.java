@@ -44,4 +44,23 @@ class TestGroupingStateResources
                 .poolZeroedLongDirectIds())
                 .isFalse();
     }
+
+    @Test
+    void testCompositePolicyViewRetainsOwnerScopedPoolFamilies()
+    {
+        GroupingStateResources resources = new GroupingStateResources(
+                true,
+                LongGroupingPolicy.defaults(true),
+                CompositeGroupingPolicy.defaults());
+
+        GroupingStateResources partial = resources.withAdaptiveFlatLookaheadBatches(4);
+
+        assertThat(partial.compositeGroupingPolicy().adaptiveFlatLookaheadBatches()).isEqualTo(4);
+        assertThat(resources.compositeGroupingPolicy().adaptiveFlatLookaheadBatches()).isEqualTo(64);
+        assertThat(partial.zeroedLongDirectIdsFamily()).isSameAs(resources.zeroedLongDirectIdsFamily());
+        assertThat(partial.groupOperatorBufferPool()).isSameAs(resources.groupOperatorBufferPool());
+        assertThat(partial.markDistinctMaskPool()).isSameAs(resources.markDistinctMaskPool());
+        assertThat(partial.markDistinctMarkerBufferPool()).isSameAs(resources.markDistinctMarkerBufferPool());
+        assertThat(partial.semiJoinBufferPool()).isSameAs(resources.semiJoinBufferPool());
+    }
 }

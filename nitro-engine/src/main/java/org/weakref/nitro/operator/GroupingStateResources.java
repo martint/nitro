@@ -23,20 +23,59 @@ public final class GroupingStateResources
     private final boolean poolZeroedLongDirectIds;
     private final LongGroupingPolicy longGroupingPolicy;
     private final CompositeGroupingPolicy compositeGroupingPolicy;
-    private final Object zeroedLongDirectIdsFamily = new Object();
-    private final Object groupOperatorBufferPool = new Object();
-    private final Object markDistinctMaskPool = new Object();
-    private final Object markDistinctMarkerBufferPool = new Object();
-    private final Object semiJoinBufferPool = new Object();
+    private final Object zeroedLongDirectIdsFamily;
+    private final Object groupOperatorBufferPool;
+    private final Object markDistinctMaskPool;
+    private final Object markDistinctMarkerBufferPool;
+    private final Object semiJoinBufferPool;
 
     public GroupingStateResources(
             boolean poolZeroedLongDirectIds,
             LongGroupingPolicy longGroupingPolicy,
             CompositeGroupingPolicy compositeGroupingPolicy)
     {
+        this(
+                poolZeroedLongDirectIds,
+                longGroupingPolicy,
+                compositeGroupingPolicy,
+                new Object(),
+                new Object(),
+                new Object(),
+                new Object(),
+                new Object());
+    }
+
+    private GroupingStateResources(
+            boolean poolZeroedLongDirectIds,
+            LongGroupingPolicy longGroupingPolicy,
+            CompositeGroupingPolicy compositeGroupingPolicy,
+            Object zeroedLongDirectIdsFamily,
+            Object groupOperatorBufferPool,
+            Object markDistinctMaskPool,
+            Object markDistinctMarkerBufferPool,
+            Object semiJoinBufferPool)
+    {
         this.poolZeroedLongDirectIds = poolZeroedLongDirectIds;
         this.longGroupingPolicy = requireNonNull(longGroupingPolicy, "longGroupingPolicy is null");
         this.compositeGroupingPolicy = requireNonNull(compositeGroupingPolicy, "compositeGroupingPolicy is null");
+        this.zeroedLongDirectIdsFamily = requireNonNull(zeroedLongDirectIdsFamily, "zeroedLongDirectIdsFamily is null");
+        this.groupOperatorBufferPool = requireNonNull(groupOperatorBufferPool, "groupOperatorBufferPool is null");
+        this.markDistinctMaskPool = requireNonNull(markDistinctMaskPool, "markDistinctMaskPool is null");
+        this.markDistinctMarkerBufferPool = requireNonNull(markDistinctMarkerBufferPool, "markDistinctMarkerBufferPool is null");
+        this.semiJoinBufferPool = requireNonNull(semiJoinBufferPool, "semiJoinBufferPool is null");
+    }
+
+    public GroupingStateResources withAdaptiveFlatLookaheadBatches(int batches)
+    {
+        return new GroupingStateResources(
+                poolZeroedLongDirectIds,
+                longGroupingPolicy,
+                compositeGroupingPolicy.withAdaptiveFlatLookaheadBatches(batches),
+                zeroedLongDirectIdsFamily,
+                groupOperatorBufferPool,
+                markDistinctMaskPool,
+                markDistinctMarkerBufferPool,
+                semiJoinBufferPool);
     }
 
     boolean poolZeroedLongDirectIds()

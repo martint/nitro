@@ -37,6 +37,7 @@ public final class GroupedAggregationSession
     private final List<Integer> groupedColumns;
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
+    private final GroupingStateResources groupingResources;
     private final PartialAggregationControl partialAggregationControl;
     private final int maxFinalOutputBatchRows;
     private final InitialAggregationBatchBuilder initialAggregationBatchBuilder;
@@ -98,12 +99,36 @@ public final class GroupedAggregationSession
             PartialAggregationControl partialAggregationControl,
             int maxFinalOutputBatchRows)
     {
+        this(
+                allocator,
+                inputSchema,
+                groupByColumns,
+                groupedColumns,
+                program,
+                operatorResources,
+                operatorResources.grouping(),
+                partialAggregationControl,
+                maxFinalOutputBatchRows);
+    }
+
+    public GroupedAggregationSession(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            PartialAggregationControl partialAggregationControl,
+            int maxFinalOutputBatchRows)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.groupByColumns = List.copyOf(requireNonNull(groupByColumns, "groupByColumns is null"));
         this.groupedColumns = List.copyOf(requireNonNull(groupedColumns, "groupedColumns is null"));
         this.program = requireNonNull(program, "program is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.groupingResources = requireNonNull(groupingResources, "groupingResources is null");
         this.partialAggregationControl = partialAggregationControl;
         if (maxFinalOutputBatchRows <= 0) {
             throw new IllegalArgumentException("maxFinalOutputBatchRows must be positive");
@@ -261,7 +286,8 @@ public final class GroupedAggregationSession
                 groupedColumns,
                 program,
                 new SchemaSource(inputSchema),
-                operatorResources);
+                operatorResources,
+                groupingResources);
     }
 
     private void ensureAggregation()
