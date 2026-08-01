@@ -317,6 +317,7 @@ public final class NitroParquetBatchSource
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources.decompressedPageCache(),
                 resources.directNumericBatchDecodeAdmission(),
+                resources.metadataCache(),
                 resources.decompressedPageCachePolicy(),
                 resources.readerPolicy(),
                 resources.numericDecodeAdmissionPolicy(),
@@ -339,6 +340,7 @@ public final class NitroParquetBatchSource
             Object batchBufferPoolKey,
             Object decompressedPageCacheKey,
             Object directNumericBatchDecodeAdmissionKey,
+            ParquetMetadataCache metadataCache,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
             ParquetReaderPolicy readerPolicy,
             ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
@@ -391,7 +393,10 @@ public final class NitroParquetBatchSource
         }
         checkArgument(!splits.isEmpty(), "splits is empty");
 
-        this.files = splits.stream().map(Split::path).map(path -> ParquetFile.open(path, arena)).toArray(ParquetFile[]::new);
+        this.files = splits.stream()
+                .map(Split::path)
+                .map(path -> ParquetFile.open(path, arena, metadataCache))
+                .toArray(ParquetFile[]::new);
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];

@@ -31,6 +31,7 @@ import java.lang.foreign.ValueLayout;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -41,6 +42,7 @@ import static java.lang.Math.addExact;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.nio.ByteOrder.BIG_ENDIAN;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
+import static java.util.Objects.requireNonNull;
 
 /**
  * A memory-mapped Parquet file. The whole file is mapped into a single off-heap {@link MemorySegment}
@@ -74,6 +76,16 @@ public final class ParquetFile
      */
     public record Column(String name, Type type, boolean optional, int leafIndex, int typeLength, boolean decimal) {}
 
+    record Metadata(FileMetaData footer, List<Column> columns, Map<String, Integer> columnIndexByName)
+    {
+        Metadata
+        {
+            footer = requireNonNull(footer, "footer is null");
+            columns = List.copyOf(columns);
+            columnIndexByName = Map.copyOf(columnIndexByName);
+        }
+    }
+
     public static ParquetFile open(Path path)
     {
         return open(path, ParquetArenaPolicy.confined());
@@ -86,12 +98,23 @@ public final class ParquetFile
 
     static ParquetFile open(Path path, Arena arena)
     {
-        return open(path, arena, false);
+        return open(path, arena, false, null);
+    }
+
+    static ParquetFile open(Path path, Arena arena, ParquetMetadataCache metadataCache)
+    {
+        return open(path, arena, false, requireNonNull(metadataCache, "metadataCache is null"));
     }
 
     private static ParquetFile open(Path path, Arena arena, boolean ownsArena)
     {
+        return open(path, arena, ownsArena, null);
+    }
+
+    private static ParquetFile open(Path path, Arena arena, boolean ownsArena, ParquetMetadataCache metadataCache)
+    {
         try {
+            BasicFileAttributes attributes = java.nio.file.Files.readAttributes(path, BasicFileAttributes.class);
             // The caller selects confined or shared lifetime according to the execution boundary.
             MemorySegment data;
             long size;
@@ -99,7 +122,13 @@ public final class ParquetFile
                 size = channel.size();
                 data = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
             }
-            return new ParquetFile(arena, ownsArena, data, size);
+            if (size != attributes.size()) {
+                throw new IOException("Parquet file size changed while opening: " + path);
+            }
+            Metadata metadata = metadataCache == null
+                    ? readMetadata(data, size)
+                    : metadataCache.get(path, size, attributes.lastModifiedTime(), () -> readMetadata(data, size));
+            return new ParquetFile(arena, ownsArena, data, size, metadata);
         }
         catch (IOException e) {
             if (ownsArena) {
@@ -109,7 +138,35 @@ public final class ParquetFile
         }
     }
 
-    private ParquetFile(Arena arena, boolean ownsArena, MemorySegment data, long size)
+    private static Metadata readMetadata(MemorySegment data, long size)
+            throws IOException
+    {
+        if (size < 8 || data.get(LE_INT, size - 4) != MAGIC) {
+            throw new IOException("Not a Parquet file (bad magic)");
+        }
+        int footerLength = data.get(LE_INT, size - 8);
+        long footerStart = size - 8 - footerLength;
+        try (InputStream in = new SegmentInputStream(data, footerStart, footerLength)) {
+            FileMetaData footer = Util.readFileMetaData(in);
+
+            // Flat schema: schema[0] is the root; schema[1..] are leaf columns in column-chunk order.
+            List<SchemaElement> schema = footer.schema;
+            List<Column> columns = new ArrayList<>();
+            Map<String, Integer> columnIndexByName = new HashMap<>();
+            for (int i = 1; i < schema.size(); i++) {
+                SchemaElement element = schema.get(i);
+                boolean optional = element.repetition_type == FieldRepetitionType.OPTIONAL;
+                int leafIndex = i - 1;
+                boolean decimal = element.converted_type == ConvertedType.DECIMAL
+                        || (element.logicalType != null && element.logicalType.isSetDECIMAL());
+                columnIndexByName.put(element.name, columns.size());
+                columns.add(new Column(element.name, element.type, optional, leafIndex, element.type_length, decimal));
+            }
+            return new Metadata(footer, columns, columnIndexByName);
+        }
+    }
+
+    private ParquetFile(Arena arena, boolean ownsArena, MemorySegment data, long size, Metadata metadata)
             throws IOException
     {
         this.arena = arena;
@@ -118,25 +175,9 @@ public final class ParquetFile
         if (size < 8 || data.get(LE_INT, size - 4) != MAGIC) {
             throw new IOException("Not a Parquet file (bad magic)");
         }
-        int footerLength = data.get(LE_INT, size - 8);
-        long footerStart = size - 8 - footerLength;
-        try (InputStream in = new SegmentInputStream(data, footerStart, footerLength)) {
-            this.footer = Util.readFileMetaData(in);
-        }
-
-        // Flat schema: schema[0] is the root; schema[1..] are leaf columns in column-chunk order.
-        List<SchemaElement> schema = footer.schema;
-        this.columns = new ArrayList<>();
-        this.columnIndexByName = new HashMap<>();
-        for (int i = 1; i < schema.size(); i++) {
-            SchemaElement element = schema.get(i);
-            boolean optional = element.repetition_type == FieldRepetitionType.OPTIONAL;
-            int leafIndex = i - 1;
-            boolean decimal = element.converted_type == ConvertedType.DECIMAL
-                    || (element.logicalType != null && element.logicalType.isSetDECIMAL());
-            columnIndexByName.put(element.name, columns.size());
-            columns.add(new Column(element.name, element.type, optional, leafIndex, element.type_length, decimal));
-        }
+        this.footer = metadata.footer();
+        this.columns = metadata.columns();
+        this.columnIndexByName = metadata.columnIndexByName();
     }
 
     public long numRows()
