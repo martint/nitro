@@ -539,3 +539,30 @@ remaining SQL CPU regression, but the integrated CPU ratio is still 3.81--3.87x 
 windows consume retained multi-page aggregation output, while the fixture presents dense single-page stages. The
 next q51 work should preserve native blocking-stage output across that boundary rather than alter window or join
 kernels.
+
+## Q51 fixture-equivalence audit
+
+A follow-up causal audit rejected page coalescing as the route to the historical operator ratio. Coalescing every
+window input into one growable native page increased a cold Nitro execution to 6.345 s wall / 14.056 CPU-s, versus
+the retained ordered-full-join baseline of 3.476 s / 7.277 CPU-s. Window CPU changed little while the copies amplified
+scan, projection, and join work, so the prototype and its test property were removed.
+
+Ordered-input diagnostics identified the actual physical divergence. The standalone fixture's 4.61-million-row
+store window receives one aggregation page and reuses its monotonic `(item, date)` order. The distributed SQL plan
+feeds two roughly 2.30-million-row instances whose rows are not monotonic, so both must sort. Its downstream windows
+do receive monotonic ordered-full-join output; an explicit trusted-order diagnostic saved only about 0.39 CPU-s,
+moving q51 from 7.277 to 6.890 CPU-s, and was removed because the existing exchange topology does not provide a
+general order-preservation proof.
+
+The fixture is also not SQL-type-equivalent: it aggregates and windows compact bigint cents in one unbounded stage,
+whereas SQL uses partial/final `decimal(38,2)` aggregation with portable exchange state and registered two-limb
+decimal window functions. Disabling the fixture's ordered-input admission increased its Nitro duration only from
+about 1.45 s to 1.73 s; it still did not reproduce the distributed decimal workload. Finally, a coordinator-only SQL
+diagnostic reduced the physical window count from six to three but worsened Nitro to 7.953 CPU-s versus Trino at
+6.779 CPU-s and increased median wall time to 8.029 s versus 5.782 s. Parallel distributed execution is beneficial,
+not the missing speedup.
+
+The published 0.260 duration / 0.256 cycle ratio therefore is not a valid literal target for the current SQL physical
+plan. Reproducing it would require an optimizer-level physical-plan change that removes or order-preserves the
+partial/final aggregation exchanges while retaining SQL decimal semantics. No window, join, or benchmark-specific
+operator change is justified by this audit.
