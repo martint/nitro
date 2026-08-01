@@ -39,7 +39,8 @@ public record HashJoinOutputPolicy(
         boolean forwardIdentityReborrowOuter,
         boolean debugIdentityReborrowOuter,
         boolean rleRunIndexHint,
-        boolean poolBuildDictionaryIds)
+        boolean poolBuildDictionaryIds,
+        boolean gatherMultiRunRetainedFixedWidthValues)
 {
     public static HashJoinOutputPolicy defaults()
     {
@@ -64,6 +65,7 @@ public record HashJoinOutputPolicy(
                 true,
                 true,
                 false,
+                true,
                 true,
                 true);
     }
@@ -97,7 +99,8 @@ public record HashJoinOutputPolicy(
                 booleanProperty("nitro.join.forwardIdentityReborrowOuter", defaults.forwardIdentityReborrowOuter()),
                 Boolean.getBoolean("nitro.debug.identityReborrowOuter"),
                 booleanProperty("nitro.join.rleRunIndexHint", defaults.rleRunIndexHint()),
-                booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()));
+                booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()),
+                booleanProperty("nitro.hash.join.gatherMultiRunRetainedFixedWidthValues", defaults.gatherMultiRunRetainedFixedWidthValues()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

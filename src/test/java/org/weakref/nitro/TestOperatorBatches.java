@@ -2206,6 +2206,89 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testHashJoinOperatorGathersFixedWidthPayloadAcrossRetainedInnerPages()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        int innerBatchSize = 350_000;
+        Operator outer = new ConstantTableOperator(allocator, 1, List.of(
+                row(1L),
+                row((long) innerBatchSize + 1),
+                row((long) innerBatchSize * 2 + 1),
+                row(2L),
+                row((long) innerBatchSize + 2),
+                row((long) innerBatchSize * 2 + 2)));
+
+        Operator inner = new Operator()
+        {
+            private int batchIndex;
+
+            @Override
+            public int outputCount()
+            {
+                return 2;
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return batchIndex < 3;
+            }
+
+            @Override
+            public Batch next()
+            {
+                long firstKey = (long) batchIndex * innerBatchSize + 1;
+                long[] keys = new long[innerBatchSize];
+                double[] payloads = new double[innerBatchSize];
+                for (int index = 0; index < innerBatchSize; index++) {
+                    keys[index] = firstKey + index;
+                    payloads[index] = keys[index] * 10.0;
+                }
+                batchIndex++;
+                return new Batch(
+                        Mask.all(innerBatchSize),
+                        Function.identity(),
+                        new Output[] {
+                                Output.of(Streams.ofValues(new I64Vector(keys))),
+                                Output.of(Streams.of(
+                                        new org.weakref.nitro.data.F64Vector(payloads),
+                                        new org.weakref.nitro.data.RleVector(new int[] {innerBatchSize}, new BooleanVector(1)),
+                                        null))});
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close() {}
+
+            @Override
+            public boolean supportsRetainedBatches()
+            {
+                return true;
+            }
+        };
+
+        try (Operator join = new HashJoinOperator(allocator, outer, 0, inner, 0)) {
+            Batch batch = join.next();
+            int rowCount = batch.borrowMask().count();
+            Vector values = batch.output(2).borrow(Stream.VALUES);
+            assertThat(values).isInstanceOf(org.weakref.nitro.data.F64Vector.class);
+            VectorAccess.DoubleValues doubles = VectorAccess.doubleValues(values);
+            assertThat(java.util.stream.IntStream.range(0, rowCount).mapToDouble(doubles::value).toArray())
+                    .containsExactly(
+                            10.0,
+                            (innerBatchSize + 1) * 10.0,
+                            (innerBatchSize * 2 + 1) * 10.0,
+                            20.0,
+                            (innerBatchSize + 2) * 10.0,
+                            (innerBatchSize * 2 + 2) * 10.0);
+            Vector nulls = batch.output(2).borrow(Stream.NULLS);
+            assertThat(VectorAccess.isAllFalseNulls(nulls)).isTrue();
+        }
+    }
+
+    @Test
     void testHashJoinOperatorSupportsI64EquiJoinWithDuplicateMatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

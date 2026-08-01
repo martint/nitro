@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 public class HashJoinOperator
@@ -2725,13 +2726,21 @@ public class HashJoinOperator
             if (currentOutputMask.all()) {
                 Streams wrappedSideStreams = tryWrapMultiRunInnerBooleanSideStreams(innerOutputIndex);
                 Streams result = wrappedSideStreams;
-                boolean copyNulls = wrappedSideStreams == null || !wrappedSideStreams.hasNulls();
-                boolean copyErrors = wrappedSideStreams == null || !wrappedSideStreams.hasErrors();
+                Set<Stream> exposedStreams = innerOutputStreams(innerOutputIndex);
+                boolean copyNulls = exposedStreams.contains(Stream.NULLS) && (wrappedSideStreams == null || !wrappedSideStreams.hasNulls());
+                boolean copyErrors = exposedStreams.contains(Stream.ERRORS) && (wrappedSideStreams == null || !wrappedSideStreams.hasErrors());
+                Vector gatheredValues = tryGatherMultiRunRetainedFixedWidthValues(innerOutputIndex);
+                if (gatheredValues != null) {
+                    result = result == null ? Streams.ofValues(gatheredValues) : result.with(Stream.VALUES, gatheredValues);
+                }
+                if (gatheredValues != null && !copyNulls && !copyErrors) {
+                    return result;
+                }
                 for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
                     int outputStart = outputInnerRunStarts[runIndex];
                     int runLength = outputInnerRunLengths[runIndex];
                     BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(outputInnerRunBatchIndexes[runIndex]);
-                    result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, true, copyNulls, copyErrors);
+                    result = copyInnerPositions(result, innerBatch, runIndex, outputInnerRunBatchIndexes[runIndex], innerOutputIndex, outputStart, runLength, currentOutputCount, gatheredValues == null, copyNulls, copyErrors);
                 }
                 return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
             }
@@ -2840,10 +2849,178 @@ public class HashJoinOperator
         return wrappedStreams.streams().isEmpty() ? null : wrappedStreams;
     }
 
+    /**
+     * Gathers a fixed-width VALUES stream from many retained build batches in one pass over the output rows.
+     *
+     * <p>A hash probe can alternate build batches on nearly every match. Processing those matches as consecutive
+     * batch runs turns a dense result into thousands of tiny copy calls. Resolve each retained batch's flat backing
+     * once and scatter directly into one dense output instead. This is a physical vector specialization only; the
+     * join remains independent of logical types, columns, and query shapes.
+     */
+    private Vector tryGatherMultiRunRetainedFixedWidthValues(int innerOutputIndex)
+    {
+        if (!outputPolicy.gatherMultiRunRetainedFixedWidthValues() || preparedInnerRunCount <= 1) {
+            return null;
+        }
+
+        Vector[] sources = new Vector[bufferedInner.batches().size()];
+        int vectorKind = 0;
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int batchIndex = outputInnerRunBatchIndexes[runIndex];
+            if (sources[batchIndex] != null) {
+                continue;
+            }
+            BufferedJoinInput.InnerBatch batch = bufferedInner.batches().get(batchIndex);
+            if (!batch.retained() || batch.deferred()) {
+                return null;
+            }
+            Output output = batch.retainedBatch().output(innerOutputIndex);
+            if (!output.hasValues()) {
+                return null;
+            }
+            Vector values = output.borrow(Stream.VALUES);
+            int sourceKind = fixedWidthVectorKind(values);
+            if (sourceKind == 0) {
+                return null;
+            }
+            if (vectorKind == 0) {
+                vectorKind = sourceKind;
+            }
+            else if (sourceKind != vectorKind) {
+                return null;
+            }
+            sources[batchIndex] = values;
+        }
+
+        if (vectorKind == 1 || vectorKind == 2) {
+            VectorAccess.LongValues[] accessors = new VectorAccess.LongValues[sources.length];
+            for (int index = 0; index < sources.length; index++) {
+                if (sources[index] != null) {
+                    accessors[index] = VectorAccess.longValues(sources[index]);
+                }
+            }
+            if (vectorKind == 2) {
+                I32Vector result = allocator.allocate(allocationContext, I32Vector.class, currentOutputCount, I32Vector::new);
+                int[] output = result.values();
+                for (int position = 0; position < currentOutputCount; position++) {
+                    long reference = outputInnerRows[position];
+                    int batchIndex = JoinRowReference.batchIndex(reference);
+                    int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
+                    output[position] = toIntExact(accessors[batchIndex].value(sourcePosition));
+                }
+                return result;
+            }
+            I64Vector result = allocator.allocate(allocationContext, I64Vector.class, currentOutputCount, I64Vector::new);
+            long[] output = result.values();
+            for (int position = 0; position < currentOutputCount; position++) {
+                long reference = outputInnerRows[position];
+                int batchIndex = JoinRowReference.batchIndex(reference);
+                int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
+                output[position] = accessors[batchIndex].value(sourcePosition);
+            }
+            return result;
+        }
+        if (vectorKind == 3) {
+            VectorAccess.DoubleValues[] accessors = new VectorAccess.DoubleValues[sources.length];
+            for (int index = 0; index < sources.length; index++) {
+                if (sources[index] != null) {
+                    accessors[index] = VectorAccess.doubleValues(sources[index]);
+                }
+            }
+            F64Vector result = allocator.allocate(allocationContext, F64Vector.class, currentOutputCount, F64Vector::new);
+            double[] output = result.values();
+            for (int position = 0; position < currentOutputCount; position++) {
+                long reference = outputInnerRows[position];
+                int batchIndex = JoinRowReference.batchIndex(reference);
+                int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
+                output[position] = accessors[batchIndex].value(sourcePosition);
+            }
+            return result;
+        }
+        VectorAccess.BooleanValues[] accessors = new VectorAccess.BooleanValues[sources.length];
+        for (int index = 0; index < sources.length; index++) {
+            if (sources[index] != null) {
+                accessors[index] = VectorAccess.booleanValues(sources[index]);
+            }
+        }
+        BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, currentOutputCount, BooleanVector::new);
+        boolean[] output = result.values();
+        for (int position = 0; position < currentOutputCount; position++) {
+            long reference = outputInnerRows[position];
+            int batchIndex = JoinRowReference.batchIndex(reference);
+            int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
+            output[position] = accessors[batchIndex].value(sourcePosition);
+        }
+        return result;
+    }
+
+    private static int fixedWidthVectorKind(Vector values)
+    {
+        Vector base = values;
+        while (true) {
+            if (base instanceof DictionaryVector dictionary) {
+                base = dictionary.values();
+                continue;
+            }
+            if (base instanceof org.weakref.nitro.data.RleVector rle) {
+                base = rle.values();
+                continue;
+            }
+            break;
+        }
+        return switch (base) {
+            case I64Vector _ -> 1;
+            case I32Vector _ -> 2;
+            case F64Vector _ -> 3;
+            case BooleanVector _ -> 4;
+            default -> 0;
+        };
+    }
+
     private Vector tryWrapMultiRunInnerBooleanStream(int innerOutputIndex, Stream stream)
     {
         if (preparedInnerRunCount <= 1) {
             return null;
+        }
+
+        // A non-null Trino build commonly exposes an explicit all-false NULLS stream on every retained page.
+        // Detect that physical shape once per referenced build batch before constructing thousands of repeated
+        // segments and dictionary ids. The result is one all-false vector for the whole join output.
+        boolean[] inspectedBatches = new boolean[bufferedInner.batches().size()];
+        boolean allFalse = true;
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int innerBatchIndex = outputInnerRunBatchIndexes[runIndex];
+            if (inspectedBatches[innerBatchIndex]) {
+                continue;
+            }
+            inspectedBatches[innerBatchIndex] = true;
+            BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+            Vector source;
+            if (innerBatch.retained() && !innerBatch.deferred()) {
+                Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+                if (!output.has(stream)) {
+                    return null;
+                }
+                source = output.borrow(stream);
+            }
+            else if (!innerBatch.retained()) {
+                Streams output = innerBatch.columns()[innerOutputIndex];
+                if (output == null || !output.has(stream)) {
+                    return null;
+                }
+                source = output.get(stream);
+            }
+            else {
+                allFalse = false;
+                break;
+            }
+            if (!isKnownAllFalseSource(source)) {
+                allFalse = false;
+                break;
+            }
+        }
+        if (allFalse) {
+            return allFalseBooleanStream(currentOutputCount);
         }
 
         Vector[] segments = new Vector[preparedInnerRunCount];
