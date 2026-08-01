@@ -27,6 +27,7 @@ import org.weakref.nitro.function.scalar.ScalarDescriptor;
 import org.weakref.nitro.function.scalar.ScalarFunction;
 import org.weakref.nitro.function.scalar.ScalarRegistry;
 import org.weakref.nitro.function.scalar.builtin.AddI64;
+import org.weakref.nitro.function.scalar.builtin.BoundLikeUtf8;
 import org.weakref.nitro.function.scalar.builtin.EqualF64;
 import org.weakref.nitro.function.scalar.builtin.EqualF64Optimization;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
@@ -77,6 +78,17 @@ public class TestScalarRegistry
         ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(function);
 
         assertThat(descriptor.name()).isEqualTo("like_utf8");
+        assertThat(descriptor.implementation()).isSameAs(function);
+    }
+
+    @Test
+    void testRegistersBoundLikeFunction()
+    {
+        BoundLikeUtf8 function = new BoundLikeUtf8("%special%requests%", new LikeUtf8Policy(false));
+
+        ScalarDescriptor descriptor = new AnnotatedScalarLoader().load(function);
+
+        assertThat(descriptor.name()).isEqualTo("bound_like_utf8");
         assertThat(descriptor.implementation()).isSameAs(function);
     }
 

@@ -158,11 +158,13 @@ public final class LikeUtf8
     private Pattern parsePattern(byte[] pattern)
     {
         String text = new String(pattern, StandardCharsets.UTF_8);
-        return patterns.computeIfAbsent(text, this::parsePattern);
+        return patterns.computeIfAbsent(text, value -> compilePattern(value, policy));
     }
 
-    private Pattern parsePattern(String text)
+    static Pattern compilePattern(String text, LikeUtf8Policy policy)
     {
+        requireNonNull(text, "text is null");
+        requireNonNull(policy, "policy is null");
         checkArgument(text.indexOf('_') < 0, "like_utf8 does not support the _ wildcard: %s", text);
         boolean anchoredStart = !text.startsWith("%");
         boolean anchoredEnd = !text.endsWith("%");
@@ -175,7 +177,7 @@ public final class LikeUtf8
         return new Pattern(anchoredStart, anchoredEnd, segments, policy.boyerMooreHorspool());
     }
 
-    private record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments, boolean boyerMooreHorspool)
+    record Pattern(boolean anchoredStart, boolean anchoredEnd, List<Segment> segments, boolean boyerMooreHorspool)
     {
         boolean matches(byte[] data, int offset, int length)
         {
