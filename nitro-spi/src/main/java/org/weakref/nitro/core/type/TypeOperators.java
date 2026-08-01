@@ -26,6 +26,8 @@ import static java.util.Objects.requireNonNull;
 /// [#valueRead()] has signature `(Vector, int) -> carrier`, [#identical()] has signature
 /// `(carrier, carrier) -> boolean`, [#hash()] has signature `(carrier) -> long`, and
 /// [#comparison()] has signature `(carrier, carrier) -> int`.
+/// [#vectorIdentical()], [#vectorHash()], and [#vectorComparison()] operate directly on
+/// `(Vector, position)` pairs and let composite carriers avoid row-local materialization.
 /// The provider-owned reader is responsible for every vector representation advertised by its
 /// [TypeBinding].
 public record TypeOperators(
@@ -34,9 +36,15 @@ public record TypeOperators(
         Optional<MethodHandle> comparison,
         Optional<MethodHandle> flatRead,
         Optional<MethodHandle> flatWrite,
-        Optional<MethodHandle> valueRead)
+        Optional<MethodHandle> valueRead,
+        Optional<MethodHandle> vectorIdentical,
+        Optional<MethodHandle> vectorHash,
+        Optional<MethodHandle> vectorComparison)
 {
     public static final TypeOperators UNSPECIFIED = new TypeOperators(
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
             Optional.empty(),
             Optional.empty(),
             Optional.empty(),
@@ -51,7 +59,36 @@ public record TypeOperators(
             Optional<MethodHandle> flatRead,
             Optional<MethodHandle> flatWrite)
     {
-        this(identical, hash, comparison, flatRead, flatWrite, Optional.empty());
+        this(
+                identical,
+                hash,
+                comparison,
+                flatRead,
+                flatWrite,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
+    }
+
+    public TypeOperators(
+            Optional<MethodHandle> identical,
+            Optional<MethodHandle> hash,
+            Optional<MethodHandle> comparison,
+            Optional<MethodHandle> flatRead,
+            Optional<MethodHandle> flatWrite,
+            Optional<MethodHandle> valueRead)
+    {
+        this(
+                identical,
+                hash,
+                comparison,
+                flatRead,
+                flatWrite,
+                valueRead,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty());
     }
 
     public TypeOperators
@@ -62,5 +99,8 @@ public record TypeOperators(
         flatRead = requireNonNull(flatRead, "flatRead is null");
         flatWrite = requireNonNull(flatWrite, "flatWrite is null");
         valueRead = requireNonNull(valueRead, "valueRead is null");
+        vectorIdentical = requireNonNull(vectorIdentical, "vectorIdentical is null");
+        vectorHash = requireNonNull(vectorHash, "vectorHash is null");
+        vectorComparison = requireNonNull(vectorComparison, "vectorComparison is null");
     }
 }

@@ -2417,6 +2417,111 @@ public class TestOperators
         }
     }
 
+    @Test
+    void testOrderingOperatorsUseDirectVectorStructuralSemantics()
+            throws ReflectiveOperationException
+    {
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        TypeOperators operators = new TypeOperators(
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "absoluteIdentical",
+                        MethodType.methodType(boolean.class, long.class, long.class))),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "absoluteHash",
+                        MethodType.methodType(long.class, long.class))),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "compareAbsolute",
+                        MethodType.methodType(int.class, long.class, long.class))),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "failValueRead",
+                        MethodType.methodType(long.class, Vector.class, int.class))),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "vectorAbsoluteIdentical",
+                        MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class))),
+                Optional.empty(),
+                Optional.of(lookup.findStatic(
+                        TestOperators.class,
+                        "compareVectorAbsolute",
+                        MethodType.methodType(int.class, Vector.class, int.class, Vector.class, int.class))));
+        TypeBinding absoluteLong = new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity("testing:direct-absolute-long");
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return operators;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I64Vector.class);
+            }
+        };
+        Schema sourceSchema = new Schema(List.of(new Field("value", absoluteLong, false)));
+
+        Operator rankingSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
+                        Mask.all(4)));
+        try (Operator ranking = new TopNRankingOperator(
+                allocator,
+                10,
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                rankingSource,
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(ranking))
+                    .matchesExactly(List.of(
+                            row(1L, 1L),
+                            row(-1L, 1L),
+                            row(-2L, 3L),
+                            row(2L, 3L)));
+        }
+
+        Operator sortSource = typedTable(
+                sourceSchema,
+                TableOperator.Page.values(
+                        4,
+                        new Vector[] {new I64Vector(new long[] {-2, 1, 2, -1})},
+                        Mask.all(4)));
+        try (Operator sort = new SortOperator(
+                allocator,
+                new int[] {0},
+                new boolean[] {false},
+                sortSource,
+                EngineResources.from(allocator).operatorResources())) {
+            assertThat(operator(sort))
+                    .matchesExactly(List.of(
+                            row(1L),
+                            row(-1L),
+                            row(-2L),
+                            row(2L)));
+        }
+    }
+
     private static Operator rejectDynamicFilters(Operator delegate)
     {
         return new Operator()
@@ -2492,6 +2597,21 @@ public class TestOperators
     private static long readI64(Vector vector, int position)
     {
         return ((I64Vector) vector).values()[position];
+    }
+
+    private static long failValueRead(Vector vector, int position)
+    {
+        throw new AssertionError("Direct vector structural operations must not materialize a carrier");
+    }
+
+    private static int compareVectorAbsolute(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        return compareAbsolute(readI64(left, leftPosition), readI64(right, rightPosition));
+    }
+
+    private static boolean vectorAbsoluteIdentical(Vector left, int leftPosition, Vector right, int rightPosition)
+    {
+        return absoluteIdentical(readI64(left, leftPosition), readI64(right, rightPosition));
     }
 
     private static int compareAbsolute(long left, long right)

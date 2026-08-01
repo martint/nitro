@@ -35,6 +35,9 @@ public final class StructuralTypeKernelFactory
     {
         requireNonNull(type, "type is null");
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
+        if (operators.vectorIdentical().isPresent()) {
+            return new DirectStructuralIdentityKernel(type, operators.vectorIdentical().orElseThrow());
+        }
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
         if (!hasValueRead && !hasIdentical) {
@@ -54,6 +57,18 @@ public final class StructuralTypeKernelFactory
     {
         requireNonNull(type, "type is null");
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
+        boolean hasVectorHash = operators.vectorHash().isPresent();
+        boolean hasVectorIdentical = operators.vectorIdentical().isPresent();
+        if (hasVectorHash) {
+            if (!hasVectorIdentical) {
+                throw new IllegalArgumentException("Type %s must provide vectorHash and vectorIdentical together"
+                        .formatted(type.identity()));
+            }
+            return new DirectStructuralKeyKernel(
+                    type,
+                    operators.vectorHash().orElseThrow(),
+                    operators.vectorIdentical().orElseThrow());
+        }
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasHash = operators.hash().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
@@ -113,10 +128,57 @@ public final class StructuralTypeKernelFactory
         }
     }
 
+    private static final class DirectStructuralIdentityKernel
+            implements StructuralIdentityKernel
+    {
+        private static final MethodType TYPE =
+                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class);
+
+        private final MethodHandle identical;
+
+        private DirectStructuralIdentityKernel(TypeBinding type, MethodHandle identical)
+        {
+            this.identical = requireDirectType(type, "vectorIdentical", identical, TYPE);
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            if (OperatorVectorSupport.isNull(leftNulls, leftPosition) ||
+                    OperatorVectorSupport.isNull(rightNulls, rightPosition)) {
+                return false;
+            }
+            try {
+                return (boolean) identical.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Direct structural identity comparison failed", throwable);
+            }
+        }
+    }
+
     StructuralComparisonKernel comparison(TypeBinding type)
     {
         requireNonNull(type, "type is null");
         TypeOperators operators = requireNonNull(type.operators(), "type operators are null");
+        boolean hasVectorComparison = operators.vectorComparison().isPresent();
+        boolean hasVectorIdentical = operators.vectorIdentical().isPresent();
+        if (hasVectorComparison) {
+            if (!hasVectorIdentical) {
+                throw new IllegalArgumentException("Type %s must provide vectorComparison and vectorIdentical together"
+                        .formatted(type.identity()));
+            }
+            return new DirectStructuralComparisonKernel(
+                    type,
+                    operators.vectorComparison().orElseThrow(),
+                    operators.vectorIdentical().orElseThrow());
+        }
         boolean hasValueRead = operators.valueRead().isPresent();
         boolean hasComparison = operators.comparison().isPresent();
         boolean hasIdentical = operators.identical().isPresent();
@@ -201,6 +263,136 @@ public final class StructuralTypeKernelFactory
                 throw new IllegalStateException("Structural identity comparison failed", throwable);
             }
         }
+    }
+
+    private static final class DirectStructuralKeyKernel
+            implements StructuralKeyKernel
+    {
+        private static final MethodType HASH_TYPE =
+                MethodType.methodType(long.class, Vector.class, int.class);
+        private static final MethodType IDENTICAL_TYPE =
+                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class);
+
+        private final MethodHandle hash;
+        private final MethodHandle identical;
+
+        private DirectStructuralKeyKernel(TypeBinding type, MethodHandle hash, MethodHandle identical)
+        {
+            this.hash = requireDirectType(type, "vectorHash", hash, HASH_TYPE);
+            this.identical = requireDirectType(type, "vectorIdentical", identical, IDENTICAL_TYPE);
+        }
+
+        @Override
+        public long hash(Vector values, Vector nulls, int position)
+        {
+            if (OperatorVectorSupport.isNull(nulls, position)) {
+                return 0;
+            }
+            try {
+                return (long) hash.invokeExact(values, position);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Direct structural hash failed", throwable);
+            }
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            if (OperatorVectorSupport.isNull(leftNulls, leftPosition) ||
+                    OperatorVectorSupport.isNull(rightNulls, rightPosition)) {
+                return false;
+            }
+            try {
+                return (boolean) identical.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Direct structural identity comparison failed", throwable);
+            }
+        }
+    }
+
+    private static final class DirectStructuralComparisonKernel
+            implements StructuralComparisonKernel
+    {
+        private static final MethodType COMPARISON_TYPE =
+                MethodType.methodType(int.class, Vector.class, int.class, Vector.class, int.class);
+        private static final MethodType IDENTICAL_TYPE =
+                MethodType.methodType(boolean.class, Vector.class, int.class, Vector.class, int.class);
+
+        private final MethodHandle comparison;
+        private final MethodHandle identical;
+
+        private DirectStructuralComparisonKernel(TypeBinding type, MethodHandle comparison, MethodHandle identical)
+        {
+            this.comparison = requireDirectType(type, "vectorComparison", comparison, COMPARISON_TYPE);
+            this.identical = requireDirectType(type, "vectorIdentical", identical, IDENTICAL_TYPE);
+        }
+
+        @Override
+        public int compare(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull == rightNull) {
+                    return 0;
+                }
+                return leftNull ? 1 : -1;
+            }
+            try {
+                return (int) comparison.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Direct structural comparison failed", throwable);
+            }
+        }
+
+        @Override
+        public boolean identical(
+                Vector leftValues,
+                Vector leftNulls,
+                int leftPosition,
+                Vector rightValues,
+                Vector rightNulls,
+                int rightPosition)
+        {
+            if (OperatorVectorSupport.isNull(leftNulls, leftPosition) ||
+                    OperatorVectorSupport.isNull(rightNulls, rightPosition)) {
+                return false;
+            }
+            try {
+                return (boolean) identical.invokeExact(leftValues, leftPosition, rightValues, rightPosition);
+            }
+            catch (Throwable throwable) {
+                throw new IllegalStateException("Direct structural identity comparison failed", throwable);
+            }
+        }
+    }
+
+    private static MethodHandle requireDirectType(
+            TypeBinding type,
+            String name,
+            MethodHandle handle,
+            MethodType expected)
+    {
+        if (!handle.type().equals(expected)) {
+            throw new IllegalArgumentException("Type %s %s handle must have type %s, but is %s"
+                    .formatted(type.identity(), name, expected, handle.type()));
+        }
+        return handle;
     }
 
     private static final class BoundStructuralComparisonKernel
