@@ -566,3 +566,30 @@ The published 0.260 duration / 0.256 cycle ratio therefore is not a valid litera
 plan. Reproducing it would require an optimizer-level physical-plan change that removes or order-preserves the
 partial/final aggregation exchanges while retaining SQL decimal semantics. No window, join, or benchmark-specific
 operator change is justified by this audit.
+
+## Q09 fixture-envelope and decoded-page reuse follow-up
+
+TPC-DS q09 initially appeared to retain a large SQL wall-time discrepancy: Trino completed in about 0.73 s while
+Nitro required about 2.0 s, despite Nitro using only 2.5--2.7 CPU-s versus Trino's 3.6 CPU-s. Temporary source timing
+localized virtually all Nitro time to Parquet source polling; aggregation input consumed only about 32 ms across
+four executions. One isolated q09 scalar branch was already faster through Nitro at 86.510 ms wall / 263 CPU-ms,
+versus 113.509 ms / 340 CPU-ms for Trino.
+
+The complete operator fixtures explain the ratio mismatch. The Nitro and Trino q09 fixtures construct and
+materialize all 15 scalar-average branches serially, measuring 1,983.877 and 4,069.387 ms/op respectively, a 0.488x
+ratio. The SQL plan schedules those independent leaf stages concurrently. Nitro SQL's approximately 2,041.697 ms
+median wall time therefore already matches Nitro's absolute operator duration, while Trino SQL benefits from a
+parallel execution envelope absent from its fixture. The historical operator ratio is not a like-for-like SQL wall
+target for this query.
+
+The source audit did expose one real connector boundary mismatch. Trino creates an allocator per driver, while the
+decoded-page cache was allocator-local even when all drivers received the same explicit allocation-resource owner.
+`NitroParquetScanResources` now leases one bounded decoded-page cache per allocation-owner identity across overlapping
+scans. Cache state is connector-instance-owned, concurrent access and duplicate page reservations are serialized,
+and the last lease closes the cache. After rebuilding the provisioned Hive plugin, q09 median CPU fell to 2,243 ms,
+about 15% below the prior 2.6--2.7 s range; wall remained about 2.04 s, as expected from the fixture-envelope result.
+
+The cache currently spans overlapping driver lifetimes, not automatically the full SQL query. Some q09 stage waves
+release every lease before later waves begin. Extending reuse across that gap requires an explicit worker-local,
+query-scoped resource lifecycle in the connector/embedding SPI. A static cache, query-ID global map, or expiry policy
+would violate ownership and classloader isolation and is not an acceptable substitute.

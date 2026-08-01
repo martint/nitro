@@ -46,6 +46,7 @@ public final class DecompressedPageCache
     private final Map<Source, Integer> consumers = new HashMap<>();
     private final Map<Source, Set<PageKey>> candidatePages = new HashMap<>();
     private final Set<Source> admittedSources = new HashSet<>();
+    private final Set<PageKey> reservedPages = new HashSet<>();
     private final Map<PageKey, MemorySegment> pages = new HashMap<>();
     private Slab slabStorage;
     private MemorySegment slab;
@@ -70,7 +71,7 @@ public final class DecompressedPageCache
         this.debug = policy.debug();
     }
 
-    public void register(Source source)
+    public synchronized void register(Source source)
     {
         checkOpen();
         int count = consumers.merge(requireNonNull(source, "source is null"), 1, Integer::sum);
@@ -84,18 +85,18 @@ public final class DecompressedPageCache
      * query. Consumers may use this execution-time fact to select a representation whose setup is amortized by the
      * repeated source; page identity and reader state remain private to each consumer.
      */
-    public boolean hasMultipleConsumers(Source source)
+    public synchronized boolean hasMultipleConsumers(Source source)
     {
         return consumerCount(source) >= 2;
     }
 
-    public int consumerCount(Source source)
+    public synchronized int consumerCount(Source source)
     {
         checkOpen();
         return consumers.getOrDefault(requireNonNull(source, "source is null"), 0);
     }
 
-    public MemorySegment lookup(Source source, long offset, int compressedSize, int uncompressedSize)
+    public synchronized MemorySegment lookup(Source source, long offset, int compressedSize, int uncompressedSize)
     {
         checkOpen();
         if (!isReusable(source)) {
@@ -113,7 +114,7 @@ public final class DecompressedPageCache
         return page;
     }
 
-    public Reservation reserve(Source source, long offset, int compressedSize, int uncompressedSize, int slack)
+    public synchronized Reservation reserve(Source source, long offset, int compressedSize, int uncompressedSize, int slack)
     {
         checkOpen();
         if (!isReusable(source)) {
@@ -123,8 +124,8 @@ public final class DecompressedPageCache
             return null;
         }
         PageKey key = new PageKey(source, offset, compressedSize, uncompressedSize);
-        if (pages.containsKey(key)) {
-            throw new IllegalStateException("Page is already cached");
+        if (pages.containsKey(key) || reservedPages.contains(key)) {
+            return null;
         }
         int alignedOffset = (nextOffset + 7) & ~7;
         int length = Math.addExact(uncompressedSize, slack);
@@ -132,27 +133,40 @@ public final class DecompressedPageCache
             capacityBypasses++;
             return null;
         }
+        reservedPages.add(key);
         ensureSlab();
         nextOffset = alignedOffset + length;
         return new Reservation(key, slab.asSlice(alignedOffset, length));
     }
 
-    public void commit(Reservation reservation)
+    public synchronized void commit(Reservation reservation)
     {
         checkOpen();
         requireNonNull(reservation, "reservation is null");
+        if (!reservedPages.remove(reservation.key)) {
+            throw new IllegalStateException("Page reservation is not active");
+        }
         MemorySegment previous = pages.putIfAbsent(reservation.key, reservation.segment);
         if (previous != null) {
             throw new IllegalStateException("Page was committed twice");
         }
     }
 
-    int cachedPageCount()
+    public synchronized void abort(Reservation reservation)
+    {
+        checkOpen();
+        requireNonNull(reservation, "reservation is null");
+        if (!reservedPages.remove(reservation.key)) {
+            throw new IllegalStateException("Page reservation is not active");
+        }
+    }
+
+    synchronized int cachedPageCount()
     {
         return pages.size();
     }
 
-    int usedBytes()
+    synchronized int usedBytes()
     {
         return nextOffset;
     }
@@ -194,7 +208,7 @@ public final class DecompressedPageCache
     }
 
     @Override
-    public void close()
+    public synchronized void close()
     {
         if (closed) {
             return;
@@ -208,6 +222,7 @@ public final class DecompressedPageCache
         consumers.clear();
         candidatePages.clear();
         admittedSources.clear();
+        reservedPages.clear();
         if (slabStorage != null) {
             slabStorage.finishUse(nextOffset, nativeBufferAdvice);
             pool.retain(Slab.class, capacity, capacity, slabStorage);

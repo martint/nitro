@@ -133,7 +133,7 @@ public final class NitroParquetBatchSource
     private final Arena arena;
     private final VectorBatchScope batchBuffers;
     private final Allocator.Context allocationContext;
-    private final Allocator.SharedResource<DecompressedPageCache> decompressedPageCacheLease;
+    private final NitroParquetScanResources.DecompressedPageCacheLease decompressedPageCacheLease;
     private final DecompressedPageCache decompressedPages;
     private final Allocator.SharedResource<DirectNumericBatchDecodeAdmission> directNumericBatchDecodeLease;
     private final DirectNumericBatchDecodeAdmission directNumericBatchDecodeAdmission;
@@ -315,7 +315,7 @@ public final class NitroParquetBatchSource
                 schema,
                 requireNonNull(columnNameMatching, "columnNameMatching is null"),
                 requireNonNull(resources, "resources is null").batchBufferPool(),
-                resources.decompressedPageCache(),
+                resources,
                 resources.directNumericBatchDecodeAdmission(),
                 resources.metadataCache(),
                 resources.decompressedPageCachePolicy(),
@@ -338,7 +338,7 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
             Object batchBufferPoolKey,
-            Object decompressedPageCacheKey,
+            NitroParquetScanResources resources,
             Object directNumericBatchDecodeAdmissionKey,
             ParquetMetadataCache metadataCache,
             DecompressedPageCachePolicy decompressedPageCachePolicy,
@@ -359,12 +359,7 @@ public final class NitroParquetBatchSource
         this.batchBuffers = new VectorBatchScope(allocator, "NitroParquetBatchSource", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
         this.decompressedPageCacheLease = decompressedPageCachePolicy.enabled()
-                ? allocator.acquireSharedResource(
-                        decompressedPageCacheKey,
-                        () -> new DecompressedPageCache(
-                                allocator.nativeBuffers(),
-                                decompressedPageCachePolicy,
-                                allocator.nativeBufferAdvice()))
+                ? resources.acquireDecompressedPageCache(allocator)
                 : null;
         this.decompressedPages = decompressedPageCacheLease == null ? null : decompressedPageCacheLease.value();
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");

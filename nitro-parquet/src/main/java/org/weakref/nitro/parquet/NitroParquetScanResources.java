@@ -13,6 +13,12 @@
  */
 package org.weakref.nitro.parquet;
 
+import org.weakref.nitro.data.AllocationResourcesOwner;
+import org.weakref.nitro.data.Allocator;
+
+import java.util.IdentityHashMap;
+import java.util.Map;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -26,7 +32,6 @@ import static java.util.Objects.requireNonNull;
 public final class NitroParquetScanResources
 {
     private final Object batchBufferPool = new Object();
-    private final Object decompressedPageCache = new Object();
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final ParquetMetadataCache metadataCache;
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
@@ -40,6 +45,7 @@ public final class NitroParquetScanResources
     private final ParquetScanDiagnostics diagnostics;
     private final ParquetScanBatchPolicy batchPolicy;
     private final ParquetArenaPolicy arenaPolicy;
+    private final Map<AllocationResourcesOwner, DecompressedPageCacheState> decompressedPageCaches = new IdentityHashMap<>();
 
     public NitroParquetScanResources(
             DecompressedPageCachePolicy decompressedPageCachePolicy,
@@ -153,11 +159,6 @@ public final class NitroParquetScanResources
         return batchBufferPool;
     }
 
-    Object decompressedPageCache()
-    {
-        return decompressedPageCache;
-    }
-
     Object directNumericBatchDecodeAdmission()
     {
         return directNumericBatchDecodeAdmission;
@@ -221,5 +222,82 @@ public final class NitroParquetScanResources
     ParquetArenaPolicy arenaPolicy()
     {
         return arenaPolicy;
+    }
+
+    synchronized DecompressedPageCacheLease acquireDecompressedPageCache(Allocator allocator)
+    {
+        requireNonNull(allocator, "allocator is null");
+        AllocationResourcesOwner owner = allocator.resourcesOwner();
+        DecompressedPageCacheState state = decompressedPageCaches.get(owner);
+        if (state == null) {
+            state = new DecompressedPageCacheState(new DecompressedPageCache(
+                    allocator.nativeBuffers(),
+                    decompressedPageCachePolicy,
+                    allocator.nativeBufferAdvice()));
+            decompressedPageCaches.put(owner, state);
+        }
+        state.references++;
+        return new DecompressedPageCacheLease(this, owner, state.cache);
+    }
+
+    private synchronized void releaseDecompressedPageCache(AllocationResourcesOwner owner)
+    {
+        DecompressedPageCacheState state = decompressedPageCaches.get(owner);
+        if (state == null || state.references <= 0) {
+            throw new IllegalStateException("Decompressed page cache is not acquired");
+        }
+        state.references--;
+        if (state.references == 0) {
+            decompressedPageCaches.remove(owner);
+            state.cache.close();
+        }
+    }
+
+    static final class DecompressedPageCacheLease
+            implements AutoCloseable
+    {
+        private final NitroParquetScanResources resources;
+        private final AllocationResourcesOwner owner;
+        private final DecompressedPageCache cache;
+        private boolean closed;
+
+        private DecompressedPageCacheLease(
+                NitroParquetScanResources resources,
+                AllocationResourcesOwner owner,
+                DecompressedPageCache cache)
+        {
+            this.resources = resources;
+            this.owner = owner;
+            this.cache = cache;
+        }
+
+        DecompressedPageCache value()
+        {
+            if (closed) {
+                throw new IllegalStateException("Decompressed page cache lease is closed");
+            }
+            return cache;
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            resources.releaseDecompressedPageCache(owner);
+        }
+    }
+
+    private static final class DecompressedPageCacheState
+    {
+        private final DecompressedPageCache cache;
+        private int references;
+
+        private DecompressedPageCacheState(DecompressedPageCache cache)
+        {
+            this.cache = cache;
+        }
     }
 }

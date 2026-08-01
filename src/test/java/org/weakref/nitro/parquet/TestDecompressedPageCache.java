@@ -14,6 +14,8 @@
 package org.weakref.nitro.parquet;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.AllocationResources;
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.NativeBufferAdvice;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
@@ -21,10 +23,34 @@ import java.lang.foreign.ValueLayout;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestDecompressedPageCache
 {
+    @Test
+    void testScanResourcesShareCacheAcrossAllocatorsWithTheSameOwner()
+    {
+        NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault();
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator firstAllocator = new Allocator(allocationResources);
+                Allocator secondAllocator = new Allocator(allocationResources);
+                NitroParquetScanResources.DecompressedPageCacheLease first = scanResources.acquireDecompressedPageCache(firstAllocator);
+                NitroParquetScanResources.DecompressedPageCacheLease second = scanResources.acquireDecompressedPageCache(secondAllocator)) {
+            assertThat(second.value()).isSameAs(first.value());
+            first.close();
+            assertThatNoException().isThrownBy(() -> second.value().register(
+                    new DecompressedPageCache.Source(Path.of("table.parquet"), "column")));
+        }
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetScanResources.DecompressedPageCacheLease next = scanResources.acquireDecompressedPageCache(allocator)) {
+            assertThat(next.value().consumerCount(
+                    new DecompressedPageCache.Source(Path.of("table.parquet"), "column"))).isZero();
+        }
+    }
+
     @Test
     void testRequiresTwoConsumersAndRecyclesSlab()
     {
@@ -46,6 +72,7 @@ class TestDecompressedPageCache
             assertThat(cache.lookup(source, 11, 7, 16)).isNull();
             DecompressedPageCache.Reservation reservation = cache.reserve(source, 11, 7, 16, 8);
             assertThat(reservation).isNotNull();
+            assertThat(cache.reserve(source, 11, 7, 16, 8)).isNull();
             reservation.segment().set(ValueLayout.JAVA_BYTE, 0, (byte) 37);
             cache.commit(reservation);
 
@@ -65,6 +92,23 @@ class TestDecompressedPageCache
         assertThat(pool.reusedBytes()).isEqualTo(reusedBefore + 128);
         recycled.close();
         assertThatThrownBy(() -> recycled.register(source)).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void testAbortedReservationCanBeRetried()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+        DecompressedPageCache.Source source = new DecompressedPageCache.Source(Path.of("table.parquet"), "column");
+
+        try (DecompressedPageCache cache = newCache(pool, 128, 1, 20 << 20)) {
+            cache.register(source);
+            cache.register(source);
+            assertThat(cache.lookup(source, 11, 7, 16)).isNull();
+            DecompressedPageCache.Reservation reservation = cache.reserve(source, 11, 7, 16, 8);
+            assertThat(reservation).isNotNull();
+            cache.abort(reservation);
+            assertThat(cache.reserve(source, 11, 7, 16, 8)).isNotNull();
+        }
     }
 
     @Test

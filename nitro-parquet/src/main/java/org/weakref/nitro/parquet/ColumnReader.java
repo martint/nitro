@@ -3120,9 +3120,15 @@ public final class ColumnReader
                     logicalSource, offset, compressedSize, uncompressedSize, SLACK);
             if (reservation != null) {
                 MemorySegment cachedTarget = reservation.segment();
-                snappy.decompress(compressedSource, cachedTarget.asSlice(0, uncompressedSize));
-                decompressedPages.commit(reservation);
-                return cachedTarget;
+                try {
+                    snappy.decompress(compressedSource, cachedTarget.asSlice(0, uncompressedSize));
+                    decompressedPages.commit(reservation);
+                    return cachedTarget;
+                }
+                catch (RuntimeException | Error failure) {
+                    decompressedPages.abort(reservation);
+                    throw failure;
+                }
             }
         }
         if (decompressCapacity < uncompressedSize + SLACK) {
