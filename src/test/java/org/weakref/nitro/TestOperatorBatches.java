@@ -39,6 +39,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.BatchSliceOperator;
+import org.weakref.nitro.operator.BuildOuterJoinOperator;
 import org.weakref.nitro.operator.ConstantTableOperator;
 import org.weakref.nitro.operator.CountingNextOperator;
 import org.weakref.nitro.operator.EnforceSingleRowOperator;
@@ -575,6 +576,28 @@ public class TestOperatorBatches
                             row(1L, 10, null, null),
                             row(2L, 20, 2L, 20),
                             row(null, null, 3L, 30));
+        }
+    }
+
+    @Test
+    void testBuildOuterJoinOperatorNullExtendsUnmatchedBuildRows()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+
+        try (Operator operator = new BuildOuterJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L), row(1L, 11L), row(3L, 30L))),
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 100L), row(1L, 101L), row(2L, 200L))),
+                0,
+                3, 1)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(100L, 10L),
+                            row(101L, 10L),
+                            row(100L, 11L),
+                            row(101L, 11L),
+                            row(200L, null));
         }
     }
 

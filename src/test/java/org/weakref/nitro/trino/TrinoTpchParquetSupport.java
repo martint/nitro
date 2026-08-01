@@ -35,6 +35,7 @@ import io.trino.operator.TaskContext;
 import io.trino.operator.TopNOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
 import io.trino.operator.join.JoinBridgeManager;
+import io.trino.operator.join.JoinOperatorFactory;
 import io.trino.operator.join.NestedLoopJoinBridge;
 import io.trino.operator.join.NestedLoopJoinPagesSupplier;
 import io.trino.spi.Page;
@@ -259,7 +260,19 @@ public final class TrinoTpchParquetSupport
      */
     public MaterializedResult query13(TpchParquetTables tables)
     {
-        return executePipelinePlan(query13Plan(tables), query13OutputTypes());
+        List<Type> outputTypes = query13OutputTypes();
+        List<Page> joinedPages = executePipelinePlan(query13Plan(tables));
+        return executePipelinePlan(
+                new PipelinePlan(
+                        new PagesPipelineSource(joinedPages, "q13.merge.lookup_outer"),
+                        List.of(namedFactoryStep("q13.order_by", orderByFactory(
+                                13_5,
+                                outputTypes,
+                                List.of(1, 0),
+                                List.of(DESC_NULLS_LAST, DESC_NULLS_LAST)))),
+                        "q13.sink.final",
+                        outputTypes),
+                outputTypes);
     }
 
     /**
@@ -1524,47 +1537,47 @@ public final class TrinoTpchParquetSupport
         List<String> ordersColumns = List.of("o_orderkey", "o_custkey", "o_comment");
         List<Type> ordersScanTypes = tableColumnTypes(tables, "orders", ordersColumns);
         List<Type> ordersTypes = List.of(ordersScanTypes.get(0), ordersScanTypes.get(1));
-        PipelinePlan orders = relationPlan(
-                tables,
-                "orders",
-                ordersColumns,
-                Optional.of(not(like(field(2, ordersScanTypes.get(2)), "%special%requests%"))),
-                List.of(field(0, ordersScanTypes.get(0)), field(1, ordersScanTypes.get(1))),
-                ordersTypes,
-                "q13.filter.orders",
-                "q13.sink.orders");
-
         List<String> customerColumns = List.of("c_custkey");
         List<Type> customerTypes = tableColumnTypes(tables, "customer", customerColumns);
+        PipelinePlan customer = relationPlan(
+                tables,
+                "customer",
+                customerColumns,
+                Optional.empty(),
+                identityProjections(customerTypes),
+                customerTypes,
+                "q13.scan.customer",
+                "q13.sink.customer");
         List<Type> outputTypes = query13OutputTypes();
         return new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles("customer"), customerColumns, "q13.scan.customer"),
+                new FilesPipelineSource(tables.tableFiles("orders"), ordersColumns, "q13.scan.orders"),
                 List.of(
-                        // [c_custkey, o_orderkey, o_custkey] with nulls on the order side for unmatched customers
-                        namedHashJoinStep("q13.join.orders", new HashJoinSpec(13_0, customerTypes, List.of(0), orders, ordersTypes, List.of(1), JoinType.LEFT)),
+                        namedFactoryStep("q13.filter.orders", filterAndProjectFactory(
+                                13_0,
+                                Optional.of(not(like(field(2, ordersScanTypes.get(2)), "%special%requests%"))),
+                                List.of(field(0, ordersScanTypes.get(0)), field(1, ordersScanTypes.get(1))),
+                                ordersTypes)),
+                        // Match the SQL engine's cost-selected physical RIGHT join:
+                        // [o_orderkey, o_custkey, c_custkey], preserving every build-side customer.
+                        namedHashJoinStep("q13.join.customer", new HashJoinSpec(13_1, ordersTypes, List.of(1), customer, customerTypes, List.of(0), JoinType.RIGHT)),
                         // [c_custkey, c_count]; count(o_orderkey) counts only matches
                         namedFactoryStep("q13.group.per_customer", hashAggregationFactory(
-                                13_1,
-                                List.of(customerTypes.get(0)),
-                                List.of(0),
-                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()))),
-                        namedFactoryStep("q13.project.distribution", filterAndProjectFactory(
                                 13_2,
+                                List.of(customerTypes.get(0)),
+                                List.of(2),
+                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(0), OptionalInt.empty()))),
+                        namedFactoryStep("q13.project.distribution", filterAndProjectFactory(
+                                13_3,
                                 Optional.empty(),
                                 List.of(field(0, customerTypes.get(0)), field(1, BIGINT)),
                                 List.of(customerTypes.get(0), BIGINT))),
                         // [c_count, custdist]
                         namedFactoryStep("q13.group.distribution", hashAggregationFactory(
-                                13_3,
+                                13_4,
                                 List.of(BIGINT),
                                 List.of(1),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                        namedFactoryStep("q13.order_by", orderByFactory(
-                                13_4,
-                                outputTypes,
-                                List.of(1, 0),
-                                List.of(DESC_NULLS_LAST, DESC_NULLS_LAST)))),
-                "q13.sink.final",
+                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
+                "q13.sink.distribution",
                 outputTypes);
     }
 
@@ -2516,13 +2529,24 @@ public final class TrinoTpchParquetSupport
         List<Page> outputPages = new ArrayList<>();
         TaskContext taskContext = taskContext();
         DriverContext driverContext = newDriverContext(taskContext);
-        List<Operator> operators = createOperators(taskContext, driverContext, plan, outputPages::add);
+        PipelineOperators pipeline = createPipelineOperators(taskContext, driverContext, plan, outputPages::add);
 
-        try (Driver driver = Driver.createDriver(driverContext, operators)) {
+        try (Driver driver = Driver.createDriver(driverContext, pipeline.mainOperators())) {
             processDriver(driver);
         }
         catch (Exception exception) {
             throw new RuntimeException("Unable to execute Trino TPC-H parquet pipeline plan", exception);
+        }
+
+        // RIGHT/FULL lookup joins emit unmatched build rows from a separate source driver followed by
+        // duplicates of every downstream operator, as LocalExecutionPlanner does for ordinary SQL plans.
+        for (DriverOperators outerDriver : pipeline.outerDrivers()) {
+            try (Driver driver = Driver.createDriver(outerDriver.driverContext(), outerDriver.operators())) {
+                processDriver(driver);
+            }
+            catch (Exception exception) {
+                throw new RuntimeException("Unable to execute Trino lookup-outer driver", exception);
+            }
         }
 
         return outputPages;
@@ -2554,11 +2578,38 @@ public final class TrinoTpchParquetSupport
 
     private List<Operator> createOperators(TaskContext taskContext, DriverContext driverContext, PipelinePlan plan, Consumer<Page> pageConsumer)
     {
+        PipelineOperators pipeline = createPipelineOperators(taskContext, driverContext, plan, pageConsumer);
+        if (!pipeline.outerDrivers().isEmpty()) {
+            throw new IllegalArgumentException("Lookup-outer joins are only supported in a directly executed pipeline plan");
+        }
+        return pipeline.mainOperators();
+    }
+
+    private PipelineOperators createPipelineOperators(TaskContext taskContext, DriverContext driverContext, PipelinePlan plan, Consumer<Page> pageConsumer)
+    {
         List<Operator> operators = new ArrayList<>();
+        List<PendingOuterDriver> pendingOuterDrivers = new ArrayList<>();
         operators.add(createSourceOperator(driverContext, plan.source()));
 
         for (PipelineStep step : plan.steps()) {
             OperatorFactory factory = step.createOperatorFactory(taskContext, this);
+
+            for (PendingOuterDriver outerDriver : pendingOuterDrivers) {
+                OperatorFactory duplicate = factory.duplicate();
+                outerDriver.operators().add(profiled(step.profileName(), duplicate.createOperator(outerDriver.driverContext())));
+                duplicate.noMoreOperators();
+            }
+
+            if (factory instanceof JoinOperatorFactory joinFactory) {
+                joinFactory.createOuterOperatorFactory().ifPresent(outerFactory -> {
+                    DriverContext outerDriverContext = newDriverContext(taskContext);
+                    List<Operator> outerOperators = new ArrayList<>();
+                    outerOperators.add(profiled(step.profileName() + ".outer", outerFactory.createOperator(outerDriverContext)));
+                    outerFactory.noMoreOperators();
+                    pendingOuterDrivers.add(new PendingOuterDriver(outerDriverContext, outerOperators));
+                });
+            }
+
             operators.add(profiled(step.profileName(), factory.createOperator(driverContext)));
             factory.noMoreOperators();
         }
@@ -2567,7 +2618,17 @@ public final class TrinoTpchParquetSupport
                 driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
                 pageConsumer,
                 Function.identity())));
-        return operators;
+        for (PendingOuterDriver outerDriver : pendingOuterDrivers) {
+            outerDriver.operators().add(profiled(plan.sinkName(), new PageConsumerOperator(
+                    outerDriver.driverContext().addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
+                    pageConsumer,
+                    Function.identity())));
+        }
+        return new PipelineOperators(
+                List.copyOf(operators),
+                pendingOuterDrivers.stream()
+                        .map(outer -> new DriverOperators(outer.driverContext(), List.copyOf(outer.operators())))
+                        .toList());
     }
 
     private Operator createSourceOperator(DriverContext driverContext, PipelineSource source)
@@ -2579,6 +2640,13 @@ public final class TrinoTpchParquetSupport
                             driverContext.addOperatorContext(0, new PlanNodeId("parquet-source-" + Math.abs(filesSource.profileName().hashCode())), ParquetPageSourceOperator.class.getSimpleName()),
                             filesSource.files(),
                             filesSource.columns()));
+        }
+        if (source instanceof PagesPipelineSource pagesSource) {
+            return profiled(
+                    pagesSource.profileName(),
+                    new PagesSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("pages-source-" + Math.abs(pagesSource.profileName().hashCode())), PagesSourceOperator.class.getSimpleName()),
+                            pagesSource.pages()));
         }
         throw new IllegalArgumentException("Unsupported pipeline source: " + source);
     }
@@ -2665,6 +2733,7 @@ public final class TrinoTpchParquetSupport
     private OperatorFactory createHashJoinFactory(TaskContext taskContext, HashJoinSpec hashJoinSpec)
     {
         List<Type> buildTypes = hashJoinSpec.buildPlan().outputTypes().isEmpty() ? hashJoinSpec.buildTypes() : hashJoinSpec.buildPlan().outputTypes();
+        boolean buildOuter = hashJoinSpec.joinType() == JoinType.RIGHT || hashJoinSpec.joinType() == JoinType.FULL;
         io.trino.operator.join.unspilled.PartitionedLookupSourceFactory lookupSourceFactory = new io.trino.operator.join.unspilled.PartitionedLookupSourceFactory(
                 buildTypes,
                 buildTypes,
@@ -2672,10 +2741,10 @@ public final class TrinoTpchParquetSupport
                         .map(buildTypes::get)
                         .toList(),
                 1,
-                false,
+                buildOuter,
                 new TypeOperators());
         JoinBridgeManager<io.trino.operator.join.unspilled.PartitionedLookupSourceFactory> joinBridgeManager = new JoinBridgeManager<>(
-                false,
+                buildOuter,
                 lookupSourceFactory,
                 lookupSourceFactory.getOutputTypes());
         OperatorFactory joinFactory = io.trino.operator.OperatorFactories.join(
@@ -2974,7 +3043,7 @@ public final class TrinoTpchParquetSupport
     }
 
     private sealed interface PipelineSource
-            permits FilesPipelineSource
+            permits FilesPipelineSource, PagesPipelineSource
     {
         String profileName();
     }
@@ -2984,9 +3053,24 @@ public final class TrinoTpchParquetSupport
     {
     }
 
+    private record PagesPipelineSource(List<Page> pages, String profileName)
+            implements PipelineSource
+    {
+        private PagesPipelineSource
+        {
+            pages = List.copyOf(pages);
+        }
+    }
+
     private record PipelinePlan(PipelineSource source, List<PipelineStep> steps, String sinkName, List<Type> outputTypes)
     {
     }
+
+    private record PipelineOperators(List<Operator> mainOperators, List<DriverOperators> outerDrivers) {}
+
+    private record DriverOperators(DriverContext driverContext, List<Operator> operators) {}
+
+    private record PendingOuterDriver(DriverContext driverContext, List<Operator> operators) {}
 
     private record HashJoinSpec(
             int operatorId,
@@ -3110,6 +3194,62 @@ public final class TrinoTpchParquetSupport
         public void close()
         {
             reader.close();
+        }
+    }
+
+    private static final class PagesSourceOperator
+            implements Operator
+    {
+        private final OperatorContext operatorContext;
+        private final List<Page> pages;
+        private int pageIndex;
+        private boolean finished;
+
+        private PagesSourceOperator(OperatorContext operatorContext, List<Page> pages)
+        {
+            this.operatorContext = operatorContext;
+            this.pages = List.copyOf(pages);
+        }
+
+        @Override
+        public OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finished = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finished || pageIndex == pages.size();
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return false;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            if (isFinished()) {
+                return null;
+            }
+            Page page = pages.get(pageIndex++);
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            return page;
         }
     }
 

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.BuildOuterJoinOperator;
 import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.FilterOperator;
@@ -1111,9 +1112,15 @@ final class TpchParquetSupport
                         notLikeUtf8(2, "%special%requests%"))),
                 0, 1);
         orders = profiled(profile, "q13.project.orders", orders);
-        // Match the native left-join boundary: [c_custkey, o_orderkey]. The duplicate build key is dead.
-        Operator joined = profiled(profile, "q13.join", new HashJoinOperator(allocator, customer, 0, orders, 1, true)
-                .withOutputs(0, 1));
+        // Match Trino's cost-selected physical RIGHT join: probe orders, build and preserve customer.
+        // Expose the SQL boundary [c_custkey, o_orderkey]; both equi-join keys are otherwise dead.
+        Operator joined = profiled(profile, "q13.join", new BuildOuterJoinOperator(
+                allocator,
+                orders,
+                1,
+                customer,
+                0,
+                2, 0));
         // [c_custkey, c_count]
         Operator perCustomer = profiled(profile, "q13.group.customer", new GroupedAggregationOperator(allocator, List.of(0), List.of(new CountColumn(1)), joined));
         // [c_count, custdist]
