@@ -416,3 +416,43 @@ With one warmup and ten interleaved measurements after the change, q42 reports 1
 84.319 ms / 146 CPU-ms for Trino. Median ratios improve to 1.704x wall and 1.185x CPU; mean CPU is 0.961x. The cache
 therefore removes most of the SQL-only CPU reversal without changing aggregation or TopN implementations. The
 remaining wall gap and small median CPU excess require a fresh board/ranking before another production target.
+
+## ClickBench sweep source-close follow-up
+
+The first post-cache broad sweep completed q01--q18, then q19 reached the test's 1 GB per-query memory limit. Query
+failure can close the same connector source concurrently from cancellation and driver-teardown paths. Although the
+Parquet source already ignored sequential duplicate closes, its boolean guard did not make concurrent close
+idempotent; both callers could release the same allocator lease.
+
+Nitro commit `f3160f3f` serializes the short source-close transition and extends the shared-arena lifecycle test with
+two concurrent close callers. Focused Parquet tests pass 83/83 and the full Nitro suite passes 1,584 tests with no
+failures or errors and 566 skips. This is a general connector lifecycle correction, not a benchmark or operator
+optimization. The performance sweep resumes at q19 with the established 4 GB ClickBench no-spill envelope.
+
+## ClickBench boolean-negation lowering
+
+The post-cache board's largest equal-input CPU reversals clustered around SQL `<>` predicates. Trino represents
+`a <> b` as a resolved `$not($operator$equal(a, b))` call. The Nitro boundary previously lowered both calls as
+ordinary scalar assignments, so filtering materialized the equality Boolean vector and then negated it. Trino commit
+`eb4a5318` records the host function's semantic negation as a Nitro `NotMask`; the engine remains function-neutral
+and can select the registry-provided UTF-8 literal mask directly, including the false outcome.
+
+The controlled q26 confirmation with one warmup and five interleaved measurements reports Nitro at 329.175 ms /
+1,547 CPU-ms and Trino at 368.625 ms / 2,100 CPU-ms: 0.893x wall and 0.737x CPU. The preceding stale-artifact run
+was 1.482x wall / 1.714x CPU. The same lowering changes q11, q12, q25, q27, q28, and q30 from CPU regressions to CPU
+wins. `clickbench-mask-regexp-targeted.csv` contains the one-warmup, three-measurement follow-up rows.
+
+## ClickBench q29 bound-regexp adaptation
+
+The q29 SQL boundary bound Trino's constant Joni pattern but still invoked `JoniRegexpFunctions.regexpReplace` for
+every value. The operator fixture instead selected Nitro's exact, newline-correct host-extraction implementation and
+preserved dictionary encoding. Trino commit `d57d64b9` recognizes the same constant pattern and replacement at the
+function-adaptation boundary and binds `ExtractHostUtf8`; dynamic replacements retain the generic Joni path and its
+error behavior. Edge cases cover final and embedded line feeds, empty authorities, absent paths, and nulls.
+
+With one warmup and three interleaved measurements, q29 improves from 8,276.731 ms / 55,045 CPU-ms to 2,910.821 ms /
+18,429 CPU-ms for Nitro, while Trino reports 8,521.009 ms / 53,670 CPU-ms. The resulting 0.342x wall / 0.343x CPU
+ratio is a 3x SQL-engine win. It does not reproduce the old operator ratio of roughly 0.11x because the real Trino SQL
+path is itself about 2.8x faster than the hand-built Trino operator fixture (about 54 CPU-s rather than 150 s). Nitro
+SQL's 18.4 CPU-s is close to the Nitro fixture's 16.1 s absolute duration, so the remaining ratio difference is a
+comparison-fixture mismatch rather than a missing Nitro operator speedup.
