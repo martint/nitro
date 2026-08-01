@@ -375,3 +375,21 @@ q37 uses less Nitro CPU (287 versus 347 CPU-ms) despite 1.514x wall time; q41 is
 1.179x CPU). q39 remains the dominant outlier at roughly 13.9x CPU in the short screen. Because scan work is now equal,
 q39 and then q42 are valid downstream profiling targets. No downstream operator change is justified until their exact
 plan-node CPU and lifecycle are compared with the corresponding operator fixtures.
+
+## ClickBench q39 broad-domain compilation follow-up
+
+The q39 operator attribution exonerated grouping and Top-N: nearly all excess CPU was charged to the split-scoped
+native source. A frame-pointer perf profile then identified the integration boundary rather than Parquet decoding:
+`SortedRangeSet.tryExpandRanges` and its iterator machinery dominated samples, while Nitro page decode was about
+0.1%. The `IsLink <> 0` static predicate has two broad integral ranges. The Trino adapter attempted to enumerate up to
+one million values before declining the domain, independently for each of 165 splits.
+
+Trino commit `8e0ec290` computes integral range cardinality from bounds before asking Trino to enumerate it. Small
+domains retain the same dense-bitset/hash-set compilation; broad domains immediately use the existing exact Trino
+domain fallback. This is a general host-boundary fix and does not alter Nitro scan, aggregation, or Top-N operators.
+The focused adapter tests pass 7/7.
+
+The controlled q39 run with one warmup and ten interleaved measurements reports Nitro at 146.263 ms / 195 CPU-ms and
+Trino at 95.246 ms / 182 CPU-ms: 1.536x wall, 1.071x CPU by median and 0.999x CPU by mean. Before the fix, Nitro used
+roughly 2.3--2.7 CPU-seconds per execution and was 13--14x behind. q39 is therefore no longer a CPU regression; its
+remaining wall difference should be treated as split/scheduling critical-path work, not an operator-kernel target.
