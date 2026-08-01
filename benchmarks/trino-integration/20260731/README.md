@@ -496,3 +496,12 @@ their existing row-level and row-group pruning. The focused Parquet cohort passe
 passes 1,585 tests with 566 skips, and q44 is exact at 0.514x Trino CPU in a cold one-shot check.
 
 Both fixes are boundary adaptations. Neither changes aggregation, ranking, join, or scan-decoding kernels.
+
+## TPC-DS q49 conditional representation follow-up
+
+Q49 exposed a physical-representation mismatch inside a conditional expression: one selected branch produced compact
+`I32Vector` values while the alternate literal arrived as an `I64Vector` inside RLE encoding. The evaluator still
+evaluates each branch only under its branch mask, but now promotes the merge target when a selected wide integer branch
+requires it and accepts encoded integer sources through `VectorAccess`. Nitro commit `ed7797e4` covers the mixed compact
+and wide merge directly. The evaluator cohort passes 112 tests, the full suite passes 1,586 tests with 566 skips, and
+the exact cold q49 check uses 0.329x Trino CPU and 0.460x wall time.
