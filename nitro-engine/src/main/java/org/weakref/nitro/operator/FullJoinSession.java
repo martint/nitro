@@ -38,6 +38,7 @@ public final class FullJoinSession
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final OperatorResources resources;
+    private final boolean inputsOrderedByJoinKeys;
     private final Schema outputSchema;
 
     private FullJoinOperator join;
@@ -53,12 +54,25 @@ public final class FullJoinSession
             Operator inner,
             int[] innerJoinColumns)
     {
+        this(resources, allocator, outerSchema, outerJoinColumns, inner, innerJoinColumns, false);
+    }
+
+    public FullJoinSession(
+            OperatorResources resources,
+            Allocator allocator,
+            Schema outerSchema,
+            int[] outerJoinColumns,
+            Operator inner,
+            int[] innerJoinColumns,
+            boolean inputsOrderedByJoinKeys)
+    {
         this.resources = requireNonNull(resources, "resources is null");
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.outerSchema = requireNonNull(outerSchema, "outerSchema is null");
         this.outerJoinColumns = requireNonNull(outerJoinColumns, "outerJoinColumns is null").clone();
         this.inner = requireNonNull(inner, "inner is null");
         this.innerJoinColumns = requireNonNull(innerJoinColumns, "innerJoinColumns is null").clone();
+        this.inputsOrderedByJoinKeys = inputsOrderedByJoinKeys;
         List<org.weakref.nitro.core.type.Field> fields = new ArrayList<>();
         outerSchema.fields().forEach(field -> fields.add(nullable(field)));
         inner.outputSchema().fields().forEach(field -> fields.add(nullable(field)));
@@ -139,13 +153,10 @@ public final class FullJoinSession
             return;
         }
         finishing = true;
-        join = new FullJoinOperator(
-                allocator,
-                TableOperator.retained(outerSchema, outerPages),
-                outerJoinColumns,
-                inner,
-                innerJoinColumns,
-                resources);
+        TableOperator outer = TableOperator.retained(outerSchema, outerPages);
+        join = inputsOrderedByJoinKeys
+                ? FullJoinOperator.sorted(allocator, outer, outerJoinColumns, inner, innerJoinColumns, resources)
+                : new FullJoinOperator(allocator, outer, outerJoinColumns, inner, innerJoinColumns, resources);
     }
 
     @Override

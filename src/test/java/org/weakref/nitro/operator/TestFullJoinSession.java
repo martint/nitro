@@ -56,4 +56,35 @@ class TestFullJoinSession
             session.close();
         }
     }
+
+    @Test
+    void testUsesExplicitOrderedInputContract()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            ConstantTableOperator outer = new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(2L)));
+            FullJoinSession session = new FullJoinSession(
+                    resources.operatorResources(),
+                    allocator,
+                    outer.outputSchema(),
+                    new int[] {0},
+                    new ConstantTableOperator(allocator, 1, List.of(row(2L), row(2L), row(3L))),
+                    new int[] {0},
+                    true);
+            session.addInput(outer.next());
+            outer.close();
+            session.finish();
+
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().selectedCount()).isEqualTo(6);
+                assertThat(((I64Vector) output.output(0).borrow(Stream.VALUES)).values()).containsExactly(1, 2, 2, 2, 2, 0);
+                assertThat(((BooleanVector) output.output(0).borrow(Stream.NULLS)).values()).containsExactly(false, false, false, false, false, true);
+                assertThat(((I64Vector) output.output(1).borrow(Stream.VALUES)).values()).containsExactly(0, 2, 2, 2, 2, 3);
+                assertThat(((BooleanVector) output.output(1).borrow(Stream.NULLS)).values()).containsExactly(true, false, false, false, false, false);
+            }
+            assertThat(session.isFinished()).isTrue();
+            session.close();
+        }
+    }
 }
