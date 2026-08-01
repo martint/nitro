@@ -32,6 +32,7 @@ import org.weakref.nitro.core.function.VersionedLongPredicate;
 import org.weakref.nitro.core.source.DomainCapability;
 import org.weakref.nitro.core.source.LongDomainCapability;
 import org.weakref.nitro.core.source.RuntimeFilter;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.source.SourceMetrics;
 import org.weakref.nitro.core.source.SourceMetricsProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
@@ -282,6 +283,38 @@ public class TestParquetOperator
 
             assertThat(metrics.completedBytes().orElseThrow()).isPositive();
             assertThat(metrics.completedPositions()).hasValue(3);
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceLeavesNullInclusiveLongDomainAsResidual()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-null-inclusive-domain.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, false, null),
+                new ParquetRow(30, true, 300L)));
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 1, 0), true),
+                    false)))
+                    .isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(batch.selection().count()).isEqualTo(3);
+                assertThat(((BooleanVector) batch.column(0).borrow(Stream.NULLS)).values())
+                        .startsWith(false, true, false);
+            }
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
         }
     }
@@ -3207,13 +3240,12 @@ public class TestParquetOperator
         }
     }
 
-    private record TestingTypedLongDomain(TypeBinding type, DynamicFilter filter)
+    private record TestingTypedLongDomain(TypeBinding type, DynamicFilter filter, boolean includesNull)
             implements TypedDomain
     {
-        @Override
-        public boolean includesNull()
+        private TestingTypedLongDomain(TypeBinding type, DynamicFilter filter)
         {
-            return false;
+            this(type, filter, false);
         }
 
         @Override

@@ -649,6 +649,13 @@ public final class NitroParquetBatchSource
         if (domain == null) {
             return RuntimeFilterAcceptance.REJECTED;
         }
+        // The long-domain capability describes non-null carriers. Nullable domain semantics remain on the enclosing
+        // TypedDomain, and the numeric filter-window path currently treats every null as rejected. Keep such filters
+        // as residuals until the source has a null-aware encoded-domain protocol; applying the value capability alone
+        // would turn an only-null domain into an empty domain and discard matching rows.
+        if (filter.domain().includesNull()) {
+            return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+        }
         pushLongDomain(column, domain);
         return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
     }
