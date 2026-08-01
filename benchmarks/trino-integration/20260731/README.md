@@ -224,3 +224,26 @@ lower in CPU than Trino's 1,481.877 ms / 6,854 CPU-ms reference.
 
 The complete 22-query Nitro TPC-H screen passes, and the full Nitro suite passes
 1,574 tests with no failures or errors and 566 skips.
+
+## TPC-DS q67 current re-baseline
+
+Lowering the general bounded-payload join threshold exposed a latent blocking
+operator contract violation: logically equivalent integer fields can arrive as
+`I32Vector` or `I64Vector` in different retained batches. Top-N ranking selected
+rows across those batches and attempted to append the second representation into
+the first representation's output vector. It now normalizes integer values to
+the physical prototype captured from the first input batch, with checked
+narrowing when that prototype is compact.
+
+The interleaved exact-result run passes after the fix. With one warmup and three
+measurements, Trino reports 5,429.688 ms / 21,650 CPU-ms and Nitro reports
+7,411.696 ms / 26,322 CPU-ms. The current 1.365x wall and 1.216x CPU ratios are
+substantially improved from the original board's 2.610x and 2.046x, but q67
+remains an active regression.
+
+Plan-node accounting attributes most remaining excess CPU to the two decimal
+aggregation stages (about 3.5 CPU-s combined), Top-N ranking (about 1.2 CPU-s),
+and the scan/join envelope. The historical standalone fixture uses unchecked
+`I64` sales arithmetic, whereas SQL uses checked decimal multiplication and sum;
+its 0.58x duration ratio is therefore not a literal kernel target for this plan.
+The full Nitro suite passes 1,575 tests with no failures or errors and 566 skips.

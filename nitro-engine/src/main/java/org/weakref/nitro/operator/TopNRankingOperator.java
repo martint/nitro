@@ -16,11 +16,13 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
+import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
 public class TopNRankingOperator
@@ -625,9 +628,9 @@ public class TopNRankingOperator
                 for (int index = 0; index < groupSize; index++) {
                     positions[index] = selectedRows.get(startPosition + groupStart + index).position();
                 }
-                result = sourceStreams.get(stream).copyPositionsInto(
-                        allocator,
-                        allocationContext,
+                result = copyPositionsInto(
+                        schema.get(stream),
+                        sourceStreams.get(stream),
                         result,
                         positions,
                         groupSize,
@@ -637,6 +640,41 @@ public class TopNRankingOperator
             builder.put(stream, result == null ? schema.get(stream).emptyLike(allocator, allocationContext) : result);
         }
         return builder.build();
+    }
+
+    private Vector copyPositionsInto(
+            Vector schema,
+            Vector source,
+            Vector existing,
+            int[] sourcePositions,
+            int sourceCount,
+            int outputStart,
+            int size)
+    {
+        if (schema instanceof I64Vector) {
+            I64Vector target = allocator.allocateOrGrow(allocationContext, (I64Vector) existing, I64Vector.class, size, I64Vector::new);
+            VectorAccess.LongValues values = VectorAccess.longValues(source);
+            for (int index = 0; index < sourceCount; index++) {
+                target.values()[outputStart + index] = values.value(sourcePositions[index]);
+            }
+            return target;
+        }
+        if (schema instanceof I32Vector) {
+            I32Vector target = allocator.allocateOrGrow(allocationContext, (I32Vector) existing, I32Vector.class, size, I32Vector::new);
+            VectorAccess.LongValues values = VectorAccess.longValues(source);
+            for (int index = 0; index < sourceCount; index++) {
+                target.values()[outputStart + index] = toIntExact(values.value(sourcePositions[index]));
+            }
+            return target;
+        }
+        return source.copyPositionsInto(
+                allocator,
+                allocationContext,
+                existing,
+                sourcePositions,
+                sourceCount,
+                outputStart,
+                size);
     }
 
     private Streams materializeRanksBatch(int startPosition, int batchSize)

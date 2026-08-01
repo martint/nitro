@@ -1392,6 +1392,34 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNRankingOperatorNormalizesIntegerRepresentationsAcrossBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new TopNRankingOperator(
+                allocator,
+                2,
+                new int[] {0},
+                new int[] {1},
+                new boolean[] {false},
+                new TableOperator(
+                        3,
+                        List.of(
+                                TableOperator.Page.values(
+                                        1,
+                                        new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {2}), new I64Vector(new long[] {20})},
+                                        Mask.all(1)),
+                                TableOperator.Page.values(
+                                        1,
+                                        new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {1}), new I32Vector(new int[] {10})},
+                                        Mask.all(1)))),
+                EngineResources.from(allocator).operatorResources().topNRankingPolicy())) {
+            assertThat(operator(operator)).matchesExactly(List.of(
+                    row(1L, 1L, 10L, 1L),
+                    row(1L, 2L, 20L, 2L)));
+        }
+    }
+
+    @Test
     void testTopNRankingOperatorPreservesUtf8PayloadColumnsAcrossMultipleBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
