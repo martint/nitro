@@ -88,7 +88,10 @@ public class TableOperator
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
             outputs[outputIndex] = Output.of(page.columns()[outputIndex]);
         }
-        return new Batch(page.mask(), outputs);
+        // Pages may be retained and consumed by multiple operators concurrently. Vectors are immutable for that
+        // lifetime, but a Batch mask is deliberately mutable (filters and join-build pruning constrain it in place),
+        // so every consumer must receive an independent selection.
+        return new Batch(page.mask().copy(), outputs);
     }
 
     @Override

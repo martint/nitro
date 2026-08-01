@@ -212,6 +212,37 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testInputErrorMergeTreatsUnevaluatedTailAsAbsent()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("combine", (inputs, _, _, _, _) -> Streams.ofValues(inputs.getFirst().values()));
+
+        Variable combined = new Variable(0);
+        Reference values = new Reference(combined, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        combined,
+                        new Call("combine", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(new Input(1), Stream.VALUES))),
+                        AllMask.ALL)),
+                List.of(values));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry,
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new I64Vector(new long[] {1, 2, 3, 4, 5}),
+                        new Reference(new Input(0), Stream.ERRORS), new BooleanVector(new boolean[] {false, true}),
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {10, 20, 30, 40, 50}),
+                        new Reference(new Input(1), Stream.ERRORS), new BooleanVector(new boolean[] {false, false, false, false, true}))),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams result = evaluator.evaluate(values, Mask.sparse(new int[] {0, 1, 4}, 5));
+
+        assertThat(readBooleans(result.get(Stream.ERRORS))).containsExactly(false, true, false, false, true);
+    }
+
+    @Test
     void testFlatBooleanReferenceCompactsOwnedMaskInPlaceWithoutTemporaryMask()
     {
         try (AllocationResources resources = AllocationResources.createDefault();

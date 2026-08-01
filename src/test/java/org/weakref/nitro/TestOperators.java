@@ -146,6 +146,25 @@ import static org.weakref.nitro.data.Row.row;
 @Execution(ExecutionMode.SAME_THREAD)
 public class TestOperators
 {
+    @Test
+    void testTableConsumersHaveIndependentMasks()
+    {
+        TableOperator.Page page = TableOperator.Page.values(
+                3,
+                new Vector[] {new I64Vector(new long[] {1, 2, 3})},
+                Mask.all(3));
+        TableOperator first = TableOperator.retained(Schema.unspecified(1), List.of(page));
+        TableOperator second = TableOperator.retained(Schema.unspecified(1), List.of(page));
+
+        Mask firstMask = first.next().borrowMask();
+        firstMask.retainIf(position -> position == 0);
+        Mask secondMask = second.next().borrowMask();
+
+        assertThat(firstMask).containsExactly(0);
+        assertThat(secondMask).containsExactly(0, 1, 2);
+        assertThat(page.mask()).containsExactly(0, 1, 2);
+    }
+
     private final Allocator allocator = new Allocator(EngineResources.createDefault());
 
     @AfterAll

@@ -1485,7 +1485,7 @@ public class Mask
         return union(other);
     }
 
-    Mask copy()
+    public Mask copy()
     {
         return copy(filteringPolicy);
     }

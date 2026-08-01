@@ -394,7 +394,7 @@ public final class PlanEvaluator
     private Streams evaluateLiteral(Set<Stream> requestedStreams, Literal literal, Mask mask)
     {
         Streams result = Streams.empty();
-        int length = mask.maxPosition() + 1;
+        int length = mask.size();
         if (requestedStreams.contains(Stream.VALUES)) {
             Vector values = literal.type()
                     .map(type -> typedLiteralValues(type, literal.value(), length))
@@ -432,7 +432,7 @@ public final class PlanEvaluator
 
     private Streams evaluateConstruct(Set<Stream> requestedStreams, Construct construct, Mask mask, Streams output)
     {
-        int length = mask.maxPosition() + 1;
+        int length = mask.size();
         List<Streams> arguments = construct.arguments().stream()
                 .map(argument -> evaluateArgument(argument, mask))
                 .toList();
@@ -962,13 +962,13 @@ public final class PlanEvaluator
     {
         if (source == null) {
             checkArgument(stream != Stream.VALUES, "VALUES stream cannot be absent for active merge branch");
-            return fillFalseBoolean(target, branchMask, fullMask.maxPosition() + 1);
+            return fillFalseBoolean(target, branchMask, fullMask.size());
         }
 
         Streams sourceStreams = evaluate(source, branchMask);
         if (!sourceStreams.has(source.stream())) {
             checkArgument(stream != Stream.VALUES, "VALUES stream not produced for active merge branch: %s", source);
-            return fillFalseBoolean(target, branchMask, fullMask.maxPosition() + 1);
+            return fillFalseBoolean(target, branchMask, fullMask.size());
         }
 
         Vector sourceVector = sourceStreams.get(source.stream());
@@ -993,16 +993,16 @@ public final class PlanEvaluator
             return mergeOptionalErrorStreams(parentStream, childStream, existing, mask);
         }
 
-        BooleanVector merged = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, mask.maxPosition() + 1);
+        BooleanVector merged = VectorAccess.writableBooleanVector(allocator, allocationContext, existing, mask.size());
         if (mask.all()) {
             for (int position = 0; position < mask.size(); position++) {
-                merged.values()[position] = readBoolean(parentStream, position) || readBoolean(childStream, position);
+                merged.values()[position] = readOptionalBoolean(parentStream, position) || readOptionalBoolean(childStream, position);
             }
             return merged;
         }
 
         for (int position : mask) {
-            merged.values()[position] = readBoolean(parentStream, position) || readBoolean(childStream, position);
+            merged.values()[position] = readOptionalBoolean(parentStream, position) || readOptionalBoolean(childStream, position);
         }
         return merged;
     }
@@ -1013,11 +1013,11 @@ public final class PlanEvaluator
                 allocationContext,
                 existing instanceof ErrorVector errors ? errors : null,
                 ErrorVector.class,
-                mask.maxPosition() + 1,
+                mask.size(),
                 ErrorVector::new);
         for (int position : mask) {
-            boolean parentError = readBoolean(parentStream, position);
-            boolean childError = readBoolean(childStream, position);
+            boolean parentError = readOptionalBoolean(parentStream, position);
+            boolean childError = readOptionalBoolean(childStream, position);
             ErrorValue error = parentError
                     ? ErrorVectors.errorAt(parentStream, position)
                     : ErrorVectors.errorAt(childStream, position);
@@ -1487,13 +1487,13 @@ public final class PlanEvaluator
 
     private MaskOutcome classifyBooleanMask(Vector values, Vector nulls, Vector errors, Mask mask)
     {
-        ClassificationCounts counts = countBooleanMaskOutcomes(values, nulls, errors, mask);
-        Mask trueMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.trueCount(), mask.size());
-        Mask nullMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.nullCount(), mask.size());
-        Mask errorMask = allocator.allocateUninitializedSparseMask(allocationContext, counts.errorCount(), mask.size());
-        int[] truePositions = trueMask.positionsArrayForOverwrite(counts.trueCount());
-        int[] nullPositions = nullMask.positionsArrayForOverwrite(counts.nullCount());
-        int[] errorPositions = errorMask.positionsArrayForOverwrite(counts.errorCount());
+        int capacity = mask.count();
+        Mask trueMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask nullMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask errorMask = allocator.allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        int[] truePositions = trueMask.positionsArrayForOverwrite(capacity);
+        int[] nullPositions = nullMask.positionsArrayForOverwrite(capacity);
+        int[] errorPositions = errorMask.positionsArrayForOverwrite(capacity);
         int trueCount = 0;
         int nullCount = 0;
         int errorCount = 0;
@@ -1510,6 +1510,9 @@ public final class PlanEvaluator
             }
         }
 
+        trueMask.finishRetain(trueCount);
+        nullMask.finishRetain(nullCount);
+        errorMask.finishRetain(errorCount);
         return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
@@ -1561,25 +1564,6 @@ public final class PlanEvaluator
         }
 
         return result;
-    }
-
-    private ClassificationCounts countBooleanMaskOutcomes(Vector values, Vector nulls, Vector errors, Mask mask)
-    {
-        int trueCount = 0;
-        int nullCount = 0;
-        int errorCount = 0;
-        for (int position : mask) {
-            if (isError(errors, position)) {
-                errorCount++;
-            }
-            else if (isNull(nulls, position)) {
-                nullCount++;
-            }
-            else if (readBoolean(values, position)) {
-                trueCount++;
-            }
-        }
-        return new ClassificationCounts(trueCount, nullCount, errorCount);
     }
 
     private int countTrueRows(Vector values, Vector nulls, Vector errors, Mask mask)
@@ -2601,6 +2585,14 @@ public final class PlanEvaluator
         };
     }
 
+    private static boolean readOptionalBoolean(Vector vector, int position)
+    {
+        // Companion streams can be produced under different short-circuit branch masks. Their storage only extends
+        // through the last evaluated position; positions beyond that extent were not evaluated and are therefore
+        // absent (false), rather than out-of-bounds errors.
+        return position < vector.length() && readBoolean(vector, position);
+    }
+
     private Vector optionalBooleanStream(org.weakref.nitro.operator.evaluator.ir.Producer producer, Stream stream, Mask mask)
     {
         return evaluate(new Reference(producer, stream), mask).getOrNull(stream);
@@ -2619,7 +2611,7 @@ public final class PlanEvaluator
         }
 
         Streams completed = streams;
-        int length = mask.maxPosition() + 1;
+        int length = mask.size();
         if (wantsValues && !completed.has(Stream.VALUES)) {
             throw new IllegalArgumentException("VALUES stream not produced for request");
         }
@@ -3187,8 +3179,6 @@ public final class PlanEvaluator
             depth--;
         }
     }
-
-    private record ClassificationCounts(int trueCount, int nullCount, int errorCount) {}
 
     private record DictionaryPeeling(int[] ids, int rowCount, Mask baseMask, List<Streams> inputs) {}
 
