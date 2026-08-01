@@ -306,3 +306,20 @@ CPU-ms for Nitro versus 5,607.225 ms / 21,698 CPU-ms for Trino: 1.356x wall and 
 host ingestion did not reduce total CPU and worsened the critical path, so the committed implementation remains the
 packed blocking algorithm. The residual wall gap with near-parity CPU should be investigated at the distributed
 scheduling and pipeline envelope before another ranking rewrite.
+
+## Current TPC-H re-baseline
+
+The original TPC-H regression ranking became stale after the shared scan, grouping, join, decimal, and ranking
+changes above. A fresh separate-JVM sweep of all 22 queries on 2026-08-01 used one warmup and three measurements per
+engine, the same SF10 Parquet data, a 16 GB heap, and an 8 GB query-memory cap. All Nitro source attempts were
+accepted and every query processed the same number of logical input positions as Trino.
+
+Nitro's sum-of-medians ratio is now 0.828x wall and 0.786x CPU; the equal-query geometric means are 0.822x wall and
+0.726x CPU. Nitro uses less CPU on 19 of 22 queries. The only material remaining CPU regression is q21 at 1.082x
+(7.800 versus 7.210 CPU-s), already localized above to the 60-million-row join. q12 and q13 are effectively CPU
+parity at 1.023x and 1.008x, respectively.
+
+In particular, q17 no longer reproduces its original 1.628x wall / 2.755x CPU regression. The full-board run reports
+0.591 s / 2.982 CPU-s for Nitro versus 1.408 s / 6.045 CPU-s for Trino (0.420x wall / 0.493x CPU). A preceding
+isolated run produced the same conclusion at 0.388x wall / 0.471x CPU. No q17 production change is justified by the
+current evidence.
