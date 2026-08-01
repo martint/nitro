@@ -187,8 +187,10 @@ public class HashJoinOperator
     private final boolean singleLongBitwiseOverlapJoinFilter;
     private VectorAccess.LongValues fastOuterFilterLongs;
     private VectorAccess.LongValues fastInnerFilterLongs;
+    private VectorAccess.LongValues[] directInnerFilterLongs;
     private long[] fastOuterFilterLongArray;
     private long[] fastInnerFilterLongArray;
+    private long[][] directInnerFilterLongArrays;
     private int[] fastInnerFilterPositions;
     private int[] fastInnerOrderedIntFilterValues;
     private boolean fastInnerOrderedFilterAttempted;
@@ -1583,6 +1585,15 @@ public class HashJoinOperator
             fastInnerFilterLongArray = innerFilterValues[0][0] instanceof I64Vector values ? values.values() : null;
             fastInnerFilterNulls = innerFilterNullAccess[0][0];
         }
+        else if (singleLongNotEqualJoinFilter || singleLongBitwiseOverlapJoinFilter) {
+            directInnerFilterLongs = new VectorAccess.LongValues[batchCount];
+            directInnerFilterLongArrays = new long[batchCount][];
+            for (int batchIndex = 0; batchIndex < batchCount; batchIndex++) {
+                Vector values = innerFilterValues[0][batchIndex];
+                directInnerFilterLongs[batchIndex] = VectorAccess.longValues(values);
+                directInnerFilterLongArrays[batchIndex] = values instanceof I64Vector longs ? longs.values() : null;
+            }
+        }
     }
 
     private boolean passesJoinFilters(int outerPosition, long rowReference, int matchIndex)
@@ -1617,6 +1628,25 @@ public class HashJoinOperator
         int batchIndex = JoinRowReference.batchIndex(rowReference);
         BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(batchIndex);
         int innerPosition = innerBatch.sourcePosition(JoinRowReference.position(rowReference));
+        if (singleLongNotEqualJoinFilter || singleLongBitwiseOverlapJoinFilter) {
+            boolean outerNull = filterPolicy.cacheCurrentOuterValue()
+                    ? currentFastOuterFilterNull
+                    : fastOuterFilterNulls != null && fastOuterFilterNulls.value(outerPosition);
+            if (outerNull ||
+                    (innerFilterNullAccess[0][batchIndex] != null && innerFilterNullAccess[0][batchIndex].value(innerPosition))) {
+                return false;
+            }
+            long outerValue = filterPolicy.cacheCurrentOuterValue()
+                    ? currentFastOuterFilterLong
+                    : fastOuterFilterLongArray == null
+                            ? fastOuterFilterLongs.value(outerPosition)
+                            : fastOuterFilterLongArray[outerPosition];
+            long[] innerArray = directInnerFilterLongArrays[batchIndex];
+            long innerValue = innerArray == null
+                    ? directInnerFilterLongs[batchIndex].value(innerPosition)
+                    : innerArray[innerPosition];
+            return singleLongNotEqualJoinFilter ? outerValue != innerValue : (outerValue & innerValue) != 0;
+        }
         if (joinFilters.length == 1 && joinFilters[0].encodedBinaryEquals()) {
             if ((currentOuterFilterNulls[0] != null && VectorAccess.isNull(currentOuterFilterNulls[0], outerPosition)) ||
                     (innerFilterNulls[0][batchIndex] != null && VectorAccess.isNull(innerFilterNulls[0][batchIndex], innerPosition))) {
@@ -1720,7 +1750,8 @@ public class HashJoinOperator
 
     private void cacheCurrentOuterFilterValue()
     {
-        if (!filterPolicy.cacheCurrentOuterValue() || fastInnerFilterBatch == null) {
+        if (!filterPolicy.cacheCurrentOuterValue() ||
+                (fastInnerFilterBatch == null && !singleLongNotEqualJoinFilter && !singleLongBitwiseOverlapJoinFilter)) {
             return;
         }
         currentFastOuterFilterNull = fastOuterFilterNulls != null && fastOuterFilterNulls.value(currentOuterPosition);

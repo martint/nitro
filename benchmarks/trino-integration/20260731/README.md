@@ -198,3 +198,29 @@ aggregation fell from about 2.94 CPU-s to 0.86--0.88 CPU-s, now below Trino's
 roughly 0.95 CPU-s scan-plus-aggregation stage. Current Trino q21 remains
 1,901.301 ms / 6,750 ms; the remaining gap is concentrated in the subsequent
 60-million-row join.
+
+## TPC-H q21 multi-batch join follow-up
+
+The remaining q21 join cost had two general causes. Its replicated build retains
+multiple batches, so the single-long residual predicate (`<>` or bitwise overlap)
+fell through the generic registry-function dispatch for every candidate. Nitro
+now resolves primitive long access once per retained batch and caches the probe
+value once per row while retaining the same null and residual-filter semantics.
+
+The build also contained 7.31 million unique nonnegative long keys in a bounded
+60-million-value physical domain. The existing bounded direct-payload admission
+was applicable, but its default minimum expected-row count was 10 million per
+driver. Lowering that immutable construction-policy threshold to 5 million
+admits the same bounded representation from observed size and domain alone; it
+does not inspect query, table, column, or function identity.
+
+The exact q21 audit returns 100 rows with all 65 native-source attempts accepted.
+With two warmups and five measurements, Nitro reports 1,897.935 ms median wall
+and 7,434 ms median query CPU, versus the current Trino reference of 1,901.301 ms
+and 6,750 ms. Nitro therefore reaches wall-time parity while retaining a 10.1%
+CPU gap. The same general build admission improves q09 from 1,288.133 ms / 5,864
+CPU-ms to 1,055.557 ms / 4,742 CPU-ms, now 28.8% faster in wall time and 30.8%
+lower in CPU than Trino's 1,481.877 ms / 6,854 CPU-ms reference.
+
+The complete 22-query Nitro TPC-H screen passes, and the full Nitro suite passes
+1,574 tests with no failures or errors and 566 skips.

@@ -5754,6 +5754,37 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinLongNotEqualResidualFilterAcrossBuildBatches()
+    {
+        Operator build = new TableOperator(
+                2,
+                List.of(
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {10})},
+                                Mask.all(1)),
+                        TableOperator.Page.values(
+                                1,
+                                new Vector[] {new I64Vector(new long[] {1}), new I64Vector(new long[] {30})},
+                                Mask.all(1))));
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(
+                                allocator,
+                                2,
+                                List.of(row(1L, 10L), row(1L, 20L))),
+                        0,
+                        build,
+                        0,
+                        HashJoinOperator.JoinFilter.longNotEqual(1, 1))))
+                .matchesExactly(List.of(
+                        row(1L, 10L, 1L, 30L),
+                        row(1L, 20L, 1L, 10L),
+                        row(1L, 20L, 1L, 30L)));
+    }
+
+    @Test
     void testLeftHashJoinResidualFilterNullExtendsOnlyWhenEveryCandidateIsRejected()
     {
         assertThat(operator(

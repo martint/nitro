@@ -53,7 +53,7 @@ public record HashJoinBuildPolicy(
                 25,
                 40_000_000,
                 25,
-                10_000_000);
+                5_000_000);
     }
 
     public static HashJoinBuildPolicy fromSystemProperties()
