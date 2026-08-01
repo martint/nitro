@@ -247,3 +247,25 @@ and the scan/join envelope. The historical standalone fixture uses unchecked
 `I64` sales arithmetic, whereas SQL uses checked decimal multiplication and sum;
 its 0.58x duration ratio is therefore not a literal kernel target for this plan.
 The full Nitro suite passes 1,575 tests with no failures or errors and 566 skips.
+
+The distributed plan also exposes a capacity-policy mismatch hidden by that
+fixture. SQL q67 performs `PARTIAL` decimal aggregation after nine-way `GroupId`,
+exchanges varbinary state, and then performs `FINAL` aggregation. The standalone
+fixture performs one unbounded `SINGLE` bigint aggregation. Nitro's ordinary flat
+grouping policy speculates 64 observed high-cardinality batches ahead, which is
+appropriate for the unbounded fixture but makes each memory-bounded partial table
+expand aggressively early in its lifecycle.
+
+Nitro commit `86167de7` adds immutable grouping-policy views that retain the same
+owner-scoped pool identities. Trino commit `24d47532` gives adaptive partial
+aggregation a four-batch view while leaving ordinary and final grouping at the
+64-batch default. This is selected from the physical `PARTIAL` lifecycle, not a
+query, table, function, or grouping-key identity. The historical grouping cohort
+remained within roughly 1.4% of the 64-batch control, q39 was neutral, and q57
+improved 3.4%.
+
+The correctness-checked interleaved q67 rerun reports Trino at 5,789.327 ms /
+21,412 CPU-ms and Nitro at 8,123.128 ms / 24,270 CPU-ms: 1.403x wall and 1.133x
+CPU. The CPU ratio improves from 1.216x to 1.133x. Nitro's full suite passes 1,576
+tests with no failures or errors and 566 skips; the complete Trino Nitro core
+cohort passes 163 tests.
