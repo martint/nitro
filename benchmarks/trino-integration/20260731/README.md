@@ -479,3 +479,20 @@ Accordingly, no q40/q42 operator rewrite is justified by this board. The remaini
 and split-scheduling analysis for wall-time gaps, plus isolated confirmation of any future CPU candidate. Production
 changes should continue to target measured SQL integration boundaries rather than attempting to force ratios toward
 an inapplicable Trino fixture baseline.
+
+## TPC-DS q01/q44 encoded-input correctness follow-up
+
+A fresh current TPC-DS ranking pass exposed two representation contracts that the isolated fixtures did not cover.
+Q01 fed a dictionary over Nitro's two-limb long-decimal struct into the Trino-owned decimal sum implementation. Trino
+commit `85485fd1` makes long-decimal sum, average, extrema, and any-value providers project struct fields through
+Nitro's encoding-preserving `VectorAccess` API instead of casting the outer vector. The 169-test Trino Nitro core
+cohort passes, and q01 is exact at 0.676x Trino CPU in a cold one-shot check.
+
+Q44's `ss_addr_sk IS NULL` static domain carried an empty non-null long-value set plus `includesNull = true`. The
+Parquet filter-window path consumed only the optional `LongDomain` value capability and therefore treated the domain
+as empty, eliminating the scalar-average input. Nitro commit `e0090591` leaves null-inclusive typed domains as
+residuals until the connector has an explicitly null-aware encoded-domain protocol; ordinary non-null domains retain
+their existing row-level and row-group pruning. The focused Parquet cohort passes 102 tests, the full Nitro suite
+passes 1,585 tests with 566 skips, and q44 is exact at 0.514x Trino CPU in a cold one-shot check.
+
+Both fixes are boundary adaptations. Neither changes aggregation, ranking, join, or scan-decoding kernels.
