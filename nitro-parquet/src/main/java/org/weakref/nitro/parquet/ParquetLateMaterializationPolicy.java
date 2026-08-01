@@ -36,7 +36,7 @@ public record ParquetLateMaterializationPolicy(
                         20,
                         4,
                         true,
-                        new FragmentedNumeric(true, 6, 6, 2, 8),
+                        new FragmentedNumeric(true, 6, 128, 2, 128),
                         1,
                         false),
                 true);
@@ -55,9 +55,9 @@ public record ParquetLateMaterializationPolicy(
                                         "nitro.parquet.lazyFragmentedNumericSkipDecode", "true")),
                                 Integer.getInteger(
                                         "nitro.parquet.lazyFragmentedNumericSkipMaxSurvivorPercent", 6),
-                                Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxScanColumns", 6),
+                                Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxScanColumns", 128),
                                 Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMinPayloadColumns", 2),
-                                Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxPayloadColumns", 8)),
+                                Integer.getInteger("nitro.parquet.lazyFragmentedNumericSkipMaxPayloadColumns", 128)),
                         Integer.getInteger("nitro.parquet.lazyNumericSkipMinDictionarySize", 1),
                         Boolean.getBoolean("nitro.debug.lazyNumericSkip")),
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.deferEmptyConstrainedDecode", "true")));

@@ -32,14 +32,14 @@ class TestNitroParquetBatchSource
     @Test
     void testFragmentedNumericSkipAdmissionBoundaries()
     {
-        assertTrue(admits(600, 10_000, 6, 2));
-        assertTrue(admits(600, 10_000, 6, 8));
+        assertTrue(admits(600, 10_000, 128, 2));
+        assertTrue(admits(600, 10_000, 128, 128));
 
-        assertFalse(admits(601, 10_000, 6, 2));
-        assertFalse(admits(600, 10_000, 7, 2));
-        assertFalse(admits(600, 10_000, 6, 1));
-        assertFalse(admits(600, 10_000, 6, 9));
-        assertFalse(admits(0, 0, 6, 2));
+        assertFalse(admits(601, 10_000, 128, 2));
+        assertFalse(admits(600, 10_000, 129, 2));
+        assertFalse(admits(600, 10_000, 128, 1));
+        assertFalse(admits(600, 10_000, 128, 129));
+        assertFalse(admits(0, 0, 128, 2));
         assertFalse(new ParquetLateMaterializationPolicy.FragmentedNumeric(false, 6, 6, 2, 8)
                 .admits(600, 10_000, 6, 2));
     }
