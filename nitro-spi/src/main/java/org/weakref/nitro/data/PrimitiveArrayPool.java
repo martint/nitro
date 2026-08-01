@@ -53,10 +53,9 @@ public final class PrimitiveArrayPool
         this.minRetainedBytes = minRetainedBytes;
     }
 
-    public synchronized int[] borrowInts(int length)
+    public int[] borrowInts(int length)
     {
-        checkOpen();
-        int[] array = borrow(int[].class, length, int[].class);
+        int[] array = tryBorrowInts(length);
         return array != null ? array : new int[length];
     }
 
@@ -71,23 +70,20 @@ public final class PrimitiveArrayPool
         return borrow(int[].class, length, int[].class);
     }
 
-    public synchronized byte[] borrowBytes(int length)
+    public byte[] borrowBytes(int length)
     {
-        checkOpen();
         byte[] array = borrow(byte[].class, length, byte[].class);
         return array != null ? array : new byte[length];
     }
 
-    public synchronized long[] borrowLongs(int length)
+    public long[] borrowLongs(int length)
     {
-        checkOpen();
         long[] array = borrow(long[].class, length, long[].class);
         return array != null ? array : new long[length];
     }
 
-    public synchronized boolean[] borrowBooleans(int length)
+    public boolean[] borrowBooleans(int length)
     {
-        checkOpen();
         boolean[] array = borrow(boolean[].class, length, boolean[].class);
         return array != null ? array : new boolean[length];
     }
