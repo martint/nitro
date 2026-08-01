@@ -521,3 +521,21 @@ median improves from 8.257 to 7.765 CPU-seconds. Against 7.347 CPU-seconds for T
 million rows and the separate page-processor driver count falls from eight to two. The remaining discrepancy from
 the 0.26x standalone fixture is structural: SQL still uses a distributed hash FULL JOIN and multi-page window inputs,
 whereas the fixture uses an ordered merge FULL JOIN and dense materialized stages.
+
+## Ordered full-join composition follow-up
+
+Both q51 FULL JOIN inputs leave Nitro windows ordered ascending on the exact `(item_sk, d_date)` equi-join keys, but
+the SQL adapter discarded that physical property and selected Nitro's hash FULL JOIN. Nitro commit `c82a0f25` lets a
+host-fed full-join session receive an explicit ordered-input contract. Trino commit `a7cc7269` supplies it only when
+the physical planner proves the complete key order on both sides through reference-only projections and filters.
+Descending, nulls-first, computed, partial, and unproved orders retain the hash path. Neither operator infers order
+from data, query identity, or a system property.
+
+The full Nitro suite passes 1,587 tests with 566 skips, and the 187-test Trino Nitro cohort passes. A two-warmup,
+five-measurement interleaved q51 run reports Nitro at 3,475.893 ms wall / 7,277 CPU-ms and Trino at 2,966.019 ms /
+7,337 CPU-ms: 1.172x wall and 0.992x CPU by median (0.992x by mean CPU). The ordered merge therefore closes q51's
+remaining SQL CPU regression, but the integrated CPU ratio is still 3.81--3.87x away from the standalone fixture's
+0.260 duration / 0.256 cycle ratios. The remaining discrepancy is concentrated in execution shape: SQL's early
+windows consume retained multi-page aggregation output, while the fixture presents dense single-page stages. The
+next q51 work should preserve native blocking-stage output across that boundary rather than alter window or join
+kernels.
