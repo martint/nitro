@@ -393,3 +393,26 @@ The controlled q39 run with one warmup and ten interleaved measurements reports 
 Trino at 95.246 ms / 182 CPU-ms: 1.536x wall, 1.071x CPU by median and 0.999x CPU by mean. Before the fix, Nitro used
 roughly 2.3--2.7 CPU-seconds per execution and was 13--14x behind. q39 is therefore no longer a CPU regression; its
 remaining wall difference should be treated as split/scheduling critical-path work, not an operator-kernel target.
+
+## ClickBench q42 split-metadata follow-up
+
+The post-q39 controlled q42 baseline still reported 171.216 ms / 238 CPU-ms for Nitro versus 83.363 ms / 138
+CPU-ms for Trino (2.054x wall, 1.725x CPU). Operator attribution showed 165 split-scoped native sources plus
+distributed partial/final aggregation and three Top-N plan levels. This is not the single-source,
+single-aggregation, single-TopN topology used by the operator fixture.
+
+A frame-pointer profile found repeated Parquet Thrift footer decoding as the largest identifiable source cost:
+`TCompactProtocol.readByte`, column metadata, varint, statistics, and schema decoding together exceeded the direct
+page-decoder samples. Each split source mapped and reparsed its physical file even when sibling splits and later
+queries had already parsed the same immutable file version.
+
+Nitro commit `4016f2a5` adds a bounded, connector-instance-owned metadata cache to `NitroParquetScanResources`.
+Identity includes normalized path, file size, and modification time. Concurrent splits for one version share a
+single future; misses for different files load concurrently; the immutable maximum-entry policy is supplied during
+resource construction. Mappings and decoder state remain source-owned. Focused tests pass 85/85 and the full Nitro
+suite passes 1,584 tests with no failures or errors and 566 skips.
+
+With one warmup and ten interleaved measurements after the change, q42 reports 143.677 ms / 173 CPU-ms for Nitro and
+84.319 ms / 146 CPU-ms for Trino. Median ratios improve to 1.704x wall and 1.185x CPU; mean CPU is 0.961x. The cache
+therefore removes most of the SQL-only CPU reversal without changing aggregation or TopN implementations. The
+remaining wall gap and small median CPU excess require a fresh board/ranking before another production target.
