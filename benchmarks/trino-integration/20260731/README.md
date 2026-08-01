@@ -287,3 +287,22 @@ large ranking node's add-input CPU falling from about 553 ms to 454 ms, versus
 about 347 ms for Trino. Its roughly one-second Nitro get-output phase remains;
 the carrier materialization hypothesis therefore explains only part of the
 ranking gap, and the next investigation must follow the exact ranking lifecycle.
+
+Nitro commit `e8f56e02` removes the ranking loader's object-per-row representation. A row is now a packed
+`(pageIndex, position)` long, partition buckets use primitive lists, and partition lookup reuses one mutable probe
+while retaining an immutable key only for each observed partition. This removes one `RowReference` and one transient
+`PartitionKey` from each of q67's 5.79 million ranking input rows without changing the ranking algorithm or teaching
+it about decimals, Trino, or q67. The full Nitro suite passes 1,578 tests with 566 skips, and the Trino Nitro core
+cohort passes all 164 tests.
+
+The correctness-checked one-warmup/three-measurement run at the stable 4 GB query cap reports Trino at 5,704.555 ms
+p50 wall / 21,425 CPU-ms and Nitro at 7,404.460 ms / 22,538 CPU-ms. The resulting ratios are 1.298x wall and 1.052x
+p50 CPU (1.019x mean CPU), improving from 1.360x / 1.078x before packed references. Cold node accounting reduced
+the large Nitro ranking node from about 1.48 CPU-s to about 1.04 CPU-s.
+
+An uncommitted streaming-candidate prototype was also tested and discarded. Its corrected O(log N) admission
+retained only qualifying rows and required ties, but the same interleaved protocol produced 7,601.718 ms / 22,830
+CPU-ms for Nitro versus 5,607.225 ms / 21,698 CPU-ms for Trino: 1.356x wall and 1.052x CPU. Moving ranking work into
+host ingestion did not reduce total CPU and worsened the critical path, so the committed implementation remains the
+packed blocking algorithm. The residual wall gap with near-parity CPU should be investigated at the distributed
+scheduling and pipeline envelope before another ranking rewrite.
