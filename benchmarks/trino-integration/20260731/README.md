@@ -505,3 +505,19 @@ evaluates each branch only under its branch mask, but now promotes the merge tar
 requires it and accepts encoded integer sources through `VectorAccess`. Nitro commit `ed7797e4` covers the mixed compact
 and wide merge directly. The evaluator cohort passes 112 tests, the full suite passes 1,586 tests with 566 skips, and
 the exact cold q49 check uses 0.329x Trino CPU and 0.460x wall time.
+
+## Native window-output composition follow-up
+
+The q51 SQL path still placed a Trino Page boundary between Nitro's blocking window and an eligible Nitro
+filter/project, while the standalone operator fixture kept that chain in native batches. Trino commit `65cac026`
+lets the physical planner attach an ordinary planned filter/project pipeline directly to the exact window instance.
+The window session applies it before adapting the surviving output to Pages; nested windows are keyed by plan-node ID
+so an outer pipeline cannot attach to an inner window. This is a generic composition rewrite and does not alter window
+or function implementations.
+
+The 172-test Trino Nitro cohort passes, q47 exact-result validation passes, and q51's interleaved three-measurement
+median improves from 8.257 to 7.765 CPU-seconds. Against 7.347 CPU-seconds for Trino, the ratio moves from 1.135x to
+1.057x; wall is 1.272x. Operator accounting confirms that the fused window output falls from 11.55 million to 6.13
+million rows and the separate page-processor driver count falls from eight to two. The remaining discrepancy from
+the 0.26x standalone fixture is structural: SQL still uses a distributed hash FULL JOIN and multi-page window inputs,
+whereas the fixture uses an ordered merge FULL JOIN and dense materialized stages.
