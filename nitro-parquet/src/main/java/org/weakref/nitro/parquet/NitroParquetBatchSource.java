@@ -658,9 +658,9 @@ public final class NitroParquetBatchSource
     /** Reject mixed-payload row groups from numeric min/max metadata before any column page is visited. */
     private void advancePastRejectedRowGroups()
     {
-        // All-numeric scans already apply these domains row by row in the filter-window path. Keep that mature
-        // lifecycle unchanged in this slice; metadata rejection primarily closes the mixed-payload SPI gap.
-        if (allNumeric || !hasRowGroupFilters || nextRow >= totalRows) {
+        // A filtered window may already have decoded survivors that still need to be emitted. Do not advance any
+        // reader into a later row group until that window has been drained.
+        if (!hasRowGroupFilters || nextRow >= totalRows || windowSurvivorCursor < windowSurvivorCount) {
             return;
         }
         closeCurrentBatch();
@@ -874,7 +874,15 @@ public final class NitroParquetBatchSource
             }
         }
         while (nextRow < totalRows) {
+            advancePastRejectedRowGroups();
+            if (nextRow >= totalRows) {
+                return false;
+            }
             int windowCount = toIntExact(Math.min(filterWindow, totalRows - nextRow));
+            if (rowGroupTracking) {
+                windowCount = toIntExact(Math.min(windowCount, rowGroupRemaining));
+                consumeRowGroupRows(windowCount);
+            }
             nextRow += windowCount;
             decodeFilterWindow(windowCount);
             windowSurvivorCursor = 0;
@@ -1420,6 +1428,7 @@ public final class NitroParquetBatchSource
                     debugFilterOutputs[column] += kept;
                 }
                 survivorCount = kept;
+                checkSurvivorBounds(column, survivors, survivorCount, count);
                 continue;
             }
 
@@ -1544,6 +1553,7 @@ public final class NitroParquetBatchSource
                 debugFilterOutputs[column] += kept;
             }
             survivorCount = kept;
+            checkSurvivorBounds(column, survivors, survivorCount, count);
         }
 
         // If a filter wiped out the window, the remaining filter columns were never read — advance their readers
@@ -1591,8 +1601,8 @@ public final class NitroParquetBatchSource
             }
             boolean[] nulls = nullable[c] ? ensureWindowNull(c, survivorCount) : null;
             if (dfPayloadBulk) {
-                boolean[] columnNulls = nullable[c] ? colNull[c] : null;
                 readColumnInto(c, null, count, count);
+                boolean[] columnNulls = nullable[c] ? colNull[c] : null;
                 if (readers[c].kind() == ColumnReader.Kind.INT) {
                     windowInt[c] = ensureInt(windowInt[c], survivorCount);
                     gatherInt(colInt[c], columnNulls, null, survivors, survivorCount, windowInt[c], nulls);
@@ -1641,6 +1651,14 @@ public final class NitroParquetBatchSource
             }
         }
         windowSurvivorCount = survivorCount;
+    }
+
+    private static void checkSurvivorBounds(int column, int[] survivors, int survivorCount, int count)
+    {
+        if (survivorCount > 0 && (survivors[0] < 0 || survivors[survivorCount - 1] >= count)) {
+            throw new IllegalStateException("Filter column %s produced survivor range [%s, %s] outside window of %s rows"
+                    .formatted(column, survivors[0], survivors[survivorCount - 1], count));
+        }
     }
 
     /** Compact every previously decoded filter column whose dense values align with {@code inputSurvivors}. */

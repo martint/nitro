@@ -29,9 +29,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.weakref.nitro.clickbench.ClickBenchHitsSupport;
 import org.weakref.nitro.core.function.VersionedLongPredicate;
+import org.weakref.nitro.core.source.DomainCapability;
+import org.weakref.nitro.core.source.LongDomainCapability;
+import org.weakref.nitro.core.source.RuntimeFilter;
 import org.weakref.nitro.core.source.SourceMetrics;
 import org.weakref.nitro.core.source.SourceMetricsProtocol;
 import org.weakref.nitro.core.source.SourcePoll;
+import org.weakref.nitro.core.source.TypedDomain;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -327,6 +331,91 @@ public class TestParquetOperator
                 }
             }
             assertThat(values).containsExactly(100, 101, 102);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourcePrunesRowGroupsBeforeNumericFilterWindows()
+            throws IOException
+    {
+        java.nio.file.Path first = writeIntStringParquetFile("numeric-filter-row-group-first.parquet", List.of(1, 2, 3));
+        java.nio.file.Path second = writeIntStringParquetFile("numeric-filter-row-group-second.parquet", List.of(100, 101, 102));
+        Schema schema = Schema.unspecified(List.of("value"));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(first, second),
+                        schema)) {
+            DynamicFilter filter = DynamicFilter.fromRange(0, 100, 102);
+            source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), filter),
+                    false));
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
+
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                ready.batch().close();
+                poll = source.poll();
+            }
+
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(metrics.completedPositions()).hasValue(3);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceGrowsNullablePayloadScratchAcrossFilterWindows()
+            throws IOException
+    {
+        java.nio.file.Path first = writeParquetFile("numeric-filter-small-row-group.parquet", true, List.of(
+                new ParquetRow(1, true, null),
+                new ParquetRow(2, true, 20L),
+                new ParquetRow(3, true, 30L)));
+        List<ParquetRow> largerRows = new ArrayList<>();
+        for (int position = 0; position < 100; position++) {
+            largerRows.add(new ParquetRow(100 + position, true, position % 7 == 0 ? null : 1_000L + position));
+        }
+        java.nio.file.Path second = writeParquetFile("numeric-filter-large-row-group.parquet", true, largerRows);
+        Schema schema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(first, second),
+                        schema)) {
+            DynamicFilter filter = DynamicFilter.fromRange(0, 1, 199);
+            source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), filter),
+                    false));
+
+            int positions = 0;
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    I64Vector payload = (I64Vector) batch.column(1).borrow(Stream.VALUES);
+                    BooleanVector nulls = (BooleanVector) batch.column(1).borrow(Stream.NULLS);
+                    for (int index = 0; index < batch.selection().count(); index++) {
+                        int position = batch.selection().position(index);
+                        if (nulls.values()[position]) {
+                            assertThat(payload.values()[position]).isZero();
+                        }
+                    }
+                    positions += batch.selection().count();
+                }
+                poll = source.poll();
+            }
+
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(positions).isEqualTo(103);
         }
     }
 
@@ -3101,6 +3190,37 @@ public class TestParquetOperator
         public TypeOperators operators()
         {
             return TypeOperators.UNSPECIFIED;
+        }
+    }
+
+    private record TestingTypedLongDomain(TypeBinding type, DynamicFilter filter)
+            implements TypedDomain
+    {
+        @Override
+        public boolean includesNull()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isAll()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isNone()
+        {
+            return filter.isEmpty();
+        }
+
+        @Override
+        public <T> java.util.Optional<T> capability(DomainCapability<T> capability)
+        {
+            if (capability == LongDomainCapability.LONG_DOMAIN) {
+                return java.util.Optional.of(capability.valueType().cast(filter));
+            }
+            return java.util.Optional.empty();
         }
     }
 
