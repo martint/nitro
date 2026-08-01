@@ -323,3 +323,33 @@ In particular, q17 no longer reproduces its original 1.628x wall / 2.755x CPU re
 0.591 s / 2.982 CPU-s for Nitro versus 1.408 s / 6.045 CPU-s for Trino (0.420x wall / 0.493x CPU). A preceding
 isolated run produced the same conclusion at 0.388x wall / 0.471x CPU. No q17 production change is justified by the
 current evidence.
+
+## ClickBench q24 sparse wide-payload follow-up
+
+The q24 plan scans and filters 105 columns before a partial Top-N. Its URL predicate retains only a few rows per
+10,000-row source batch, but the Parquet late-materialization policy rejected fragmented numeric skip-decode whenever
+a scan had more than six columns or more than eight live numeric payload columns. That forced full numeric payload
+decode even though the physical survivor mask was sparse. A live thread dump also found primitive pool misses
+allocating and zeroing arrays while holding the pool monitor.
+
+Nitro commit `c3ad4086` moves primitive array allocation on a pool miss outside the synchronized lookup while
+preserving bucket, ownership, FIFO, and capacity semantics. Commit `252e440b` raises the connector-owned fragmented
+numeric width bounds to 128 while retaining the existing six-percent survivor guard, numeric/dictionary proof, and
+immutable construction policy. The full Nitro suite passes 1,578 tests with no failures or errors and 566 skips.
+
+The no-override, correctness-checked q24 confirmation with one warmup and three interleaved measurements reports Nitro
+at 6,784.437 ms / 28,022 CPU-ms and Trino at 5,421.274 ms / 34,510 CPU-ms. The resulting 1.251x wall / 0.812x CPU
+ratios substantially improve the original 2.020x / 1.130x result. Nitro now uses about 19% less CPU, so the remaining
+wall gap is a critical-path and source-parallelism issue rather than function adaptation or excess aggregate work.
+
+`clickbench-post-wide-skip.csv` records a complete 43-query same-JVM screen after this change. It is useful for finding
+current candidates but is not a replacement for isolated confirmations: q30 followed the allocation-heavy q29 and
+reported 4,440.911 ms / 32,189 CPU-ms in the screen, while an immediately following fresh-JVM run with the same
+defaults reported 1,417.113 ms / 8,640 CPU-ms. The q30 plan has one physical scan column and does not qualify for the
+new fragmented-width path. No operator change is justified by the noisy broad row.
+
+The screen also makes the next connector mismatch explicit. ClickBench q37--43 read about 100 million logical
+positions through the Nitro source, while the Trino Parquet path reports about 1.4 million physical input positions
+after predicate/statistics pruning. Their large ratio reversals therefore compare different scan work. Static filter
+domains need an explicit optimizer-to-connector SPI path so Nitro Parquet can prune row groups without teaching the
+connector about SQL expressions or benchmark queries.
