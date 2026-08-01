@@ -2293,7 +2293,7 @@ public final class NitroParquetBatchSource
     private boolean closed;
 
     @Override
-    public void close()
+    public synchronized void close()
     {
         if (closed) {
             return;

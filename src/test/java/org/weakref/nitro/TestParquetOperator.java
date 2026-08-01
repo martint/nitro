@@ -123,6 +123,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
@@ -449,7 +450,7 @@ public class TestParquetOperator
     }
 
     @Test
-    void testNitroParquetSourceWithSharedArenasCanCloseOnAnotherThread()
+    void testNitroParquetSourceWithSharedArenasCanCloseConcurrentlyAcrossThreads()
             throws Exception
     {
         java.nio.file.Path file = writeInt32ParquetFile("nitro-shared-arena.parquet", List.of(1, 2, 3));
@@ -461,13 +462,26 @@ public class TestParquetOperator
 
         try (AllocationResources allocationResources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(allocationResources);
-                var executor = Executors.newSingleThreadExecutor()) {
+                var executor = Executors.newFixedThreadPool(2)) {
             NitroParquetBatchSource source = new NitroParquetBatchSource(
                     NitroParquetScanResources.createDefault(org.weakref.nitro.parquet.ParquetArenaPolicy.shared()),
                     allocator,
                     List.of(file),
                     schema);
-            executor.submit(source::close).get();
+            CountDownLatch start = new CountDownLatch(1);
+            var first = executor.submit(() -> {
+                start.await();
+                source.close();
+                return null;
+            });
+            var second = executor.submit(() -> {
+                start.await();
+                source.close();
+                return null;
+            });
+            start.countDown();
+            first.get();
+            second.get();
         }
     }
 
