@@ -480,6 +480,35 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConditionalMergesCompactAndWideIntegerRepresentations()
+    {
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, true, false}),
+                        new Reference(new Input(1), Stream.VALUES), new I32Vector(new int[] {1, 2, 3, 4}),
+                        new Reference(new Input(2), Stream.VALUES), new RleVector(new int[] {4}, new I64Vector(new long[] {0})))),
+                new Allocator(EngineResources.createDefault()));
+
+        I64Vector values = (I64Vector) evaluator.evaluate(
+                        new Reference(result, Stream.VALUES),
+                        Mask.all(4))
+                .values();
+        assertThat(values.values()).containsExactly(1, 0, 3, 0);
+    }
+
+    @Test
     void testConditionalDoesNotEvaluateUnselectedNestedBranch()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();

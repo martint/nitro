@@ -1172,7 +1172,53 @@ public final class PlanEvaluator
             }
             return target;
         }
+        if (existing instanceof I64Vector wideTarget && isIntegerVector(source)) {
+            I64Vector target = allocator.allocateOrGrow(
+                    allocationContext,
+                    wideTarget,
+                    I64Vector.class,
+                    Math.max(source.length(), mask.size()),
+                    I64Vector::new);
+            VectorAccess.LongValues values = VectorAccess.longValues(source);
+            for (int position : mask) {
+                target.values()[position] = values.value(position);
+            }
+            return target;
+        }
+        if (existing instanceof I32Vector compactTarget && isWideIntegerVector(source)) {
+            int length = Math.max(Math.max(source.length(), compactTarget.length()), mask.size());
+            I64Vector target = allocator.allocate(allocationContext, I64Vector.class, length, I64Vector::new);
+            for (int position = 0; position < compactTarget.length(); position++) {
+                target.values()[position] = compactTarget.values()[position];
+            }
+            VectorAccess.LongValues values = VectorAccess.longValues(source);
+            for (int position : mask) {
+                target.values()[position] = values.value(position);
+            }
+            allocator.release(allocationContext, compactTarget);
+            return target;
+        }
         return source.copyMasked(allocator, allocationContext, existing, mask);
+    }
+
+    private static boolean isIntegerVector(Vector vector)
+    {
+        return switch (vector) {
+            case I32Vector _, I64Vector _ -> true;
+            case DictionaryVector dictionary -> isIntegerVector(dictionary.values());
+            case RleVector rle -> isIntegerVector(rle.values());
+            default -> false;
+        };
+    }
+
+    private static boolean isWideIntegerVector(Vector vector)
+    {
+        return switch (vector) {
+            case I64Vector _ -> true;
+            case DictionaryVector dictionary -> isWideIntegerVector(dictionary.values());
+            case RleVector rle -> isWideIntegerVector(rle.values());
+            default -> false;
+        };
     }
 
     private Vector fillLongRle(long value, int length)
