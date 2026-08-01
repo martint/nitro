@@ -1036,6 +1036,45 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNRankingSessionRanksMultiplePartitionsAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 3, List.of(
+                row("a", 3L, "a-third"),
+                row("b", 1L, "b-first-a"),
+                row("a", 1L, "a-first-a")));
+                TopNRankingSession session = new TopNRankingSession(
+                        allocator,
+                        1,
+                        new int[] {0},
+                        new int[] {1},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.RANK,
+                        first.outputSchema(),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 3, List.of(
+                    row("b", 2L, "b-second"),
+                    row("a", 1L, "a-first-b"),
+                    row("b", 1L, "b-first-b")));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactlyInAnyOrder(
+                            row("a", 1L, "a-first-a", 1L),
+                            row("a", 1L, "a-first-b", 1L),
+                            row("b", 1L, "b-first-a", 1L),
+                            row("b", 1L, "b-first-b", 1L));
+        }
+    }
+
+    @Test
     void testTopNRankingSupportsRowNumberAndDenseRank()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

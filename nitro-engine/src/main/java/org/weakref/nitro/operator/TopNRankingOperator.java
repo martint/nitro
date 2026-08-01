@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
@@ -60,7 +61,7 @@ public class TopNRankingOperator
 
     private Streams[] sourceSchema;
     private List<TableOperator.Page> pages;
-    private List<RowReference> selectedRows;
+    private LongArrayList selectedRows;
     private I64Vector ranks;
     private int currentOutputPosition;
     private boolean loaded;
@@ -399,21 +400,14 @@ public class TopNRankingOperator
             }
         }
 
-        List<RowReference> rows = rows(pages);
-
         // A full global sort would order every row by (partition, ordering) only to keep the rank<=limit
         // prefix of each partition. Instead, bucket rows by partition and select a bounded top-N per
         // bucket: the comparator never compares partition columns, and per-partition work scales with
         // the limit rather than the partition size.
         List<RankedRow> ranked = new ArrayList<>();
         if (limit > 0) {
-            Map<PartitionKey, List<RowReference>> partitions = new HashMap<>();
-            for (RowReference row : rows) {
-                // Window partitioning uses NOT DISTINCT semantics: all rows with the same
-                // values, including nulls in the same positions, share one partition.
-                partitions.computeIfAbsent(new PartitionKey(row), _ -> new ArrayList<>()).add(row);
-            }
-            for (List<RowReference> partition : partitions.values()) {
+            Map<PartitionKey, LongArrayList> partitions = partitions();
+            for (LongArrayList partition : partitions.values()) {
                 rankPartition(partition, ranked);
             }
         }
@@ -423,7 +417,7 @@ public class TopNRankingOperator
         // bounded (~limit per partition), so this sort is cheap.
         ranked.sort((left, right) -> compareRows(left.row(), right.row()));
 
-        List<RowReference> selected = new ArrayList<>(ranked.size());
+        LongArrayList selected = new LongArrayList(ranked.size());
         List<Long> selectedRanks = new ArrayList<>(ranked.size());
         for (RankedRow row : ranked) {
             selected.add(row.row());
@@ -437,7 +431,37 @@ public class TopNRankingOperator
         }
     }
 
-    private int compareRows(RowReference left, RowReference right)
+    private Map<PartitionKey, LongArrayList> partitions()
+    {
+        Map<PartitionKey, LongArrayList> partitions = new HashMap<>();
+        PartitionKey probe = new PartitionKey();
+        for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+            TableOperator.Page page = pages.get(pageIndex);
+            if (page.mask().all()) {
+                for (int position = 0; position < page.rows(); position++) {
+                    addPartitionRow(partitions, probe, rowReference(pageIndex, position));
+                }
+                continue;
+            }
+            for (int index = 0; index < page.mask().selectedCount(); index++) {
+                addPartitionRow(partitions, probe, rowReference(pageIndex, page.mask().position(index)));
+            }
+        }
+        return partitions;
+    }
+
+    private void addPartitionRow(Map<PartitionKey, LongArrayList> partitions, PartitionKey probe, long row)
+    {
+        probe.set(row);
+        LongArrayList partition = partitions.get(probe);
+        if (partition == null) {
+            partition = new LongArrayList();
+            partitions.put(new PartitionKey(row), partition);
+        }
+        partition.add(row);
+    }
+
+    private int compareRows(long left, long right)
     {
         for (int partitionColumn : partitionColumns) {
             int comparison = compareColumn(partitionColumn, left, right);
@@ -454,22 +478,25 @@ public class TopNRankingOperator
         return 0;
     }
 
-    private void rankPartition(List<RowReference> partition, List<RankedRow> ranked)
+    private void rankPartition(LongArrayList partition, List<RankedRow> ranked)
     {
-        List<RowReference> candidates = rankingType == RankingType.DENSE_RANK
-                ? new ArrayList<>(partition)
+        LongArrayList candidates = rankingType == RankingType.DENSE_RANK
+                ? new LongArrayList(partition)
                 : boundedTopN(partition);
         candidates.sort(this::compareOrdering);
 
-        RowReference previous = null;
+        long previous = 0;
+        boolean first = true;
         long partitionRowNumber = 0;
         long currentRank = 0;
         long currentDenseRank = 0;
-        for (RowReference row : candidates) {
-            if (previous == null) {
+        for (int index = 0; index < candidates.size(); index++) {
+            long row = candidates.getLong(index);
+            if (first) {
                 partitionRowNumber = 1;
                 currentRank = 1;
                 currentDenseRank = 1;
+                first = false;
             }
             else {
                 partitionRowNumber++;
@@ -501,14 +528,15 @@ public class TopNRankingOperator
      * better than or equal to it is a candidate. For partitions no larger than the limit, every row
      * qualifies.
      */
-    private List<RowReference> boundedTopN(List<RowReference> partition)
+    private LongArrayList boundedTopN(LongArrayList partition)
     {
         if (partition.size() <= limit) {
             return partition;
         }
         // Min-heap whose root is the worst of the best `limit` rows seen so far.
-        PriorityQueue<RowReference> bestRows = new PriorityQueue<>(limit, (left, right) -> compareOrdering(right, left));
-        for (RowReference row : partition) {
+        PriorityQueue<Long> bestRows = new PriorityQueue<>(limit, (left, right) -> compareOrdering(right, left));
+        for (int index = 0; index < partition.size(); index++) {
+            long row = partition.getLong(index);
             if (bestRows.size() < limit) {
                 bestRows.add(row);
             }
@@ -517,9 +545,10 @@ public class TopNRankingOperator
                 bestRows.add(row);
             }
         }
-        RowReference threshold = bestRows.peek();
-        List<RowReference> candidates = new ArrayList<>();
-        for (RowReference row : partition) {
+        long threshold = bestRows.peek();
+        LongArrayList candidates = new LongArrayList();
+        for (int index = 0; index < partition.size(); index++) {
+            long row = partition.getLong(index);
             if (compareOrdering(row, threshold) <= 0) {
                 candidates.add(row);
             }
@@ -527,7 +556,7 @@ public class TopNRankingOperator
         return candidates;
     }
 
-    private int compareOrdering(RowReference left, RowReference right)
+    private int compareOrdering(long left, long right)
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int comparison = compareOrderingColumn(orderingIndex, left, right);
@@ -538,7 +567,7 @@ public class TopNRankingOperator
         return 0;
     }
 
-    private boolean sameOrderingValue(RowReference left, RowReference right)
+    private boolean sameOrderingValue(long left, long right)
     {
         for (int orderingColumn : orderingColumns) {
             if (!equalColumn(orderingColumn, left, right)) {
@@ -548,44 +577,44 @@ public class TopNRankingOperator
         return true;
     }
 
-    private int compareColumn(int column, RowReference left, RowReference right)
+    private int compareColumn(int column, long left, long right)
     {
-        Streams leftStreams = left.page().columns()[column];
-        Streams rightStreams = right.page().columns()[column];
+        Streams leftStreams = pages.get(pageIndex(left)).columns()[column];
+        Streams rightStreams = pages.get(pageIndex(right)).columns()[column];
         return comparisonKernels[column].compare(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
-                left.position(),
+                pagePosition(left),
                 rightStreams.values(),
                 rightStreams.getOrNull(Stream.NULLS),
-                right.position());
+                pagePosition(right));
     }
 
-    private boolean equalColumn(int column, RowReference left, RowReference right)
+    private boolean equalColumn(int column, long left, long right)
     {
-        Streams leftStreams = left.page().columns()[column];
-        Streams rightStreams = right.page().columns()[column];
-        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
-        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+        Streams leftStreams = pages.get(pageIndex(left)).columns()[column];
+        Streams rightStreams = pages.get(pageIndex(right)).columns()[column];
+        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), pagePosition(left));
+        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), pagePosition(right));
         if (leftNull || rightNull) {
             return leftNull == rightNull;
         }
         return comparisonKernels[column].identical(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
-                left.position(),
+                pagePosition(left),
                 rightStreams.values(),
                 rightStreams.getOrNull(Stream.NULLS),
-                right.position());
+                pagePosition(right));
     }
 
-    private int compareOrderingColumn(int orderingIndex, RowReference left, RowReference right)
+    private int compareOrderingColumn(int orderingIndex, long left, long right)
     {
         int column = orderingColumns[orderingIndex];
-        Streams leftStreams = left.page().columns()[column];
-        Streams rightStreams = right.page().columns()[column];
-        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), left.position());
-        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), right.position());
+        Streams leftStreams = pages.get(pageIndex(left)).columns()[column];
+        Streams rightStreams = pages.get(pageIndex(right)).columns()[column];
+        boolean leftNull = OperatorVectorSupport.isNull(leftStreams.getOrNull(Stream.NULLS), pagePosition(left));
+        boolean rightNull = OperatorVectorSupport.isNull(rightStreams.getOrNull(Stream.NULLS), pagePosition(right));
         if (leftNull || rightNull) {
             if (leftNull == rightNull) {
                 return 0;
@@ -595,10 +624,10 @@ public class TopNRankingOperator
         int comparison = comparisonKernels[column].compare(
                 leftStreams.values(),
                 leftStreams.getOrNull(Stream.NULLS),
-                left.position(),
+                pagePosition(left),
                 rightStreams.values(),
                 rightStreams.getOrNull(Stream.NULLS),
-                right.position());
+                pagePosition(right));
         return descendingByColumn[orderingIndex] ? -comparison : comparison;
     }
 
@@ -610,23 +639,23 @@ public class TopNRankingOperator
             Vector result = null;
             int outputPosition = 0;
             while (outputPosition < batchSize) {
-                RowReference firstRow = selectedRows.get(startPosition + outputPosition);
-                Streams sourceStreams = pages.get(firstRow.pageIndex()).columns()[outputIndex];
+                long firstRow = selectedRows.getLong(startPosition + outputPosition);
+                Streams sourceStreams = pages.get(pageIndex(firstRow)).columns()[outputIndex];
                 if (!sourceStreams.has(stream)) {
                     outputPosition++;
                     continue;
                 }
 
                 int groupStart = outputPosition;
-                int groupPageIndex = firstRow.pageIndex();
-                while (outputPosition < batchSize && selectedRows.get(startPosition + outputPosition).pageIndex() == groupPageIndex) {
+                int groupPageIndex = pageIndex(firstRow);
+                while (outputPosition < batchSize && pageIndex(selectedRows.getLong(startPosition + outputPosition)) == groupPageIndex) {
                     outputPosition++;
                 }
 
                 int groupSize = outputPosition - groupStart;
                 int[] positions = new int[groupSize];
                 for (int index = 0; index < groupSize; index++) {
-                    positions[index] = selectedRows.get(startPosition + groupStart + index).position();
+                    positions[index] = pagePosition(selectedRows.getLong(startPosition + groupStart + index));
                 }
                 result = copyPositionsInto(
                         schema.get(stream),
@@ -684,24 +713,6 @@ public class TopNRankingOperator
         return Streams.ofValues(batchRanks);
     }
 
-    private List<RowReference> rows(List<TableOperator.Page> pages)
-    {
-        List<RowReference> rows = new ArrayList<>();
-        for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
-            TableOperator.Page page = pages.get(pageIndex);
-            if (page.mask().all()) {
-                for (int position = 0; position < page.rows(); position++) {
-                    rows.add(new RowReference(pageIndex, page, position));
-                }
-                continue;
-            }
-            for (int index = 0; index < page.mask().selectedCount(); index++) {
-                rows.add(new RowReference(pageIndex, page, page.mask().position(index)));
-            }
-        }
-        return rows;
-    }
-
     private Streams emptyStreamsLike(Output output)
     {
         Streams.Builder builder = Streams.builder();
@@ -729,28 +740,48 @@ public class TopNRankingOperator
         return builder.build();
     }
 
-    private record RowReference(int pageIndex, TableOperator.Page page, int position) {}
+    private static long rowReference(int pageIndex, int position)
+    {
+        return ((long) pageIndex << Integer.SIZE) | Integer.toUnsignedLong(position);
+    }
 
-    private record RankedRow(RowReference row, long rank) {}
+    private static int pageIndex(long rowReference)
+    {
+        return (int) (rowReference >>> Integer.SIZE);
+    }
+
+    private static int pagePosition(long rowReference)
+    {
+        return (int) rowReference;
+    }
+
+    private record RankedRow(long row, long rank) {}
 
     /**
      * Groups rows by partition value using NOT DISTINCT equality, including nulls.
      */
     private final class PartitionKey
     {
-        private final RowReference row;
-        private final int hash;
+        private long row;
+        private int hash;
 
-        private PartitionKey(RowReference row)
+        private PartitionKey() {}
+
+        private PartitionKey(long row)
+        {
+            set(row);
+        }
+
+        private void set(long row)
         {
             this.row = row;
             int result = 1;
             for (int partitionColumn : partitionColumns) {
-                Streams streams = row.page().columns()[partitionColumn];
+                Streams streams = pages.get(pageIndex(row)).columns()[partitionColumn];
                 result = 31 * result + Long.hashCode(partitionKernels[partitionColumn].hash(
                         streams.values(),
                         streams.getOrNull(Stream.NULLS),
-                        row.position()));
+                        pagePosition(row)));
             }
             this.hash = result;
         }
@@ -774,10 +805,10 @@ public class TopNRankingOperator
                 return false;
             }
             for (int partitionColumn : partitionColumns) {
-                Streams left = row.page().columns()[partitionColumn];
-                Streams right = that.row.page().columns()[partitionColumn];
-                boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), row.position());
-                boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), that.row.position());
+                Streams left = pages.get(pageIndex(row)).columns()[partitionColumn];
+                Streams right = pages.get(pageIndex(that.row)).columns()[partitionColumn];
+                boolean leftNull = OperatorVectorSupport.isNull(left.getOrNull(Stream.NULLS), pagePosition(row));
+                boolean rightNull = OperatorVectorSupport.isNull(right.getOrNull(Stream.NULLS), pagePosition(that.row));
                 if (leftNull || rightNull) {
                     if (leftNull != rightNull) {
                         return false;
@@ -787,10 +818,10 @@ public class TopNRankingOperator
                 if (!partitionKernels[partitionColumn].identical(
                         left.values(),
                         left.getOrNull(Stream.NULLS),
-                        row.position(),
+                        pagePosition(row),
                         right.values(),
                         right.getOrNull(Stream.NULLS),
-                        that.row.position())) {
+                        pagePosition(that.row))) {
                     return false;
                 }
             }
