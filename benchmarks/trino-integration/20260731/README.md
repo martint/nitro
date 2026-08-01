@@ -458,3 +458,24 @@ ratio is a 3x SQL-engine win. It does not reproduce the old operator ratio of ro
 path is itself about 2.8x faster than the hand-built Trino operator fixture (about 54 CPU-s rather than 150 s). Nitro
 SQL's 18.4 CPU-s is close to the Nitro fixture's 16.1 s absolute duration, so the remaining ratio difference is a
 comparison-fixture mismatch rather than a missing Nitro operator speedup.
+
+## Current ClickBench re-baseline
+
+Overlaying the controlled boolean-mask and q29 regexp confirmations on the complete post-metadata-cache board gives
+Nitro 40 CPU wins and 28 wall-time wins across 43 queries. The sum of per-query medians is 276.920 CPU-s for Nitro
+versus 369.412 CPU-s for Trino, a 0.750x CPU ratio; the corresponding wall-time ratio is 0.808x. This replaces the
+original board's 1.151x aggregate CPU regression. The remaining rows at or above CPU parity are q19 at 1.015x, q40
+at 1.119x, and q42 at 1.306x.
+
+Those three ratios do not identify a missing Nitro operator speedup. Q19 is within ordinary broad-screen noise. For
+q40, Nitro SQL uses about 0.49 CPU-s, already below the historical Nitro operator fixture's roughly 0.64 s, while
+real Trino SQL uses about 0.44 CPU-s instead of the Trino fixture's roughly 11.44 s. For q42, Nitro SQL uses about
+0.16--0.17 CPU-s, below the historical Nitro fixture's roughly 0.23 s, while real Trino SQL uses about 0.12--0.15
+CPU-s instead of the Trino fixture's roughly 1.19 s. The controlled ten-measurement q42 confirmation has a 1.185x
+median CPU ratio but a 0.961x mean CPU ratio. In both cases Nitro SQL has reproduced or exceeded the absolute Nitro
+operator result; it is the hand-built Trino comparison fixture that does not reproduce Trino SQL's optimized path.
+
+Accordingly, no q40/q42 operator rewrite is justified by this board. The remaining ClickBench work is critical-path
+and split-scheduling analysis for wall-time gaps, plus isolated confirmation of any future CPU candidate. Production
+changes should continue to target measured SQL integration boundaries rather than attempting to force ratios toward
+an inapplicable Trino fixture baseline.
