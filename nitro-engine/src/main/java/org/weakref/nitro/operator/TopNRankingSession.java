@@ -88,6 +88,36 @@ public final class TopNRankingSession
         pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
     }
 
+    /**
+     * Adds an allocator-owned native batch without copying its streams. Ownership of every stream and the
+     * selection transfers to this session; the caller must still close the now-drained batch.
+     */
+    public void addRetainedInput(Batch batch)
+    {
+        requireNonNull(batch, "batch is null");
+        checkOpen();
+        if (finished) {
+            throw new IllegalStateException("TopN ranking input is finished");
+        }
+        Mask mask = batch.borrowMask();
+        if (mask.none()) {
+            return;
+        }
+        Streams[] columns = new Streams[inputColumns];
+        for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
+            Output output = batch.output(outputIndex);
+            Streams.Builder retained = Streams.builder();
+            for (Stream stream : output.streams()) {
+                retained.put(stream, allocator.transfer(allocationContext, output.take(stream)));
+            }
+            columns[outputIndex] = retained.build();
+        }
+        pages.add(new TableOperator.Page(
+                mask.count(),
+                columns,
+                allocator.transfer(allocationContext, batch.takeMask())));
+    }
+
     public void finishInput()
     {
         checkOpen();
