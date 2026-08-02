@@ -1245,7 +1245,7 @@ public class TestParquetOperator
     }
 
     @Test
-    void testFullNumericDictionaryReadRemainsAlignedAcrossPartialBatches()
+    void testFullNullableNumericReadRemainsAlignedAcrossPartialBatches()
             throws IOException
     {
         List<ParquetRow> rows = new ArrayList<>();
@@ -1255,30 +1255,37 @@ public class TestParquetOperator
                     true,
                     position % 7 == 0 ? null : 1_000L + (position % 23)));
         }
-        java.nio.file.Path file = writeParquetFile("numeric-dictionary-partial-batches.parquet", true, rows);
-        assertDictionaryEncoding(file, "x");
-        assertDictionaryEncoding(file, "maybe");
-
-        try (ParquetFile parquetFile = ParquetFile.open(file);
-                ColumnReader required = columnReader(List.of(parquetFile), "x");
-                ColumnReader optional = columnReader(List.of(parquetFile), "maybe")) {
-            int consumed = 0;
-            for (int batchSize : new int[] {31, 73, 153}) {
-                long[] requiredValues = new long[batchSize];
-                long[] optionalValues = new long[batchSize];
-                boolean[] optionalNulls = new boolean[batchSize];
-                required.readLongs(requiredValues, null, batchSize);
-                optional.readLongs(optionalValues, optionalNulls, batchSize);
-
-                for (int index = 0; index < batchSize; index++) {
-                    int position = consumed + index;
-                    assertThat(requiredValues[index]).isEqualTo(100L + (position % 17));
-                    assertThat(optionalNulls[index]).isEqualTo(position % 7 == 0);
-                    assertThat(optionalValues[index]).isEqualTo(position % 7 == 0 ? 0 : 1_000L + (position % 23));
-                }
-                consumed += batchSize;
+        for (boolean dictionaryEnabled : new boolean[] {false, true}) {
+            java.nio.file.Path file = writeParquetFile(
+                    "numeric-" + (dictionaryEnabled ? "dictionary" : "plain") + "-partial-batches.parquet",
+                    dictionaryEnabled,
+                    rows);
+            if (dictionaryEnabled) {
+                assertDictionaryEncoding(file, "x");
+                assertDictionaryEncoding(file, "maybe");
             }
-            assertThat(consumed).isEqualTo(rows.size());
+
+            try (ParquetFile parquetFile = ParquetFile.open(file);
+                    ColumnReader required = columnReader(List.of(parquetFile), "x");
+                    ColumnReader optional = columnReader(List.of(parquetFile), "maybe")) {
+                int consumed = 0;
+                for (int batchSize : new int[] {31, 73, 153}) {
+                    long[] requiredValues = new long[batchSize];
+                    long[] optionalValues = new long[batchSize];
+                    boolean[] optionalNulls = new boolean[batchSize];
+                    required.readLongs(requiredValues, null, batchSize);
+                    optional.readLongs(optionalValues, optionalNulls, batchSize);
+
+                    for (int index = 0; index < batchSize; index++) {
+                        int position = consumed + index;
+                        assertThat(requiredValues[index]).isEqualTo(100L + (position % 17));
+                        assertThat(optionalNulls[index]).isEqualTo(position % 7 == 0);
+                        assertThat(optionalValues[index]).isEqualTo(position % 7 == 0 ? 0 : 1_000L + (position % 23));
+                    }
+                    consumed += batchSize;
+                }
+                assertThat(consumed).isEqualTo(rows.size());
+            }
         }
     }
 

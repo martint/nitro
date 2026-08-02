@@ -227,6 +227,7 @@ public final class ColumnReader
     private int pageValueCount;
     private int pageCursor;
     private boolean directFullDecodeRequested;
+    private boolean fullSequentialReadRequested;
     private boolean pageDirectDictionary;
     private boolean pageDirectPlain;
     private MemorySegment pageDirectPlainBody;
@@ -634,6 +635,7 @@ public final class ColumnReader
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
                 directFullDecodeRequested = numericDecodePolicy.directBatchDecode() && directNumericBatchDecodeEnabled;
+                fullSequentialReadRequested = true;
                 try {
                     if (!decodeNextDataPage()) {
                         throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
@@ -641,10 +643,17 @@ public final class ColumnReader
                 }
                 finally {
                     directFullDecodeRequested = false;
+                    fullSequentialReadRequested = false;
                 }
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
-            if (pageDirectDictionary) {
+            if (pageDefStreaming) {
+                readStreamingNullableDictionaryInts(out, produced, n, nullsOut);
+            }
+            else if (pagePlainStreaming) {
+                readStreamingNullablePlainInts(out, produced, n, nullsOut);
+            }
+            else if (pageDirectDictionary) {
                 gatherInts(dictionaryInts, idBuffer, pageCursor, out, produced, n);
             }
             else if (pageDirectPlain) {
@@ -656,7 +665,7 @@ public final class ColumnReader
             if (nullsOut != null && (pageDirectDictionary || pageDirectPlain)) {
                 Arrays.fill(nullsOut, produced, produced + n, false);
             }
-            else if (nullsOut != null) {
+            else if (nullsOut != null && !pageDefStreaming && !pagePlainStreaming) {
                 System.arraycopy(pageNulls, pageCursor, nullsOut, produced, n);
             }
             pageCursor += n;
@@ -671,6 +680,7 @@ public final class ColumnReader
         while (produced < count) {
             if (pageCursor >= pageValueCount) {
                 directFullDecodeRequested = numericDecodePolicy.directBatchDecode() && directNumericBatchDecodeEnabled;
+                fullSequentialReadRequested = true;
                 try {
                     if (!decodeNextDataPage()) {
                         throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
@@ -678,10 +688,17 @@ public final class ColumnReader
                 }
                 finally {
                     directFullDecodeRequested = false;
+                    fullSequentialReadRequested = false;
                 }
             }
             int n = Math.min(pageValueCount - pageCursor, count - produced);
-            if (pageDirectDictionary) {
+            if (pageDefStreaming) {
+                readStreamingNullableDictionaryLongs(out, produced, n, nullsOut);
+            }
+            else if (pagePlainStreaming) {
+                readStreamingNullablePlainLongs(out, produced, n, nullsOut);
+            }
+            else if (pageDirectDictionary) {
                 gatherLongs(dictionaryLongs, idBuffer, pageCursor, out, produced, n);
             }
             else if (pageDirectPlain) {
@@ -693,12 +710,44 @@ public final class ColumnReader
             if (nullsOut != null && (pageDirectDictionary || pageDirectPlain)) {
                 Arrays.fill(nullsOut, produced, produced + n, false);
             }
-            else if (nullsOut != null) {
+            else if (nullsOut != null && !pageDefStreaming && !pagePlainStreaming) {
                 System.arraycopy(pageNulls, pageCursor, nullsOut, produced, n);
             }
             pageCursor += n;
             produced += n;
         }
+    }
+
+    private void readStreamingNullableDictionaryInts(int[] out, int outputOffset, int count, boolean[] nullsOut)
+    {
+        ensureRunDefCapacity(count);
+        int nonNullCount = defRle.readRunCountingOnes(runDef, count);
+        materializeStreamingRunInt(out, outputOffset, count, nonNullCount, nullsOut, dictionaryInts);
+        defPageCursor += count;
+    }
+
+    private void readStreamingNullableDictionaryLongs(long[] out, int outputOffset, int count, boolean[] nullsOut)
+    {
+        ensureRunDefCapacity(count);
+        int nonNullCount = defRle.readRunCountingOnes(runDef, count);
+        materializeStreamingRunLong(out, outputOffset, count, nonNullCount, nullsOut, dictionaryLongs);
+        defPageCursor += count;
+    }
+
+    private void readStreamingNullablePlainInts(int[] out, int outputOffset, int count, boolean[] nullsOut)
+    {
+        ensureRunDefCapacity(count);
+        defRle.readRunCountingOnes(runDef, count);
+        materializeStreamingPlainRunInt(out, outputOffset, count, nullsOut);
+        defPageCursor += count;
+    }
+
+    private void readStreamingNullablePlainLongs(long[] out, int outputOffset, int count, boolean[] nullsOut)
+    {
+        ensureRunDefCapacity(count);
+        defRle.readRunCountingOnes(runDef, count);
+        materializeStreamingPlainRunLong(out, outputOffset, count, nullsOut);
+        defPageCursor += count;
     }
 
     /**
@@ -3379,6 +3428,11 @@ public final class ColumnReader
         boolean filterDictPrefixBuilt = false;
         boolean streamNullableFilter = false;
         boolean streamBinaryDictionary = false;
+        boolean streamNullableNumeric = false;
+        pageDefStreaming = false;
+        pagePlainStreaming = false;
+        skipBody = null;
+        pageFullyDecoded = false;
         if (optional) {
             // V1 definition levels: 4-byte LE length prefix, then RLE(bitWidth=1) of `valueCount` levels.
             int defLength = body.get(LE_INT, 0);
@@ -3391,6 +3445,13 @@ public final class ColumnReader
                 if (!filterScan && dictionary && kind == Kind.BINARY) {
                     defRle.init(body, offset, 1);
                     streamBinaryDictionary = true;
+                }
+                else if (fullSequentialReadRequested && !filterScan && kind != Kind.BINARY) {
+                    // A full sequential scan can consume definitions and the dense value stream together in output-
+                    // batch-sized runs. Avoid retaining page-sized definitions, ids, values, and nulls for every
+                    // projected column and concurrent split of a wide scan.
+                    defRle.init(body, offset, 1);
+                    streamNullableNumeric = true;
                 }
                 else if (dictionaryFilterPolicy.nullableFilter().stream() && filterScan && dictionary && kind != Kind.BINARY) {
                     defRle.init(body, offset, 1);
@@ -3428,6 +3489,12 @@ public final class ColumnReader
                 pageBinaryDictionaryStreaming = true;
                 pageBinaryDictionaryNullFree = !optional || !streamBinaryDictionary;
                 pageFullyDecoded = true;
+                return;
+            }
+            if (streamNullableNumeric) {
+                pageDefStreaming = true;
+                defPageCursor = 0;
+                pageFullyDecoded = false;
                 return;
             }
             boolean filterDict = filterScan && kind != Kind.BINARY;
@@ -3487,6 +3554,14 @@ public final class ColumnReader
                 decodePlainBinary(body, offset, nonNullCount);
                 pageBinaryDeferred = false;
                 pageFullyDecoded = true;
+            }
+            else if (streamNullableNumeric) {
+                pagePlainBody = body;
+                pagePlainOffset = offset;
+                plainValueCursor = 0;
+                defPageCursor = 0;
+                pagePlainStreaming = true;
+                pageFullyDecoded = false;
             }
             else if (directFullDecodeRequested && numericDecodePolicy.directPlainBatchDecode() && nonNullCount == valueCount && !flbaDecimal) {
                 pageDirectPlain = true;
