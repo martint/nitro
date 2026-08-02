@@ -1,5 +1,27 @@
 # Trino/Nitro full-suite baseline — 2026-07-31
 
+## Current board update — 2026-08-02
+
+After native-source, aggregation, join, window, ranking, and composition work,
+the latest 168-query persisted-Parquet screen is below. Ratios are Nitro divided
+by Trino.
+
+| Suite | Wall sum | Query CPU sum |
+|---|---:|---:|
+| TPC-H | 0.927x | 0.860x |
+| TPC-DS | 0.803x | 0.581x |
+| ClickBench | 0.887x | 0.804x |
+
+All queries completed with native Nitro sources. Because the broad screen is a
+cold, low-repetition triage run, suspected rows are repeated in controlled fresh
+JVMs before code changes. Current controls turn TPC-H q01/q05 and ClickBench q30
+into clear Nitro wins, and place q03, ClickBench q16, and ClickBench q19 at CPU
+parity or better. Synchronized q03 hardware counters show 0.978x cycles and
+0.997x instructions for Nitro despite a 1.021x query-reported CPU ratio, so q03
+is not an operator regression. Full protocol, controls, counters, and corrected
+SQL-shape operator results are in
+`../20260802-post-ranking-composition-full-sweep/README.md`.
+
 ## Scope and method
 
 - Trino integration parent: `ddc606aa95e0 Run benchmark suites fully through Nitro`.
