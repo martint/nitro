@@ -639,3 +639,23 @@ duplicates; the external Hive tables do not currently provide a uniqueness proof
 output to Trino Pages for the exchange and adapts it back on join ingress. The historical q74 ratio is consequently
 not a valid literal SQL target without either a proven optimizer rewrite or a classloader-neutral native exchange
 contract. An unproved, query-specific semi-join rewrite would trade correctness for the benchmark and is rejected.
+
+## Q78 selection-predicate normalization
+
+Q78 did contain one remaining SQL-adapter mismatch. Its SQL filter compares zero with nullable quantities expressed
+as `coalesce(quantity, 0)`, while the shape-equivalent operator fixture compares the nullable quantity directly.
+Under filter-selection semantics these select exactly the same rows: when the final constant fallback is selected,
+the strict comparison is `0 < 0` and rejects the row; the direct nullable comparison produces NULL and also rejects
+it. Keeping the `coalesce` in the host IR nevertheless hid the column/constant shape from Nitro's generic comparison
+mask specialization and materialized nullable intermediate vectors.
+
+The Trino adapter now applies this equivalence only while compiling a filter, only through AND/OR composition, only
+for strict normalized comparisons, and only when the final fallback is the same constant as the opposite operand.
+Projection/value contexts and nonconstant or differing fallbacks retain ordinary SQL evaluation. The evaluator and
+operators remain unaware of Trino expressions and benchmark identity.
+
+Plan-node attribution for the 4,896,401-row filter drops from about 1,010 CPU-ms to about 590 CPU-ms while retaining
+715 output rows. In the controlled three-warmup, nine-measurement run, Nitro improves from 0.917x wall / 0.771x CPU
+to 0.813x wall / 0.720x CPU: Trino is 2,886.445 ms wall / 11,777 CPU-ms and Nitro is 2,347.819 ms / 8,480 CPU-ms.
+The remaining difference from the standalone fixture still includes SQL's partial/final aggregation stages and
+Page exchange boundaries; it is not evidence for changing an operator kernel.
