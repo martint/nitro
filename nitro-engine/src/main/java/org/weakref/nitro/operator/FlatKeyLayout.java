@@ -2026,16 +2026,16 @@ class FlatKeyLayout
         if (!policy.generatedDictionaryHashBatch() ||
                 count < policy.generatedDictionaryHashBatchMinRows() ||
                 handlers.length < 2 ||
-                handlers.length > 7 ||
+                handlers.length > 15 ||
                 dictionaryHashedIds == null) {
             return null;
         }
-        int shape = handlers.length;
+        long shape = handlers.length;
         int accessorHashedFields = 0;
         boolean allFieldsNullFree = true;
         for (int field = 0; field < handlers.length; field++) {
             int nullShape = batchNullShape(field);
-            shape |= nullShape << (4 + field * 2);
+            shape |= (long) nullShape << (4 + field * 2);
             allFieldsNullFree &= nullShape == DictionaryHashBatchKernelGenerator.NULL_FREE;
             if (nullShape == DictionaryHashBatchKernelGenerator.ALL_NULL) {
                 continue;
@@ -2046,7 +2046,7 @@ class FlatKeyLayout
             if (handlers.length >= policy.generatedHybridHashBatchMinFields() &&
                     fieldKinds[field] == FlatTypeHandler.Kind.LONG &&
                     fieldLong[field] != null) {
-                shape |= DictionaryHashBatchKernelGenerator.LONG_ACCESSOR_HASH <<
+                shape |= (long) DictionaryHashBatchKernelGenerator.LONG_ACCESSOR_HASH <<
                         (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
                 accessorHashedFields++;
                 continue;
@@ -2063,7 +2063,9 @@ class FlatKeyLayout
             return null;
         }
         if (accessorHashedFields > 0 &&
-                accessorHashedFields < policy.generatedHybridHashBatchMinAccessorFields()) {
+                accessorHashedFields < policy.generatedHybridHashBatchMinAccessorFields() &&
+                handlers.length - accessorHashedFields <
+                        policy.generatedHybridHashBatchMinFields() + policy.generatedHybridHashBatchMinAccessorFields()) {
             return null;
         }
         if (handlers.length == 2 &&

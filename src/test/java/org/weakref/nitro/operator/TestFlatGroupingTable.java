@@ -263,6 +263,43 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedDictionaryHashBatchMatchesNineFieldLogicalHash()
+    {
+        int size = 128;
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            ids[position] = position % 3;
+        }
+        long[] constantGroupId = new long[size];
+        java.util.Arrays.fill(constantGroupId, 7);
+        Vector[] values = {
+                DictionaryVector.wrap(ids, size, utf8("a", "b", "c")),
+                DictionaryVector.wrap(ids, size, new I64Vector(new long[] {10, 20, 30})),
+                DictionaryVector.wrap(ids, size, utf8("d", "e", "f")),
+                DictionaryVector.wrap(ids, size, new I64Vector(new long[] {40, 50, 60})),
+                DictionaryVector.wrap(ids, size, utf8("g", "h", "i")),
+                DictionaryVector.wrap(ids, size, new I64Vector(new long[] {70, 80, 90})),
+                DictionaryVector.wrap(ids, size, utf8("j", "k", "l")),
+                DictionaryVector.wrap(ids, size, new I64Vector(new long[] {100, 110, 120})),
+                new I64Vector(constantGroupId)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, null);
+            long[] expected = new long[size];
+            for (int position = 0; position < size; position++) {
+                expected[position] = layout.hash(values, null, position);
+            }
+            long[] actual = new long[size];
+            assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, actual)).isTrue();
+            assertThat(actual).containsExactly(expected);
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGeneratedDictionaryHashProbeBatchMatchesDecoupledDriver()
     {
         int size = 128;

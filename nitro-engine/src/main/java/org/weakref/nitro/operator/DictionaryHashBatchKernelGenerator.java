@@ -35,7 +35,9 @@ final class DictionaryHashBatchKernelGenerator
     static final int MIXED = 2;
     static final int LONG_ACCESSOR_HASH = 1;
 
-    static final int HASH_MODE_SHIFT = 18;
+    // Four low bits retain the field count, followed by two null-shape bits for each of up to 15 fields.
+    // Keep hash modes in the upper half of the word so wide SQL grouping keys do not overlap the two regions.
+    static final int HASH_MODE_SHIFT = 34;
 
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryHashBatchKernel");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
@@ -85,7 +87,7 @@ final class DictionaryHashBatchKernelGenerator
     private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
 
-    DictionaryHashBatchKernel create(int shape, int assignTileRows)
+    DictionaryHashBatchKernel create(long shape, int assignTileRows)
     {
         checkOpen();
         return kernels.computeIfAbsent(new KernelShape(shape, assignTileRows), DictionaryHashBatchKernelGenerator::generate);
@@ -107,10 +109,10 @@ final class DictionaryHashBatchKernelGenerator
 
     private static DictionaryHashBatchKernel generate(KernelShape kernelShape)
     {
-        int shape = kernelShape.shape();
-        int fieldCount = shape & 0xF;
+        long shape = kernelShape.shape();
+        int fieldCount = (int) (shape & 0xF);
         ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryHashBatchKernel" +
-                Integer.toUnsignedString(shape) + "Tile" + kernelShape.assignTileRows());
+                Long.toUnsignedString(shape) + "Tile" + kernelShape.assignTileRows());
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(ClassDesc.of("java.lang.Object"));
             builder.withInterfaceSymbols(CD_KERNEL);
@@ -136,7 +138,7 @@ final class DictionaryHashBatchKernelGenerator
         }
     }
 
-    private static void emitHash(CodeBuilder code, int shape, int fieldCount)
+    private static void emitHash(CodeBuilder code, long shape, int fieldCount)
     {
         code.loadConstant(0);
         code.istore(POSITION);
@@ -150,8 +152,8 @@ final class DictionaryHashBatchKernelGenerator
         code.lstore(RESULT);
 
         for (int field = 0; field < fieldCount; field++) {
-            int nullShape = (shape >>> (4 + field * 2)) & 3;
-            int hashMode = (shape >>> (HASH_MODE_SHIFT + field * 2)) & 3;
+            int nullShape = (int) ((shape >>> (4 + field * 2)) & 3);
+            int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + field * 2)) & 3);
             code.lload(RESULT);
             code.loadConstant(31L);
             code.lmul();
@@ -223,7 +225,7 @@ final class DictionaryHashBatchKernelGenerator
         code.laload();
     }
 
-    private static void emitAssign(CodeBuilder code, int shape, int fieldCount, int assignTileRows)
+    private static void emitAssign(CodeBuilder code, long shape, int fieldCount, int assignTileRows)
     {
         code.loadConstant(0);
         code.istore(ASSIGN_TILE_START);
@@ -259,8 +261,8 @@ final class DictionaryHashBatchKernelGenerator
         code.loadConstant(1L);
         code.lstore(ASSIGN_HASH);
         for (int field = 0; field < fieldCount; field++) {
-            int nullShape = (shape >>> (4 + field * 2)) & 3;
-            int hashMode = (shape >>> (HASH_MODE_SHIFT + field * 2)) & 3;
+            int nullShape = (int) ((shape >>> (4 + field * 2)) & 3);
+            int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + field * 2)) & 3);
             code.lload(ASSIGN_HASH);
             code.loadConstant(31L);
             code.lmul();
@@ -322,5 +324,5 @@ final class DictionaryHashBatchKernelGenerator
         code.lreturn();
     }
 
-    private record KernelShape(int shape, int assignTileRows) {}
+    private record KernelShape(long shape, int assignTileRows) {}
 }
