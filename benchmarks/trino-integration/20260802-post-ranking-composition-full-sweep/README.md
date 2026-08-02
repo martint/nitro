@@ -28,14 +28,27 @@ outliers were startup or ordering noise rather than persistent regressions.
 | ClickBench q16 | 1.015x | 0.936x | parity |
 | ClickBench q19 | 0.819x | 1.013x | wall win; CPU parity |
 | ClickBench q30 | 0.422x | 0.388x | confirmed Nitro win |
+| ClickBench q13 | 0.836x | 0.867x | cold-screen regression disproved |
 | TPC-H q01 | 0.687x | 0.784x | confirmed Nitro win |
 | TPC-H q03 | 0.954x | 1.021x | wall win; CPU parity |
 | TPC-H q05 | 0.961x | 0.774x | confirmed CPU win |
+| TPC-DS q02 | 1.464x | 0.958x | CPU parity; wall critical path remains |
 
 TPC-H q03 used five warmups and twenty measurements per engine in separate,
 verified 16 GB JVMs. Nitro reported 629.424 ms wall and 3,170 CPU-ms at p50;
 Trino reported 659.755 ms and 3,106 CPU-ms. A separate 30-measurement control
 was similarly close at 0.980x wall and 1.009x mean CPU.
+
+The first interleaved TPC-DS q02 control also exposed a correctness hole hidden
+by the separate-engine sweep: Nitro saw 207 too many nulls in the 7,197,566-row
+`web_sales.ws_ext_sales_price` column. A homogeneous RLE definition run can be
+counted without writing the definition scratch, but the sequential numeric
+reader subsequently interpreted that stale scratch. Nitro commit `9bf9b3db`
+handles homogeneous all-present/all-null runs directly for plain and dictionary
+INT/LONG pages. The real SF10 source aggregate and complete q02 result now match
+Trino. After the fix, ten interleaved measurements report 1.464x wall but only
+0.958x CPU, making q02 a scheduling/critical-path issue rather than an operator
+CPU regression.
 
 ## Synchronized q03 hardware counters
 
@@ -76,6 +89,18 @@ The broad instrumented logs aggregate the largest operator families as follows
 These totals corroborate that the operator-level advantages now survive the SQL
 boundary at suite scale. Controlled query overlays remain necessary before
 acting on individual cold-screen reversals.
+
+TPC-DS q67 is the main controlled ranking critical-path exception. Whole-query
+CPU is effectively tied (0.982x in the instrumented control), while Nitro wall
+is 1.158x. The final stage receives 29% fewer rows with Nitro, but composed
+aggregation-output ranking consumes about 1.62 CPU-seconds versus about 0.63
+CPU-seconds for Trino's separate aggregation output, filter, and ranking work,
+extending each final-stage driver by roughly 0.88 seconds. Reusing grouping
+state for partition IDs and retaining only currently competitive ranking rows
+were both measured and reverted because they were neutral or worse. The result
+points to the comparison/materialization boundary: a general aggregation-output
+selection/cursor API could avoid materializing every aggregate group before a
+bounded ranking consumes it, without embedding query-specific logic.
 
 ## q03 SQL-shape benchmark correction
 
