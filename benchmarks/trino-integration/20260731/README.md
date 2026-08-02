@@ -695,8 +695,15 @@ Nitro ranking operator. A one-warmup/three-measurement screen reports q47 at 1.1
 0.949x / 0.490x; those absolute runs were colder than the established board, especially for Trino, and are retained
 as correctness/no-regression evidence rather than a replacement baseline.
 
-The current implementation is deliberately confined to the explicit Trino/Nitro execution boundary, but it exposes
-an abstraction gap: the aggregation adapter currently knows about the ranking terminal. The reusable endpoint is a
-native operator-island/terminal composition contract selected by the physical planner. That will also cover
-scan-to-aggregation and GroupId-to-aggregation pipelines that currently return early and leave ranking as a separate
-operator, without teaching Nitro aggregation about a specific downstream operator.
+The follow-up composition slice extends the same owned output-terminal contract across direct connector scans,
+scan/project aggregation sources, GroupId pipelines, and ordinary project-to-aggregation pipelines. Input and output
+pipelines now coexist in one allocator/session, while admission and physical layout selection remain in the local
+execution planner. A source-lifecycle test verifies count aggregation flowing directly into ranking and producing the
+rank column before leaving the source operator. The full cohort passes 194 tests. The controlled q67 confirmation is
+5,608.734 ms / 21,171 CPU-ms for Trino and 6,494.709 ms / 20,913 CPU-ms for Nitro, or 1.158x wall / 0.988x median CPU
+(0.945x mean CPU), within the established run-to-run band.
+
+This remains deliberately confined to the explicit Trino/Nitro execution boundary and does not alter either kernel.
+The remaining abstraction gap is that the host aggregation adapter names the ranking terminal. A future generalized
+native operator-island terminal interface can remove that knowledge when a second blocking terminal needs the same
+composition, without speculatively introducing an engine-wide framework now.
