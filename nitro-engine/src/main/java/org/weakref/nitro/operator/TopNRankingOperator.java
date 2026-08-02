@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -27,6 +28,7 @@ import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -660,6 +662,7 @@ public class TopNRankingOperator
                 result = copyPositionsInto(
                         schema.get(stream),
                         sourceStreams.get(stream),
+                        stream == Stream.VALUES ? sourceStreams.getOrNull(Stream.NULLS) : null,
                         result,
                         positions,
                         groupSize,
@@ -674,12 +677,48 @@ public class TopNRankingOperator
     private Vector copyPositionsInto(
             Vector schema,
             Vector source,
+            Vector sourceNulls,
             Vector existing,
             int[] sourcePositions,
             int sourceCount,
             int outputStart,
             int size)
     {
+        if (source instanceof BinaryVector binary) {
+            int currentOffset = outputStart == 0 ? 0 : ((BinaryVector) existing).endOffset(outputStart - 1);
+            int byteCapacity = currentOffset;
+            for (int index = 0; index < sourceCount; index++) {
+                int sourcePosition = sourcePositions[index];
+                if (!OperatorVectorSupport.isNull(sourceNulls, sourcePosition)) {
+                    byteCapacity = Math.addExact(byteCapacity, binary.length(sourcePosition));
+                }
+            }
+            BinaryVector target = BinaryVector.allocateOrGrow(
+                    allocator,
+                    allocationContext,
+                    (BinaryVector) existing,
+                    size,
+                    byteCapacity,
+                    currentOffset);
+            if (outputStart == 0) {
+                Arrays.fill(target.offsets(), 0);
+                target.clearTraits();
+                target.addTraits(binary.traits());
+            }
+            for (int index = 0; index < sourceCount; index++) {
+                int targetPosition = outputStart + index;
+                target.offsets()[targetPosition] = currentOffset;
+                int sourcePosition = sourcePositions[index];
+                if (OperatorVectorSupport.isNull(sourceNulls, sourcePosition)) {
+                    target.setNull(targetPosition);
+                }
+                else {
+                    target.setBytes(targetPosition, binary.data(), binary.startOffset(sourcePosition), binary.length(sourcePosition));
+                    currentOffset = target.endOffset(targetPosition);
+                }
+            }
+            return target;
+        }
         if (schema instanceof I64Vector) {
             I64Vector target = allocator.allocateOrGrow(allocationContext, (I64Vector) existing, I64Vector.class, size, I64Vector::new);
             VectorAccess.LongValues values = VectorAccess.longValues(source);

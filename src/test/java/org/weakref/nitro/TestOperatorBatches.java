@@ -1075,6 +1075,39 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNRankingDoesNotReadBinaryPayloadUnderNull()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        BinaryVector payload = new BinaryVector(2, new int[] {0, 1, 0}, new byte[] {'x'});
+        try (TopNRankingOperator ranking = new TopNRankingOperator(
+                        allocator,
+                        2,
+                        new int[] {0},
+                        new int[] {1},
+                        new boolean[] {false},
+                        TopNRankingOperator.RankingType.RANK,
+                        TableOperator.retained(
+                                Schema.unspecified(3),
+                                List.of(new TableOperator.Page(
+                                        2,
+                                        new Streams[] {
+                                                Streams.ofValues(new I64Vector(new long[] {0, 0})),
+                                                Streams.ofValues(new I64Vector(new long[] {1, 2})),
+                                                Streams.builder()
+                                                        .put(Stream.VALUES, payload)
+                                                        .put(Stream.NULLS, new BooleanVector(new boolean[] {false, true}))
+                                                        .build()},
+                                        Mask.all(2)))),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources())) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(ranking))
+                    .containsExactly(
+                            row(0L, 1L, new byte[] {'x'}, 1L),
+                            row(0L, 2L, null, 2L));
+        }
+    }
+
+    @Test
     void testTopNRankingSupportsRowNumberAndDenseRank()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
