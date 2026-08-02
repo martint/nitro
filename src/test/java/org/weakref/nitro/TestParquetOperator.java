@@ -1131,6 +1131,39 @@ public class TestParquetOperator
     }
 
     @Test
+    void testSequentialReadStreamsHomogeneousNullableRunsWithoutReusingDefinitionScratch()
+            throws IOException
+    {
+        for (boolean dictionaryEnabled : List.of(false, true)) {
+            List<ParquetRow> rows = new ArrayList<>();
+            for (int position = 0; position < 8_000; position++) {
+                rows.add(new ParquetRow(position, true, position < 2_000 ? null : 100L + (position & 3)));
+            }
+            java.nio.file.Path file = writeParquetFile(
+                    "nullable-homogeneous-sequential-" + dictionaryEnabled + ".parquet",
+                    dictionaryEnabled,
+                    rows);
+
+            try (ParquetFile parquetFile = ParquetFile.open(file);
+                    ColumnReader reader = columnReader(List.of(parquetFile), "maybe")) {
+                long[] values = new long[2_000];
+                boolean[] nulls = new boolean[2_000];
+
+                reader.readLongs(values, nulls, values.length);
+                assertThat(nulls).containsOnly(true);
+
+                for (int batch = 0; batch < 3; batch++) {
+                    reader.readLongs(values, nulls, values.length);
+                    assertThat(nulls).containsOnly(false);
+                    for (int position = 0; position < values.length; position++) {
+                        assertThat(values[position]).isEqualTo(100L + (position & 3));
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void testTrinoParquetScanPreservesDictionaryEncodingForUtf8Columns()
             throws IOException
     {

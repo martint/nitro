@@ -722,7 +722,23 @@ public final class ColumnReader
     {
         ensureRunDefCapacity(count);
         int nonNullCount = defRle.readRunCountingOnes(runDef, count);
-        materializeStreamingRunInt(out, outputOffset, count, nonNullCount, nullsOut, dictionaryInts);
+        if (nonNullCount == count) {
+            ensureIdCapacity(count);
+            rle.read(idBuffer, 0, count);
+            gatherInts(dictionaryInts, idBuffer, 0, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (nonNullCount == 0) {
+            Arrays.fill(out, outputOffset, outputOffset + count, 0);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, true);
+            }
+        }
+        else {
+            materializeStreamingRunInt(out, outputOffset, count, nonNullCount, nullsOut, dictionaryInts);
+        }
         defPageCursor += count;
     }
 
@@ -730,23 +746,69 @@ public final class ColumnReader
     {
         ensureRunDefCapacity(count);
         int nonNullCount = defRle.readRunCountingOnes(runDef, count);
-        materializeStreamingRunLong(out, outputOffset, count, nonNullCount, nullsOut, dictionaryLongs);
+        if (nonNullCount == count) {
+            ensureIdCapacity(count);
+            rle.read(idBuffer, 0, count);
+            gatherLongs(dictionaryLongs, idBuffer, 0, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (nonNullCount == 0) {
+            Arrays.fill(out, outputOffset, outputOffset + count, 0);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, true);
+            }
+        }
+        else {
+            materializeStreamingRunLong(out, outputOffset, count, nonNullCount, nullsOut, dictionaryLongs);
+        }
         defPageCursor += count;
     }
 
     private void readStreamingNullablePlainInts(int[] out, int outputOffset, int count, boolean[] nullsOut)
     {
         ensureRunDefCapacity(count);
-        defRle.readRunCountingOnes(runDef, count);
-        materializeStreamingPlainRunInt(out, outputOffset, count, nullsOut);
+        int nonNullCount = defRle.readRunCountingOnes(runDef, count);
+        if (nonNullCount == count) {
+            copyPlainInts(plainValueCursor, out, outputOffset, count);
+            plainValueCursor += count;
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (nonNullCount == 0) {
+            Arrays.fill(out, outputOffset, outputOffset + count, 0);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, true);
+            }
+        }
+        else {
+            materializeStreamingPlainRunInt(out, outputOffset, count, nullsOut);
+        }
         defPageCursor += count;
     }
 
     private void readStreamingNullablePlainLongs(long[] out, int outputOffset, int count, boolean[] nullsOut)
     {
         ensureRunDefCapacity(count);
-        defRle.readRunCountingOnes(runDef, count);
-        materializeStreamingPlainRunLong(out, outputOffset, count, nullsOut);
+        int nonNullCount = defRle.readRunCountingOnes(runDef, count);
+        if (nonNullCount == count) {
+            readPlainLongsAt(out, outputOffset, plainValueCursor, count);
+            plainValueCursor += count;
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (nonNullCount == 0) {
+            Arrays.fill(out, outputOffset, outputOffset + count, 0);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, true);
+            }
+        }
+        else {
+            materializeStreamingPlainRunLong(out, outputOffset, count, nullsOut);
+        }
         defPageCursor += count;
     }
 
