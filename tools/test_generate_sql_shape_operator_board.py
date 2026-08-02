@@ -1,0 +1,46 @@
+import importlib.util
+import tempfile
+import unittest
+from pathlib import Path
+
+
+MODULE_PATH = Path(__file__).with_name("generate_sql_shape_operator_board.py")
+SPEC = importlib.util.spec_from_file_location("sql_shape_board", MODULE_PATH)
+BOARD = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BOARD)
+
+
+class SqlShapeOperatorBoardTest(unittest.TestCase):
+    def test_parses_stage_aware_rich_metrics(self):
+        text = "\n".join([
+            "prefix operator_cpu,nitro,3/TrinoNitroAggregationOperator@17,2,1.000,2.000,3.000,10,20,4,5.000",
+            "prefix nitro,tpch-parquet-sf10,q12,1,1,1,1,1,7.000,7.000,1,1,1,1,1",
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.log"
+            path.write_text(text)
+            rows = BOARD.parse_log(path, "tpch-parquet-sf10")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stage"], "3")
+        self.assertEqual(rows[0]["plan_node"], "17")
+        self.assertEqual(rows[0]["family"], "aggregation")
+        self.assertEqual(rows[0]["output_positions"], 4)
+        self.assertEqual(rows[0]["finish_cpu_ms"], 3)
+
+    def test_averages_multiple_measurement_summaries(self):
+        text = "\n".join([
+            "operator_cpu,trino,HashAggregationOperator,4,4.000,6.000,2.000",
+            "trino,clickbench,q01,2,1,1,1,1,8.000,9.000,1,1,1",
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.log"
+            path.write_text(text)
+            rows = BOARD.parse_log(path, "clickbench")
+        self.assertEqual(rows[0]["drivers"], 2)
+        self.assertEqual(rows[0]["add_input_cpu_ms"], 2)
+        self.assertEqual(rows[0]["get_output_cpu_ms"], 3)
+        self.assertEqual(rows[0]["physical_input_positions"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

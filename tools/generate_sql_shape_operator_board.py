@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Generate an operator board from instrumented Nitro/Trino SQL benchmark logs."""
+
+import argparse
+import csv
+import re
+from collections import defaultdict
+from pathlib import Path
+
+
+SUITES = {
+    "tpch": "tpch-parquet-sf10",
+    "tpcds": "tpcds-parquet-sf10",
+    "clickbench": "clickbench",
+}
+ENGINES = ("nitro", "trino")
+OPERATOR_PATTERN = re.compile(
+    r"operator_cpu,(nitro|trino),([^,]+),(\d+),([0-9.]+),([0-9.]+),([0-9.]+)"
+    r"(?:,(\d+),(\d+),(\d+),([0-9.]+))?")
+
+
+def operator_family(operator):
+    if "AggregationSource" in operator:
+        return "fused_scan_aggregation"
+    if "Aggregation" in operator:
+        return "aggregation"
+    if "Join" in operator or "HashBuild" in operator or "HashBuilder" in operator:
+        return "join"
+    if any(name in operator for name in ("TopN", "Sort", "OrderBy", "Window", "RowNumber")):
+        return "ranking_sort_window"
+    if any(name in operator for name in ("PipelineSource", "PageProcessor", "ScanFilterAndProject", "TableScan", "FilterAndProject")):
+        return "scan_filter_project"
+    if any(name in operator for name in ("Exchange", "PartitionedOutput", "TaskOutput", "Merge")):
+        return "exchange_output"
+    return "other"
+
+
+def split_operator_key(key):
+    stage = ""
+    operator_node = key
+    if "/" in key:
+        stage, operator_node = key.split("/", 1)
+    operator, _, plan_node = operator_node.partition("@")
+    return stage, operator, plan_node
+
+
+def parse_log(path, suite_name):
+    pending = []
+    rows = []
+    query_pattern = re.compile(
+        rf"(nitro|trino),{re.escape(suite_name)},(q[0-9]+[ab]?),"
+        r"(\d+),[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,([0-9.]+),([0-9.]+),")
+    for line in path.read_text().splitlines():
+        operator = OPERATOR_PATTERN.search(line)
+        if operator:
+            pending.append(operator.groups())
+            continue
+        query = query_pattern.search(line)
+        if not query:
+            continue
+        engine, query_id, measurements, cpu_p50, cpu_mean = query.groups()
+        measurements = int(measurements)
+        for values in pending:
+            if values[0] != engine:
+                raise ValueError(f"{path}:{query_id}: operator engine {values[0]} precedes {engine} result")
+            stage, operator_name, plan_node = split_operator_key(values[1])
+            numeric = [float(value) if value is not None else 0.0 for value in values[2:]]
+            rows.append({
+                "engine": engine,
+                "query": query_id,
+                "measurements": measurements,
+                "query_cpu_p50_ms": float(cpu_p50),
+                "query_cpu_mean_ms": float(cpu_mean),
+                "stage": stage,
+                "plan_node": plan_node,
+                "operator": operator_name,
+                "family": operator_family(operator_name),
+                "drivers": numeric[0] / measurements,
+                "add_input_cpu_ms": numeric[1] / measurements,
+                "get_output_cpu_ms": numeric[2] / measurements,
+                "finish_cpu_ms": numeric[3] / measurements,
+                "physical_input_positions": numeric[4] / measurements,
+                "input_positions": numeric[5] / measurements,
+                "output_positions": numeric[6] / measurements,
+                "blocked_wall_ms": numeric[7] / measurements,
+            })
+        pending = []
+    if pending:
+        raise ValueError(f"{path}: operator metrics are not followed by a query result")
+    return rows
+
+
+def load(directory):
+    rows = []
+    for suite, suite_name in SUITES.items():
+        for engine in ENGINES:
+            path = directory / f"{suite}-{engine}-queryphase-instrumented.log"
+            if not path.is_file():
+                raise ValueError(f"missing SQL-shape input: {path}")
+            parsed = parse_log(path, suite_name)
+            for row in parsed:
+                row["suite"] = suite
+            rows.extend(parsed)
+    return rows
+
+
+def write_csv(path, rows):
+    fields = [
+        "suite", "query", "engine", "measurements", "query_cpu_p50_ms", "query_cpu_mean_ms",
+        "stage", "plan_node", "operator", "family", "drivers", "add_input_cpu_ms",
+        "get_output_cpu_ms", "finish_cpu_ms", "physical_input_positions", "input_positions",
+        "output_positions", "blocked_wall_ms",
+    ]
+    with path.open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_markdown(path, rows):
+    totals = defaultdict(float)
+    query_counts = defaultdict(set)
+    stage_counts = defaultdict(set)
+    for row in rows:
+        key = (row["suite"], row["engine"])
+        totals[key, row["family"]] += row["add_input_cpu_ms"] + row["get_output_cpu_ms"] + row["finish_cpu_ms"]
+        query_counts[key].add(row["query"])
+        if row["stage"]:
+            stage_counts[key].add((row["query"], row["stage"]))
+    families = sorted({row["family"] for row in rows})
+    lines = [
+        "# SQL-shape operator benchmark board",
+        "",
+        "Generated from operator summaries of the actual distributed SQL physical plans. Unlike the legacy",
+        "single-threaded query fixtures, these measurements retain partial/final stages, exchanges, driver counts,",
+        "and the optimizer-selected join and ranking shapes.",
+        "",
+        "CPU values are milliseconds per measured query invocation.",
+        "",
+        "| suite | engine | queries | query-stages | " + " | ".join(families) + " |",
+        "|---|---|---:|---:|" + "---:|" * len(families),
+    ]
+    for suite in SUITES:
+        for engine in ENGINES:
+            key = (suite, engine)
+            values = [f"{totals[key, family]:.1f}" for family in families]
+            stages = len(stage_counts[key]) if stage_counts[key] else "unavailable"
+            lines.append(f"| {suite} | {engine} | {len(query_counts[key])} | {stages} | " + " | ".join(values) + " |")
+    lines.extend([
+        "",
+        "The CSV is the source of record. Each row retains stage, plan-node, operator type, driver count, CPU phases,",
+        "physical/input/output positions, and blocked wall time. Missing stage counts mean the input was captured",
+        "before plan-node instrumentation was enabled and must be recaptured before shape-level comparison.",
+        "",
+    ])
+    path.write_text("\n".join(lines))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("artifact_directory", type=Path)
+    parser.add_argument("--output-prefix", type=Path)
+    args = parser.parse_args()
+    prefix = args.output_prefix or args.artifact_directory / "sql-shape-operator-board"
+    rows = load(args.artifact_directory)
+    write_csv(prefix.with_suffix(".csv"), rows)
+    write_markdown(prefix.with_suffix(".md"), rows)
+
+
+if __name__ == "__main__":
+    main()
