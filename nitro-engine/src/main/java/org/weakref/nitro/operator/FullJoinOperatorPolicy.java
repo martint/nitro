@@ -27,7 +27,7 @@ public record FullJoinOperatorPolicy(boolean retainInputBatches, int maxOutputBa
 
     public static FullJoinOperatorPolicy defaults()
     {
-        return new FullJoinOperatorPolicy(true, 1 << 13);
+        return new FullJoinOperatorPolicy(true, 1 << 15);
     }
 
     public static FullJoinOperatorPolicy fromSystemProperties()
