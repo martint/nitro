@@ -1001,6 +1001,47 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowSessionRanksDictionaryEncodedSparseHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (WindowSession session = new WindowSession(
+                allocator,
+                Schema.unspecified(2),
+                new int[0],
+                new int[] {0},
+                new boolean[] {false},
+                List.of(new RankWindowFunction(new int[] {0}, new boolean[] {false})),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources())) {
+            try (Batch batch = new Batch(
+                    Mask.sparse(new int[] {0, 1, 2}, 4),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(
+                            new int[] {2, 0, 1, 2},
+                            new I64Vector(new long[] {1, 2, 3})))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {30, 10, 20, 999}))))) {
+                session.addInput(batch);
+            }
+            try (Batch batch = new Batch(
+                    Mask.sparse(new int[] {0, 1}, 3),
+                    Output.of(Streams.ofValues(DictionaryVector.wrap(
+                            new int[] {0, 1, 0},
+                            new I64Vector(new long[] {1, 4})))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {11, 40, 999}))))) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactly(
+                            row(1L, 10L, 1L),
+                            row(1L, 11L, 1L),
+                            row(2L, 20L, 3L),
+                            row(3L, 30L, 4L),
+                            row(4L, 40L, 5L));
+        }
+    }
+
+    @Test
     void testTopNRankingSessionRanksNullPartitionAcrossHostBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

@@ -18,9 +18,13 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -53,7 +57,7 @@ public final class WindowSession
         inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
         window = new WindowOperator(
                 allocator,
-                new TableOperator(inputSchema, pages),
+                TableOperator.retained(inputSchema, pages),
                 partitionColumns,
                 orderingColumns,
                 descending,
@@ -73,6 +77,11 @@ public final class WindowSession
         if (mask.none()) {
             return;
         }
+        int[] selectedPositions = new int[mask.count()];
+        int selectedIndex = 0;
+        for (int position : mask) {
+            selectedPositions[selectedIndex++] = position;
+        }
         Streams[] columns = new Streams[inputColumns];
         for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
             Output output = batch.output(outputIndex);
@@ -80,7 +89,10 @@ public final class WindowSession
             for (Stream stream : output.streams()) {
                 borrowed.put(stream, output.borrow(stream));
             }
-            columns[outputIndex] = allocator.copyStreams(allocationContext, borrowed.build(), mask);
+            // Window repeatedly traverses its blocking input while sorting, finding partitions, and evaluating
+            // functions. Materialize encoded host input once, and let WindowOperator retain that owned flat copy,
+            // instead of preserving dictionary indirection and then copying the same page a second time.
+            columns[outputIndex] = allocator.copyStreams(allocationContext, borrowed.build(), selectedPositions);
         }
         pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
     }
@@ -91,7 +103,57 @@ public final class WindowSession
         if (finished) {
             throw new IllegalStateException("Window input is already finished");
         }
+        coalescePages();
         finished = true;
+    }
+
+    private void coalescePages()
+    {
+        if (pages.size() < 2 || !haveConsistentStreams()) {
+            return;
+        }
+        int rows = 0;
+        for (TableOperator.Page page : pages) {
+            rows = Math.addExact(rows, page.rows());
+        }
+        Streams[] columns = new Streams[inputColumns];
+        for (int columnIndex = 0; columnIndex < inputColumns; columnIndex++) {
+            Streams schema = pages.getFirst().columns()[columnIndex];
+            Streams.Builder result = Streams.builder();
+            for (Stream stream : schema.streams()) {
+                Vector[] segments = new Vector[pages.size()];
+                for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+                    segments[pageIndex] = pages.get(pageIndex).columns()[columnIndex].get(stream);
+                }
+                result.put(stream, segments[0].materializeRows(allocator, allocationContext, segments));
+            }
+            columns[columnIndex] = result.build();
+        }
+        Set<Vector> released = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (TableOperator.Page page : pages) {
+            for (Streams column : page.columns()) {
+                for (Vector vector : column.asMap().values()) {
+                    if (released.add(vector)) {
+                        allocator.release(allocationContext, vector);
+                    }
+                }
+            }
+        }
+        pages.clear();
+        pages.add(new TableOperator.Page(rows, columns, Mask.all(rows)));
+    }
+
+    private boolean haveConsistentStreams()
+    {
+        for (int columnIndex = 0; columnIndex < inputColumns; columnIndex++) {
+            var streams = pages.getFirst().columns()[columnIndex].streams();
+            for (int pageIndex = 1; pageIndex < pages.size(); pageIndex++) {
+                if (!pages.get(pageIndex).columns()[columnIndex].streams().equals(streams)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     @Override
