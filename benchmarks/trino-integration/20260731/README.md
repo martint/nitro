@@ -618,3 +618,24 @@ ratio. Nitro SQL consumes 465 CPU-ms versus about 162 ms for its fixture, but re
 versus about 5.0 s for the hand-built Trino fixture, and the SQL plan retains an additional `INTERSECT` branch. The
 remaining ratio difference is therefore partly a physical-plan/fixture mismatch and does not justify changing the
 membership or aggregation operators.
+
+## Current TPC-DS tail confirmation and q74 fixture audit
+
+The remaining material broad-screen CPU reversals do not reproduce under the controlled three-warmup,
+nine-measurement protocol. Q57 reports 0.850x wall / 0.587x CPU, q74 reports 0.808x / 0.618x, and q78 reports
+0.917x / 0.771x. The broad q57/q74/q78 rows were therefore stale or noisy, not evidence for operator changes. The
+post-fusion q67 result is approximately 1.015x CPU; q20's apparent 1.274x ratio compares only 107 and 84 CPU-ms.
+
+Q74 nevertheless remains a useful operator-corroboration audit because its current standalone fixtures still report
+1,260.616 ms/op for Nitro and 7,360.751 ms/op for Trino, a 0.171x duration ratio close to the historical 0.159x.
+Integrated attribution shows 4.336 CPU-seconds in Nitro hash-join probes versus 3.302 seconds in Trino lookup joins.
+Two large date-filter joins each consume roughly 1.1 Nitro CPU-seconds after receiving about 5.3 million rows through
+repartition exchange boundaries.
+
+That does not show a hash-join kernel regression. The standalone fixture connects native operators directly and
+models each sales/date inner join as a `SemiJoinOperator`. The SQL plan has repartition exchanges and ordinary inner
+hash joins. Converting the SQL join to a semi join is not generally semantics-preserving when the build key can contain
+duplicates; the external Hive tables do not currently provide a uniqueness proof. Nitro SQL also converts native scan
+output to Trino Pages for the exchange and adapts it back on join ingress. The historical q74 ratio is consequently
+not a valid literal SQL target without either a proven optimizer rewrite or a classloader-neutral native exchange
+contract. An unproved, query-specific semi-join rewrite would trade correctness for the benchmark and is rejected.
