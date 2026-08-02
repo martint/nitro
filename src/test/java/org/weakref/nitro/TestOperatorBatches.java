@@ -46,6 +46,7 @@ import org.weakref.nitro.operator.EnforceSingleRowOperator;
 import org.weakref.nitro.operator.EnforceSingleRowSession;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.FullJoinOperator;
+import org.weakref.nitro.operator.FullJoinOperatorPolicy;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -627,6 +628,28 @@ public class TestOperatorBatches
                             row(1L, 11L, 1L, 31L),
                             row(null, 90L, null, null),
                             row(null, null, null, 91L));
+        }
+    }
+
+    @Test
+    void testFullJoinOperatorProducesBoundedOutputBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+
+        try (Operator operator = new FullJoinOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 1, List.of(row(1L))),
+                new int[] {0},
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(1L), row(1L), row(1L), row(1L))),
+                new int[] {0},
+                new FullJoinOperatorPolicy(true, 2))) {
+            List<Integer> batchSizes = new ArrayList<>();
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batchSizes.add(batch.borrowMask().count());
+                }
+            }
+            assertThat(batchSizes).containsExactly(2, 2, 1);
         }
     }
 

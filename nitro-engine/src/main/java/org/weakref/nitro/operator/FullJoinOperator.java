@@ -56,10 +56,12 @@ public final class FullJoinOperator
     private final StructuralComparisonKernel[] comparisonKernels;
     private final StructuralKeyKernel[] keyKernels;
 
-    private Streams[] materialized;
-    private Mask outputMask;
+    private MaterializedInput outerInput;
+    private MaterializedInput innerInput;
+    private JoinedRows joinedRows;
+    private long[] innerRowReferences;
+    private int outputPosition;
     private boolean loaded;
-    private boolean done;
 
     public FullJoinOperator(
             Allocator allocator,
@@ -246,7 +248,7 @@ public final class FullJoinOperator
         if (!loaded) {
             load();
         }
-        return !done;
+        return outputPosition < joinedRows.size();
     }
 
     @Override
@@ -255,16 +257,26 @@ public final class FullJoinOperator
         if (!loaded) {
             load();
         }
-        done = true;
+        if (outputPosition >= joinedRows.size()) {
+            throw new IllegalStateException("full join output is exhausted");
+        }
+        MaterializedBatch batch = materializeJoinedRows();
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
-            int index = outputIndex;
+            Streams streams = batch.columns()[outputIndex];
             outputs[outputIndex] = new Output(
-                    materialized[index].streams(),
-                    materialized[index]::get,
-                    (stream, vector) -> allocator.transfer(allocationContext, vector));
+                    streams.streams(),
+                    streams::get,
+                    (stream, vector) -> allocator.transfer(allocationContext, vector),
+                    (stream, vector) -> allocator.release(allocationContext, vector));
         }
-        return new Batch(outputMask, takenMask -> allocator.transfer(allocationContext, takenMask), outputs);
+        return new Batch(
+                batch.mask(),
+                _ -> {},
+                takenMask -> allocator.transfer(allocationContext, takenMask),
+                releasedMask -> allocator.release(allocationContext, releasedMask),
+                () -> {},
+                outputs);
     }
 
     @Override
@@ -291,6 +303,14 @@ public final class FullJoinOperator
     {
         outer.close();
         inner.close();
+        if (joinedRows != null) {
+            joinedRows.close();
+            joinedRows = null;
+        }
+        if (innerRowReferences != null) {
+            arrayPool.release(innerRowReferences);
+            innerRowReferences = null;
+        }
         allocator.release(allocationContext);
     }
 
@@ -298,8 +318,8 @@ public final class FullJoinOperator
     {
         loaded = true;
 
-        MaterializedInput outerInput = materialize(outer);
-        MaterializedInput innerInput = materialize(inner);
+        outerInput = materialize(outer);
+        innerInput = materialize(inner);
         validateKeyVectors(outerInput.pages(), outerJoinColumns, "outer");
         validateKeyVectors(innerInput.pages(), innerJoinColumns, "inner");
 
@@ -309,7 +329,7 @@ public final class FullJoinOperator
         }
 
         int innerRowCount = countRows(innerInput.pages());
-        long[] innerRowReferences = arrayPool.borrowLongs(innerRowCount);
+        innerRowReferences = arrayPool.borrowLongs(innerRowCount);
         int[] innerHashNext = arrayPool.borrowInts(innerRowCount);
         boolean[] matchedInnerRows = arrayPool.borrowBooleans(innerRowCount);
         int[] innerHashHeads = arrayPool.borrowInts(hashTableSize(innerRowCount));
@@ -322,50 +342,46 @@ public final class FullJoinOperator
                     innerHashHeads,
                     innerHashNext);
 
-            try (JoinedRows joinedRows = new JoinedRows(arrayPool)) {
-                for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
-                    TableOperator.Page page = outerInput.pages().get(outerPageIndex);
-                    for (int position = 0; position < page.rows(); position++) {
-                        long outerRowReference = packRowReference(outerPageIndex, position);
-                        if (keyHasNull(page.columns(), position, outerJoinColumns)) {
-                            joinedRows.add(outerRowReference, NO_MATCH);
-                            continue;
+            joinedRows = new JoinedRows(arrayPool);
+            for (int outerPageIndex = 0; outerPageIndex < outerInput.pages().size(); outerPageIndex++) {
+                TableOperator.Page page = outerInput.pages().get(outerPageIndex);
+                for (int position = 0; position < page.rows(); position++) {
+                    long outerRowReference = packRowReference(outerPageIndex, position);
+                    if (keyHasNull(page.columns(), position, outerJoinColumns)) {
+                        joinedRows.add(outerRowReference, NO_MATCH);
+                        continue;
+                    }
+                    int innerOrdinal = innerHashHeads[
+                            hashKey(page.columns(), outerJoinColumns, position) &
+                                    (innerHashHeads.length - 1)];
+                    boolean matched = false;
+                    while (innerOrdinal != NO_MATCH) {
+                        if (equalKeys(
+                                outerInput.pages(),
+                                outerRowReference,
+                                outerJoinColumns,
+                                innerInput.pages(),
+                                innerRowReferences[innerOrdinal],
+                                innerJoinColumns)) {
+                            matched = true;
+                            matchedInnerRows[innerOrdinal] = true;
+                            joinedRows.add(outerRowReference, innerOrdinal);
                         }
-                        int innerOrdinal = innerHashHeads[
-                                hashKey(page.columns(), outerJoinColumns, position) &
-                                        (innerHashHeads.length - 1)];
-                        boolean matched = false;
-                        while (innerOrdinal != NO_MATCH) {
-                            if (equalKeys(
-                                    outerInput.pages(),
-                                    outerRowReference,
-                                    outerJoinColumns,
-                                    innerInput.pages(),
-                                    innerRowReferences[innerOrdinal],
-                                    innerJoinColumns)) {
-                                matched = true;
-                                matchedInnerRows[innerOrdinal] = true;
-                                joinedRows.add(outerRowReference, innerOrdinal);
-                            }
-                            innerOrdinal = innerHashNext[innerOrdinal];
-                        }
-                        if (!matched) {
-                            joinedRows.add(outerRowReference, NO_MATCH);
-                        }
+                        innerOrdinal = innerHashNext[innerOrdinal];
+                    }
+                    if (!matched) {
+                        joinedRows.add(outerRowReference, NO_MATCH);
                     }
                 }
+            }
 
-                for (int innerOrdinal = 0; innerOrdinal < matchedInnerRows.length; innerOrdinal++) {
-                    if (!matchedInnerRows[innerOrdinal]) {
-                        joinedRows.add(NO_MATCH, innerOrdinal);
-                    }
+            for (int innerOrdinal = 0; innerOrdinal < matchedInnerRows.length; innerOrdinal++) {
+                if (!matchedInnerRows[innerOrdinal]) {
+                    joinedRows.add(NO_MATCH, innerOrdinal);
                 }
-
-                materializeJoinedRows(outerInput, innerInput, joinedRows, innerRowReferences);
             }
         }
         finally {
-            arrayPool.release(innerRowReferences);
             arrayPool.release(innerHashNext);
             arrayPool.release(matchedInnerRows);
             arrayPool.release(innerHashHeads);
@@ -377,63 +393,61 @@ public final class FullJoinOperator
         int outerRowCount = countRows(outerInput.pages());
         int innerRowCount = countRows(innerInput.pages());
         long[] outerRowReferences = arrayPool.borrowLongs(outerRowCount);
-        long[] innerRowReferences = arrayPool.borrowLongs(innerRowCount);
+        innerRowReferences = arrayPool.borrowLongs(innerRowCount);
         try {
             fillRowReferences(outerInput.pages(), outerRowReferences);
             fillRowReferences(innerInput.pages(), innerRowReferences);
-            try (JoinedRows joinedRows = new JoinedRows(arrayPool)) {
-                int outerOrdinal = 0;
-                int innerOrdinal = 0;
-                while (outerOrdinal < outerRowCount && innerOrdinal < innerRowCount) {
-                    long outerReference = outerRowReferences[outerOrdinal];
-                    long innerReference = innerRowReferences[innerOrdinal];
-                    int comparison = compareKeys(outerInput.pages(), outerReference, outerJoinColumns, innerInput.pages(), innerReference, innerJoinColumns);
-                    if (comparison < 0 || (comparison == 0 && (keyHasNull(outerInput.pages(), outerReference, outerJoinColumns) || keyHasNull(innerInput.pages(), innerReference, innerJoinColumns)))) {
-                        joinedRows.add(outerReference, NO_MATCH);
-                        outerOrdinal++;
-                        continue;
-                    }
-                    if (comparison > 0) {
-                        joinedRows.add(NO_MATCH, innerOrdinal);
-                        innerOrdinal++;
-                        continue;
-                    }
+            joinedRows = new JoinedRows(arrayPool);
+            int outerOrdinal = 0;
+            int innerOrdinal = 0;
+            while (outerOrdinal < outerRowCount && innerOrdinal < innerRowCount) {
+                long outerReference = outerRowReferences[outerOrdinal];
+                long innerReference = innerRowReferences[innerOrdinal];
+                int comparison = compareKeys(outerInput.pages(), outerReference, outerJoinColumns, innerInput.pages(), innerReference, innerJoinColumns);
+                if (comparison < 0 || (comparison == 0 && (keyHasNull(outerInput.pages(), outerReference, outerJoinColumns) || keyHasNull(innerInput.pages(), innerReference, innerJoinColumns)))) {
+                    joinedRows.add(outerReference, NO_MATCH);
+                    outerOrdinal++;
+                    continue;
+                }
+                if (comparison > 0) {
+                    joinedRows.add(NO_MATCH, innerOrdinal);
+                    innerOrdinal++;
+                    continue;
+                }
 
-                    int outerRunEnd = equalRunEnd(outerInput.pages(), outerRowReferences, outerOrdinal, outerJoinColumns);
-                    int innerRunEnd = equalRunEnd(innerInput.pages(), innerRowReferences, innerOrdinal, innerJoinColumns);
-                    for (int outerIndex = outerOrdinal; outerIndex < outerRunEnd; outerIndex++) {
-                        for (int innerIndex = innerOrdinal; innerIndex < innerRunEnd; innerIndex++) {
-                            joinedRows.add(outerRowReferences[outerIndex], innerIndex);
-                        }
+                int outerRunEnd = equalRunEnd(outerInput.pages(), outerRowReferences, outerOrdinal, outerJoinColumns);
+                int innerRunEnd = equalRunEnd(innerInput.pages(), innerRowReferences, innerOrdinal, innerJoinColumns);
+                for (int outerIndex = outerOrdinal; outerIndex < outerRunEnd; outerIndex++) {
+                    for (int innerIndex = innerOrdinal; innerIndex < innerRunEnd; innerIndex++) {
+                        joinedRows.add(outerRowReferences[outerIndex], innerIndex);
                     }
-                    outerOrdinal = outerRunEnd;
-                    innerOrdinal = innerRunEnd;
                 }
-                while (outerOrdinal < outerRowCount) {
-                    joinedRows.add(outerRowReferences[outerOrdinal++], NO_MATCH);
-                }
-                while (innerOrdinal < innerRowCount) {
-                    joinedRows.add(NO_MATCH, innerOrdinal++);
-                }
-                materializeJoinedRows(outerInput, innerInput, joinedRows, innerRowReferences);
+                outerOrdinal = outerRunEnd;
+                innerOrdinal = innerRunEnd;
+            }
+            while (outerOrdinal < outerRowCount) {
+                joinedRows.add(outerRowReferences[outerOrdinal++], NO_MATCH);
+            }
+            while (innerOrdinal < innerRowCount) {
+                joinedRows.add(NO_MATCH, innerOrdinal++);
             }
         }
         finally {
             arrayPool.release(outerRowReferences);
-            arrayPool.release(innerRowReferences);
         }
     }
 
-    private void materializeJoinedRows(MaterializedInput outerInput, MaterializedInput innerInput, JoinedRows joinedRows, long[] innerRowReferences)
+    private MaterializedBatch materializeJoinedRows()
     {
-        int rowCount = joinedRows.size();
-        materialized = new Streams[outputCount()];
+        int rowCount = Math.min(policy.maxOutputBatchRows(), joinedRows.size() - outputPosition);
+        Streams[] materialized = new Streams[outputCount()];
         for (int outputIndex = 0; outputIndex < outer.outputCount(); outputIndex++) {
             materialized[outputIndex] = materializeOutputColumn(
                     outputSchema.field(outputIndex).type(),
                     outerInput.schema()[outputIndex],
                     outerInput.pages(),
                     joinedRows,
+                    outputPosition,
                     rowCount,
                     true,
                     outputIndex,
@@ -445,12 +459,14 @@ public final class FullJoinOperator
                     innerInput.schema()[outputIndex],
                     innerInput.pages(),
                     joinedRows,
+                    outputPosition,
                     rowCount,
                     false,
                     outputIndex,
                     innerRowReferences);
         }
-        outputMask = allocator.allocateRangeMask(allocationContext, 0, rowCount);
+        outputPosition += rowCount;
+        return new MaterializedBatch(materialized, allocator.allocateRangeMask(allocationContext, 0, rowCount));
     }
 
     private static void fillRowReferences(List<TableOperator.Page> pages, long[] references)
@@ -602,14 +618,15 @@ public final class FullJoinOperator
         return Integer.highestOneBit(target - 1) << 1;
     }
 
-    private Streams materializeOutputColumn(TypeBinding type, Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
+    private Streams materializeOutputColumn(TypeBinding type, Streams schema, List<TableOperator.Page> pages, JoinedRows joinedRows, int joinedStart, int rowCount, boolean useOuter, int outputIndex, long[] innerRowReferences)
     {
         Vector values = null;
         BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
         BooleanVector errors = schema.has(Stream.ERRORS) ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
 
         for (int outputPosition = 0; outputPosition < rowCount; outputPosition++) {
-            long rowReference = useOuter ? joinedRows.outerRowReference(outputPosition) : innerReferencesOrNoMatch(joinedRows.innerRowOrdinal(outputPosition), innerRowReferences);
+            int joinedPosition = joinedStart + outputPosition;
+            long rowReference = useOuter ? joinedRows.outerRowReference(joinedPosition) : innerReferencesOrNoMatch(joinedRows.innerRowOrdinal(joinedPosition), innerRowReferences);
             if (rowReference == NO_MATCH) {
                 nulls.values()[outputPosition] = true;
                 continue;
@@ -761,6 +778,8 @@ public final class FullJoinOperator
     }
 
     private record MaterializedInput(Streams[] schema, List<TableOperator.Page> pages) {}
+
+    private record MaterializedBatch(Streams[] columns, Mask mask) {}
 
     private static final class JoinedRows
             implements AutoCloseable

@@ -13,20 +13,30 @@
  */
 package org.weakref.nitro.operator;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
 /**
  * Engine-selected physical policies for full joins.
  */
-public record FullJoinOperatorPolicy(boolean retainInputBatches)
+public record FullJoinOperatorPolicy(boolean retainInputBatches, int maxOutputBatchRows)
 {
+    public FullJoinOperatorPolicy
+    {
+        checkArgument(maxOutputBatchRows > 0, "maxOutputBatchRows must be positive");
+    }
+
     public static FullJoinOperatorPolicy defaults()
     {
-        return new FullJoinOperatorPolicy(true);
+        return new FullJoinOperatorPolicy(true, 1 << 13);
     }
 
     public static FullJoinOperatorPolicy fromSystemProperties()
     {
-        return new FullJoinOperatorPolicy(Boolean.parseBoolean(System.getProperty(
-                "nitro.fullJoin.retainInputBatches",
-                Boolean.toString(defaults().retainInputBatches()))));
+        FullJoinOperatorPolicy defaults = defaults();
+        return new FullJoinOperatorPolicy(
+                Boolean.parseBoolean(System.getProperty(
+                        "nitro.fullJoin.retainInputBatches",
+                        Boolean.toString(defaults.retainInputBatches()))),
+                Integer.getInteger("nitro.fullJoin.maxOutputBatchRows", defaults.maxOutputBatchRows()));
     }
 }
