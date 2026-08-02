@@ -678,3 +678,25 @@ Selecting single-stage aggregation is not generally legal for distributed SQL be
 workers. The production paths are a generic optimizer rewrite for the correlated inequality shape plus native
 exchange/partition contracts, or connector-proven compatible partitioning that makes the single stage legal. The
 recorded standalone q21 ratio must not be used as a literal SQL target until the fixture models those contracts.
+
+## Aggregation-output ranking composition
+
+The local execution planner can now compose a compatible aggregation, optional Nitro output projection, and
+Top-N-ranking terminal into one Nitro operator lifecycle. Aggregation output is transferred as allocator-owned native
+batches directly into the ranking session; it is no longer converted to a Trino Page and adapted back into Nitro at
+the adjacent operator boundary. Unsupported intervening projections retain the standalone path, and a regression
+test verifies that composition cannot bypass their semantics. All 193 Nitro/Trino integration tests pass.
+
+The controlled q67 run reports Trino at 5,644.330 ms wall / 21,361 CPU-ms and Nitro at 6,306.066 ms /
+20,550 CPU-ms, or 1.117x wall / 0.962x median CPU. Before this composition q67 was approximately 1.18--1.20x wall
+with CPU near or above parity, so the boundary transfer removes real work without changing either aggregation or
+ranking kernels. Ranking-heavy q36, q47, q57, q70, and q86 also pass exact result comparison without a standalone
+Nitro ranking operator. A one-warmup/three-measurement screen reports q47 at 1.128x wall / 0.533x CPU and q57 at
+0.949x / 0.490x; those absolute runs were colder than the established board, especially for Trino, and are retained
+as correctness/no-regression evidence rather than a replacement baseline.
+
+The current implementation is deliberately confined to the explicit Trino/Nitro execution boundary, but it exposes
+an abstraction gap: the aggregation adapter currently knows about the ranking terminal. The reusable endpoint is a
+native operator-island/terminal composition contract selected by the physical planner. That will also cover
+scan-to-aggregation and GroupId-to-aggregation pipelines that currently return early and leave ranking as a separate
+operator, without teaching Nitro aggregation about a specific downstream operator.
