@@ -1642,6 +1642,59 @@ public class TestParquetOperator
     }
 
     @Test
+    void testFullBinaryDictionaryReadRemainsAlignedAcrossPartialBatches()
+            throws IOException
+    {
+        List<BinaryParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 257; position++) {
+            rows.add(new BinaryParquetRow(
+                    (position & 1) == 0 ? "alpha" : "beta",
+                    position % 7 == 0 ? null : bytes(10 + (position % 3), 20 + (position % 5))));
+        }
+        java.nio.file.Path file = writeBinaryParquetFile("binary-dictionary-partial-batches.parquet", true, rows);
+        assertDictionaryEncoding(file, "name");
+        assertDictionaryEncoding(file, "payload");
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader required = columnReader(List.of(parquetFile), "name");
+                ColumnReader optional = columnReader(List.of(parquetFile), "payload")) {
+            Allocator.Context context = new Allocator.Context("binary-dictionary-partial-batches");
+            int consumed = 0;
+            for (int batchSize : new int[] {31, 73, 153}) {
+                boolean[] optionalNulls = new boolean[batchSize];
+                org.weakref.nitro.data.Vector requiredValues = required.readBinary(allocator, context, null, batchSize);
+                org.weakref.nitro.data.Vector optionalValues = optional.readBinary(allocator, context, optionalNulls, batchSize);
+
+                try {
+                    BinaryVector requiredDictionary = binaryValues(requiredValues);
+                    BinaryVector optionalDictionary = binaryValues(optionalValues);
+                    for (int index = 0; index < batchSize; index++) {
+                        int position = consumed + index;
+                        int requiredPosition = requiredValues instanceof DictionaryVector dictionary ? dictionary.ids()[index] : index;
+                        assertThat(utf8(requiredDictionary, requiredPosition))
+                                .isEqualTo((position & 1) == 0 ? "alpha" : "beta");
+
+                        assertThat(optionalNulls[index]).isEqualTo(position % 7 == 0);
+                        if (position % 7 != 0) {
+                            int optionalPosition = optionalValues instanceof DictionaryVector dictionary ? dictionary.ids()[index] : index;
+                            assertThat(optionalDictionary.copyBytes(optionalPosition))
+                                    .containsExactly((byte) (10 + (position % 3)), (byte) (20 + (position % 5)));
+                        }
+                    }
+                }
+                finally {
+                    allocator.release(context, requiredValues);
+                    allocator.release(context, optionalValues);
+                }
+                consumed += batchSize;
+            }
+            assertThat(consumed).isEqualTo(rows.size());
+        }
+    }
+
+    @Test
     void testParquetScanFiltersCompressedDictionaryStrings()
             throws IOException
     {
