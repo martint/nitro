@@ -32,7 +32,7 @@ outliers were startup or ordering noise rather than persistent regressions.
 | TPC-H q01 | 0.687x | 0.784x | confirmed Nitro win |
 | TPC-H q03 | 0.954x | 1.021x | wall win; CPU parity |
 | TPC-H q05 | 0.961x | 0.774x | confirmed CPU win |
-| TPC-DS q02 | 1.464x | 0.958x | CPU parity; wall critical path remains |
+| TPC-DS q02 | 0.952x | 0.943x | dynamic-filter wait mismatch fixed |
 
 TPC-H q03 used five warmups and twenty measurements per engine in separate,
 verified 16 GB JVMs. Nitro reported 629.424 ms wall and 3,170 CPU-ms at p50;
@@ -46,9 +46,18 @@ counted without writing the definition scratch, but the sequential numeric
 reader subsequently interpreted that stale scratch. Nitro commit `9bf9b3db`
 handles homogeneous all-present/all-null runs directly for plain and dictionary
 INT/LONG pages. The real SF10 source aggregate and complete q02 result now match
-Trino. After the fix, ten interleaved measurements report 1.464x wall but only
-0.958x CPU, making q02 a scheduling/critical-path issue rather than an operator
-CPU regression.
+Trino. The first post-correctness control reported 1.464x wall but only 0.958x
+CPU. Driver attribution showed that downstream stages were waiting for one of
+the two otherwise symmetric CTE branches. The Nitro source adapter was waiting
+again for a complete distributed dynamic filter even after Trino had applied
+its connector wait policy (zero seconds in this benchmark). Trino commit
+`78413aec` leaves waiting to the engine and installs a completed immutable
+snapshot only when one is available before the source's first poll. The commit
+was subsequently amended to `428d8882` after the analyzed q02 plan demonstrated
+why the snapshot must never change the decoder strategy after scanning starts.
+The follow-up
+control reports 0.952x wall and 0.943x CPU, reproducing the operator-level win
+at the SQL boundary.
 
 ## Synchronized q03 hardware counters
 
