@@ -624,24 +624,41 @@ public final class FullJoinOperator
         BooleanVector nulls = allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new);
         BooleanVector errors = schema.has(Stream.ERRORS) ? allocator.allocate(allocationContext, BooleanVector.class, rowCount, BooleanVector::new) : null;
 
-        for (int outputPosition = 0; outputPosition < rowCount; outputPosition++) {
-            int joinedPosition = joinedStart + outputPosition;
-            long rowReference = useOuter ? joinedRows.outerRowReference(joinedPosition) : innerReferencesOrNoMatch(joinedRows.innerRowOrdinal(joinedPosition), innerRowReferences);
-            if (rowReference == NO_MATCH) {
-                nulls.values()[outputPosition] = true;
-                continue;
-            }
+        int[] sourcePositions = arrayPool.borrowInts(rowCount);
+        try {
+            int sourcePageIndex = NO_MATCH;
+            int outputStart = 0;
+            int sourceCount = 0;
+            for (int outputPosition = 0; outputPosition < rowCount; outputPosition++) {
+                int joinedPosition = joinedStart + outputPosition;
+                long rowReference = useOuter ? joinedRows.outerRowReference(joinedPosition) : innerReferencesOrNoMatch(joinedRows.innerRowOrdinal(joinedPosition), innerRowReferences);
+                if (rowReference == NO_MATCH) {
+                    if (sourceCount > 0) {
+                        values = copyOutputRun(values, nulls, errors, pages.get(sourcePageIndex).columns()[outputIndex], sourcePositions, sourceCount, outputStart, rowCount);
+                        sourceCount = 0;
+                        sourcePageIndex = NO_MATCH;
+                    }
+                    nulls.values()[outputPosition] = true;
+                    continue;
+                }
 
-            TableOperator.Page page = pages.get(unpackPageIndex(rowReference));
-            int sourcePosition = unpackPosition(rowReference);
-            Streams source = page.columns()[outputIndex];
-            values = source.values().copySinglePositionInto(allocator, allocationContext, values, sourcePosition, outputPosition, rowCount);
-            if (source.has(Stream.NULLS)) {
-                nulls.values()[outputPosition] = OperatorVectorSupport.isNull(source.get(Stream.NULLS), sourcePosition);
+                int pageIndex = unpackPageIndex(rowReference);
+                if (sourceCount > 0 && pageIndex != sourcePageIndex) {
+                    values = copyOutputRun(values, nulls, errors, pages.get(sourcePageIndex).columns()[outputIndex], sourcePositions, sourceCount, outputStart, rowCount);
+                    sourceCount = 0;
+                }
+                if (sourceCount == 0) {
+                    sourcePageIndex = pageIndex;
+                    outputStart = outputPosition;
+                }
+                sourcePositions[sourceCount++] = unpackPosition(rowReference);
             }
-            if (errors != null && source.has(Stream.ERRORS)) {
-                errors.values()[outputPosition] = OperatorVectorSupport.isNull(source.get(Stream.ERRORS), sourcePosition);
+            if (sourceCount > 0) {
+                values = copyOutputRun(values, nulls, errors, pages.get(sourcePageIndex).columns()[outputIndex], sourcePositions, sourceCount, outputStart, rowCount);
             }
+        }
+        finally {
+            arrayPool.release(sourcePositions);
         }
 
         if (values == null) {
@@ -654,6 +671,18 @@ public final class FullJoinOperator
             builder.put(Stream.ERRORS, errors);
         }
         return builder.build();
+    }
+
+    private Vector copyOutputRun(Vector values, BooleanVector nulls, BooleanVector errors, Streams source, int[] sourcePositions, int sourceCount, int outputStart, int rowCount)
+    {
+        values = source.values().copyPositionsInto(allocator, allocationContext, values, sourcePositions, sourceCount, outputStart, rowCount);
+        if (source.has(Stream.NULLS)) {
+            source.get(Stream.NULLS).copyPositionsInto(allocator, allocationContext, nulls, sourcePositions, sourceCount, outputStart, rowCount);
+        }
+        if (errors != null && source.has(Stream.ERRORS)) {
+            source.get(Stream.ERRORS).copyPositionsInto(allocator, allocationContext, errors, sourcePositions, sourceCount, outputStart, rowCount);
+        }
+        return values;
     }
 
     private long innerReferencesOrNoMatch(int innerRowOrdinal, long[] innerRowReferences)
