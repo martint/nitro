@@ -3319,6 +3319,47 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testTopNOperatorSupportsSparseLargeCapacityMultiKeyOrdering()
+    {
+        int totalPositions = (1 << 16) + 1;
+        int selectedCount = 200;
+        int[] positions = new int[selectedCount];
+        long[] firstValues = new long[totalPositions];
+        BinaryVector secondValues = new BinaryVector(totalPositions, selectedCount * 3);
+        for (int position = 0; position < selectedCount; position++) {
+            positions[position] = position;
+            int value = selectedCount - position - 1;
+            firstValues[position] = value / 10;
+            secondValues.setBytes(position, "%03d".formatted(value).getBytes(UTF_8));
+        }
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Batch input = new Batch(
+                Mask.sparse(positions, totalPositions),
+                Output.of(Streams.of(new I64Vector(firstValues), null, null)),
+                Output.of(Streams.of(secondValues, null, null)));
+        try (Operator operator = new TopNOperator(
+                allocator,
+                100,
+                new int[] {0, 1},
+                new boolean[] {false, false},
+                new SingleBatchOperator(Schema.unspecified(2), input));
+                Batch output = operator.next()) {
+            VectorAccess.LongValues first = VectorAccess.longValues(output.output(0).borrow(Stream.VALUES));
+            VectorAccess.BinaryRegions second = VectorAccess.binaryRegions(output.output(1).borrow(Stream.VALUES));
+            for (int outputPosition = 0; outputPosition < 100; outputPosition++) {
+                assertThat(first.value(outputPosition)).isEqualTo(outputPosition / 10);
+                assertThat(new String(
+                        second.data(outputPosition),
+                        second.offset(outputPosition),
+                        second.length(outputPosition),
+                        UTF_8))
+                        .isEqualTo("%03d".formatted(outputPosition));
+            }
+        }
+    }
+
+    @Test
     void testTopNSessionRetainsCandidatesAcrossHostBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
