@@ -60,7 +60,7 @@ public final class TopNRankingSession
                 orderingColumns,
                 descending,
                 rankingType,
-                new TableOperator(inputSchema, pages),
+                TableOperator.retained(inputSchema, pages),
                 rankingSchema,
                 requireNonNull(resources, "resources is null"));
     }
