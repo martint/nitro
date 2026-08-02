@@ -659,3 +659,22 @@ Plan-node attribution for the 4,896,401-row filter drops from about 1,010 CPU-ms
 to 0.813x wall / 0.720x CPU: Trino is 2,886.445 ms wall / 11,777 CPU-ms and Nitro is 2,347.819 ms / 8,480 CPU-ms.
 The remaining difference from the standalone fixture still includes SQL's partial/final aggregation stages and
 Page exchange boundaries; it is not evidence for changing an operator kernel.
+
+## Q21 operator-plan fidelity audit
+
+The remaining TPC-H q21 ratio gap is not an operator-kernel reversal. The current standalone fixtures pre-aggregate
+each order into supplier min/max ranges and feed those single-stage results directly to joins. Trino's actual SQL
+plan decorrelates `EXISTS` and `NOT EXISTS` into inequality joins, distinct aggregations, partial/final aggregation
+stages, and exchanges; one join processes roughly 60 million rows. The fixture therefore models an independently
+chosen logical rewrite, not the physical plan produced by Trino.
+
+An equivalent min/max SQL control makes Nitro faster than Trino at 1,977.479 ms / 8,721 CPU-ms versus 2,400.327 ms /
+10,192 CPU-ms, or 0.824x wall / 0.856x CPU. It still cannot reproduce the old single-process fixture ratio because
+two high-cardinality min/max branches dominate the distributed Nitro plan: source-side partial aggregation consumes
+about 4.65 CPU-s and final aggregation another 2.41 CPU-s. Disabling partial aggregation lowers Nitro CPU only to
+8.19 s and worsens wall to 2.57 s.
+
+Selecting single-stage aggregation is not generally legal for distributed SQL because groups can span splits and
+workers. The production paths are a generic optimizer rewrite for the correlated inequality shape plus native
+exchange/partition contracts, or connector-proven compatible partitioning that makes the single stage legal. The
+recorded standalone q21 ratio must not be used as a literal SQL target until the fixture models those contracts.
