@@ -593,3 +593,28 @@ The cache currently spans overlapping driver lifetimes, not automatically the fu
 release every lease before later waves begin. Extending reuse across that gap requires an explicit worker-local,
 query-scoped resource lifecycle in the connector/embedding SPI. A static cache, query-ID global map, or expiry policy
 would violate ownership and classloader isolation and is not an acceptable substitute.
+
+## Q15/q08 controlled TPC-DS reconciliation
+
+The broad TPC-DS screen's q15 row was measurement noise rather than a production regression. A nine-measurement
+controlled run reports Trino at 671.431 ms wall / 2,267 CPU-ms and Nitro at 363.820 ms / 351 CPU-ms, or 0.542x wall
+and 0.155x CPU. It requires no execution change.
+
+Q08 did expose a real function-adaptation gap. Before the correction, the same controlled protocol reported Trino at
+515.367 ms wall / 1,081 CPU-ms and Nitro at 632.748 ms / 852 CPU-ms, or 1.228x wall and 0.788x CPU. Operator
+attribution placed 481.300 CPU-ms in the Nitro aggregation-source pipeline. The SQL predicate applies a constant
+three-argument `substring` to dictionary-encoded ZIP values and then tests a large constant membership set. Trino's
+exact substring adapter did not advertise Nitro's binary-slice projection capability, so the membership optimizer
+could not compose the operation and materialized the substring per row.
+
+The Trino function registry now attaches an exact binary-slice projection capability to its resolved VARCHAR and
+CHAR substring bindings. VARCHAR delegates to Trino's UTF-8 substring implementation; CHAR retains the declared
+length and therefore preserves Trino's space-padding semantics. Nitro's evaluator remains unaware of Trino functions
+and consumes only the generic capability. The 59-test page-processor cohort and all 190 Nitro integration tests pass.
+
+After the change, nine controlled measurements report Trino at 454.691 ms wall / 1,110 CPU-ms and Nitro at 256.579
+ms / 465 CPU-ms, or 0.564x wall and 0.419x CPU. This is still not the standalone fixture's approximately 0.032x
+ratio. Nitro SQL consumes 465 CPU-ms versus about 162 ms for its fixture, but real Trino SQL consumes only 1.11 CPU-s
+versus about 5.0 s for the hand-built Trino fixture, and the SQL plan retains an additional `INTERSECT` branch. The
+remaining ratio difference is therefore partly a physical-plan/fixture mismatch and does not justify changing the
+membership or aggregation operators.
