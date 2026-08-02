@@ -121,10 +121,16 @@ def write_markdown(path, rows):
     totals = defaultdict(float)
     query_counts = defaultdict(set)
     stage_counts = defaultdict(set)
+    query_operator_cpu = defaultdict(float)
+    query_cpu = {}
     for row in rows:
         key = (row["suite"], row["engine"])
-        totals[key, row["family"]] += row["add_input_cpu_ms"] + row["get_output_cpu_ms"] + row["finish_cpu_ms"]
+        operator_cpu = row["add_input_cpu_ms"] + row["get_output_cpu_ms"] + row["finish_cpu_ms"]
+        totals[key, row["family"]] += operator_cpu
         query_counts[key].add(row["query"])
+        query_key = (row["suite"], row["query"], row["engine"])
+        query_operator_cpu[query_key] += operator_cpu
+        query_cpu[query_key] = row["query_cpu_mean_ms"]
         if row["stage"]:
             stage_counts[key].add((row["query"], row["stage"]))
     families = sorted({row["family"] for row in rows})
@@ -146,6 +152,41 @@ def write_markdown(path, rows):
             values = [f"{totals[key, family]:.1f}" for family in families]
             stages = len(stage_counts[key]) if stage_counts[key] else "unavailable"
             lines.append(f"| {suite} | {engine} | {len(query_counts[key])} | {stages} | " + " | ".join(values) + " |")
+    lines.extend([
+        "",
+        "## End-to-end operator CPU reconciliation",
+        "",
+        "| suite | Nitro operator CPU (ms) | Trino operator CPU (ms) | Nitro / Trino | Nitro CPU coverage | Trino CPU coverage |",
+        "|---|---:|---:|---:|---:|---:|",
+    ])
+    for suite in SUITES:
+        nitro_operator = sum(query_operator_cpu[suite, query, "nitro"] for query in query_counts[suite, "nitro"])
+        trino_operator = sum(query_operator_cpu[suite, query, "trino"] for query in query_counts[suite, "trino"])
+        nitro_query = sum(query_cpu[suite, query, "nitro"] for query in query_counts[suite, "nitro"])
+        trino_query = sum(query_cpu[suite, query, "trino"] for query in query_counts[suite, "trino"])
+        lines.append(
+            f"| {suite} | {nitro_operator:.1f} | {trino_operator:.1f} | {nitro_operator / trino_operator:.3f} | "
+            f"{nitro_operator / nitro_query:.3%} | {trino_operator / trino_query:.3%} |")
+
+    regressions = []
+    for suite in SUITES:
+        for query in query_counts[suite, "nitro"] & query_counts[suite, "trino"]:
+            nitro = query_operator_cpu[suite, query, "nitro"]
+            trino = query_operator_cpu[suite, query, "trino"]
+            if nitro > trino:
+                regressions.append((nitro - trino, nitro / trino, suite, query, nitro, trino))
+    lines.extend([
+        "",
+        "## Largest single-sweep Nitro CPU regressions",
+        "",
+        "These are triage candidates. Confirm them with fresh-JVM or interleaved runs before changing production code;",
+        "a suite sweep can expose JIT, cache, allocator-pool, and run-order effects.",
+        "",
+        "| suite | query | Nitro CPU (ms) | Trino CPU (ms) | Nitro / Trino | excess (ms) |",
+        "|---|---|---:|---:|---:|---:|",
+    ])
+    for delta, ratio, suite, query, nitro, trino in sorted(regressions, reverse=True)[:15]:
+        lines.append(f"| {suite} | {query} | {nitro:.1f} | {trino:.1f} | {ratio:.3f} | {delta:.1f} |")
     lines.extend([
         "",
         "The CSV is the source of record. Each row retains stage, plan-node, operator type, driver count, CPU phases,",

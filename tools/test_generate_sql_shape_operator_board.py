@@ -41,6 +41,28 @@ class SqlShapeOperatorBoardTest(unittest.TestCase):
         self.assertEqual(rows[0]["get_output_cpu_ms"], 3)
         self.assertEqual(rows[0]["physical_input_positions"], 0)
 
+    def test_markdown_reconciles_operator_and_query_cpu(self):
+        rows = []
+        for suite in BOARD.SUITES:
+            for engine, operator_cpu, query_cpu in (("nitro", 6.0, 6.0), ("trino", 10.0, 10.0)):
+                rows.append({
+                    "suite": suite,
+                    "query": "q01",
+                    "engine": engine,
+                    "query_cpu_mean_ms": query_cpu,
+                    "stage": "1",
+                    "family": "aggregation",
+                    "add_input_cpu_ms": operator_cpu,
+                    "get_output_cpu_ms": 0.0,
+                    "finish_cpu_ms": 0.0,
+                })
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "board.md"
+            BOARD.write_markdown(path, rows)
+            text = path.read_text()
+        self.assertIn("| tpch | 6.0 | 10.0 | 0.600 | 100.000% | 100.000% |", text)
+        self.assertNotIn("| tpch | q01 |", text)
+
 
 if __name__ == "__main__":
     unittest.main()
