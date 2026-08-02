@@ -106,6 +106,7 @@ public class BenchmarkOperatorComparison
     private List<Page> scanValues;
     private List<Page> scanTwoKey;
     private List<Page> scanThreeKey;
+    private List<Page> scanThreeKeyHighCardinality;
     private List<Page> scanStringLowCard;
     private List<Page> scanStringHighCard;
     private List<Page> scanStringDictLowCard;
@@ -130,11 +131,19 @@ public class BenchmarkOperatorComparison
         scanLowCard = twoColumnPages(SCAN_ROWS, row -> row % GROUPS_LOW, row -> row);
         scanHighCard = twoColumnPages(SCAN_ROWS, row -> row % GROUPS_HIGH, row -> row);
         scanValues = oneColumnPages(SCAN_ROWS, row -> row);
-        // Multi-long grouping inputs: key columns + payload. 2-key ~64k groups, 3-key ~64k groups.
+        // Multi-long grouping inputs: key columns + payload. Vary the digits independently so these really
+        // produce the documented Cartesian cardinalities rather than collapsing to the largest modulus.
         scanTwoKey = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
-                row -> row % 1024, row -> row % 64, row -> row});
+                row -> (row / 64) % 1024, row -> row % 64, row -> row});
         scanThreeKey = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
-                row -> row % 256, row -> row % 16, row -> row % 16, row -> row});
+                row -> (row / (16 * 16)) % 256, row -> (row / 16) % 16, row -> row % 16, row -> row});
+        // TPC-H q03 groups by order key, order date, and ship priority. The first key determines the other two,
+        // and roughly one quarter of input rows establish groups. Preserve that correlation and cardinality.
+        scanThreeKeyHighCardinality = multiColumnPages(SCAN_ROWS, new LongUnaryOperator[] {
+                row -> row % GROUPS_HIGH,
+                row -> (row % GROUPS_HIGH) % 2_400,
+                row -> (row % GROUPS_HIGH) % 5,
+                row -> row});
         // String group key (UTF-8) + long payload — the flat/string grouping path.
         scanStringLowCard = stringKeyPages(SCAN_ROWS, GROUPS_LOW);
         scanStringHighCard = stringKeyPages(SCAN_ROWS, 65_536);
@@ -219,6 +228,13 @@ public class BenchmarkOperatorComparison
     {
         consume(sumAll(new GroupedAggregationOperator(
                 allocator, List.of(0, 1, 2), List.of(new Sum(3)), new TableOperator(4, scanThreeKey)), 4));
+    }
+
+    @Benchmark
+    public void groupSumThreeLongKeysHighCardinality()
+    {
+        consume(sumAll(new GroupedAggregationOperator(
+                allocator, List.of(0, 1, 2), List.of(new Sum(3)), new TableOperator(4, scanThreeKeyHighCardinality)), 4));
     }
 
     // ---- String-keyed grouped aggregation: sum(payload) GROUP BY string_key ----
