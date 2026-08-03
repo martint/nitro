@@ -69,3 +69,17 @@ operator benchmark no longer predicts a large q16 SQL win. It does not yet expla
 Nitro SQL uses about 948 CPU-ms versus Trino SQL's prior 706 CPU-ms: the integrated Nitro capture's
 aggregation regions are actually lower (roughly 439 ms), leaving boundary, exchange, and execution
 orchestration as the next attribution target.
+
+## Remote-exchange representation correction
+
+The initial topology adapter reproduced partition and driver counts but passed sparse masks over the original Nitro
+vectors at each hash exchange. It therefore preserved dictionary-backed brand/type vectors that the real Trino
+remote exchange flattens while partitioning and serializing pages. That was still a material physical-shape mismatch.
+
+The adapter now copies every selected partition into dense, owned vectors before the receiving aggregation session.
+This is test-only exchange materialization; production aggregation implementations are unchanged. Exact SF10 Nitro
+and Trino-operator results pass. A short adjacent JDK 26 screen measured 727.084 ms for Nitro and 739.975 ms for the
+Trino operators (0.983x), versus 661.020/763.564 (0.866x) when the same current source preserved native encodings.
+The earlier 0.959 duration and counter rows remain useful evidence for the native-encoding control, but must not be
+presented as the current SQL-boundary expectation. A fixed/pre-touched publication recapture is still required before
+replacing the benchmark board row.

@@ -43,11 +43,14 @@ public final class SqlStageAggregationOperator
         implements Operator
 {
     private final Operator source;
+    private final Allocator allocator;
+    private final Allocator.Context exchangeMaterializationContext = new Allocator.Context("sql-stage-exchange-materialization");
     private final int partitionCount;
     private final int[] hashChannels;
     private final GroupedAggregationSession[][] sessions;
     private final Batch[] firstOutputs;
     private final Schema outputSchema;
+    private final boolean materializeExchange;
 
     private Batch pendingOutput;
     private int outputPartition;
@@ -62,11 +65,23 @@ public final class SqlStageAggregationOperator
             int[] hashChannels,
             List<Stage> stages)
     {
-        requireNonNull(allocator, "allocator is null");
+        this(allocator, source, partitionCount, hashChannels, stages, true);
+    }
+
+    public SqlStageAggregationOperator(
+            Allocator allocator,
+            Operator source,
+            int partitionCount,
+            int[] hashChannels,
+            List<Stage> stages,
+            boolean materializeExchange)
+    {
+        this.allocator = requireNonNull(allocator, "allocator is null");
         this.source = requireNonNull(source, "source is null");
         checkArgument(partitionCount > 0, "partitionCount must be positive");
         this.partitionCount = partitionCount;
         this.hashChannels = requireNonNull(hashChannels, "hashChannels is null").clone();
+        this.materializeExchange = materializeExchange;
         checkArgument(!stages.isEmpty(), "stages is empty");
 
         OperatorResources resources = EngineResources.from(allocator).operatorResources();
@@ -225,11 +240,20 @@ public final class SqlStageAggregationOperator
             if (counts[partition] == 0) {
                 continue;
             }
-            Output[] outputs = Arrays.stream(streams)
-                    .map(Output::of)
-                    .toArray(Output[]::new);
+            int[] selectedPositions = Arrays.copyOf(positions[partition], counts[partition]);
+            Output[] outputs = materializeExchange
+                    ? Arrays.stream(streams)
+                            .map(column -> Output.of(allocator.copyStreams(exchangeMaterializationContext, column, selectedPositions)))
+                            .toArray(Output[]::new)
+                    : Arrays.stream(streams)
+                            .map(Output::of)
+                            .toArray(Output[]::new);
             try (Batch partitionBatch = new Batch(
-                    Mask.sparse(Arrays.copyOf(positions[partition], counts[partition]), inputMask.size()),
+                    materializeExchange ? Mask.all(counts[partition]) : Mask.sparse(selectedPositions, inputMask.size()),
+                    _ -> {},
+                    java.util.function.Function.identity(),
+                    _ -> {},
+                    materializeExchange ? () -> allocator.releaseIfPresent(exchangeMaterializationContext) : () -> {},
                     outputs)) {
                 sessions[0][partition].addInput(partitionBatch);
             }
