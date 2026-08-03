@@ -25,9 +25,9 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * The ClickBench queries as compiled-engine lowerings, mirroring the {@link ClickBenchHitsSupport} operator
- * chains operator-for-operator (which themselves mirror the Trino plans of the SQL suite) and validated
- * byte-exact against them. Every query reads the single {@code hits} table; all its columns are NOT NULL.
+ * ClickBench kernel lowerings for the data-centric compiler. These preserve SQL results but do not model distributed
+ * fragment, exchange, or partial/final aggregation topology; use {@link ClickBenchHitsSupport} for SQL-plan-shaped
+ * operator comparisons. Every query reads the single {@code hits} table; all its columns are NOT NULL.
  */
 public final class CompiledClickBenchQueries
 {
@@ -131,8 +131,8 @@ public final class CompiledClickBenchQueries
 
     /**
      * SELECT RegionID, SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM hits
-     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10: the mixed distinct/plain aggregation runs single-pass, the
-     * distinct count fused into the grouping (the harness's DistinctCount accumulator).
+     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10. This lowering deliberately measures the fused single-pass kernel; the
+     * SQL-shaped harness preserves the optimizer-selected MarkDistinct boundary when table statistics are present.
      */
     public static Ported query10()
     {
@@ -150,7 +150,7 @@ public final class CompiledClickBenchQueries
         return new Ported(query, List.of());
     }
 
-    /** SELECT COUNT(DISTINCT SearchPhrase) FROM hits: single-pass over the globally-interned phrase ids. */
+    /** SELECT COUNT(DISTINCT SearchPhrase) FROM hits: fused kernel, without SQL fragment/exchange topology. */
     public static Ported query06()
     {
         QueryLowering query = QueryLowering.scan(ClickBenchParquetTables.HITS_TABLE,

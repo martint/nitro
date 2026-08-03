@@ -42,12 +42,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
- * Apples-to-apples benchmark of the data-centric compiler over every ported ClickBench query, against the Nitro
- * and Trino operator-chain harnesses ({@code org.weakref.nitro.clickbench.BenchmarkQueries} and
- * {@code org.weakref.trino.clickbench.BenchmarkQueries}) on the same per-invocation read of the split hits
- * Parquet. Compilation is amortized like a query plan (compiled pipelines are cached by source), so after warmup
- * the measured iterations only execute. Each query dispatches to the shape it was ported as: a streamed
- * single-stage pipeline, or a tree of stages (the harness's MarkDistinct/TopN/Project pre-stages).
+ * Kernel benchmark of the data-centric compiler over every ported ClickBench query. Compilation is amortized like a
+ * query plan (compiled pipelines are cached by source), so after warmup the measured iterations only execute. These
+ * lowerings preserve query semantics but are not evidence for full SQL-engine parity when Trino selects distributed
+ * exchanges or partial/final aggregation; the ordinary operator harnesses carry those SQL-plan-shaped comparisons.
  */
 @State(Scope.Thread)
 @Fork(1)

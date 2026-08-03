@@ -41,8 +41,17 @@ disabled Trino's single-DISTINCT-to-group-by rewrite and serialized all 100 mill
 aggregation. Restoring Trino's ordinary strategy changes q05 from 1.997x to 1.041x p50 wall and q06 from 3.450x to
 1.148x, while CPU is 0.984x/0.946x. The `clickbench-q05-12g-controlled.log` and
 `clickbench-q06-12g-controlled.log` files preserve the serialized-plan controls; the `*-trino-shape-controlled.log`
-files are the accepted overlays. The current operator harnesses still model one-driver direct distinct, so their
-larger q05/q06 kernel wins must not be used as SQL expectations until the fragment/partial/final phases are modeled.
+files are the accepted overlays. The q05/q06 operator harnesses now reproduce split-local distinct grouping, the
+exchange boundary, final distinct grouping, and global count; the separate compiled lowerings remain explicitly
+kernel-only and are not SQL expectations.
+
+Q10 demonstrates why plan capture must use the same statistics regime as the benchmark. The no-statistics correctness
+session selects the PRE_AGGREGATE `GroupId` rewrite, while the performance setup runs `ANALYZE` and selects the
+`MarkDistinct` shape already modeled by the ordinary operator harness. The controlled analyzed capture in
+`clickbench-q10-trino-shape-operator-cpu.log` is Nitro 2.613 s / 5.716 CPU-s versus Trino 3.596 s / 8.170 CPU-s
+(0.727x wall, 0.700x CPU). The dominant aggregate is 3.440 CPU-s for Nitro versus 5.800 CPU-s for Trino; scan is
+1.127 versus 1.276 CPU-s and partitioned output is 0.929 versus 0.880 CPU-s. The compiled q10 lowering remains a
+fused-kernel benchmark and is labeled accordingly.
 
 The post-change correctness/admission gate preserves Trino's normal optimizer choices. All 43 ClickBench queries,
 all 22 TPC-H queries, and all 99 TPC-DS queries pass with zero Nitro expression, aggregation, aggregation-source,
