@@ -243,6 +243,9 @@ public class HashJoinOperator
     private final Streams[] currentOutputs;
     private int[] retainedConstraintCountsByBatch = new int[16];
     private int[][] retainedConstraintPositionsByBatch = new int[16][];
+    private Mask[] retainedConstraintMasksByBatch = new Mask[16];
+    private int[] preparedInnerBatchPositionCounts = new int[16];
+    private int[] preparedInnerBatchCursors = new int[16];
     // Lazily built, per (inner batch, inner column) unified dictionary view for non-retained build
     // BinaryVector columns. Built once over the (small) build side; reused to emit every probe-output
     // batch's matched rows as a DictionaryVector over the shared dictionary instead of flattening the
@@ -2938,21 +2941,29 @@ public class HashJoinOperator
             if (vectorKind == 2) {
                 I32Vector result = allocator.allocate(allocationContext, I32Vector.class, currentOutputCount, I32Vector::new);
                 int[] output = result.values();
-                for (int position = 0; position < currentOutputCount; position++) {
-                    long reference = outputInnerRows[position];
-                    int batchIndex = JoinRowReference.batchIndex(reference);
-                    int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
-                    output[position] = toIntExact(accessors[batchIndex].value(sourcePosition));
+                int[] sourcePositions = innerSourcePositions();
+                for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                    int batchIndex = outputInnerRunBatchIndexes[runIndex];
+                    VectorAccess.LongValues accessor = accessors[batchIndex];
+                    int positionStart = outputInnerRunStarts[runIndex];
+                    int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+                    for (int position = positionStart; position < positionEnd; position++) {
+                        output[position] = toIntExact(accessor.value(sourcePositions[position]));
+                    }
                 }
                 return result;
             }
             I64Vector result = allocator.allocate(allocationContext, I64Vector.class, currentOutputCount, I64Vector::new);
             long[] output = result.values();
-            for (int position = 0; position < currentOutputCount; position++) {
-                long reference = outputInnerRows[position];
-                int batchIndex = JoinRowReference.batchIndex(reference);
-                int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
-                output[position] = accessors[batchIndex].value(sourcePosition);
+            int[] sourcePositions = innerSourcePositions();
+            for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                int batchIndex = outputInnerRunBatchIndexes[runIndex];
+                VectorAccess.LongValues accessor = accessors[batchIndex];
+                int positionStart = outputInnerRunStarts[runIndex];
+                int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+                for (int position = positionStart; position < positionEnd; position++) {
+                    output[position] = accessor.value(sourcePositions[position]);
+                }
             }
             return result;
         }
@@ -2965,11 +2976,15 @@ public class HashJoinOperator
             }
             F64Vector result = allocator.allocate(allocationContext, F64Vector.class, currentOutputCount, F64Vector::new);
             double[] output = result.values();
-            for (int position = 0; position < currentOutputCount; position++) {
-                long reference = outputInnerRows[position];
-                int batchIndex = JoinRowReference.batchIndex(reference);
-                int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
-                output[position] = accessors[batchIndex].value(sourcePosition);
+            int[] sourcePositions = innerSourcePositions();
+            for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                int batchIndex = outputInnerRunBatchIndexes[runIndex];
+                VectorAccess.DoubleValues accessor = accessors[batchIndex];
+                int positionStart = outputInnerRunStarts[runIndex];
+                int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+                for (int position = positionStart; position < positionEnd; position++) {
+                    output[position] = accessor.value(sourcePositions[position]);
+                }
             }
             return result;
         }
@@ -2981,11 +2996,15 @@ public class HashJoinOperator
         }
         BooleanVector result = allocator.allocate(allocationContext, BooleanVector.class, currentOutputCount, BooleanVector::new);
         boolean[] output = result.values();
-        for (int position = 0; position < currentOutputCount; position++) {
-            long reference = outputInnerRows[position];
-            int batchIndex = JoinRowReference.batchIndex(reference);
-            int sourcePosition = bufferedInner.batches().get(batchIndex).sourcePosition(JoinRowReference.position(reference));
-            output[position] = accessors[batchIndex].value(sourcePosition);
+        int[] sourcePositions = innerSourcePositions();
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int batchIndex = outputInnerRunBatchIndexes[runIndex];
+            VectorAccess.BooleanValues accessor = accessors[batchIndex];
+            int positionStart = outputInnerRunStarts[runIndex];
+            int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+            for (int position = positionStart; position < positionEnd; position++) {
+                output[position] = accessor.value(sourcePositions[position]);
+            }
         }
         return result;
     }
@@ -3059,45 +3078,102 @@ public class HashJoinOperator
             return allFalseBooleanStream(currentOutputCount);
         }
 
-        Vector[] segments = new Vector[preparedInnerRunCount];
-        int[] dictionaryIds = new int[currentOutputCount];
-        int segmentOffset = 0;
+        int[] activeBatchIndexes = joinScratch.activeInnerBatchIndexes;
+        int activeBatchCount = 0;
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int innerBatchIndex = outputInnerRunBatchIndexes[runIndex];
+            if (preparedInnerBatchPositionCounts[innerBatchIndex] == 0) {
+                activeBatchIndexes[activeBatchCount++] = innerBatchIndex;
+            }
+            preparedInnerBatchPositionCounts[innerBatchIndex] += outputInnerRunLengths[runIndex];
+        }
+
+        int groupedOffset = 0;
+        for (int activeIndex = 0; activeIndex < activeBatchCount; activeIndex++) {
+            int innerBatchIndex = activeBatchIndexes[activeIndex];
+            preparedInnerBatchCursors[innerBatchIndex] = groupedOffset;
+            groupedOffset += preparedInnerBatchPositionCounts[innerBatchIndex];
+        }
+        int[] groupedSourcePositions = retainedInnerMaskPositionsScratch();
+        int[] sourcePositions = innerSourcePositions();
         for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
             int innerBatchIndex = outputInnerRunBatchIndexes[runIndex];
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
             int positionStart = outputInnerRunStarts[runIndex];
-            int positionCount = outputInnerRunLengths[runIndex];
-
-            Vector source;
-            if (!innerBatch.retained()) {
-                Streams output = innerBatch.columns()[innerOutputIndex];
-                if (output == null || !output.has(stream)) {
-                    return null;
-                }
-                source = output.get(stream);
-                for (int index = 0; index < positionCount; index++) {
-                    dictionaryIds[positionStart + index] = segmentOffset + outputInnerLogicalPositions[positionStart + index];
-                }
+            int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+            int cursor = preparedInnerBatchCursors[innerBatchIndex];
+            for (int position = positionStart; position < positionEnd; position++) {
+                groupedSourcePositions[cursor++] = innerBatch.retained()
+                        ? sourcePositions[position]
+                        : outputInnerLogicalPositions[position];
             }
-            else {
-                constrainRetainedInnerBatch(innerBatchIndex, innerBatch, outputInnerRunUniqueStarts[runIndex], outputInnerRunUniqueCounts[runIndex]);
-                Output output = innerBatch.retainedBatch().output(innerOutputIndex);
-                if (!output.has(stream)) {
-                    return null;
-                }
-                source = output.borrow(stream);
-                int[] innerSourcePositions = innerSourcePositions();
-                for (int index = 0; index < positionCount; index++) {
-                    dictionaryIds[positionStart + index] = segmentOffset + innerSourcePositions[positionStart + index];
-                }
-            }
-
-            segments[runIndex] = source;
-            segmentOffset += source.length();
+            preparedInnerBatchCursors[innerBatchIndex] = cursor;
         }
 
-        Vector values = new ConcatenatedBooleanVector(segments);
-        return DictionaryVector.wrap(dictionaryIds, values);
+        try {
+            Vector[] segments = new Vector[activeBatchCount];
+            int segmentOffset = 0;
+            for (int activeIndex = 0; activeIndex < activeBatchCount; activeIndex++) {
+                int innerBatchIndex = activeBatchIndexes[activeIndex];
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+                int positionCount = preparedInnerBatchPositionCounts[innerBatchIndex];
+                int positionStart = preparedInnerBatchCursors[innerBatchIndex] - positionCount;
+
+                Vector source;
+                if (!innerBatch.retained()) {
+                    Streams output = innerBatch.columns()[innerOutputIndex];
+                    if (output == null || !output.has(stream)) {
+                        return null;
+                    }
+                    source = output.get(stream);
+                }
+                else {
+                    Arrays.sort(groupedSourcePositions, positionStart, positionStart + positionCount);
+                    int uniqueCount = 0;
+                    int previous = -1;
+                    int[] uniquePositions = innerUniqueSourcePositions();
+                    for (int position = positionStart; position < positionStart + positionCount; position++) {
+                        int sourcePosition = groupedSourcePositions[position];
+                        if (uniqueCount == 0 || sourcePosition != previous) {
+                            uniquePositions[uniqueCount++] = sourcePosition;
+                            previous = sourcePosition;
+                        }
+                    }
+                    constrainRetainedInnerBatchSourcePositions(innerBatchIndex, innerBatch, uniquePositions, uniqueCount);
+                    Output output = innerBatch.retainedBatch().output(innerOutputIndex);
+                    if (!output.has(stream)) {
+                        return null;
+                    }
+                    source = output.borrow(stream);
+                }
+
+                segments[activeIndex] = source;
+                preparedInnerBatchCursors[innerBatchIndex] = segmentOffset;
+                segmentOffset += source.length();
+            }
+
+            int[] dictionaryIds = new int[currentOutputCount];
+            for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+                int innerBatchIndex = outputInnerRunBatchIndexes[runIndex];
+                BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
+                int positionStart = outputInnerRunStarts[runIndex];
+                int positionEnd = positionStart + outputInnerRunLengths[runIndex];
+                int batchOffset = preparedInnerBatchCursors[innerBatchIndex];
+                for (int position = positionStart; position < positionEnd; position++) {
+                    dictionaryIds[position] = batchOffset + (innerBatch.retained()
+                            ? sourcePositions[position]
+                            : outputInnerLogicalPositions[position]);
+                }
+            }
+
+            Vector values = new ConcatenatedBooleanVector(segments);
+            return DictionaryVector.wrap(dictionaryIds, values);
+        }
+        finally {
+            for (int activeIndex = 0; activeIndex < activeBatchCount; activeIndex++) {
+                preparedInnerBatchPositionCounts[activeBatchIndexes[activeIndex]] = 0;
+            }
+        }
     }
 
     private Streams tryWrapSingleBatchInnerOutput(int innerOutputIndex)
@@ -3512,7 +3588,7 @@ public class HashJoinOperator
                 Arrays.equals(scratch, 0, uniqueCount, cachedPositions, 0, uniqueCount)) {
             return;
         }
-        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+        replaceRetainedInnerConstraint(innerBatchIndex, innerBatch, allocator.allocateSparseMask(
                 allocationContext,
                 scratch,
                 uniqueCount,
@@ -3540,7 +3616,7 @@ public class HashJoinOperator
         }
         int[] scratch = retainedInnerMaskPositionsScratch();
         System.arraycopy(uniqueSourcePositions, uniquePositionStart, scratch, 0, uniqueCount);
-        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+        replaceRetainedInnerConstraint(innerBatchIndex, innerBatch, allocator.allocateSparseMask(
                 allocationContext,
                 scratch,
                 uniqueCount,
@@ -3551,6 +3627,28 @@ public class HashJoinOperator
         }
         System.arraycopy(uniqueSourcePositions, uniquePositionStart, cachedPositions, 0, uniqueCount);
         retainedConstraintCountsByBatch[innerBatchIndex] = uniqueCount;
+    }
+
+    private void constrainRetainedInnerBatchSourcePositions(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, int[] sourcePositions, int positionCount)
+    {
+        int cachedCount = retainedConstraintCountsByBatch[innerBatchIndex];
+        int[] cachedPositions = retainedConstraintPositionsByBatch[innerBatchIndex];
+        if (positionCount == cachedCount &&
+                cachedPositions != null &&
+                Arrays.equals(sourcePositions, 0, positionCount, cachedPositions, 0, positionCount)) {
+            return;
+        }
+        replaceRetainedInnerConstraint(innerBatchIndex, innerBatch, allocator.allocateSparseMask(
+                allocationContext,
+                sourcePositions,
+                positionCount,
+                innerBatch.retainedBatch().borrowMask().size()));
+        if (cachedPositions == null || cachedPositions.length < positionCount) {
+            cachedPositions = new int[Math.max(positionCount, 4)];
+            retainedConstraintPositionsByBatch[innerBatchIndex] = cachedPositions;
+        }
+        System.arraycopy(sourcePositions, 0, cachedPositions, 0, positionCount);
+        retainedConstraintCountsByBatch[innerBatchIndex] = positionCount;
     }
 
     private int copySortedUniquePositions(int[] sourcePositions, int positionStart, int positionCount, int[] targetPositions, int targetStart)
@@ -3653,7 +3751,7 @@ public class HashJoinOperator
         }
         int[] scratch = retainedInnerMaskPositionsScratch();
         scratch[0] = sourcePosition;
-        innerBatch.retainedBatch().constrain(allocator.allocateSparseMask(
+        replaceRetainedInnerConstraint(innerBatchIndex, innerBatch, allocator.allocateSparseMask(
                 allocationContext,
                 scratch,
                 1,
@@ -3666,6 +3764,25 @@ public class HashJoinOperator
         retainedConstraintCountsByBatch[innerBatchIndex] = 1;
     }
 
+    private void replaceRetainedInnerConstraint(int innerBatchIndex, BufferedJoinInput.InnerBatch innerBatch, Mask constraint)
+    {
+        retainedConstraintMasksByBatch[innerBatchIndex] = replaceRetainedConstraint(
+                allocator,
+                allocationContext,
+                innerBatch.retainedBatch(),
+                retainedConstraintMasksByBatch[innerBatchIndex],
+                constraint);
+    }
+
+    static Mask replaceRetainedConstraint(Allocator allocator, Allocator.Context context, Batch batch, Mask previous, Mask constraint)
+    {
+        batch.constrain(constraint);
+        if (previous != null) {
+            allocator.release(context, previous);
+        }
+        return constraint;
+    }
+
     private void ensureRetainedConstraintCacheCapacity(int batchCount)
     {
         if (retainedConstraintCountsByBatch.length >= batchCount) {
@@ -3675,6 +3792,9 @@ public class HashJoinOperator
         retainedConstraintCountsByBatch = Arrays.copyOf(retainedConstraintCountsByBatch, batchCount);
         Arrays.fill(retainedConstraintCountsByBatch, previousLength, batchCount, -1);
         retainedConstraintPositionsByBatch = Arrays.copyOf(retainedConstraintPositionsByBatch, batchCount);
+        retainedConstraintMasksByBatch = Arrays.copyOf(retainedConstraintMasksByBatch, batchCount);
+        preparedInnerBatchPositionCounts = Arrays.copyOf(preparedInnerBatchPositionCounts, batchCount);
+        preparedInnerBatchCursors = Arrays.copyOf(preparedInnerBatchCursors, batchCount);
     }
 
     private int expectedInnerRowCount()
@@ -3880,6 +4000,7 @@ public class HashJoinOperator
         private final int[] preparedSingleRefs32;
         private final int[] preparedRangeStarts;
         private final int[] preparedRangeCounts;
+        private final int[] activeInnerBatchIndexes;
         private int[] outputInnerSourcePositions;
         private int[] outputInnerUniqueSourcePositions;
         private int[] retainedInnerMaskPositionsScratch;
@@ -3899,11 +4020,12 @@ public class HashJoinOperator
             preparedSingleRefs32 = new int[capacity];
             preparedRangeStarts = new int[capacity];
             preparedRangeCounts = new int[capacity];
+            activeInnerBatchIndexes = new int[capacity];
         }
 
         private long retainedBytes()
         {
-            long bytes = (long) outputOuterPositions.length * (11 * Integer.BYTES + 2 * Long.BYTES);
+            long bytes = (long) outputOuterPositions.length * (12 * Integer.BYTES + 2 * Long.BYTES);
             if (outputInnerSourcePositions != null) {
                 bytes += (long) outputInnerSourcePositions.length * Integer.BYTES;
             }

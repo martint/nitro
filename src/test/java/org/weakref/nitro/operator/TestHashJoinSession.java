@@ -32,6 +32,25 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestHashJoinSession
 {
     @Test
+    void testReleasesSupersededRetainedBuildConstraints()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Allocator.Context context = new Allocator.Context("retained-constraint-test");
+            try (Batch retained = batch(1, 2, 3)) {
+                Mask current = null;
+                for (int iteration = 0; iteration < 1_000; iteration++) {
+                    Mask replacement = allocator.allocateSparseMask(context, new int[] {iteration % 3}, 3);
+                    current = HashJoinOperator.replaceRetainedConstraint(allocator, context, retained, current, replacement);
+                }
+                assertThat(allocator.currentBytes(context)).isLessThan(128);
+                allocator.release(context, current);
+            }
+        }
+    }
+
+    @Test
     void testPreservesBuildIndexAcrossIndependentlyScheduledProbeBatches()
     {
         try (EngineResources resources = EngineResources.createDefault();
