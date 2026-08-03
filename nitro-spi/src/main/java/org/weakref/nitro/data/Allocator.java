@@ -1331,7 +1331,7 @@ public class Allocator
             return;
         }
         vectorLeases.remove(vector);
-        lease.owner.restoreAfterLease(vector, lease.ownerEpoch);
+        lease.owner.restoreAfterLease(vector, lease.ownerEpoch, lease.ownerReleased, lease.ownerDiscarded);
     }
 
     private void transferOwnedVector(Context context, Vector vector)
@@ -1379,7 +1379,13 @@ public class Allocator
 
     private void releaseVector(Context context, Vector vector)
     {
-        state(context).releaseVector(vector);
+        ContextState contextState = state(context);
+        VectorLeaseState lease = vectorLeases.get(vector);
+        if (lease != null && lease.owner == contextState) {
+            lease.ownerReleased = true;
+            return;
+        }
+        contextState.releaseVector(vector);
     }
 
     private void releaseVectorTree(Context context, Vector vector)
@@ -1413,7 +1419,13 @@ public class Allocator
 
     private void discardVector(Context context, Vector vector)
     {
-        state(context).discardVector(vector);
+        ContextState contextState = state(context);
+        VectorLeaseState lease = vectorLeases.get(vector);
+        if (lease != null && lease.owner == contextState) {
+            lease.ownerDiscarded = true;
+            return;
+        }
+        contextState.discardVector(vector);
     }
 
     private ContextState state(Context context)
@@ -1733,16 +1745,20 @@ public class Allocator
             return true;
         }
 
-        private void restoreAfterLease(Vector vector, long ownerEpoch)
+        private void restoreAfterLease(Vector vector, long ownerEpoch, boolean ownerReleased, boolean ownerDiscarded)
         {
+            if (ownerDiscarded || lastDiscardEpoch > ownerEpoch) {
+                allocator.releaseResident(vector.retainedBytes());
+                return;
+            }
+            if (ownerReleased) {
+                releaseLeased(vector);
+                return;
+            }
             if (lifecycleEpoch == ownerEpoch) {
                 inUseVectors.add(vector);
                 inUseVectorCounts.merge(requireNonNull(vector.poolFamily(), "leased vector has no pool family"), 1, Integer::sum);
                 stats.acquire(vector.retainedBytes(), true);
-                return;
-            }
-            if (lastDiscardEpoch > ownerEpoch) {
-                allocator.releaseResident(vector.retainedBytes());
                 return;
             }
             releaseLeased(vector);
@@ -2224,6 +2240,8 @@ public class Allocator
         private final ContextState owner;
         private final long ownerEpoch;
         private int references = 1;
+        private boolean ownerReleased;
+        private boolean ownerDiscarded;
 
         private VectorLeaseState(ContextState owner, long ownerEpoch)
         {

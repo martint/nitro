@@ -1080,8 +1080,27 @@ public class TestBatchRuntime
 
         allocator.leaseVectorTree(List.of(values)).close();
 
-        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+        I64Vector other = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        assertThat(other).isNotSameAs(values);
         allocator.release(owner);
+        I64Vector first = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        I64Vector second = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        assertThat(first == values || second == values).isTrue();
+    }
+
+    @Test
+    void testVectorTreeLeasePoolsAfterExplicitProducerRelease()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context owner = new Allocator.Context("Owner");
+        I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        Allocator.VectorTreeLease lease = allocator.leaseVectorTree(List.of(values));
+        allocator.release(owner, values);
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+
+        lease.close();
+
         assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isSameAs(values);
     }
 
