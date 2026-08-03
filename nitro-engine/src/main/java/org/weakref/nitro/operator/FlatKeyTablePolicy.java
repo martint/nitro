@@ -156,7 +156,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     5,
                     true,
                     true,
-                    96,
+                    128,
                     4,
                     128,
                     90,
