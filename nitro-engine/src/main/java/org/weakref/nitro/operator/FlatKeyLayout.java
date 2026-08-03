@@ -261,7 +261,10 @@ class FlatKeyLayout
         this.singleFixedOffset = singleField ? fixedOffsets[0] : -1;
         this.fixedRecordSize = fixedRecordSize;
         this.anyVariableWidth = anyVariableWidth;
-        boolean normalizedShape = policy.normalizedIntKey() && handlers.length >= 3 && handlers.length <= 4;
+        int normalizedKeyBits = Math.multiplyExact(handlers.length, Integer.SIZE);
+        boolean normalizedShape = policy.normalizedIntKey() &&
+                normalizedKeyBits > Long.SIZE &&
+                normalizedKeyBits <= policy.normalizedIntKeyMaxBits();
         for (FlatTypeHandler.Kind kind : fieldKinds) {
             normalizedShape &= kind == FlatTypeHandler.Kind.LONG || kind == FlatTypeHandler.Kind.BINARY;
         }

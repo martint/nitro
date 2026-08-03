@@ -90,6 +90,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int dictionaryNullResolutionMinFields,
             boolean adaptiveDiscriminatingFieldHash,
             boolean normalizedIntKey,
+            int normalizedIntKeyMaxBits,
             int discriminatingFieldHashMinFields,
             int discriminatingFieldHashSampleSize,
             int discriminatingFieldHashMinDistinctPercent,
@@ -97,8 +98,10 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
     {
         public Layout
         {
-            if (generatedDictionaryHashProbeTileRows <= 0) {
-                throw new IllegalArgumentException("Generated dictionary hash probe tile rows must be positive");
+            if (generatedDictionaryHashProbeTileRows <= 0 ||
+                    normalizedIntKeyMaxBits < 0 ||
+                    normalizedIntKeyMaxBits > Long.SIZE * 2) {
+                throw new IllegalArgumentException("Invalid flat layout admission policy");
             }
         }
 
@@ -153,6 +156,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     5,
                     true,
                     true,
+                    96,
                     4,
                     128,
                     90,
@@ -253,6 +257,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                             "nitro.group.adaptiveDiscriminatingFieldHash",
                             defaults.adaptiveDiscriminatingFieldHash()),
                     booleanProperty("nitro.group.normalizedIntKey", defaults.normalizedIntKey()),
+                    Integer.getInteger(
+                            "nitro.group.normalizedIntKeyMaxBits",
+                            defaults.normalizedIntKeyMaxBits()),
                     Integer.getInteger(
                             "nitro.group.discriminatingFieldHashMinFields",
                             defaults.discriminatingFieldHashMinFields()),

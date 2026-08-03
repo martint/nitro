@@ -1410,9 +1410,8 @@ class TestFlatGroupingTable
         Vector[] firstValues = {
                 DictionaryVector.wrapNested(new int[] {0, 0, 1, 0}, 4, utf8("alpha", "beta")),
                 new I64Vector(new long[] {1, 1, 2, 1}),
-                new I64Vector(new long[] {10, 10, 20, 10}),
-                new I64Vector(new long[] {1, 1, 1, 2})};
-        Vector[] nulls = {null, null, null, null};
+                new I64Vector(new long[] {10, 10, 20, 11})};
+        Vector[] nulls = {null, null, null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
@@ -1429,8 +1428,7 @@ class TestFlatGroupingTable
             Vector[] laterValues = {
                     utf8("beta", "alpha"),
                     new I64Vector(new long[] {2, 1}),
-                    new I64Vector(new long[] {20, -10}),
-                    new I64Vector(new long[] {1, 1})};
+                    new I64Vector(new long[] {20, -10})};
             table.beginBatch(laterValues, nulls);
             table.prepareBatchHashes(laterValues, nulls, Mask.all(2));
             assertThat(table.assignGroup(laterValues, nulls, 0, 3)).isEqualTo(1);
@@ -1448,9 +1446,8 @@ class TestFlatGroupingTable
         Vector[] firstValues = {
                 DictionaryVector.wrapNested(new int[] {0, 1}, 2, utf8("alpha", "outside-domain")),
                 new I64Vector(new long[] {1, -1}),
-                new I64Vector(new long[] {10, 20}),
-                new I64Vector(new long[] {100, 200})};
-        Vector[] nulls = {null, null, null, null};
+                new I64Vector(new long[] {10, 20})};
+        Vector[] nulls = {null, null, null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         try {
@@ -1465,8 +1462,7 @@ class TestFlatGroupingTable
             Vector[] laterValues = {
                     DictionaryVector.wrapNested(new int[] {0}, 1, utf8("alpha")),
                     new I64Vector(new long[] {1}),
-                    new I64Vector(new long[] {10}),
-                    new I64Vector(new long[] {100})};
+                    new I64Vector(new long[] {10})};
             table.beginBatch(laterValues, nulls);
             assertThat(layout.tryPrepareNormalizedIntKey(laterValues, nulls, 0)).isTrue();
             table.prepareBatchHashes(laterValues, nulls, Mask.all(1));
@@ -1475,6 +1471,56 @@ class TestFlatGroupingTable
         }
         finally {
             table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testFullWidthNormalizedIntKeyDeclinesEvenWithReusableValues()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        long[] second = new long[positions];
+        long[] third = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + (position % 8);
+            first[position] = position % 16;
+            second[position] = position % 4;
+            third[position] = position % 2;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second), new I64Vector(third)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null, null});
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testCompactNormalizedIntKeyDoesNotRequireReuse()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        long[] second = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + position;
+            first[position] = position;
+            second[position] = position + 1;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null});
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
         }
     }
 
