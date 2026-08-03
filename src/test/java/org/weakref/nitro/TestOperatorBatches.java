@@ -2795,6 +2795,55 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testGroupIdOperatorReleasesBorrowedBatchBuffers()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault(), new org.weakref.nitro.core.execution.MemoryReservation()
+        {
+            private long reservedBytes;
+
+            @Override
+            public java.util.concurrent.CompletionStage<Void> reserve(long bytes)
+            {
+                reservedBytes += bytes;
+                return java.util.concurrent.CompletableFuture.completedFuture(null);
+            }
+
+            @Override
+            public void release(long bytes)
+            {
+                reservedBytes -= bytes;
+            }
+
+            @Override
+            public long reservedBytes()
+            {
+                return reservedBytes;
+            }
+        });
+        Allocator.Context groupIdContext = new Allocator.Context("GroupIdOperator");
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(row("detail", 10L), row("other", 20L))),
+                new int[][] {
+                        {-1, 1},
+                        {0, 1}},
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
+            Batch batch = operator.next();
+            for (int output = 0; output < operator.outputCount(); output++) {
+                Output column = batch.output(output);
+                for (Stream stream : column.streams()) {
+                    column.borrow(stream);
+                }
+            }
+            assertThat(allocator.currentBytes(groupIdContext)).isPositive();
+
+            batch.close();
+
+            assertThat(allocator.currentBytes(groupIdContext)).isZero();
+        }
+    }
+
+    @Test
     void testGroupIdOperatorUsesMappedTypeForNullExtendedOutput()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

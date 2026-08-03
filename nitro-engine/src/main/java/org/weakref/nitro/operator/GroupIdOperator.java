@@ -182,7 +182,10 @@ public final class GroupIdOperator
 
         return new Batch(
                 allocator.allocateRangeMask(allocationContext, 0, rowCount),
+                _ -> {},
                 takenMask -> allocator.transfer(allocationContext, takenMask),
+                releasedMask -> allocator.release(allocationContext, releasedMask),
+                () -> {},
                 outputs);
     }
 
@@ -322,7 +325,11 @@ public final class GroupIdOperator
         Set<Stream> exposedStreams = streams.streams();
         // Encoded outputs can borrow their value vector from the source batch. Transfer only buffers owned by this
         // operator so taking a dictionary/RLE wrapper does not steal the borrowed child from its upstream owner.
-        return new Output(exposedStreams, streams::get, (stream, vector) -> allocator.transferOwned(allocationContext, vector));
+        return new Output(
+                exposedStreams,
+                streams::get,
+                (stream, vector) -> allocator.transferOwned(allocationContext, vector),
+                (stream, vector) -> allocator.release(allocationContext, vector));
     }
 
     private BooleanVector booleanVector(int size, boolean value)
