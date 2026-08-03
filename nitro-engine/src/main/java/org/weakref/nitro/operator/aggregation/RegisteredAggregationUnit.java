@@ -28,7 +28,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Engine-owned lowering from a registry aggregate protocol to one physical execution unit.
  */
-public final class RegisteredAggregationUnit
+public class RegisteredAggregationUnit
         implements PhysicalAggregationUnit
 {
     private final AggregationImplementation implementation;

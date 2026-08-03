@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
+import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -30,6 +32,21 @@ import static org.weakref.nitro.operator.aggregation.RegisteredAggregationUnit.O
 
 class TestRegisteredAggregationUnit
 {
+    @Test
+    void testBindsProviderDeclaredGeneratedUpdateToOpaqueState()
+    {
+        GroupedAggregationUpdate update = GroupedAggregationUpdate.inputValue(7);
+        GeneratedRegisteredAggregationUnit unit = new GeneratedRegisteredAggregationUnit(
+                new TrackingImplementation(), RAW, FINAL, new int[] {7}, -1, update);
+        LongStateUpdate state = (_, _) -> {};
+        LongStateUpdate[] targets = new LongStateUpdate[1];
+
+        unit.bindGeneratedGroupedState(state, targets, 0);
+
+        assertThat(unit.generatedGroupedUpdates()).containsExactly(update);
+        assertThat(targets).containsExactly(state);
+    }
+
     @Test
     void testPhysicalModesAndInputMappingArePlanOwned()
     {
