@@ -1092,7 +1092,9 @@ public class HashJoinOperator
     /** Once the build side is materialized, push this join's own key membership down to the probe. Runs once. */
     private void pushDynamicFilterIfReady()
     {
-        if (dynamicFilterPushed || !buildKeysViable) {
+        // A probe-side outer join preserves probe rows that have no build match. Filtering that side by build-key
+        // membership would discard precisely those rows before the join can null-extend them.
+        if (dynamicFilterPushed || !buildKeysViable || probeOuterJoin) {
             return;
         }
         dynamicFilterPushed = true;

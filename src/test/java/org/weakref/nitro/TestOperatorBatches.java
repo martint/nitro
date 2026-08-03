@@ -97,6 +97,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
@@ -2829,6 +2830,43 @@ public class TestOperatorBatches
                     .containsExactly(
                             row(1L, "matched", 1L, 100L),
                             row(2L, "unmatched", null, null));
+        }
+    }
+
+    @Test
+    void testHashJoinOperatorDoesNotPushBuildFilterIntoPreservedProbe()
+    {
+        AtomicBoolean filterPushed = new AtomicBoolean();
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator probe = new ConstantTableOperator(allocator, 2, List.of(
+                row(1L, "matched"),
+                row(2L, "preserved")))
+        {
+            @Override
+            public void pushDynamicFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                filterPushed.set(true);
+            }
+
+            @Override
+            public boolean supportsDynamicFilterPushdown(int column)
+            {
+                return true;
+            }
+        };
+
+        try (Operator operator = new HashJoinOperator(
+                allocator,
+                probe,
+                0,
+                new ConstantTableOperator(allocator, 2, List.of(row(1L, 100L))),
+                0,
+                true)) {
+            assertThat(OperatorAssertions.OperatorAssert.toRows(operator))
+                    .containsExactly(
+                            row(1L, "matched", 1L, 100L),
+                            row(2L, "preserved", null, null));
+            assertThat(filterPushed).isFalse();
         }
     }
 
