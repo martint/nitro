@@ -358,6 +358,22 @@ class TestAllocator
     }
 
     @Test
+    void testSharedResourceLeaseCanCloseAfterAllocator()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        AtomicInteger closes = new AtomicInteger();
+        Allocator.SharedResource<TestResource> lease =
+                allocator.acquireSharedResource(new Object(), () -> new TestResource(closes));
+
+        allocator.close();
+        assertThat(closes).hasValue(1);
+
+        lease.close();
+        lease.close();
+        assertThat(closes).hasValue(1);
+    }
+
+    @Test
     void testAllFalseBooleanConstantIsSharedAndUnowned()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

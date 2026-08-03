@@ -322,6 +322,12 @@ public class Allocator
 
     private synchronized void releaseSharedResource(Object key)
     {
+        // Allocator shutdown owns and closes every remaining shared resource. A host may subsequently unwind a
+        // child source or operator that still holds a lease, especially after cancellation. Its close is therefore
+        // already satisfied rather than an ownership error.
+        if (closed) {
+            return;
+        }
         SharedResourceState state = sharedResources.get(key);
         if (state == null || state.references <= 0) {
             throw new IllegalStateException("Shared resource is not acquired");
@@ -986,7 +992,7 @@ public class Allocator
     }
 
     @Override
-    public void close()
+    public synchronized void close()
     {
         if (closed) {
             return;
