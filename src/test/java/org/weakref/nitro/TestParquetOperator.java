@@ -747,6 +747,45 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroFilteredWindowDoesNotDeferAcrossInitialAdaptiveBatches()
+            throws IOException
+    {
+        java.nio.file.Path file = writeWideNumericParquetFile("nitro-adaptive-filtered-payload.parquet", List.of(
+                new WideNumericRow(1, 11, 12, 13, 14),
+                new WideNumericRow(2, 21, 22, 23, 24),
+                new WideNumericRow(3, 31, 32, 33, 34),
+                new WideNumericRow(4, 41, 42, 43, 44),
+                new WideNumericRow(5, 51, 52, 53, 54),
+                new WideNumericRow(6, 61, 62, 63, 64),
+                new WideNumericRow(7, 71, 72, 73, 74),
+                new WideNumericRow(8, 81, 82, 83, 84),
+                new WideNumericRow(9, 91, 92, 93, 94),
+                new WideNumericRow(10, 101, 102, 103, 104)));
+        NitroParquetScanResources resources = NitroParquetScanResources.createDefault(
+                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                new ParquetRuntimeFilterPolicy(true, true, true),
+                new ParquetScanBatchPolicy(4, 8, 8, 0.25));
+
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                resources,
+                new Allocator(EngineResources.createDefault()),
+                List.of(file),
+                List.of("key", "p1", "p2", "p3", "p4"))) {
+            scan.pushDynamicFilter(DynamicFilter.fromRange(0, 2, 6));
+            try (Batch first = scan.next()) {
+                assertThat(first.borrowMask()).hasSize(4);
+                assertThat(((I64Vector) first.output(4).borrow(Stream.VALUES)).values())
+                        .startsWith(24L, 34L, 44L, 54L);
+            }
+            try (Batch second = scan.next()) {
+                assertThat(second.borrowMask()).hasSize(1);
+                assertThat(((I64Vector) second.output(4).borrow(Stream.VALUES)).values()[0]).isEqualTo(64L);
+            }
+            assertThat(scan.hasNext()).isFalse();
+        }
+    }
+
+    @Test
     void testNitroDirectNullMaskKeepsValueReaderIndependent()
             throws IOException
     {

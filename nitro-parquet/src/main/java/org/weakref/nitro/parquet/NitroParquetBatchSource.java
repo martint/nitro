@@ -1609,7 +1609,7 @@ public final class NitroParquetBatchSource
         deferredFilteredPayload = deferredPolicy.enabled() &&
                 !dfPayloadBulk &&
                 survivorCount > 0 &&
-                survivorCount <= batchPolicy.maxRows() &&
+                survivorCount <= currentBatchRows &&
                 payloadColumnCount() >= deferredPolicy.minColumns();
         deferredWindowRows = count;
         deferredWindowSurvivors = survivors;
