@@ -74,8 +74,15 @@ three-measurement 0.571 control.
 
 The first ClickBench attempt used the harness's 1 GiB default and stopped at the
 first high-cardinality grouping query with 1,022 MiB reserved. The complete 4
-GiB rerun passed all 43 queries. That failure also exposed a shutdown-only
+GiB rerun passed all 43 queries. An isolated q19 check confirms this is not a
+Nitro memory regression: Trino also fails at 1,021.8 MiB, led by 953.0 MiB in
+`HashAggregationOperator`; Nitro fails at 1,016.2 MiB, led by 866.6 MiB in
+aggregation and 110.1 MiB in its fused source. The 4 GiB ClickBench limit is a
+suite requirement for both engines.
+
+The initial failure also exposed a shutdown-only
 `Shared resource is not acquired` warning when a Parquet source lease closed
 after its allocator had already been closed. It did not affect accepted query
-results, but is retained in `clickbench-default-1gb-failure.log` for the next
-lifecycle-hardening slice.
+results. Commit `ebe81a6d` makes parent-before-child lease unwind idempotent; a
+reproduced Nitro q19 admission failure retains the primary memory error without
+the shared-resource warning.
