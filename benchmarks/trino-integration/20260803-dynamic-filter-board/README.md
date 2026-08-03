@@ -62,6 +62,9 @@ CPU. The standalone physical-shape harness now also includes the two SQL `INTEGE
 about 0.380 CPU-s while its exclusive aggregation remains about 2.05 CPU-s. The remaining SQL/standalone aggregation
 gap therefore reflects exact Trino aggregate semantics and integration topology, not block adaptation: the SQL input
 was verified to be compact primitive arrays and zero-copy at the Nitro boundary.
+The interleaved two-warmup/three-measurement confirmation in
+`clickbench-q10-generated-registry-controlled.csv` gives Nitro 1.908 s / 5.230 CPU-s versus Trino 3.295 s /
+7.890 CPU-s: 0.579x wall and 0.663x CPU.
 
 The post-change correctness/admission gate preserves Trino's normal optimizer choices. All 43 ClickBench queries,
 all 22 TPC-H queries, and all 99 TPC-DS queries pass with zero Nitro expression, aggregation, aggregation-source,
