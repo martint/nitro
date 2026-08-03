@@ -781,6 +781,69 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroLateBinaryPayloadRemainsAlignedAcrossSparseBatches()
+            throws IOException
+    {
+        List<Integer> rows = new ArrayList<>();
+        for (int position = 0; position < 25_003; position++) {
+            rows.add(position % 31);
+        }
+        java.nio.file.Path file = writeIntStringParquetFile("nitro-late-binary-sparse-batches.parquet", rows);
+        assertDictionaryEncoding(file, "payload");
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                ParquetFile parquetFile = ParquetFile.open(file);
+                ColumnReader reader = columnReader(List.of(parquetFile), "payload")) {
+            Allocator.Context context = new Allocator.Context("late-binary-direct-skip");
+            reader.skip(10_000);
+            org.weakref.nitro.data.Vector payload = reader.readBinary(allocator, context, null, 3);
+            BinaryVector values = binaryValues(payload);
+            int[] ids = payload instanceof DictionaryVector dictionary ? dictionary.ids() : null;
+            for (int position = 0; position < 3; position++) {
+                assertThat(utf8(values, ids == null ? position : ids[position]))
+                        .isEqualTo("payload-" + ((10_000 + position) % 31));
+            }
+            allocator.release(context, payload);
+        }
+
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
+                NitroParquetScanResources.createDefault(),
+                new Allocator(EngineResources.createDefault()),
+                List.of(file),
+                List.of("value", "payload"))) {
+            int batchStart = 0;
+            while (scan.hasNext()) {
+                try (Batch batch = scan.next()) {
+                    I32Vector keys = (I32Vector) batch.output(0).borrow(Stream.VALUES);
+                    int count = batch.borrowMask().selectedCount();
+                    if (batchStart == 0) {
+                        scan.constrain(Mask.none(count));
+                        batchStart += count;
+                        continue;
+                    }
+                    int[] selected = count > 2
+                            ? new int[] {1, count / 2, count - 1}
+                            : new int[] {count - 1};
+                    scan.constrain(Mask.sparse(selected, count));
+
+                    org.weakref.nitro.data.Vector payload = batch.output(1).borrow(Stream.VALUES);
+                    BinaryVector values = binaryValues(payload);
+                    int[] ids = payload instanceof DictionaryVector dictionary ? dictionary.ids() : null;
+                    for (int position : selected) {
+                        int row = batchStart + position;
+                        assertThat(keys.values()[position]).isEqualTo(row % 31);
+                        assertThat(utf8(values, ids == null ? position : ids[position]))
+                                .isEqualTo("payload-" + (row % 31));
+                    }
+                    batchStart += count;
+                }
+            }
+            assertThat(batchStart).isEqualTo(rows.size());
+        }
+    }
+
+    @Test
     void testParquetScanReadsPlainColumns()
             throws IOException
     {

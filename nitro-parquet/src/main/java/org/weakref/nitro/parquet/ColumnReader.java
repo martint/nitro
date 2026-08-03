@@ -986,7 +986,7 @@ public final class ColumnReader
         // Consume the remainder of the currently-decoded page (already decoded; only the cursor moves).
         if (pageCursor < pageValueCount) {
             int take = (int) Math.min(pageValueCount - pageCursor, n);
-            pageCursor += take;
+            skipDecodedRows(take);
             n -= take;
         }
         if (pageNavigationPolicy.skipWholeChunks()) {
@@ -1006,10 +1006,28 @@ public final class ColumnReader
                 MemorySegment body = decompress(segment, pendingBodyPosition, pendingCompressedSize, pendingUncompressedSize, codec);
                 decodeDataPageV1(body, pendingNumValues, pendingEncoding);
                 pagePosition = pendingNextPosition;
-                pageCursor = (int) n;
+                skipDecodedRows((int) n);
                 n = 0;
             }
         }
+    }
+
+    /** Advance the logical row cursor and any streaming definition/value cursors for an already loaded page. */
+    private void skipDecodedRows(int rows)
+    {
+        if (pageBinaryDictionaryStreaming) {
+            int values = pageBinaryDictionaryNullFree ? rows : defRle.skipCountingOnes(rows);
+            rle.skip(values);
+        }
+        else if (pageDefStreaming) {
+            rle.skip(defRle.skipCountingOnes(rows));
+            defPageCursor += rows;
+        }
+        else if (pagePlainStreaming) {
+            plainValueCursor += defRle.skipCountingOnes(rows);
+            defPageCursor += rows;
+        }
+        pageCursor += rows;
     }
 
     /** Skip complete row-group chunks without parsing any page headers; partial chunks retain the page-safe path. */
