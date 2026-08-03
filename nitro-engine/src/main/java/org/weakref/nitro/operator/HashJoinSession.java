@@ -34,6 +34,7 @@ public final class HashJoinSession
 {
     private final ExternallyScheduledBatchFeed probe;
     private final HashJoinOperator join;
+    private Operator outputRoot;
 
     private Batch output;
     private boolean finishing;
@@ -121,6 +122,7 @@ public final class HashJoinSession
                 probeOuterJoin,
                 preparedBuild,
                 joinFilters.clone());
+        outputRoot = join;
     }
 
     public static Optional<HashJoinBuild> prepareBuild(
@@ -157,13 +159,37 @@ public final class HashJoinSession
     @Override
     public Schema outputSchema()
     {
-        return join.outputSchema();
+        return outputRoot.outputSchema();
     }
 
     public HashJoinSession withOutputs(int... outputChannels)
     {
         checkAcceptingInput();
+        if (outputRoot != join) {
+            throw new IllegalStateException("hash join output pipeline is already configured");
+        }
         join.withOutputs(outputChannels);
+        return this;
+    }
+
+    /**
+     * Composes a stateless output pipeline directly over native join batches.
+     *
+     * <p>The pipeline must preserve the externally scheduled input boundary: while a probe batch
+     * is active, its {@link Operator#hasNext()} must remain true until the wrapped join has been
+     * drained. Filter and projection pipelines satisfy this contract. This lets host integrations
+     * evaluate residual predicates before materializing join payload or crossing an engine
+     * boundary.
+     */
+    public HashJoinSession withOutputPipeline(UnaryOperator<Operator> outputPipeline)
+    {
+        checkAcceptingInput();
+        if (outputRoot != join) {
+            throw new IllegalStateException("hash join output pipeline is already configured");
+        }
+        outputRoot = requireNonNull(
+                requireNonNull(outputPipeline, "outputPipeline is null").apply(join),
+                "outputPipeline returned null");
         return this;
     }
 
@@ -203,8 +229,8 @@ public final class HashJoinSession
             return false;
         }
 
-        while (join.hasNext()) {
-            Batch candidate = join.next();
+        while (outputRoot.hasNext()) {
+            Batch candidate = outputRoot.next();
             if (!candidate.borrowMask().none()) {
                 output = candidate;
                 return true;
@@ -255,7 +281,7 @@ public final class HashJoinSession
             return false;
         }
         hasOutput();
-        return !join.hasNext();
+        return !outputRoot.hasNext();
     }
 
     private void checkAcceptingInput()
@@ -284,6 +310,6 @@ public final class HashJoinSession
             output.close();
             output = null;
         }
-        join.close();
+        outputRoot.close();
     }
 }
