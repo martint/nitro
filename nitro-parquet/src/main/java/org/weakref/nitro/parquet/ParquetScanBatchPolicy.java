@@ -16,16 +16,55 @@ package org.weakref.nitro.parquet;
 /**
  * Immutable output-batch sizing for a native Parquet scan.
  */
-public record ParquetScanBatchPolicy(int maxRows)
+public record ParquetScanBatchPolicy(
+        int initialRows,
+        int maxRows,
+        long adaptiveObservationRows,
+        double adaptiveMaximumSelectedFraction)
 {
+    public ParquetScanBatchPolicy
+    {
+        if (initialRows <= 0) {
+            throw new IllegalArgumentException("initialRows must be positive");
+        }
+        if (maxRows < initialRows) {
+            throw new IllegalArgumentException("maxRows is less than initialRows");
+        }
+        if (adaptiveObservationRows < 0) {
+            throw new IllegalArgumentException("adaptiveObservationRows is negative");
+        }
+        if (adaptiveMaximumSelectedFraction < 0 || adaptiveMaximumSelectedFraction > 1) {
+            throw new IllegalArgumentException("adaptiveMaximumSelectedFraction is outside [0, 1]");
+        }
+    }
+
+    public ParquetScanBatchPolicy(int maxRows)
+    {
+        this(maxRows, maxRows, 0, 0);
+    }
+
     public static ParquetScanBatchPolicy defaults()
     {
         return new ParquetScanBatchPolicy(10_000);
+    }
+
+    /**
+     * Starts with the cache-qualified native batch size and grows only after a downstream pipeline has
+     * demonstrated that the host boundary would otherwise receive very sparse batches.
+     */
+    public static ParquetScanBatchPolicy adaptiveHostBoundaryDefaults()
+    {
+        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, 0.25);
     }
 
     public static ParquetScanBatchPolicy fromSystemProperties()
     {
         return new ParquetScanBatchPolicy(
                 Integer.getInteger("nitro.parquet.scan.maxBatchRows", 10_000));
+    }
+
+    boolean adaptive()
+    {
+        return initialRows < maxRows && adaptiveObservationRows > 0;
     }
 }

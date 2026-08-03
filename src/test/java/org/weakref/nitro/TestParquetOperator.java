@@ -296,6 +296,37 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourceGrowsBatchAfterSustainedSparseDownstreamSelection()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int value = 0; value < 16; value++) {
+            rows.add(new ParquetRow(value, true, (long) value));
+        }
+        java.nio.file.Path file = writeParquetFile("nitro-adaptive-source-batches.parquet", true, rows);
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+        NitroParquetScanResources resources = NitroParquetScanResources.createDefault(
+                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                ParquetRuntimeFilterPolicy.defaults(),
+                new ParquetScanBatchPolicy(4, 8, 8, 0.25));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(resources, allocator, List.of(file), schema)) {
+            for (int batchIndex = 0; batchIndex < 2; batchIndex++) {
+                try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                    assertThat(batch.selection().positionCount()).isEqualTo(4);
+                    batch.select(new org.weakref.nitro.data.MaskSelection(Mask.sparse(new int[] {0}, 4)));
+                }
+            }
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(batch.selection().positionCount()).isEqualTo(8);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
     void testNitroParquetSourceLeavesNullInclusiveLongDomainAsResidual()
             throws IOException
     {

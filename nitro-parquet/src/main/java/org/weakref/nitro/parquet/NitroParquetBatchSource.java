@@ -233,11 +233,17 @@ public final class NitroParquetBatchSource
     private int deferredWindowRows;
     private int[] deferredWindowSurvivors;
     private int[] deferredRawSurvivors = new int[0];
-    private final java.util.function.Consumer<Mask> noOpConstrainer = _ -> {};
-    private final java.util.function.Consumer<Mask> lazyMaskConstrainer = this::constrainLazyMask;
-    private final Runnable noOpClose = () -> {};
-    private final Runnable lazyClose = this::advanceUnresolvedColumns;
-    private final Runnable deferredFilteredClose = this::advanceUnresolvedFilteredPayload;
+    private final java.util.function.Consumer<Mask> adaptiveConstrainer = this::observeAdaptiveSelection;
+    private final java.util.function.Consumer<Mask> lazyMaskConstrainer = this::constrainLazyMaskAndObserveSelection;
+    private final Runnable adaptiveClose = this::finishAdaptiveBatch;
+    private final Runnable lazyClose = this::finishLazyBatch;
+    private final Runnable deferredFilteredClose = this::finishDeferredFilteredBatch;
+    private int currentBatchRows;
+    private long adaptiveObservedRows;
+    private long adaptiveSelectedRows;
+    private int adaptiveBatchRows;
+    private int adaptiveBatchSelectedRows;
+    private boolean adaptiveDecided;
 
     // Late-materialization batch state: the active mask (narrowed by constrain) and per-column resolution cache for
     // the current batch. A column is decoded full when the mask is still all(), or skip-decoded at survivors + scattered
@@ -377,6 +383,7 @@ public final class NitroParquetBatchSource
         this.dictionaryFilterPolicy = requireNonNull(readerPolicy, "readerPolicy is null").dictionaryFilter();
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
+        this.currentBatchRows = batchPolicy.initialRows();
         this.directNumericBatchDecodeLease = allocator.acquireSharedResource(
                 directNumericBatchDecodeAdmissionKey,
                 () -> new DirectNumericBatchDecodeAdmission(numericDecodeAdmissionPolicy));
@@ -636,7 +643,7 @@ public final class NitroParquetBatchSource
         if (filtersActive()) {
             return new SourcePoll.Ready(emitSlice());
         }
-        int count = toIntExact(Math.min(batchPolicy.maxRows(), totalRows - nextRow));
+        int count = toIntExact(Math.min(currentBatchRows, totalRows - nextRow));
         if (rowGroupTracking) {
             count = toIntExact(Math.min(count, rowGroupRemaining));
             consumeRowGroupRows(count);
@@ -973,7 +980,8 @@ public final class NitroParquetBatchSource
         }
 
         Mask mask = allocator.allocateAllMask(allocationContext, count);
-        SourceBatch batch = new VectorSourceBatch(outputSchema, mask, outputs, batchBuffers, noOpConstrainer, noOpClose);
+        beginAdaptiveBatch(count);
+        SourceBatch batch = new VectorSourceBatch(outputSchema, mask, outputs, batchBuffers, adaptiveConstrainer, adaptiveClose);
         currentBatch = batch;
         return batch;
     }
@@ -990,6 +998,7 @@ public final class NitroParquetBatchSource
         lazyOutputResolution = true;
         lazyCount = count;
         lazyConstrained = false;
+        beginAdaptiveBatch(count);
         lazyMask = allocator.allocateAllMask(allocationContext, count);
         if (lazyResolved == null || lazyResolved.length < columnCount) {
             lazyResolved = new boolean[columnCount];
@@ -1831,7 +1840,7 @@ public final class NitroParquetBatchSource
     {
         int columnCount = readers.length;
         int start = windowSurvivorCursor;
-        int sliceCount = Math.min(batchPolicy.maxRows(), windowSurvivorCount - start);
+        int sliceCount = Math.min(currentBatchRows, windowSurvivorCount - start);
         windowSurvivorCursor += sliceCount;
 
         VectorColumnGeneration[] outputs = new VectorColumnGeneration[columnCount];
@@ -1882,13 +1891,14 @@ public final class NitroParquetBatchSource
             lazyCount = sliceCount;
             lazyConstrained = false;
         }
+        beginAdaptiveBatch(sliceCount);
         SourceBatch batch = new VectorSourceBatch(
                 outputSchema,
                 mask,
                 outputs,
                 batchBuffers,
-                deferredFilteredPayload ? lazyMaskConstrainer : noOpConstrainer,
-                deferredFilteredPayload ? deferredFilteredClose : noOpClose);
+                deferredFilteredPayload ? lazyMaskConstrainer : adaptiveConstrainer,
+                deferredFilteredPayload ? deferredFilteredClose : adaptiveClose);
         currentBatch = batch;
         return batch;
     }
@@ -2073,6 +2083,69 @@ public final class NitroParquetBatchSource
         }
         deferredFilteredPayload = false;
         deferredWindowSurvivors = null;
+    }
+
+    private void beginAdaptiveBatch(int rows)
+    {
+        adaptiveBatchRows = rows;
+        adaptiveBatchSelectedRows = rows;
+    }
+
+    private void observeAdaptiveSelection(Mask mask)
+    {
+        adaptiveBatchSelectedRows = mask.count();
+    }
+
+    private void constrainLazyMaskAndObserveSelection(Mask mask)
+    {
+        constrainLazyMask(mask);
+        observeAdaptiveSelection(mask);
+    }
+
+    private void finishLazyBatch()
+    {
+        try {
+            advanceUnresolvedColumns();
+        }
+        finally {
+            finishAdaptiveBatch();
+        }
+    }
+
+    private void finishDeferredFilteredBatch()
+    {
+        try {
+            advanceUnresolvedFilteredPayload();
+        }
+        finally {
+            finishAdaptiveBatch();
+        }
+    }
+
+    private void finishAdaptiveBatch()
+    {
+        if (adaptiveDecided || !batchPolicy.adaptive() || adaptiveBatchRows == 0) {
+            return;
+        }
+        adaptiveObservedRows += adaptiveBatchRows;
+        adaptiveSelectedRows += adaptiveBatchSelectedRows;
+        adaptiveBatchRows = 0;
+        if (adaptiveObservedRows < batchPolicy.adaptiveObservationRows()) {
+            return;
+        }
+        adaptiveDecided = true;
+        double selectedFraction = (double) adaptiveSelectedRows / adaptiveObservedRows;
+        if (selectedFraction <= batchPolicy.adaptiveMaximumSelectedFraction()) {
+            currentBatchRows = batchPolicy.maxRows();
+        }
+        if (diagnostics.rowCounts()) {
+            System.err.printf("[adaptive-batch] columns=%s observed=%s selected=%s fraction=%.4f rows=%s%n",
+                    columnNames,
+                    adaptiveObservedRows,
+                    adaptiveSelectedRows,
+                    selectedFraction,
+                    currentBatchRows);
+        }
     }
 
     private void constrainLazyMask(Mask mask)
