@@ -25,6 +25,7 @@ import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.HashArraySizeSupplier;
 import io.trino.operator.HashSemiJoinOperator;
+import io.trino.operator.InterpretedHashGenerator;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorContext;
 import io.trino.operator.OperatorFactory;
@@ -61,6 +62,7 @@ import org.weakref.nitro.tpch.TpchParquetTables;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -110,6 +112,7 @@ public final class TrinoTpchParquetSupport
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 600;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT_ALL = FUNCTION_RESOLUTION.getAggregateFunction("count", List.of());
+    private static final TestingAggregationFunction BIGINT_COUNT = FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MAX = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT));
@@ -283,7 +286,61 @@ public final class TrinoTpchParquetSupport
      */
     public MaterializedResult query16(TpchParquetTables tables)
     {
-        return executePipelinePlan(query16Plan(tables), query16OutputTypes(tables));
+        List<Type> outputTypes = query16OutputTypes(tables);
+        List<Type> distinctTypes = List.of(outputTypes.get(0), outputTypes.get(1), outputTypes.get(2), BIGINT);
+        List<Type> survivingTypes = List.of(BIGINT, outputTypes.get(0), outputTypes.get(1), outputTypes.get(2));
+        List<Page> surviving = executePipelinePlan(query16Plan(tables));
+        List<Page> partialDistinct = executeSqlAggregationStage(
+                surviving,
+                survivingTypes,
+                6,
+                new int[0],
+                () -> List.of(namedFactoryStep("q16.group.distinct.partial", hashAggregationFactory(
+                        16_3,
+                        distinctTypes,
+                        List.of(1, 2, 3, 0)))),
+                distinctTypes,
+                "q16.exchange.distinct.partial");
+        List<Page> partialCount = executeSqlAggregationStage(
+                partialDistinct,
+                distinctTypes,
+                2,
+                new int[] {0, 1, 2, 3},
+                () -> List.of(
+                        namedFactoryStep("q16.group.distinct.final", hashAggregationFactory(
+                                16_4,
+                                distinctTypes,
+                                List.of(0, 1, 2, 3))),
+                        namedFactoryStep("q16.group.count.partial", hashAggregationFactory(
+                                16_5,
+                                outputTypes.subList(0, 3),
+                                List.of(0, 1, 2),
+                                BIGINT_COUNT.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
+                outputTypes,
+                "q16.exchange.count.partial");
+        List<Page> counted = executeSqlAggregationStage(
+                partialCount,
+                outputTypes,
+                2,
+                new int[] {0, 1, 2},
+                () -> List.of(namedFactoryStep("q16.group.count.final", hashAggregationFactory(
+                        16_6,
+                        outputTypes.subList(0, 3),
+                        List.of(0, 1, 2),
+                        BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
+                outputTypes,
+                "q16.exchange.count.final");
+        return executePipelinePlan(
+                new PipelinePlan(
+                        new PagesPipelineSource(counted, "q16.merge.counted"),
+                        List.of(namedFactoryStep("q16.order_by", orderByFactory(
+                                16_7,
+                                outputTypes,
+                                List.of(3, 0, 1, 2),
+                                List.of(DESC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
+                        "q16.sink.final",
+                        outputTypes),
+                outputTypes);
     }
 
     /**
@@ -1630,9 +1687,10 @@ public final class TrinoTpchParquetSupport
         List<String> partsuppColumns = List.of("ps_partkey", "ps_suppkey");
         List<Type> partsuppTypes = tableColumnTypes(tables, "partsupp", partsuppColumns);
         Type suppkeyType = partsuppTypes.get(1);
-        // [ps_partkey, ps_suppkey, p_partkey, p_brand, p_type, p_size]
+        // The join internally carries both key columns, but the optimized SQL boundary is the narrow
+        // [ps_suppkey, p_brand, p_type, p_size] layout consumed by the semi join and DISTINCT stage.
         List<Type> joinedTypes = concatTypes(partsuppTypes, partTypes);
-        List<Type> outputTypes = query16OutputTypes(tables);
+        List<Type> survivingTypes = List.of(suppkeyType, brandType, typeType, sizeType);
         return new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("partsupp"), partsuppColumns, "q16.scan.partsupp"),
                 List.of(
@@ -1642,35 +1700,14 @@ public final class TrinoTpchParquetSupport
                         namedFactoryStep("q16.filter.no_complaints", filterAndProjectFactory(
                                 16_2,
                                 Optional.of(not(field(joinedTypes.size(), BOOLEAN))),
-                                identityProjections(joinedTypes),
-                                joinedTypes)),
-                        // Preserve Trino's partial/final DISTINCT topology even though this harness has one stream.
-                        namedFactoryStep("q16.group.distinct.partial", hashAggregationFactory(
-                                16_3,
-                                List.of(brandType, typeType, sizeType, suppkeyType),
-                                List.of(3, 4, 5, 1))),
-                        namedFactoryStep("q16.group.distinct.final", hashAggregationFactory(
-                                16_4,
-                                List.of(brandType, typeType, sizeType, suppkeyType),
-                                List.of(0, 1, 2, 3))),
-                        namedFactoryStep("q16.group.count.partial", hashAggregationFactory(
-                                16_5,
-                                List.of(brandType, typeType, sizeType),
-                                List.of(0, 1, 2),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                        // [p_brand, p_type, p_size, supplier_cnt]
-                        namedFactoryStep("q16.group.count.final", hashAggregationFactory(
-                                16_6,
-                                List.of(brandType, typeType, sizeType),
-                                List.of(0, 1, 2),
-                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
-                        namedFactoryStep("q16.order_by", orderByFactory(
-                                16_7,
-                                outputTypes,
-                                List.of(3, 0, 1, 2),
-                                List.of(DESC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
-                "q16.sink.final",
-                outputTypes);
+                                List.of(
+                                        field(1, suppkeyType),
+                                        field(3, brandType),
+                                        field(4, typeType),
+                                        field(5, sizeType)),
+                                List.of(suppkeyType, brandType, typeType, sizeType)))),
+                "q16.sink.surviving",
+                survivingTypes);
     }
 
     private List<Type> query16OutputTypes(TpchParquetTables tables)
@@ -2560,6 +2597,72 @@ public final class TrinoTpchParquetSupport
         }
 
         return outputPages;
+    }
+
+    private List<Page> executeSqlAggregationStage(
+            List<Page> inputPages,
+            List<Type> inputTypes,
+            int partitionCount,
+            int[] hashChannels,
+            Supplier<List<PipelineStep>> steps,
+            List<Type> outputTypes,
+            String profileName)
+    {
+        List<List<Page>> partitions = partitionPages(inputPages, inputTypes, partitionCount, hashChannels);
+        List<Page> output = new ArrayList<>();
+        for (int partition = 0; partition < partitionCount; partition++) {
+            output.addAll(executePipelinePlan(new PipelinePlan(
+                    new PagesPipelineSource(partitions.get(partition), profileName + ".source"),
+                    steps.get(),
+                    profileName + ".sink",
+                    outputTypes)));
+        }
+        return output;
+    }
+
+    private static List<List<Page>> partitionPages(
+            List<Page> pages,
+            List<Type> inputTypes,
+            int partitionCount,
+            int[] hashChannels)
+    {
+        List<List<Page>> partitions = new ArrayList<>(partitionCount);
+        for (int partition = 0; partition < partitionCount; partition++) {
+            partitions.add(new ArrayList<>());
+        }
+        if (hashChannels.length == 0) {
+            for (int page = 0; page < pages.size(); page++) {
+                partitions.get(page % partitionCount).add(pages.get(page));
+            }
+            return partitions;
+        }
+
+        List<Type> hashTypes = Arrays.stream(hashChannels)
+                .mapToObj(inputTypes::get)
+                .toList();
+        InterpretedHashGenerator hashGenerator = InterpretedHashGenerator.createChannelsHashGenerator(
+                hashTypes,
+                hashChannels,
+                new TypeOperators());
+        for (Page page : pages) {
+            int positionCount = page.getPositionCount();
+            long[] hashes = new long[positionCount];
+            for (int position = 0; position < positionCount; position++) {
+                hashes[position] = hashGenerator.hashPosition(position, page);
+            }
+            int[][] positions = new int[partitionCount][positionCount];
+            int[] counts = new int[partitionCount];
+            for (int position = 0; position < positionCount; position++) {
+                int partition = Math.floorMod(hashes[position], partitionCount);
+                positions[partition][counts[partition]++] = position;
+            }
+            for (int partition = 0; partition < partitionCount; partition++) {
+                if (counts[partition] > 0) {
+                    partitions.get(partition).add(page.getPositions(positions[partition], 0, counts[partition]));
+                }
+            }
+        }
+        return partitions;
     }
 
     private TaskContext taskContext()

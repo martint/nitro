@@ -29,6 +29,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
+import org.weakref.nitro.operator.SqlStageAggregationOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.aggregation.AvgF64;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -1150,8 +1151,8 @@ final class TpchParquetSupport
         HashJoinOperator joined = new HashJoinOperator(allocator, partsupp, 0, part, 0);
         boolean projectJoinOutput = Boolean.parseBoolean(System.getProperty("nitro.tpch.query16ProjectJoinOutput", "true"));
         if (projectJoinOutput) {
-            // Match Velox's hash-join output layout: [ps_suppkey, p_brand, p_type, p_size]. Neither equi-join key is
-            // consumed downstream, so retaining it only widens the anti-join and both grouping inputs.
+            // Match Trino's optimized join output layout: [ps_suppkey, p_brand, p_type, p_size]. Neither equi-join
+            // key is consumed downstream, so the projection is part of the physical SQL plan.
             joined.withOutputs(1, 3, 4, 5);
         }
         Operator joinedParts = profiled(profile, "q16.join.part", joined);
@@ -1163,29 +1164,31 @@ final class TpchParquetSupport
                 0));
         Operator surviving = profiled(profile, "q16.anti_join.supplier", new SemiJoinOperator(allocator, joinedParts, projectJoinOutput ? 0 : 1, complainingSuppliers, 0, false));
 
-        // Preserve Trino's four physical aggregation stages. The harness has one stream, so the second DISTINCT
-        // pass is a semantic no-op and the final SUM sees one partial count per key, but both engines still execute
-        // the same operator topology as the SQL plan.
-        Operator partialDistinct = profiled(profile, "q16.group.distinct.partial", new GroupedAggregationOperator(
+        // Fragment 4 has six source drivers, each with independent partial-DISTINCT state.
+        Operator partialDistinct = profiled(profile, "q16.group.distinct.partial", new SqlStageAggregationOperator(
                 allocator,
-                projectJoinOutput ? List.of(1, 2, 3, 0) : List.of(3, 4, 5, 1),
-                List.of(),
-                surviving));
-        Operator finalDistinct = profiled(profile, "q16.group.distinct.final", new GroupedAggregationOperator(
+                surviving,
+                6,
+                new int[0],
+                List.of(SqlStageAggregationOperator.distinct(
+                        projectJoinOutput ? List.of(1, 2, 3, 0) : List.of(3, 4, 5, 1)))));
+        // The exchange hashes all four DISTINCT keys into two fragment-3 tasks. Each task runs final DISTINCT and
+        // partial count in one pipeline, exactly as the distributed SQL plan does.
+        Operator partialCount = profiled(profile, "q16.group.distinct.final_and_count.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2, 3),
-                List.of(),
-                partialDistinct));
-        Operator partialCount = profiled(profile, "q16.group.count.partial", new GroupedAggregationOperator(
+                partialDistinct,
+                2,
+                new int[] {0, 1, 2, 3},
+                List.of(
+                        SqlStageAggregationOperator.distinct(List.of(0, 1, 2, 3)),
+                        SqlStageAggregationOperator.aggregate(List.of(0, 1, 2), () -> List.of(new CountColumn(3))))));
+        // A second three-key hash exchange feeds two fragment-2 final-count tasks.
+        Operator counted = profiled(profile, "q16.group.count.final", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(new CountAll()),
-                finalDistinct));
-        Operator counted = profiled(profile, "q16.group.count.final", new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1, 2),
-                List.of(new Sum(3)),
-                partialCount));
+                partialCount,
+                2,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.aggregate(List.of(0, 1, 2), () -> List.of(new Sum(3))))));
         // SQL order: p_brand, p_type, p_size, supplier_cnt; sort: cnt DESC, brand, type, size
         Operator sorted = profiled(profile, "q16.sort", new SortOperator(allocator, new int[] {3, 0, 1, 2}, new boolean[] {true, false, false, false}, counted));
         return sorted;
