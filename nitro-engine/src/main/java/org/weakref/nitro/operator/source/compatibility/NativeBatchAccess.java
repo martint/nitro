@@ -17,7 +17,7 @@ import org.weakref.nitro.operator.Batch;
 
 /// Ownership-transfer protocol for a source that already supplies a native Nitro batch.
 @FunctionalInterface
-interface NativeBatchAccess
+public interface NativeBatchAccess
 {
     Batch transfer();
 }

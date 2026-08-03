@@ -16,7 +16,7 @@ package org.weakref.nitro.operator.source.compatibility;
 import org.weakref.nitro.core.batch.BatchCapability;
 
 /// Compatibility capability for zero-copy native ingress.
-enum NativeBatchCapability
+public enum NativeBatchCapability
         implements BatchCapability<NativeBatchAccess>
 {
     NATIVE_BATCH;
