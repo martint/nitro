@@ -456,7 +456,24 @@ final class TpchParquetSupport
                                 new Reference(lowBucket, Stream.VALUES))),
                 primitiveRegistry,
                 joined));
-        Operator aggregated = profiled(profile, "q12.group.shipmode", new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1), new Sum(2)), projected));
+        // The distributed SQL plan has three probe/partial-aggregation drivers. Their six shipmode rows hash into
+        // two final aggregation tasks before the final two-row sort.
+        Operator partial = profiled(profile, "q12.group.partial", new SqlStageAggregationOperator(
+                allocator,
+                projected,
+                3,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0),
+                        () -> List.of(new Sum(1), new Sum(2))))));
+        Operator aggregated = profiled(profile, "q12.group.final", new SqlStageAggregationOperator(
+                allocator,
+                partial,
+                2,
+                new int[] {0},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0),
+                        () -> List.of(new Sum(1), new Sum(2))))));
         return profiled(profile, "q12.sort", new SortOperator(allocator, new int[] {0}, new boolean[] {false}, aggregated));
     }
 

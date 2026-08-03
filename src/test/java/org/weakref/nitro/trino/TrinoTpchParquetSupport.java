@@ -206,7 +206,45 @@ public final class TrinoTpchParquetSupport
      */
     public MaterializedResult query12(TpchParquetTables tables)
     {
-        return executePipelinePlan(query12Plan(tables), query12OutputTypes(tables));
+        List<Type> outputTypes = query12OutputTypes(tables);
+        List<Page> buckets = executePipelinePlan(query12Plan(tables));
+        List<Page> partial = executeSqlAggregationStage(
+                buckets,
+                outputTypes,
+                3,
+                new int[0],
+                () -> List.of(namedFactoryStep("q12.group.partial", hashAggregationFactory(
+                        12_2,
+                        outputTypes,
+                        List.of(0),
+                        BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                        BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))),
+                outputTypes,
+                "q12.exchange.partial");
+        List<Page> aggregated = executeSqlAggregationStage(
+                partial,
+                outputTypes,
+                2,
+                new int[] {0},
+                () -> List.of(namedFactoryStep("q12.group.final", hashAggregationFactory(
+                        12_4,
+                        outputTypes,
+                        List.of(0),
+                        BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                        BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))),
+                outputTypes,
+                "q12.exchange.final");
+        return executePipelinePlan(
+                new PipelinePlan(
+                        new PagesPipelineSource(aggregated, "q12.merge.aggregated"),
+                        List.of(namedFactoryStep("q12.order_by", orderByFactory(
+                                12_3,
+                                outputTypes,
+                                List.of(0),
+                                List.of(ASC_NULLS_LAST)))),
+                        "q12.sink.final",
+                        outputTypes),
+                outputTypes);
     }
 
     /**
@@ -921,7 +959,6 @@ public final class TrinoTpchParquetSupport
         RowExpression isUrgent = or(equalUtf8(1, "1-URGENT", priorityType), equalUtf8(1, "2-HIGH", priorityType));
         // [shipmode, high, low]
         List<Type> bucketTypes = List.of(shipModeType, BIGINT, BIGINT);
-        List<Type> outputTypes = query12OutputTypes(tables);
         return new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("orders"), ordersColumns, "q12.scan.orders"),
                 List.of(
@@ -934,16 +971,9 @@ public final class TrinoTpchParquetSupport
                                         field(3, shipModeType),
                                         ifExpression(isUrgent, constant(1L, BIGINT), constant(0L, BIGINT), BIGINT),
                                         ifExpression(isUrgent, constant(0L, BIGINT), constant(1L, BIGINT), BIGINT)),
-                                bucketTypes)),
-                        namedFactoryStep("q12.group", hashAggregationFactory(
-                                12_2,
-                                List.of(shipModeType),
-                                List.of(0),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
-                        namedFactoryStep("q12.order_by", orderByFactory(12_3, outputTypes, List.of(0), List.of(ASC_NULLS_LAST)))),
-                "q12.sink.final",
-                outputTypes);
+                                bucketTypes))),
+                "q12.sink.buckets",
+                bucketTypes);
     }
 
     private List<Type> query12OutputTypes(TpchParquetTables tables)
