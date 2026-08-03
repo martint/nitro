@@ -36,6 +36,12 @@ interprets ClickHouse's `\\1` replacement as a literal `1`; the integration harn
 8.193 CPU-s versus 3.151 s / 21.081 CPU-s, or 0.424x wall and 0.389x CPU. Controlled q19 is CPU-neutral (1.009x)
 but faster on wall (0.829x), so no implementation change is justified there.
 
+The interleaved q12 control likewise overturns the old single-sample CPU regression. Nitro uses 0.935x mean CPU
+(0.948x p50) but 1.380x p50 wall. Its scan/partial aggregation is fused into the Nitro source and uses about
+0.67 CPU-s; the downstream Nitro aggregation is slower than Trino's corresponding aggregation, but Nitro still uses
+less CPU overall. The remaining q12 gap is critical-path utilization around the exchange, not excess computation;
+`clickbench-q12-controlled-wall-utilization.csv` records the controlled result.
+
 ClickBench q05/q06 exposed a plan-shape error rather than an operator regression. The Nitro-enabled optimizer had
 disabled Trino's single-DISTINCT-to-group-by rewrite and serialized all 100 million rows through one Nitro
 aggregation. Restoring Trino's ordinary strategy changes q05 from 1.997x to 1.041x p50 wall and q06 from 3.450x to
