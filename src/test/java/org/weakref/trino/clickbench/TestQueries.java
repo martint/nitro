@@ -60,6 +60,26 @@ public class TestQueries
     }
 
     @Test
+    void testQuery05()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query05(writeHitsFixture());
+            assertThat(result.getOnlyValue()).isEqualTo(5L);
+        }
+    }
+
+    @Test
+    void testQuery06()
+            throws IOException
+    {
+        try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            MaterializedResult result = support.query06(writeHitsFixture());
+            assertThat(result.getOnlyValue()).isEqualTo(5L);
+        }
+    }
+
+    @Test
     void testQuery07()
             throws IOException
     {

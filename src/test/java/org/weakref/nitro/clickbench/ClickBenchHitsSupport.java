@@ -34,10 +34,12 @@ import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
+import org.weakref.nitro.operator.MaterializeOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
@@ -74,6 +76,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -287,14 +290,12 @@ public final class ClickBenchHitsSupport
 
     static Operator query05(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
-        Operator scan = profiled(profile, "q05.scan", clickBenchScan(allocator, file, "UserID"));
-        Operator distinct = profiled(profile, "q05.distinct", new MarkDistinctOperator(allocator, 0, scan, EngineResources.from(allocator).operatorResources()));
-        return profiled(profile, "q05.aggregate", new AggregationOperator(allocator, List.of(new CountAll()), distinct));
+        return sqlShapedCountDistinct(allocator, file, "UserID", "q05", profile);
     }
 
     public static Operator query06(Allocator allocator, Path file)
     {
-        return countDistinct(allocator, clickBenchScan(allocator, file, "SearchPhrase"));
+        return sqlShapedCountDistinct(allocator, file, "SearchPhrase", "q06", null);
     }
 
     public static Operator query08(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -895,9 +896,46 @@ public final class ClickBenchHitsSupport
         }
     }
 
-    private static Operator countDistinct(Allocator allocator, Operator source)
+    /**
+     * Models Trino's distributed single-DISTINCT rewrite: each scan split performs local key aggregation, the
+     * exchange materializes those partial rows, a final key aggregation removes cross-split duplicates, and only
+     * then does the global count run. The direct one-set kernel belongs in a kernel benchmark, not in this
+     * SQL-shaped harness.
+     */
+    private static Operator sqlShapedCountDistinct(
+            Allocator allocator,
+            Path input,
+            String column,
+            String profilePrefix,
+            OperatorCpuProfile profile)
     {
-        return new AggregationOperator(allocator, List.of(new CountAll()), new MarkDistinctOperator(allocator, 0, source, EngineResources.from(allocator).operatorResources()));
+        try {
+            List<Path> splits = Files.isDirectory(input) ? parquetFiles(input) : List.of(input);
+            List<Operator> partials = new ArrayList<>(splits.size());
+            for (Path split : splits) {
+                Operator scan = profiled(profile, profilePrefix + ".partial-scan", clickBenchScan(allocator, split, column));
+                partials.add(profiled(
+                        profile,
+                        profilePrefix + ".partial-distinct",
+                        new MarkDistinctOperator(allocator, 0, scan, EngineResources.from(allocator).operatorResources())));
+            }
+
+            Operator exchange = profiled(
+                    profile,
+                    profilePrefix + ".exchange",
+                    new MaterializeOperator(allocator, new UnionAllOperator(1, partials)));
+            Operator finalDistinct = profiled(
+                    profile,
+                    profilePrefix + ".final-distinct",
+                    new MarkDistinctOperator(allocator, 0, exchange, EngineResources.from(allocator).operatorResources()));
+            return profiled(
+                    profile,
+                    profilePrefix + ".final-count",
+                    new AggregationOperator(allocator, List.of(new CountAll()), finalDistinct));
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to list ClickBench splits for " + input, exception);
+        }
     }
 
     private static Operator topIntegerCounts(Allocator allocator, Path file, String column)

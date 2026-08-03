@@ -18,7 +18,6 @@ import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import io.trino.metadata.TestingFunctionResolution;
 import io.trino.operator.AggregationOperator.AggregationOperatorFactory;
-import io.trino.operator.DistinctLimitOperator.DistinctLimitOperatorFactory;
 import io.trino.operator.Driver;
 import io.trino.operator.DriverContext;
 import io.trino.operator.FilterAndProjectOperator;
@@ -271,24 +270,12 @@ public final class TrinoClickBenchSupport
 
     public MaterializedResult query05(Path input)
     {
-        return materialize(
-                input,
-                List.of("UserID"),
-                List.of(
-                        distinctLimitFactory(1, List.of(BIGINT), List.of(0), Long.MAX_VALUE),
-                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                List.of(BIGINT));
+        return sqlShapedCountDistinct(input, "UserID", BIGINT);
     }
 
     public MaterializedResult query06(Path input)
     {
-        return materialize(
-                input,
-                List.of("SearchPhrase"),
-                List.of(
-                        distinctLimitFactory(1, List.of(VARCHAR), List.of(0), Long.MAX_VALUE),
-                        aggregationFactory(2, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                List.of(BIGINT));
+        return sqlShapedCountDistinct(input, "SearchPhrase", VARCHAR);
     }
 
     public MaterializedResult query09(Path input)
@@ -988,7 +975,24 @@ public final class TrinoClickBenchSupport
 
     private MaterializedResult execute(Path input, List<String> columns, List<OperatorFactory> factories, List<Type> outputTypes, boolean collectOutput)
     {
-        List<Page> outputPages = collectOutput ? new ArrayList<>() : null;
+        PipelineOutput output = executePipeline(
+                driverContext -> new ParquetPageSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("source"), ParquetPageSourceOperator.class.getSimpleName()),
+                        input,
+                        columns),
+                factories,
+                collectOutput);
+
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(output.driverContext().getSession(), outputTypes);
+        for (Page page : output.pages()) {
+            result.page(page);
+        }
+        return result.build();
+    }
+
+    private PipelineOutput executePipeline(SourceFactory sourceFactory, List<OperatorFactory> factories, boolean collectOutput)
+    {
+        List<Page> outputPages = new ArrayList<>();
         DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
                 .setQueryMaxMemory(queryMaxMemory)
                 .setMemoryPoolSize(queryMaxMemory)
@@ -997,10 +1001,7 @@ public final class TrinoClickBenchSupport
                 .addDriverContext();
 
         List<Operator> operators = new ArrayList<>();
-        operators.add(new ParquetPageSourceOperator(
-                driverContext.addOperatorContext(0, new PlanNodeId("source"), ParquetPageSourceOperator.class.getSimpleName()),
-                input,
-                columns));
+        operators.add(sourceFactory.create(driverContext));
 
         for (OperatorFactory factory : factories) {
             operators.add(factory.createOperator(driverContext));
@@ -1027,15 +1028,48 @@ public final class TrinoClickBenchSupport
         catch (Exception exception) {
             throw new RuntimeException("Unable to execute Trino ClickBench pipeline", exception);
         }
+        return new PipelineOutput(driverContext, outputPages);
+    }
 
-        MaterializedResult.Builder result = MaterializedResult.resultBuilder(driverContext.getSession(), outputTypes);
-        if (collectOutput) {
-            for (Page page : outputPages) {
-                result.page(page);
-            }
+    /** Executes the same local/final aggregation topology selected for distributed single-DISTINCT SQL. */
+    private MaterializedResult sqlShapedCountDistinct(Path input, String column, Type type)
+    {
+        List<Page> partialKeys = new ArrayList<>();
+        for (Path split : TrinoClickBenchPageReader.resolveFiles(input)) {
+            partialKeys.addAll(executePipeline(
+                    driverContext -> new ParquetPageSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("partial-source"), ParquetPageSourceOperator.class.getSimpleName()),
+                            split,
+                            List.of(column)),
+                    List.of(hashAggregationFactory(1, List.of(type), List.of(0))),
+                    true).pages());
         }
+
+        List<Page> finalKeys = executePipeline(
+                driverContext -> new PagesSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("distinct-exchange"), PagesSourceOperator.class.getSimpleName()),
+                        partialKeys),
+                List.of(hashAggregationFactory(1, List.of(type), List.of(0))),
+                true).pages();
+        PipelineOutput count = executePipeline(
+                driverContext -> new PagesSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("count-exchange"), PagesSourceOperator.class.getSimpleName()),
+                        finalKeys),
+                List.of(aggregationFactory(1, COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                true);
+
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(count.driverContext().getSession(), List.of(BIGINT));
+        count.pages().forEach(result::page);
         return result.build();
     }
+
+    @FunctionalInterface
+    private interface SourceFactory
+    {
+        Operator create(DriverContext driverContext);
+    }
+
+    private record PipelineOutput(DriverContext driverContext, List<Page> pages) {}
 
     private static final class ParquetPageSourceOperator
             implements Operator
@@ -1098,6 +1132,62 @@ public final class TrinoClickBenchSupport
         }
     }
 
+    private static final class PagesSourceOperator
+            implements Operator
+    {
+        private final OperatorContext operatorContext;
+        private final List<Page> pages;
+        private int index;
+        private boolean finished;
+
+        private PagesSourceOperator(OperatorContext operatorContext, List<Page> pages)
+        {
+            this.operatorContext = operatorContext;
+            this.pages = List.copyOf(pages);
+        }
+
+        @Override
+        public OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finished = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finished || index == pages.size();
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return false;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            if (isFinished()) {
+                return null;
+            }
+            Page page = pages.get(index++);
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            return page;
+        }
+    }
+
     private AggregationOperatorFactory aggregationFactory(int operatorId, io.trino.operator.aggregation.AggregatorFactory... aggregators)
     {
         return new AggregationOperatorFactory(operatorId, new PlanNodeId("aggregation-" + operatorId), List.of(aggregators));
@@ -1141,11 +1231,6 @@ public final class TrinoClickBenchSupport
     private OperatorFactory markDistinctFactory(int operatorId, List<Type> types, List<Integer> distinctChannels)
     {
         return new MarkDistinctOperatorFactory(operatorId, new PlanNodeId("mark-distinct-" + operatorId), types, distinctChannels, hashStrategyCompiler);
-    }
-
-    private OperatorFactory distinctLimitFactory(int operatorId, List<Type> types, List<Integer> channels, long limit)
-    {
-        return new DistinctLimitOperatorFactory(operatorId, new PlanNodeId("distinct-limit-" + operatorId), types, channels, limit, hashStrategyCompiler);
     }
 
     private OperatorFactory filterAndProjectFactory(int operatorId, List<Type> inputTypes, Optional<RowExpression> filter, List<RowExpression> projections, List<Type> outputTypes)
