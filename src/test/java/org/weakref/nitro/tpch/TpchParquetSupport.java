@@ -20,10 +20,8 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.BuildOuterJoinOperator;
-import org.weakref.nitro.operator.DistinctCount;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.FilterOperator;
-import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.NestedLoopJoinOperator;
@@ -1131,8 +1129,8 @@ final class TpchParquetSupport
 
     /**
      * Q16: partsupp joins the brand/type/size-filtered part, anti-joins the complaining suppliers, then the
-     * plan's two-level distinct count: group by (brand, type, size, suppkey), then count per (brand, type,
-     * size), sorted (supplier_cnt DESC, brand, type, size).
+     * plan's distributed distinct count: partial and final group by (brand, type, size, suppkey), followed by
+     * partial count and final sum per (brand, type, size), sorted (supplier_cnt DESC, brand, type, size).
      */
     public static Operator query16(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
@@ -1165,27 +1163,29 @@ final class TpchParquetSupport
                 0));
         Operator surviving = profiled(profile, "q16.anti_join.supplier", new SemiJoinOperator(allocator, joinedParts, projectJoinOutput ? 0 : 1, complainingSuppliers, 0, false));
 
-        Operator counted;
-        if (projectJoinOutput && Boolean.parseBoolean(System.getProperty("nitro.tpch.query16GroupedDistinctAggregation", "true"))) {
-            // Directly express GROUP BY (brand,type,size), count(DISTINCT suppkey). GroupOperator emits
-            // [group_id, suppkey, brand, type, size], so the aggregation returns [brand,type,size,count].
-            Operator grouped = profiled(profile, "q16.group.keys", new GroupOperator(allocator, new int[] {1, 2, 3}, surviving));
-            counted = profiled(profile, "q16.group.distinct_count", new GroupedAggregationOperator(
-                    allocator,
-                    0,
-                    List.of(2, 3, 4),
-                    List.of(new DistinctCount(1)),
-                    grouped));
-        }
-        else {
-            // Expanded equivalent retained as an opt-out control.
-            Operator distinctSuppliers = profiled(profile, "q16.group.distinct", new GroupedAggregationOperator(
-                    allocator,
-                    projectJoinOutput ? List.of(1, 2, 3, 0) : List.of(3, 4, 5, 1),
-                    List.of(),
-                    surviving));
-            counted = profiled(profile, "q16.group.count", new GroupedAggregationOperator(allocator, List.of(0, 1, 2), List.of(new CountAll()), distinctSuppliers));
-        }
+        // Preserve Trino's four physical aggregation stages. The harness has one stream, so the second DISTINCT
+        // pass is a semantic no-op and the final SUM sees one partial count per key, but both engines still execute
+        // the same operator topology as the SQL plan.
+        Operator partialDistinct = profiled(profile, "q16.group.distinct.partial", new GroupedAggregationOperator(
+                allocator,
+                projectJoinOutput ? List.of(1, 2, 3, 0) : List.of(3, 4, 5, 1),
+                List.of(),
+                surviving));
+        Operator finalDistinct = profiled(profile, "q16.group.distinct.final", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2, 3),
+                List.of(),
+                partialDistinct));
+        Operator partialCount = profiled(profile, "q16.group.count.partial", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new CountAll()),
+                finalDistinct));
+        Operator counted = profiled(profile, "q16.group.count.final", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(new Sum(3)),
+                partialCount));
         // SQL order: p_brand, p_type, p_size, supplier_cnt; sort: cnt DESC, brand, type, size
         Operator sorted = profiled(profile, "q16.sort", new SortOperator(allocator, new int[] {3, 0, 1, 2}, new boolean[] {true, false, false, false}, counted));
         return sorted;

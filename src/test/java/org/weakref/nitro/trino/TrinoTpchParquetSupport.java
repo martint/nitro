@@ -110,6 +110,7 @@ public final class TrinoTpchParquetSupport
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 600;
     private static final TestingFunctionResolution FUNCTION_RESOLUTION = new TestingFunctionResolution();
     private static final TestingAggregationFunction COUNT_ALL = FUNCTION_RESOLUTION.getAggregateFunction("count", List.of());
+    private static final TestingAggregationFunction BIGINT_SUM = FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MIN = FUNCTION_RESOLUTION.getAggregateFunction("min", fromTypes(BIGINT));
     private static final TestingAggregationFunction BIGINT_MAX = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(BIGINT));
 
@@ -277,8 +278,8 @@ public final class TrinoTpchParquetSupport
 
     /**
      * Q16: partsupp joins the brand/type/size-filtered part, anti-joins the complaining suppliers, then the
-     * plan's two-level distinct count: group by (brand, type, size, suppkey) with no aggregates, then count
-     * per (brand, type, size), sorted (supplier_cnt DESC, brand, type, size).
+     * plan's distributed distinct count: partial and final group by (brand, type, size, suppkey), followed by
+     * partial count and final sum per (brand, type, size), sorted (supplier_cnt DESC, brand, type, size).
      */
     public MaterializedResult query16(TpchParquetTables tables)
     {
@@ -1643,19 +1644,28 @@ public final class TrinoTpchParquetSupport
                                 Optional.of(not(field(joinedTypes.size(), BOOLEAN))),
                                 identityProjections(joinedTypes),
                                 joinedTypes)),
-                        // distinct (brand, type, size, suppkey): grouped aggregation with no aggregates
-                        namedFactoryStep("q16.group.distinct", hashAggregationFactory(
+                        // Preserve Trino's partial/final DISTINCT topology even though this harness has one stream.
+                        namedFactoryStep("q16.group.distinct.partial", hashAggregationFactory(
                                 16_3,
                                 List.of(brandType, typeType, sizeType, suppkeyType),
                                 List.of(3, 4, 5, 1))),
-                        // [p_brand, p_type, p_size, supplier_cnt]
-                        namedFactoryStep("q16.group.count", hashAggregationFactory(
+                        namedFactoryStep("q16.group.distinct.final", hashAggregationFactory(
                                 16_4,
+                                List.of(brandType, typeType, sizeType, suppkeyType),
+                                List.of(0, 1, 2, 3))),
+                        namedFactoryStep("q16.group.count.partial", hashAggregationFactory(
+                                16_5,
                                 List.of(brandType, typeType, sizeType),
                                 List.of(0, 1, 2),
                                 COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
+                        // [p_brand, p_type, p_size, supplier_cnt]
+                        namedFactoryStep("q16.group.count.final", hashAggregationFactory(
+                                16_6,
+                                List.of(brandType, typeType, sizeType),
+                                List.of(0, 1, 2),
+                                BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
                         namedFactoryStep("q16.order_by", orderByFactory(
-                                16_5,
+                                16_7,
                                 outputTypes,
                                 List.of(3, 0, 1, 2),
                                 List.of(DESC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
