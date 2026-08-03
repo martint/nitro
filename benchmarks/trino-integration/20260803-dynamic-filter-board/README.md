@@ -81,10 +81,12 @@ branches. Commit `763828a1` makes structural field access encoding-neutral witho
 `clickbench-correctness-trino-shape.log` preserves the earlier q10 diagnostic before generic `any_value` bindings
 were added.
 
-The largest remaining material wall-only gap is TPC-DS q09. The largest remaining CPU excesses are TPC-DS q22
-(+4.128 s), q67 (+3.596 s), q04 (+3.298 s), and q47 (+1.150 s); the ClickBench wall ratios above 1.3 are subsecond
-queries and need controlled repeats before implementation work. Q72 is no longer a regression after completed
-dynamic-filter admission:
+The largest remaining material wall-only gap is TPC-DS q09. The old board's q22 CPU excess does not survive an
+interleaved two-warmup/three-measurement control: Nitro is 6.129 s / 12.684 CPU-s versus Trino at 6.063 s /
+16.327 CPU-s, or 1.011x wall and 0.777x CPU. Nitro and Trino aggregation consume the same 9.85 CPU-s; Nitro saves
+CPU in scan, join, and exchange processing. `tpcds-q22-controlled.csv` records the summary. Q67 also has later
+controlled captures near CPU parity, leaving q04 as the largest repeatedly observed CPU regression requiring a fresh
+operator-level control. Q72 is no longer a regression after completed dynamic-filter admission:
 the warmed run is 1.542 s / 4.631 CPU-s for Nitro versus 5.908 s / 23.025 CPU-s for Trino.
 
 The unsuffixed ClickBench Nitro log ends with a failure in an unrelated smoke test that assumes a baseline runner is
