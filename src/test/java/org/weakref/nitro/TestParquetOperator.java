@@ -112,6 +112,7 @@ import org.weakref.nitro.parquet.ParquetPageNavigationPolicy;
 import org.weakref.nitro.parquet.ParquetProgressiveFilterCompactionPolicy;
 import org.weakref.nitro.parquet.ParquetReaderDiagnostics;
 import org.weakref.nitro.parquet.ParquetReaderPolicy;
+import org.weakref.nitro.parquet.ParquetRuntimeFilterPolicy;
 import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.parquet.ParquetScanDiagnostics;
 import org.weakref.nitro.parquet.RleReaderPolicy;
@@ -138,6 +139,13 @@ import static org.weakref.nitro.OperatorAssertions.operator;
 
 public class TestParquetOperator
 {
+    private static NitroParquetScanResources executableRuntimeFilterResources()
+    {
+        return NitroParquetScanResources.createDefault(
+                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                new ParquetRuntimeFilterPolicy(true, true, true));
+    }
+
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
     private static final ParquetScanBatchPolicy LEGACY_PARQUET_SCAN_BATCH_POLICY = new ParquetScanBatchPolicy(512);
     private static final ParquetPageNavigationPolicy GENERIC_PAGE_NAVIGATION =
@@ -350,7 +358,7 @@ public class TestParquetOperator
         java.nio.file.Path second = writeIntStringParquetFile("mixed-row-group-second.parquet", List.of(100, 101, 102));
 
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
-                NitroParquetScanResources.createDefault(),
+                executableRuntimeFilterResources(),
                 new Allocator(EngineResources.createDefault()),
                 List.of(first, second),
                 List.of("value", "payload"))) {
@@ -379,7 +387,7 @@ public class TestParquetOperator
         try (AllocationResources allocationResources = AllocationResources.createDefault();
                 Allocator allocator = new Allocator(allocationResources);
                 NitroParquetBatchSource source = new NitroParquetBatchSource(
-                        NitroParquetScanResources.createDefault(),
+                        executableRuntimeFilterResources(),
                         allocator,
                         List.of(first, second),
                         schema)) {
@@ -398,6 +406,36 @@ public class TestParquetOperator
 
             assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
             assertThat(metrics.completedPositions()).hasValue(3);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceKeepsRuntimeFilterAsResidualWhenPushdownDisabled()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("runtime-filter-residual.parquet", true, List.of(
+                new ParquetRow(1, true, 1L),
+                new ParquetRow(2, true, 100L)));
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(
+                                org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
+                                new ParquetRuntimeFilterPolicy(false, false, false)),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            RuntimeFilterAcceptance acceptance = source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 100, 100)),
+                    false));
+
+            assertThat(acceptance).isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(batch.selection().count()).isEqualTo(2);
+            }
         }
     }
 
@@ -557,7 +595,7 @@ public class TestParquetOperator
                 new Field("x", BIGINT, false),
                 new Field("maybe", BIGINT, true)));
         Operator ingress = new BatchSourceOperator(new OperatorBatchSource(
-                new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), allocator, List.of(file), List.of("x", "maybe")),
+                new NitroParquetScanOperator(executableRuntimeFilterResources(), allocator, List.of(file), List.of("x", "maybe")),
                 inputSchema), new NativeSourceOperatorIngress());
         assertThat(ingress.outputSchema()).isEqualTo(inputSchema);
         assertThat(ingress.supportsDynamicFilterPushdown(0)).isTrue();
@@ -614,7 +652,7 @@ public class TestParquetOperator
 
         Allocator allocator = new Allocator(EngineResources.createDefault());
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
-                NitroParquetScanResources.createDefault(),
+                executableRuntimeFilterResources(),
                 allocator,
                 List.of(file),
                 List.of("key", "p1", "p2", "p3", "p4"))) {
@@ -956,7 +994,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-filter.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(executableRuntimeFilterResources(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(1_200);
@@ -989,7 +1027,7 @@ public class TestParquetOperator
 
         int actual = 0;
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(
-                NitroParquetScanResources.createDefault(),
+                executableRuntimeFilterResources(),
                 new Allocator(EngineResources.createDefault()),
                 List.of(file),
                 List.of("x", "maybe"))) {
@@ -1115,7 +1153,7 @@ public class TestParquetOperator
         java.nio.file.Path file = writeParquetFile("nullable-dictionary-homogeneous-runs.parquet", true, rows);
 
         assertDictionaryEncoding(file, "maybe");
-        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(executableRuntimeFilterResources(), new Allocator(EngineResources.createDefault()), List.of(file), List.of("maybe"))) {
             scan.pushDynamicFilter(DynamicFilter.fromRange(0, 100, 300));
             try (Batch batch = scan.next()) {
                 assertThat(batch.borrowMask()).hasSize(4_500);

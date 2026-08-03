@@ -144,6 +144,7 @@ public final class NitroParquetBatchSource
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
+    private final ParquetRuntimeFilterPolicy runtimeFilterPolicy;
     private final ParquetDictionaryFilterPolicy dictionaryFilterPolicy;
     private final ParquetScanDiagnostics diagnostics;
     private final ParquetScanBatchPolicy batchPolicy;
@@ -326,6 +327,7 @@ public final class NitroParquetBatchSource
                 resources.filteredPayloadPolicy(),
                 resources.filterWindowPolicy(),
                 resources.filterEvaluationPolicy(),
+                resources.runtimeFilterPolicy(),
                 resources.diagnostics(),
                 resources.batchPolicy(),
                 resources.arenaPolicy());
@@ -349,6 +351,7 @@ public final class NitroParquetBatchSource
             ParquetFilteredPayloadPolicy filteredPayloadPolicy,
             ParquetFilterWindowPolicy filterWindowPolicy,
             ParquetFilterEvaluationPolicy filterEvaluationPolicy,
+            ParquetRuntimeFilterPolicy runtimeFilterPolicy,
             ParquetScanDiagnostics diagnostics,
             ParquetScanBatchPolicy batchPolicy,
             ParquetArenaPolicy arenaPolicy)
@@ -370,6 +373,7 @@ public final class NitroParquetBatchSource
         this.filteredPayloadPolicy = requireNonNull(filteredPayloadPolicy, "filteredPayloadPolicy is null");
         this.filterWindowPolicy = requireNonNull(filterWindowPolicy, "filterWindowPolicy is null");
         this.filterEvaluationPolicy = requireNonNull(filterEvaluationPolicy, "filterEvaluationPolicy is null");
+        this.runtimeFilterPolicy = requireNonNull(runtimeFilterPolicy, "runtimeFilterPolicy is null");
         this.dictionaryFilterPolicy = requireNonNull(readerPolicy, "readerPolicy is null").dictionaryFilter();
         this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
@@ -508,15 +512,19 @@ public final class NitroParquetBatchSource
         if (readers[column].kind() == ColumnReader.Kind.BINARY || readers[column].isDouble()) {
             return;
         }
-        LongDomain existingRowGroupFilter = rowGroupFiltersByColumn[column];
-        if (existingRowGroupFilter == null || filter.size() < existingRowGroupFilter.size()) {
-            rowGroupFiltersByColumn[column] = filter;
-            hasRowGroupFilters = true;
+        if (runtimeFilterPolicy.rowGroupFiltering()) {
+            LongDomain existingRowGroupFilter = rowGroupFiltersByColumn[column];
+            if (existingRowGroupFilter == null || filter.size() < existingRowGroupFilter.size()) {
+                rowGroupFiltersByColumn[column] = filter;
+                hasRowGroupFilters = true;
+            }
         }
         // Only all-numeric scans take the row-level skip-decode path: the survivor payload is then guaranteed
         // INT/LONG, so readSelectedInts/Longs cover it. Mixed scans still retain the domain above for metadata-only
         // row-group rejection and keep the executable filter as a residual operator predicate.
-        if (!allNumeric) {
+        if (!runtimeFilterPolicy.rowLevelFiltering() ||
+                (nullable[column] && !runtimeFilterPolicy.nullableRowLevelFiltering()) ||
+                !allNumeric) {
             return;
         }
         // Several joins can push a filter on the same probe column (e.g. this scan's own dimension join and a

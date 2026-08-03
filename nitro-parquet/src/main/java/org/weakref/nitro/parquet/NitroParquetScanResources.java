@@ -42,6 +42,7 @@ public final class NitroParquetScanResources
     private final ParquetFilteredPayloadPolicy filteredPayloadPolicy;
     private final ParquetFilterWindowPolicy filterWindowPolicy;
     private final ParquetFilterEvaluationPolicy filterEvaluationPolicy;
+    private final ParquetRuntimeFilterPolicy runtimeFilterPolicy;
     private final ParquetScanDiagnostics diagnostics;
     private final ParquetScanBatchPolicy batchPolicy;
     private final ParquetArenaPolicy arenaPolicy;
@@ -71,7 +72,8 @@ public final class NitroParquetScanResources
                 diagnostics,
                 batchPolicy,
                 ParquetArenaPolicy.confined(),
-                ParquetMetadataCachePolicy.defaults());
+                ParquetMetadataCachePolicy.defaults(),
+                ParquetRuntimeFilterPolicy.defaults());
     }
 
     public NitroParquetScanResources(
@@ -99,7 +101,8 @@ public final class NitroParquetScanResources
                 diagnostics,
                 batchPolicy,
                 arenaPolicy,
-                ParquetMetadataCachePolicy.defaults());
+                ParquetMetadataCachePolicy.defaults(),
+                ParquetRuntimeFilterPolicy.defaults());
     }
 
     public NitroParquetScanResources(
@@ -116,6 +119,37 @@ public final class NitroParquetScanResources
             ParquetArenaPolicy arenaPolicy,
             ParquetMetadataCachePolicy metadataCachePolicy)
     {
+        this(
+                decompressedPageCachePolicy,
+                readerPolicy,
+                numericDecodeAdmissionPolicy,
+                lateMaterializationPolicy,
+                progressiveFilterCompactionPolicy,
+                filteredPayloadPolicy,
+                filterWindowPolicy,
+                filterEvaluationPolicy,
+                diagnostics,
+                batchPolicy,
+                arenaPolicy,
+                metadataCachePolicy,
+                ParquetRuntimeFilterPolicy.defaults());
+    }
+
+    public NitroParquetScanResources(
+            DecompressedPageCachePolicy decompressedPageCachePolicy,
+            ParquetReaderPolicy readerPolicy,
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
+            ParquetLateMaterializationPolicy lateMaterializationPolicy,
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
+            ParquetFilteredPayloadPolicy filteredPayloadPolicy,
+            ParquetFilterWindowPolicy filterWindowPolicy,
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy,
+            ParquetScanDiagnostics diagnostics,
+            ParquetScanBatchPolicy batchPolicy,
+            ParquetArenaPolicy arenaPolicy,
+            ParquetMetadataCachePolicy metadataCachePolicy,
+            ParquetRuntimeFilterPolicy runtimeFilterPolicy)
+    {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
@@ -129,6 +163,7 @@ public final class NitroParquetScanResources
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
         this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
         this.metadataCache = new ParquetMetadataCache(requireNonNull(metadataCachePolicy, "metadataCachePolicy is null"));
+        this.runtimeFilterPolicy = requireNonNull(runtimeFilterPolicy, "runtimeFilterPolicy is null");
     }
 
     public static NitroParquetScanResources createDefault()
@@ -137,6 +172,13 @@ public final class NitroParquetScanResources
     }
 
     public static NitroParquetScanResources createDefault(ParquetArenaPolicy arenaPolicy)
+    {
+        return createDefault(arenaPolicy, ParquetRuntimeFilterPolicy.defaults());
+    }
+
+    public static NitroParquetScanResources createDefault(
+            ParquetArenaPolicy arenaPolicy,
+            ParquetRuntimeFilterPolicy runtimeFilterPolicy)
     {
         ParquetLateMaterializationPolicy lateMaterializationPolicy =
                 ParquetLateMaterializationPolicy.fromSystemProperties();
@@ -151,7 +193,9 @@ public final class NitroParquetScanResources
                 ParquetFilterEvaluationPolicy.fromSystemProperties(),
                 ParquetScanDiagnostics.fromSystemProperties(),
                 ParquetScanBatchPolicy.fromSystemProperties(),
-                arenaPolicy);
+                arenaPolicy,
+                ParquetMetadataCachePolicy.defaults(),
+                runtimeFilterPolicy);
     }
 
     Object batchBufferPool()
@@ -207,6 +251,11 @@ public final class NitroParquetScanResources
     ParquetFilterEvaluationPolicy filterEvaluationPolicy()
     {
         return filterEvaluationPolicy;
+    }
+
+    ParquetRuntimeFilterPolicy runtimeFilterPolicy()
+    {
+        return runtimeFilterPolicy;
     }
 
     ParquetScanDiagnostics diagnostics()
