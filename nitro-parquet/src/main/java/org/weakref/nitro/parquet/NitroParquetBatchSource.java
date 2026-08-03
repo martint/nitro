@@ -519,6 +519,13 @@ public final class NitroParquetBatchSource
                 hasRowGroupFilters = true;
             }
         }
+        // A filter admitted after the first batch may encounter a partially consumed nullable page. Row-group
+        // metadata remains safe to consult between polls, but the row-level dictionary path requires page state
+        // initialized from its boundary. Keep late filters at row-group scope until the reader supports an explicit
+        // mid-page transition.
+        if (nextRow > 0) {
+            return;
+        }
         // Only all-numeric scans take the row-level skip-decode path: the survivor payload is then guaranteed
         // INT/LONG, so readSelectedInts/Longs cover it. Mixed scans still retain the domain above for metadata-only
         // row-group rejection and keep the executable filter as a residual operator predicate.
@@ -537,9 +544,8 @@ public final class NitroParquetBatchSource
         }
         filtersByColumn[column] = filter;
         if (existing == null && filterOrder != null) {
-            // Runtime filters may arrive after this source has already decoded a window. Preserve the established
-            // order so partially consumed readers keep their lead/selected roles, and append the newly active
-            // column so it is decoded before the filtered-column gather below.
+            // Multiple filters can be installed before the first poll. Preserve the established order and append
+            // the newly active column so it is decoded before the filtered-column gather below.
             filterOrder = appendFilterColumn(filterOrder, column);
         }
         int dictionaryEntries = readers[column].peekDictionarySize();
