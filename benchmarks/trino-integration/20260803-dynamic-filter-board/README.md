@@ -85,8 +85,12 @@ The largest remaining material wall-only gap is TPC-DS q09. The old board's q22 
 interleaved two-warmup/three-measurement control: Nitro is 6.129 s / 12.684 CPU-s versus Trino at 6.063 s /
 16.327 CPU-s, or 1.011x wall and 0.777x CPU. Nitro and Trino aggregation consume the same 9.85 CPU-s; Nitro saves
 CPU in scan, join, and exchange processing. `tpcds-q22-controlled.csv` records the summary. Q67 also has later
-controlled captures near CPU parity, leaving q04 as the largest repeatedly observed CPU regression requiring a fresh
-operator-level control. Q72 is no longer a regression after completed dynamic-filter admission:
+controlled captures near CPU parity. A fresh q04 control also clears its old regression: Nitro is 4.795 s /
+22.361 CPU-s versus Trino at 7.812 s / 29.789 CPU-s, or 0.614x wall and 0.751x CPU. Its aggregate operators remain
+locally more expensive (7.06 versus 3.32 CPU-s), broadly consistent with the SQL-shaped operator board's smaller
+aggregate gap, while native scan and integration-path savings dominate the complete query. The old single-sample
+regression ranking is therefore stale; a new controlled suite sweep is required before further implementation work.
+`tpcds-q04-controlled.csv` records the summary. Q72 is no longer a regression after completed dynamic-filter admission:
 the warmed run is 1.542 s / 4.631 CPU-s for Nitro versus 5.908 s / 23.025 CPU-s for Trino.
 
 The unsuffixed ClickBench Nitro log ends with a failure in an unrelated smoke test that assumes a baseline runner is
