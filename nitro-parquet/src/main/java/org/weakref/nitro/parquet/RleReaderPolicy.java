@@ -24,7 +24,7 @@ public record RleReaderPolicy(
 {
     public static RleReaderPolicy defaults()
     {
-        return new RleReaderPolicy(true, true, true, true);
+        return new RleReaderPolicy(true, true, true, false);
     }
 
     public static RleReaderPolicy fromSystemProperties()
@@ -33,6 +33,6 @@ public record RleReaderPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.unrolledUleb128", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.swarUleb128", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.scanAllOneDefinitionRuns", "true")),
-                Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "true")));
+                Boolean.parseBoolean(System.getProperty("nitro.parquet.directNullableDictionaryUnrollIds", "false")));
     }
 }
