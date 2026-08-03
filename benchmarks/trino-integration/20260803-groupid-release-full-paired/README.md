@@ -29,16 +29,16 @@ allocation.
 The accepted controlled board retains the established fresh-process controls
 from `20260803-adaptive-source-batch-board`. The only production change relevant
 to those controls is GroupId lifecycle ownership, so TPC-DS q22 is replaced by
-the new three-measurement default-memory control:
+the final two-warmup/three-measurement default-memory control:
 
-- wall: 4,481.285 / 6,287.504 ms = 0.713;
-- CPU: 9,362 / 15,760 ms = 0.594;
-- allocation: 9,281.302 / 33,686.337 MiB = 0.276.
+- wall: 3,933.328 / 5,777.254 ms = 0.681;
+- CPU: 8,951 / 15,677 ms = 0.571;
+- allocation: 9,250.418 / 33,679.051 MiB = 0.275.
 
 | Suite | Controlled wall geomean | Controlled CPU geomean | CPU wins | Total CPU ratio |
 |---|---:|---:|---:|---:|
 | TPC-H | 0.742 | 0.700 | 20/22 | 0.740 |
-| TPC-DS, q22 refreshed | 0.494 | 0.364 | 103/103 | 0.519 |
+| TPC-DS, q22 refreshed | 0.494 | 0.364 | 103/103 | 0.518 |
 | ClickBench | 0.700 | 0.567 | 43/43 | 0.699 |
 | All suites | 0.570 | 0.444 | 166/168 | — |
 
@@ -50,8 +50,25 @@ implementations.
 
 The long-process screen reproduces the already-attributed history effects:
 TPC-DS q22 has an invalid allocation delta and 0.961 CPU in the accumulated JVM
-but 0.594 CPU fresh; ClickBench q30 consumes 33,018 CPU-ms in sequence versus the
+but 0.571 CPU fresh; ClickBench q30 consumes 33,018 CPU-ms in sequence versus the
 accepted fresh 8,098 CPU-ms. Both raw rows are retained in the logs.
+
+## Q22 operator ownership and counters
+
+The final q22 control prints every operator's add-input, get-output, and finish
+CPU for all three measurements. Nitro operators account for 8,940.248 ms per
+measurement versus 8,945.333 ms of query CPU (99.94%); Trino operators account
+for 15,673.525 versus 15,682.667 ms (99.94%). The result is therefore owned by
+the execution operators, with no material SQL-framework bucket introduced by
+the lifecycle fix.
+
+Separate fresh JVMs then ran one synchronized measured q22 invocation per
+engine. `perf stat` attached after warmup at the harness barrier. Nitro/Trino
+ratios are 0.590 task-clock, 0.592 cycles, 0.746 instructions, 0.773 branches,
+0.365 branch misses, 0.683 cache misses, 0.591 L1 data-load misses, and 0.476
+dTLB-load misses. Every captured hardware class improves. The query CPU ratio
+inside those counter runs is 9,375 / 16,234 = 0.577, consistent with the paired
+three-measurement 0.571 control.
 
 ## Default-memory mismatch found by the sweep
 
