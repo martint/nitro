@@ -40,6 +40,7 @@ public class Allocator
 {
     private final Map<Context, ContextState> states = new HashMap<>();
     private final Map<Object, PoolState> pools = new HashMap<>();
+    private final Map<Vector, VectorLeaseState> vectorLeases = new IdentityHashMap<>();
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -997,6 +998,7 @@ public class Allocator
         residentBytes = 0;
         states.clear();
         pools.clear();
+        vectorLeases.clear();
         for (SharedResourceState state : sharedResources.values()) {
             try {
                 state.value.close();
@@ -1036,6 +1038,22 @@ public class Allocator
     public void release(Context context, Vector vector)
     {
         releaseVectorTree(context, vector);
+    }
+
+    /**
+     * Pins every allocator-owned buffer reachable from the supplied vector roots while an asynchronous consumer
+     * retains the vector tree. Borrowed encoded children remain owned by their producer context, but that context
+     * cannot return them to a reuse pool until the lease closes.
+     */
+    public VectorTreeLease leaseVectorTree(List<? extends Vector> roots)
+    {
+        requireNonNull(roots, "roots is null");
+        Set<Vector> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<Vector> leased = new java.util.ArrayList<>();
+        for (Vector root : roots) {
+            leaseVectorTree(requireNonNull(root, "root is null"), visited, leased);
+        }
+        return new VectorTreeLease(this, leased);
     }
 
     /**
@@ -1268,6 +1286,54 @@ public class Allocator
         }
     }
 
+    private void leaseVectorTree(Vector vector, Set<Vector> visited, List<Vector> leased)
+    {
+        if (!visited.add(vector)) {
+            return;
+        }
+        if (policy.indexedVectorTreeTraversal()) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                leaseVectorTree(vector.childVector(index), visited, leased);
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> leaseVectorTree(child, visited, leased));
+        }
+        if (leaseVector(vector)) {
+            leased.add(vector);
+        }
+    }
+
+    private boolean leaseVector(Vector vector)
+    {
+        VectorLeaseState existing = vectorLeases.get(vector);
+        if (existing != null) {
+            existing.references++;
+            return true;
+        }
+        for (ContextState state : states.values()) {
+            if (state.detachForLease(vector)) {
+                vectorLeases.put(vector, new VectorLeaseState(state, state.lifecycleEpoch));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void releaseVectorLease(Vector vector)
+    {
+        VectorLeaseState lease = vectorLeases.get(vector);
+        if (lease == null) {
+            return;
+        }
+        lease.references--;
+        if (lease.references > 0) {
+            return;
+        }
+        vectorLeases.remove(vector);
+        lease.owner.restoreAfterLease(vector, lease.ownerEpoch);
+    }
+
     private void transferOwnedVector(Context context, Vector vector)
     {
         vector.prepareBufferTransfer(this, context);
@@ -1488,6 +1554,8 @@ public class Allocator
         private final Map<Object, Long> retainedBytesByOwner = new IdentityHashMap<>();
         private Mask inUseMasksHead;
         private boolean borrowedVectorResident;
+        private long lifecycleEpoch;
+        private long lastDiscardEpoch = -1;
 
         private ContextState(Allocator allocator, PoolState pool, PoolState compatibilityPool)
         {
@@ -1656,6 +1724,30 @@ public class Allocator
             return this;
         }
 
+        private boolean detachForLease(Vector vector)
+        {
+            if (vector.poolFamily() == null || !untrackVector(vector)) {
+                return false;
+            }
+            stats.releaseBytes(vector.retainedBytes());
+            return true;
+        }
+
+        private void restoreAfterLease(Vector vector, long ownerEpoch)
+        {
+            if (lifecycleEpoch == ownerEpoch) {
+                inUseVectors.add(vector);
+                inUseVectorCounts.merge(requireNonNull(vector.poolFamily(), "leased vector has no pool family"), 1, Integer::sum);
+                stats.acquire(vector.retainedBytes(), true);
+                return;
+            }
+            if (lastDiscardEpoch > ownerEpoch) {
+                allocator.releaseResident(vector.retainedBytes());
+                return;
+            }
+            releaseLeased(vector);
+        }
+
         @Override
         public void releaseLeased(Vector vector)
         {
@@ -1728,6 +1820,7 @@ public class Allocator
 
         public void release()
         {
+            lifecycleEpoch++;
             // The normal BatchBufferScope close path has already released every resolved output and its owned mask.
             // Avoid constructing an IdentityHashMap iterator for that overwhelmingly common empty generation; the
             // full sweep below remains the safety net for lazy or otherwise unexposed allocations.
@@ -1760,6 +1853,8 @@ public class Allocator
 
         public void discardAll()
         {
+            lifecycleEpoch++;
+            lastDiscardEpoch = lifecycleEpoch;
             Mask mask = inUseMasksHead;
             while (mask != null) {
                 Mask next = mask.trackedNext();
@@ -2096,6 +2191,45 @@ public class Allocator
     public interface BufferLeaseOwner
     {
         void releaseLeased(Vector vector);
+    }
+
+    public static final class VectorTreeLease
+            implements AutoCloseable
+    {
+        private final Allocator allocator;
+        private final List<Vector> vectors;
+        private boolean closed;
+
+        private VectorTreeLease(Allocator allocator, List<Vector> vectors)
+        {
+            this.allocator = requireNonNull(allocator, "allocator is null");
+            this.vectors = List.copyOf(requireNonNull(vectors, "vectors is null"));
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            for (Vector vector : vectors) {
+                allocator.releaseVectorLease(vector);
+            }
+        }
+    }
+
+    private static final class VectorLeaseState
+    {
+        private final ContextState owner;
+        private final long ownerEpoch;
+        private int references = 1;
+
+        private VectorLeaseState(ContextState owner, long ownerEpoch)
+        {
+            this.owner = requireNonNull(owner, "owner is null");
+            this.ownerEpoch = ownerEpoch;
+        }
     }
 
     public record Context(String name, Object scopeId, Object poolGroup, Object compatibilityGroup)

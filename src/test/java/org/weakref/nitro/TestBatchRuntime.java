@@ -1031,6 +1031,75 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testVectorTreeLeasePinsBorrowedChildrenUntilConsumerCloses()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context owner = new Allocator.Context("Owner");
+        I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        DictionaryVector dictionary = DictionaryVector.wrap(new int[] {3, 1}, values);
+
+        Allocator.VectorTreeLease lease = allocator.leaseVectorTree(List.of(dictionary));
+        allocator.release(owner);
+        I64Vector whilePinned = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        assertThat(whilePinned).isNotSameAs(values);
+
+        lease.close();
+        I64Vector afterClose = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        assertThat(afterClose).isSameAs(values);
+    }
+
+    @Test
+    void testVectorTreeLeaseIsReferenceCountedByVectorIdentity()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context owner = new Allocator.Context("Owner");
+        I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+        DictionaryVector first = DictionaryVector.wrap(new int[] {0}, values);
+        DictionaryVector second = DictionaryVector.wrap(new int[] {1}, values);
+
+        Allocator.VectorTreeLease firstLease = allocator.leaseVectorTree(List.of(first));
+        Allocator.VectorTreeLease secondLease = allocator.leaseVectorTree(List.of(second));
+        allocator.release(owner);
+        firstLease.close();
+
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+
+        secondLease.close();
+
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isSameAs(values);
+    }
+
+    @Test
+    void testVectorTreeLeaseRestoresLiveOwnerWithoutPooling()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context owner = new Allocator.Context("Owner");
+        I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        allocator.leaseVectorTree(List.of(values)).close();
+
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+        allocator.release(owner);
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isSameAs(values);
+    }
+
+    @Test
+    void testDiscardedOwnerDoesNotPoolLeasedVector()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context owner = new Allocator.Context("Owner");
+        I64Vector values = allocator.allocate(owner, I64Vector.class, 4, I64Vector::new);
+
+        Allocator.VectorTreeLease lease = allocator.leaseVectorTree(List.of(values));
+        allocator.discardAllIfPresent(owner);
+        lease.close();
+
+        assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+    }
+
+    @Test
     void testOperatorOutputsRespectBorrowAndTakeSemantics()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
