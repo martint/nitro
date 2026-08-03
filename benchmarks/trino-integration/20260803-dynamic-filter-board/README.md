@@ -46,12 +46,22 @@ exchange boundary, final distinct grouping, and global count; the separate compi
 kernel-only and are not SQL expectations.
 
 Q10 demonstrates why plan capture must use the same statistics regime as the benchmark. The no-statistics correctness
-session selects the PRE_AGGREGATE `GroupId` rewrite, while the performance setup runs `ANALYZE` and selects the
-`MarkDistinct` shape already modeled by the ordinary operator harness. The controlled analyzed capture in
-`clickbench-q10-trino-shape-operator-cpu.log` is Nitro 2.613 s / 5.716 CPU-s versus Trino 3.596 s / 8.170 CPU-s
-(0.727x wall, 0.700x CPU). The dominant aggregate is 3.440 CPU-s for Nitro versus 5.800 CPU-s for Trino; scan is
-1.127 versus 1.276 CPU-s and partitioned output is 0.929 versus 0.880 CPU-s. The compiled q10 lowering remains a
-fused-kernel benchmark and is labeled accordingly.
+session selects the PRE_AGGREGATE `GroupId` rewrite. The analyzed performance plan does not execute a separate
+`MarkDistinct`; its aggregation contains a `DistinctPhysicalAggregationUnit`. The controlled analyzed capture in
+`clickbench-q10-trino-shape-operator-cpu.log` was Nitro 2.613 s / 5.716 CPU-s versus Trino 3.596 s / 8.170 CPU-s
+(0.727x wall, 0.700x CPU). Nitro aggregation consumed 3.440 CPU-s, versus 5.800 CPU-s for Trino.
+
+The remaining operator/SQL discrepancy was a capability-lowering bug. Standalone `Sum`, `CountAll`, and `Avg`
+advertised classloader-neutral generated grouped updates, but Trino's dynamic aggregate bindings discarded that
+metadata, forcing grouping plus a separate row pass for every ordinary aggregate. The registry now carries the
+existing `GroupedAggregationUpdateProvider` capability into a generated registered physical unit; the engine still
+recognizes no function identity or provider class. `clickbench-q10-generated-registry-overlay.csv` records the
+same analyzed query after the fix: median wall falls to 1.987 s, total CPU to 5.250 CPU-s, and Nitro aggregation to
+2.690 CPU-s. Relative to the controlled diagnostic this is 0.760x wall, 0.918x total CPU, and 0.782x aggregation
+CPU. The standalone physical-shape harness now also includes the two SQL `INTEGER`-to-`BIGINT` projections; they cost
+about 0.380 CPU-s while its exclusive aggregation remains about 2.05 CPU-s. The remaining SQL/standalone aggregation
+gap therefore reflects exact Trino aggregate semantics and integration topology, not block adaptation: the SQL input
+was verified to be compact primitive arrays and zero-copy at the Nitro boundary.
 
 The post-change correctness/admission gate preserves Trino's normal optimizer choices. All 43 ClickBench queries,
 all 22 TPC-H queries, and all 99 TPC-DS queries pass with zero Nitro expression, aggregation, aggregation-source,

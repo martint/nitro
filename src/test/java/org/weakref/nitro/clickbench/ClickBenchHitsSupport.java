@@ -27,6 +27,7 @@ import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
@@ -43,6 +44,7 @@ import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.DistinctPhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.MinUtf8;
@@ -341,14 +343,38 @@ public final class ClickBenchHitsSupport
     static Operator query10(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
         Operator scan = profiled(profile, "q10.scan", clickBenchScan(allocator, file, "RegionID", "AdvEngineID", "ResolutionWidth", "UserID"));
-        Operator distinct = profiled(profile, "q10.mark-distinct", new MarkDistinctMarkerOperator(
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("cast_i64_to_i64", new CastI64ToI64());
+        Variable advEngineId = new Variable(0);
+        Variable resolutionWidth = new Variable(1);
+        EvaluationPlan projection = new EvaluationPlan(
+                List.of(
+                        new Assignment(advEngineId, new Call("cast_i64_to_i64", List.of(new Reference(new Input(1), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(resolutionWidth, new Call("cast_i64_to_i64", List.of(new Reference(new Input(2), Stream.VALUES))), AllMask.ALL)),
+                List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(advEngineId, Stream.VALUES),
+                        new Reference(resolutionWidth, Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES)));
+        Operator projected = profiled(profile, "q10.project", new ProjectOperator(allocator, projection, primitiveRegistry, scan));
+        PhysicalAggregationProgram aggregations = new PhysicalAggregationProgram(
+                List.of(
+                        new Sum(1),
+                        new CountAll(),
+                        new Avg(2),
+                        new DistinctPhysicalAggregationUnit(new CountAll(), new int[] {3})),
+                List.of(
+                        new PhysicalAggregationProgram.Output(0, 0),
+                        new PhysicalAggregationProgram.Output(1, 0),
+                        new PhysicalAggregationProgram.Output(2, 0),
+                        new PhysicalAggregationProgram.Output(3, 0)));
+        Operator aggregated = new GroupedAggregationOperator(
                 allocator,
-                new int[] {0, 3},
-                scan,
-                true,
-                EngineResources.from(allocator).operatorResources()));
-        List<Accumulator> aggregations = List.of(new Sum(1), new CountAll(), new Avg(2), new FilteredAccumulator(new CountAll(), 4));
-        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0), List.of(0), aggregations, distinct);
+                List.of(0),
+                List.of(0),
+                aggregations,
+                projected,
+                EngineResources.from(allocator).operatorResources());
         aggregated = profiled(profile, "q10.aggregate", aggregated);
         return profiled(profile, "q10.topn", new TopNOperator(allocator, 10, 2, aggregated));
     }

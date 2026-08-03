@@ -131,8 +131,8 @@ public final class CompiledClickBenchQueries
 
     /**
      * SELECT RegionID, SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM hits
-     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10. This lowering deliberately measures the fused single-pass kernel; the
-     * SQL-shaped harness preserves the optimizer-selected MarkDistinct boundary when table statistics are present.
+     * GROUP BY 1 ORDER BY 3 DESC LIMIT 10. This lowering deliberately measures the logical fused kernel. The
+     * SQL-shaped harness separately models Trino's bigint coercions and the analyzed physical DISTINCT unit.
      */
     public static Ported query10()
     {
