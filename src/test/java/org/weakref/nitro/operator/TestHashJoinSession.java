@@ -210,6 +210,56 @@ class TestHashJoinSession
     }
 
     @Test
+    void testSharesCompactedPairDuplicateRangesAcrossProbeSessions()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1},
+                            tripleTable(
+                                    new long[] {2, 2, 2},
+                                    new long[] {20, 20, 20},
+                                    new long[] {200, 201, 202}),
+                            new int[] {0, 1},
+                            false,
+                            new int[] {0, 1, 2, 3, 4, 5})
+                    .orElseThrow();
+            try (build;
+                    HashJoinSession first = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1},
+                            tripleTable(
+                                    new long[] {2, 2, 2},
+                                    new long[] {20, 20, 20},
+                                    new long[] {200, 201, 202}),
+                            new int[] {0, 1},
+                            false,
+                            build);
+                    HashJoinSession second = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(3),
+                            new int[] {0, 1},
+                            tripleTable(
+                                    new long[] {2, 2, 2},
+                                    new long[] {20, 20, 20},
+                                    new long[] {200, 201, 202}),
+                            new int[] {0, 1},
+                            false,
+                            build)) {
+                assertPairDuplicateSessionOutput(first);
+                assertPairDuplicateSessionOutput(second);
+            }
+        }
+    }
+
+    @Test
     void testSharesPreparedTripleBuildAcrossProbeSessions()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -339,6 +389,32 @@ class TestHashJoinSession
         while (session.hasOutput()) {
             session.getOutput().close();
         }
+    }
+
+    private static void assertPairDuplicateSessionOutput(HashJoinSession session)
+    {
+        session.addInput(tripleBatch(new long[] {2}, new long[] {20}, new long[] {100}));
+        List<Long> buildPayloads = new ArrayList<>();
+        while (session.hasOutput()) {
+            try (Batch output = session.getOutput()) {
+                Mask mask = output.borrowMask();
+                VectorAccess.LongValues buildPayload = VectorAccess.longValues(output.output(5).borrow(Stream.VALUES));
+                for (int position : mask) {
+                    buildPayloads.add(buildPayload.value(position));
+                }
+            }
+        }
+        session.finish();
+        while (session.hasOutput()) {
+            try (Batch output = session.getOutput()) {
+                Mask mask = output.borrowMask();
+                VectorAccess.LongValues buildPayload = VectorAccess.longValues(output.output(5).borrow(Stream.VALUES));
+                for (int position : mask) {
+                    buildPayloads.add(buildPayload.value(position));
+                }
+            }
+        }
+        assertThat(buildPayloads).containsExactly(200L, 201L, 202L);
     }
 
     private static void assertBinarySessionOutput(HashJoinSession session, String value, int expectedRows)

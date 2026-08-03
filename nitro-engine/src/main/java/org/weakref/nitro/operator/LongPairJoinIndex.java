@@ -65,6 +65,7 @@ final class LongPairJoinIndex
     private static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
     private static final int GROUP = SPECIES.length();
     private final HashJoinIndexPolicy policy;
+    private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinExecutionPolicy executionPolicy;
     private final PrimitiveArrayPool arrayPool;
 
@@ -112,11 +113,15 @@ final class LongPairJoinIndex
     private int maxFill;
     private int size;
     private boolean pairHasDuplicates;
+    private boolean finalized;
+    private long[] compactedRows;
+    private long[] compactedRanges;
     private final JoinMatchScratch matchScratch = new JoinMatchScratch();
     private final boolean ownsStorage;
 
     LongPairJoinIndex(
             HashJoinIndexPolicy policy,
+            HashJoinOutputPolicy outputPolicy,
             HashJoinExecutionPolicy executionPolicy,
             PrimitiveArrayPool arrayPool,
             int expectedSize,
@@ -125,6 +130,7 @@ final class LongPairJoinIndex
             boolean batchBuild)
     {
         this.policy = requireNonNull(policy, "policy is null");
+        this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
         this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
         this.arrayPool = arrayPool;
         this.expectedBuildRows = expectedSize;
@@ -150,6 +156,7 @@ final class LongPairJoinIndex
     private LongPairJoinIndex(LongPairJoinIndex prepared)
     {
         this.policy = prepared.policy;
+        this.outputPolicy = prepared.outputPolicy;
         this.executionPolicy = prepared.executionPolicy;
         this.arrayPool = prepared.arrayPool;
         this.tags = prepared.tags;
@@ -186,6 +193,9 @@ final class LongPairJoinIndex
         this.maxFill = prepared.maxFill;
         this.size = prepared.size;
         this.pairHasDuplicates = prepared.pairHasDuplicates;
+        this.finalized = prepared.finalized;
+        this.compactedRows = prepared.compactedRows;
+        this.compactedRanges = prepared.compactedRanges;
         this.ownsStorage = false;
     }
 
@@ -429,6 +439,14 @@ final class LongPairJoinIndex
 
     private LongList matchesForSlot(int slot, SingleLongList single, ChainLongList chain)
     {
+        if (compactedRows != null) {
+            long range = compactedRange(slot);
+            int start = (int) (range >>> Integer.SIZE);
+            int count = (int) range;
+            return count == 1
+                    ? single.withValue(compactedRows[start])
+                    : chain.resetRange(compactedRows, start, count);
+        }
         if (keyOnlyBuild) {
             int count = keyOnlyCounts == null || keyOnlyCounts[slot] == 0 ? 1 : keyOnlyCounts[slot];
             return count == 1 ? single.withValue(0) : chain.resetRepeated(0, count);
@@ -460,7 +478,61 @@ final class LongPairJoinIndex
     @Override
     public boolean supportsSingleMatchRefs()
     {
+        finalizeForProbe(executionPolicy.maxBatchRows());
         return !pairHasDuplicates;
+    }
+
+    @Override
+    public boolean supportsRowRanges()
+    {
+        finalizeForProbe(executionPolicy.maxBatchRows());
+        return outputPolicy.directCompactedRangeOutput() && compactedRows != null;
+    }
+
+    @Override
+    public boolean matchRowRanges(
+            Vector[] valuesArray,
+            Vector[] nullsArray,
+            boolean hasNulls,
+            int[] positions,
+            int positionCount,
+            int[] starts,
+            int[] counts)
+    {
+        finalizeForProbe(positionCount);
+        if (compactedRows == null) {
+            return false;
+        }
+        VectorAccess.LongValues firstValues = VectorAccess.longValues(valuesArray[0]);
+        VectorAccess.LongValues secondValues = VectorAccess.longValues(valuesArray[1]);
+        VectorAccess.BooleanValues firstNulls = hasNulls ? VectorAccess.booleanValues(nullsArray[0]) : null;
+        VectorAccess.BooleanValues secondNulls = hasNulls ? VectorAccess.booleanValues(nullsArray[1]) : null;
+        for (int index = 0; index < positionCount; index++) {
+            int position = positions[index];
+            if (hasNulls && (firstNulls.value(position) || secondNulls.value(position))) {
+                starts[index] = 0;
+                counts[index] = 0;
+                continue;
+            }
+            long first = firstValues.value(position);
+            long second = secondValues.value(position);
+            int slot = probe(first, second, hash64(first, second));
+            if (slot < 0) {
+                starts[index] = 0;
+                counts[index] = 0;
+                continue;
+            }
+            long range = compactedRange(slot);
+            starts[index] = (int) (range >>> Integer.SIZE);
+            counts[index] = (int) range;
+        }
+        return true;
+    }
+
+    @Override
+    public void copyRowRange(int start, long[] output, int outputOffset, int length)
+    {
+        System.arraycopy(compactedRows, start, output, outputOffset, length);
     }
 
     @Override
@@ -986,6 +1058,101 @@ final class LongPairJoinIndex
         denseRowStates32 = null;
     }
 
+    void finalizeForProbe(int initialProbeRows)
+    {
+        if (finalized) {
+            return;
+        }
+        finalized = true;
+        if (pairHasDuplicates &&
+                policy.compactChains() &&
+                initialProbeRows >= policy.compactChainsMinProbeRows()) {
+            compactDuplicateChains();
+        }
+    }
+
+    /** Converts per-key linked duplicate rows into immutable insertion-ordered ranges once build is complete. */
+    private void compactDuplicateChains()
+    {
+        int totalRows = 0;
+        for (int slot = 0; slot < tags.length; slot++) {
+            if (tags[slot] != 0) {
+                totalRows = Math.addExact(totalRows, rowCount(slot));
+            }
+        }
+        long[] ordered = arrayPool.borrowLongs(totalRows);
+        int rangeCount = denseCompactEntries ? denseEntryCount : tags.length;
+        long[] ranges = arrayPool.borrowLongs(rangeCount);
+        int cursor = 0;
+        for (int slot = 0; slot < tags.length; slot++) {
+            if (tags[slot] == 0) {
+                continue;
+            }
+            int count = rowCount(slot);
+            int start = cursor;
+            if (keyOnlyBuild) {
+                Arrays.fill(ordered, cursor, cursor + count, 0);
+                cursor += count;
+            }
+            else if (count == 1) {
+                ordered[cursor++] = rowReference(slot);
+            }
+            else {
+                int ordinal = duplicateHeadForSlot(slot);
+                for (int index = 0; index < count; index++) {
+                    ordered[cursor++] = duplicateReference(ordinal);
+                    ordinal = duplicateNext[ordinal];
+                }
+            }
+            int rangeIndex = denseCompactEntries ? denseOrdinal(slot) : slot;
+            ranges[rangeIndex] = ((long) start << Integer.SIZE) | (count & 0xFFFF_FFFFL);
+        }
+        compactedRows = ordered;
+        compactedRanges = ranges;
+
+        arrayPool.release(duplicateHead);
+        duplicateHead = null;
+        arrayPool.release(duplicateTail);
+        duplicateTail = null;
+        arrayPool.release(duplicateCount);
+        duplicateCount = null;
+        arrayPool.release(duplicateNext);
+        duplicateNext = null;
+        arrayPool.release(duplicateRows32);
+        duplicateRows32 = null;
+        arrayPool.release(duplicateRows);
+        duplicateRows = null;
+        arrayPool.release(keyOnlyCounts);
+        keyOnlyCounts = null;
+    }
+
+    private int rowCount(int slot)
+    {
+        if (keyOnlyBuild) {
+            return keyOnlyCounts == null || keyOnlyCounts[slot] == 0 ? 1 : keyOnlyCounts[slot];
+        }
+        if (denseCompactEntries) {
+            long state = denseRowState(denseOrdinal(slot));
+            return state >= 0 ? 1 : duplicateCount[toIntExact(-state - 1)];
+        }
+        int head = duplicateHead == null ? -1 : duplicateHead[slot];
+        return head < 0 ? 1 : duplicateCount[slot];
+    }
+
+    private int duplicateHeadForSlot(int slot)
+    {
+        if (denseCompactEntries) {
+            long state = denseRowState(denseOrdinal(slot));
+            return duplicateHead[toIntExact(-state - 1)];
+        }
+        return duplicateHead[slot];
+    }
+
+    private long compactedRange(int slot)
+    {
+        return compactedRanges[denseCompactEntries ? denseOrdinal(slot) : slot];
+    }
+
     @Override
     public void releaseBuffers()
     {
@@ -1018,6 +1185,10 @@ final class LongPairJoinIndex
         duplicateRows = null;
         arrayPool.release(keyOnlyCounts);
         keyOnlyCounts = null;
+        arrayPool.release(compactedRows);
+        compactedRows = null;
+        arrayPool.release(compactedRanges);
+        compactedRanges = null;
     }
 
     @Override
@@ -1039,6 +1210,8 @@ final class LongPairJoinIndex
         bytes += duplicateNext == null ? 0 : (long) duplicateNext.length * Integer.BYTES;
         bytes += duplicateRows32 == null ? 0 : (long) duplicateRows32.length * Integer.BYTES;
         bytes += duplicateRows == null ? 0 : (long) duplicateRows.length * Long.BYTES;
+        bytes += compactedRows == null ? 0 : (long) compactedRows.length * Long.BYTES;
+        bytes += compactedRanges == null ? 0 : (long) compactedRanges.length * Long.BYTES;
         return Math.addExact(bytes, matchScratch.retainedBytes());
     }
 

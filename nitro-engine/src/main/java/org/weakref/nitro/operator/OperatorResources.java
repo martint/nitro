@@ -92,6 +92,7 @@ public final class OperatorResources
                 flatKeyTablePolicy,
                 hashJoin.buildPolicy(),
                 hashJoin.indexPolicy(),
+                hashJoin.outputPolicy(),
                 hashJoin.executionPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");

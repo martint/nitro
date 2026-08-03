@@ -28,6 +28,7 @@ final class GenericJoinIndexFactory
     private final FlatKeyTablePolicy flatKeyTablePolicy;
     private final HashJoinBuildPolicy buildPolicy;
     private final HashJoinIndexPolicy joinIndexPolicy;
+    private final HashJoinOutputPolicy outputPolicy;
     private final HashJoinExecutionPolicy executionPolicy;
 
     GenericJoinIndexFactory(
@@ -35,12 +36,14 @@ final class GenericJoinIndexFactory
             FlatKeyTablePolicy flatKeyTablePolicy,
             HashJoinBuildPolicy buildPolicy,
             HashJoinIndexPolicy joinIndexPolicy,
+            HashJoinOutputPolicy outputPolicy,
             HashJoinExecutionPolicy executionPolicy)
     {
         this.codeGeneration = requireNonNull(codeGeneration, "codeGeneration is null");
         this.flatKeyTablePolicy = requireNonNull(flatKeyTablePolicy, "flatKeyTablePolicy is null");
         this.buildPolicy = requireNonNull(buildPolicy, "buildPolicy is null");
         this.joinIndexPolicy = requireNonNull(joinIndexPolicy, "joinIndexPolicy is null");
+        this.outputPolicy = requireNonNull(outputPolicy, "outputPolicy is null");
         this.executionPolicy = requireNonNull(executionPolicy, "executionPolicy is null");
     }
 
@@ -61,6 +64,7 @@ final class GenericJoinIndexFactory
                 isLong(values[1])) {
             return new LongPairJoinIndex(
                     joinIndexPolicy,
+                    outputPolicy,
                     executionPolicy,
                     arrayPool,
                     expectedSize,

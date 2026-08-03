@@ -2059,6 +2059,9 @@ public class HashJoinOperator
         if (joinIndex instanceof LongJoinIndex longJoinIndex) {
             longJoinIndex.finalizeForProbe(executionPolicy.maxBatchRows());
         }
+        if (joinIndex instanceof LongPairJoinIndex longPairJoinIndex) {
+            longPairJoinIndex.finalizeForProbe(executionPolicy.maxBatchRows());
+        }
         return new HashJoinBuild(this);
     }
 
