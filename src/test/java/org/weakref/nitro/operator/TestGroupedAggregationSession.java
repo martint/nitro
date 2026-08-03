@@ -23,6 +23,7 @@ import org.weakref.nitro.core.type.TypeVectorFactory;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -41,6 +42,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.LongStream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
@@ -77,6 +79,68 @@ class TestGroupedAggregationSession
                 assertThat(selectedLongValues(third, 0)).containsExactly(50);
             }
             assertThat(session.hasOutput()).isFalse();
+        }
+    }
+
+    @Test
+    void testStreamsRepeatedBinaryKeysAsDictionariesInBoundedBatches()
+    {
+        int rows = 10_000;
+        Schema schema = new Schema(List.of(
+                new Field(binaryType(), true),
+                new Field(binaryType(), true),
+                Schema.unspecified(1).field(0)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1, 2),
+                        List.of(0, 1, 2),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        rows / 2)) {
+            allocator.beginExecution();
+            BinaryVector keys = new BinaryVector(rows, rows);
+            BinaryVector categories = new BinaryVector(rows, rows);
+            boolean[] keyNulls = new boolean[rows];
+            boolean[] categoryNulls = new boolean[rows];
+            long[] groupIds = new long[rows];
+            for (int position = 0; position < rows; position++) {
+                keys.setBytes(position, (position % 2 == 0 ? "a" : "b").getBytes(UTF_8));
+                categories.setBytes(position, "x".getBytes(UTF_8));
+                groupIds[position] = position;
+            }
+            keyNulls[2] = true;
+            keyNulls[rows / 2 + 2] = true;
+            categoryNulls[3] = true;
+            categoryNulls[rows / 2 + 3] = true;
+            try (Batch input = new Batch(
+                    Mask.all(rows),
+                    Output.of(Streams.ofValuesAndNulls(keys, new BooleanVector(keyNulls))),
+                    Output.of(Streams.ofValuesAndNulls(categories, new BooleanVector(categoryNulls))),
+                    Output.of(Streams.ofValues(new I64Vector(groupIds))))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+                assertThat(Arrays.copyOf(((DictionaryVector) first.output(0).borrow(Stream.VALUES)).ids(), 4))
+                        .containsExactly(0, 1, 0, 1);
+                assertThat(((BooleanVector) first.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
+                assertThat(((BooleanVector) first.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(second.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+                assertThat(Arrays.copyOf(((DictionaryVector) second.output(0).borrow(Stream.VALUES)).ids(), 4))
+                        .containsExactly(0, 1, 0, 1);
+                assertThat(((BooleanVector) second.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
+                assertThat(((BooleanVector) second.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
+                long[] values = ((I64Vector) second.output(2).borrow(Stream.VALUES)).values();
+                assertThat(values[0]).isEqualTo(rows / 2);
+                assertThat(values[rows / 2 - 1]).isEqualTo(rows - 1);
+            }
         }
     }
 

@@ -1312,6 +1312,14 @@ public class GroupedAggregationOperator
             if (streams != null) {
                 return streams;
             }
+            if (output < groupedResults.length && groupByColumns != null) {
+                streams = inlineGroupingState.groupedValueRangeAsDictionary(
+                        groupedKeyIndexes[output], sourceStart, size, mask, allocator, allocationContext);
+            }
+            if (streams != null) {
+                materialized[output] = streams;
+                return streams;
+            }
             for (int outputPosition : mask) {
                 Streams copied = copyDenseOutputPosition(
                         output,

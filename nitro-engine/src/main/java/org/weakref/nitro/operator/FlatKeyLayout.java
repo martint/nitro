@@ -1695,7 +1695,7 @@ class FlatKeyLayout
         ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];
         int[] recordIds = recordDictionaryIds == null ? null : recordDictionaryIds[fieldIndex];
         if (interner == null ||
-                (!embedIdOnlyBinaryIds &&
+                (!normalizedIntKeyShape && !embedIdOnlyBinaryIds &&
                         (policy.packedRecordDictionaryIds() ? packedRecordDictionaryIds == null : recordIds == null))) {
             return null;
         }
@@ -1715,36 +1715,11 @@ class FlatKeyLayout
             if (recordIndex < 0) {
                 return null;
             }
-            int globalId;
-            if (compactBinaryRecord(fieldIndex)) {
-                byte[] chunk = table.fixedChunk(recordIndex);
-                int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
-                globalId = (int) GROUP_INT_HANDLE.get(chunk, offset);
-                if (globalId < 0) {
-                    return null;
-                }
+            if (table.fieldNull(recordIndex, fieldIndex)) {
+                dictionaryIds[index] = 0;
+                continue;
             }
-            else if (embedIdOnlyBinaryIds) {
-                byte[] chunk = table.fixedChunk(recordIndex);
-                int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
-                if ((int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2) >= 0) {
-                    return null;
-                }
-                globalId = recordDictionaryId(fieldIndex, chunk, offset, recordIndex);
-            }
-            else if (policy.packedRecordDictionaryIds()) {
-                int packedIndex = recordIndex * packedDictionaryFieldCount + packedDictionaryFieldIndex[fieldIndex];
-                if (packedIndex >= packedRecordDictionaryIds.length) {
-                    return null;
-                }
-                globalId = packedRecordDictionaryIds[packedIndex];
-            }
-            else {
-                if (recordIndex >= recordIds.length) {
-                    return null;
-                }
-                globalId = recordIds[recordIndex];
-            }
+            int globalId = groupedDictionaryId(table, fieldIndex, recordIndex, recordIds);
             if (globalId < 0 || globalId >= distinct) {
                 return null;
             }
@@ -1757,6 +1732,85 @@ class FlatKeyLayout
             return allocator.adopt(allocationContext, DictionaryVector.wrapOwnedIds(ownedDictionaryIds, size, base));
         }
         return DictionaryVector.wrap(dictionaryIds, base);
+    }
+
+    Vector tryGroupedValueRangeAsDictionary(
+            FlatGroupingTable table,
+            int fieldIndex,
+            int sourceStart,
+            int size,
+            org.weakref.nitro.data.Mask outputMask,
+            org.weakref.nitro.data.Allocator allocator,
+            org.weakref.nitro.data.Allocator.Context allocationContext)
+    {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY) {
+            return null;
+        }
+        ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];
+        int[] recordIds = recordDictionaryIds == null ? null : recordDictionaryIds[fieldIndex];
+        if (interner == null ||
+                (!normalizedIntKeyShape && !embedIdOnlyBinaryIds &&
+                        (policy.packedRecordDictionaryIds() ? packedRecordDictionaryIds == null : recordIds == null))) {
+            return null;
+        }
+        int distinct = interner.distinctCount();
+        if (distinct == 0 || (!fieldUsesIdOnlyRecords[fieldIndex] && distinct * 2 > outputMask.count())) {
+            return null;
+        }
+
+        I32Vector ownedDictionaryIds = policy.ownGroupedDictionaryIds()
+                ? allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new)
+                : null;
+        int[] dictionaryIds = ownedDictionaryIds == null ? new int[size] : ownedDictionaryIds.values();
+        for (int outputPosition : outputMask) {
+            int recordIndex = table.recordIndex(sourceStart + outputPosition);
+            if (recordIndex < 0) {
+                return null;
+            }
+            if (table.fieldNull(recordIndex, fieldIndex)) {
+                dictionaryIds[outputPosition] = 0;
+                continue;
+            }
+            int globalId = groupedDictionaryId(table, fieldIndex, recordIndex, recordIds);
+            if (globalId < 0 || globalId >= distinct) {
+                return null;
+            }
+            dictionaryIds[outputPosition] = globalId;
+        }
+
+        BinaryVector base = interner.toBinaryVector(allocator, allocationContext);
+        base.clearTraits();
+        base.addTraits(field(fieldIndex).binaryTraits());
+        if (ownedDictionaryIds != null) {
+            return allocator.adopt(allocationContext, DictionaryVector.wrapOwnedIds(ownedDictionaryIds, size, base));
+        }
+        return DictionaryVector.wrap(dictionaryIds, base);
+    }
+
+    private int groupedDictionaryId(FlatGroupingTable table, int fieldIndex, int recordIndex, int[] recordIds)
+    {
+        int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+        if (normalizedId >= 0) {
+            return normalizedId;
+        }
+        if (compactBinaryRecord(fieldIndex)) {
+            byte[] chunk = table.fixedChunk(recordIndex);
+            int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+            return (int) GROUP_INT_HANDLE.get(chunk, offset);
+        }
+        if (embedIdOnlyBinaryIds) {
+            byte[] chunk = table.fixedChunk(recordIndex);
+            int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+            if ((int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2) >= 0) {
+                return -1;
+            }
+            return recordDictionaryId(fieldIndex, chunk, offset, recordIndex);
+        }
+        if (policy.packedRecordDictionaryIds()) {
+            int packedIndex = recordIndex * packedDictionaryFieldCount + packedDictionaryFieldIndex[fieldIndex];
+            return packedIndex >= packedRecordDictionaryIds.length ? -1 : packedRecordDictionaryIds[packedIndex];
+        }
+        return recordIndex >= recordIds.length ? -1 : recordIds[recordIndex];
     }
 
     Vector tryMaterializeIdBackedBinaryValues(

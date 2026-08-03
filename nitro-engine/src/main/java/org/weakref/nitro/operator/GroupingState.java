@@ -2486,6 +2486,21 @@ final class GroupingState
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    Streams groupedValueRangeAsDictionary(
+            int groupedColumnIndex,
+            int sourceStart,
+            int size,
+            Mask outputMask,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (!useFlatGrouping && !sharedDictionaryFlatBacking) {
+            return null;
+        }
+        return flatGroupingTable.groupedValueRangeAsDictionary(
+                groupedColumnIndex, sourceStart, size, outputMask, allocator, allocationContext);
+    }
+
     private I64Vector materializeLongGroupedValues(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;

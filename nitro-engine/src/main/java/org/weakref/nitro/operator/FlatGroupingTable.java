@@ -798,6 +798,28 @@ final class FlatGroupingTable
                 materializeNulls(groupedColumnIndex, size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
+    Streams groupedValueRangeAsDictionary(
+            int groupedColumnIndex,
+            int sourceStart,
+            int size,
+            Mask outputMask,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        Vector values = layout.tryGroupedValueRangeAsDictionary(
+                this, groupedColumnIndex, sourceStart, size, outputMask, allocator, allocationContext);
+        if (values == null) {
+            return null;
+        }
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator, allocationContext, null, size);
+        for (int outputPosition : outputMask) {
+            int recordIndex = recordIndex(sourceStart + outputPosition);
+            nulls.values()[outputPosition] = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
     public Streams copyGroupedValuePosition(
             int groupedColumnIndex,
             Streams output,
@@ -975,6 +997,16 @@ final class FlatGroupingTable
     {
         return normalizedValidByRecord != null && recordIndex < normalizedFirstByRecord.length &&
                 (normalizedValidByRecord[recordIndex >>> 6] & (1L << recordIndex)) != 0;
+    }
+
+    int normalizedBinaryId(int recordIndex, int fieldIndex)
+    {
+        if (!normalizedRecordValid(recordIndex) || fieldIndex < 0 || fieldIndex >= 4) {
+            return -1;
+        }
+        long packed = fieldIndex < 2 ? normalizedFirstByRecord[recordIndex] : normalizedSecondByRecord[recordIndex];
+        int encoded = (int) (packed >>> ((fieldIndex & 1) * Integer.SIZE));
+        return encoded == 0 ? -1 : encoded - 1;
     }
 
     private void ensureNormalizedRecordCapacity(int size)
