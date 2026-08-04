@@ -9367,17 +9367,17 @@ final class TpcdsParquetSupport
 
     private static Operator query47MonthlySales(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator facts = profiled("q47.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
-        facts = profiled("q47.join.item", new HashJoinOperator(
+        Operator sales = profiled("q47.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"));
+        Operator facts = profiled("q47.join.item", new HashJoinOperator(
                 allocator,
-                facts,
-                1,
                 profiled("q47.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category")),
-                0));
+                0,
+                sales,
+                1));
         facts = profiled("q47.join.date_dim", new HashJoinOperator(
                 allocator,
                 facts,
-                0,
+                3,
                 profiled("q47.scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9390,10 +9390,10 @@ final class TpcdsParquetSupport
         facts = profiled("q47.join.store", new HashJoinOperator(
                 allocator,
                 facts,
-                2,
+                5,
                 profiled("q47.scan.store", scannedTable(allocator, tables, "store", "s_store_sk", "s_store_name", "s_company_name")),
                 0));
-        facts = profiled("q47.project.group_inputs", projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 12, 8, 9, 3));
+        facts = profiled("q47.project.group_inputs", projectInputs(allocator, primitiveRegistry, facts, 2, 1, 11, 12, 8, 9, 6));
         facts = profiled("q47.group.monthly_sales", new GroupedAggregationOperator(
                 allocator,
                 List.of(0, 1, 2, 3, 4, 5),

@@ -1812,15 +1812,15 @@ public final class TrinoTpcdsParquetSupport
         List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_name", "s_company_name"));
         List<Type> groupedTypes = query47MonthlySalesTypes(tables);
 
-        PipelinePlan items = relationPlan(
+        PipelinePlan sales = relationPlan(
                 tables,
-                "item",
-                List.of("i_item_sk", "i_brand", "i_category"),
+                "store_sales",
+                List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
                 Optional.empty(),
-                identityProjections(itemTypes),
-                itemTypes,
-                "q47.scan.item",
-                "q47.sink.item");
+                identityProjections(factTypes),
+                factTypes,
+                "q47.scan.sales",
+                "q47.sink.sales");
         PipelinePlan dates = relationPlan(
                 tables,
                 "date_dim",
@@ -1844,28 +1844,28 @@ public final class TrinoTpcdsParquetSupport
         return appendPlan(
                 relationPlan(
                         tables,
-                        "store_sales",
-                        List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_sales_price"),
+                        "item",
+                        List.of("i_item_sk", "i_brand", "i_category"),
                         Optional.empty(),
-                        identityProjections(factTypes),
-                        factTypes,
-                        "q47.scan.sales",
-                        "q47.sink.sales"),
+                        identityProjections(itemTypes),
+                        itemTypes,
+                        "q47.scan.item",
+                        "q47.sink.item"),
                 List.of(
-                        namedHashJoinStep("q47.join.item", new HashJoinSpec(47_0, factTypes, List.of(1), items, itemTypes, List.of(0))),
-                        namedHashJoinStep("q47.join.date_dim", new HashJoinSpec(47_1, concatTypes(factTypes, itemTypes), List.of(0), dates, dateTypes, List.of(0))),
-                        namedHashJoinStep("q47.join.store", new HashJoinSpec(47_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(2), stores, storeTypes, List.of(0))),
+                        namedHashJoinStep("q47.join.item", new HashJoinSpec(47_0, itemTypes, List.of(0), sales, factTypes, List.of(1))),
+                        namedHashJoinStep("q47.join.date_dim", new HashJoinSpec(47_1, concatTypes(itemTypes, factTypes), List.of(3), dates, dateTypes, List.of(0))),
+                        namedHashJoinStep("q47.join.store", new HashJoinSpec(47_2, concatTypes(concatTypes(itemTypes, factTypes), dateTypes), List.of(5), stores, storeTypes, List.of(0))),
                         namedFactoryStep("q47.project.group_inputs", filterAndProjectFactory(
                                 47_3,
                                 Optional.empty(),
                                 List.of(
-                                        field(6, itemTypes.get(2)),
-                                        field(5, itemTypes.get(1)),
+                                        field(2, itemTypes.get(2)),
+                                        field(1, itemTypes.get(1)),
                                         field(11, storeTypes.get(1)),
                                         field(12, storeTypes.get(2)),
                                         field(8, dateTypes.get(1)),
                                         field(9, dateTypes.get(2)),
-                                        scaledCents(field(3, factTypes.get(3)), factTypes.get(3))),
+                                        scaledCents(field(6, factTypes.get(3)), factTypes.get(3))),
                                 groupedTypes)),
                         namedFactoryStep("q47.group.monthly_sales", hashAggregationFactory(
                                 47_4,
