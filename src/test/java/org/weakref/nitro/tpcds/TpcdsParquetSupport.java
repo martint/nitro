@@ -10492,11 +10492,22 @@ final class TpcdsParquetSupport
         if (!QUERY78_COMPACT_JOIN_LAYOUTS) {
             sales = profiled(profilePrefix + ".project.group_inputs", projectInputs(allocator, primitiveRegistry, sales, 10, 1, 2, 4, 5, 6));
         }
-        return profiled(profilePrefix + ".group.channel", new GroupedAggregationOperator(
+        sales = profiled(profilePrefix + ".group.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(new Sum(3), new Sum(4), new Sum(5)),
-                sales));
+                sales,
+                2,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new Sum(3), new Sum(4), new Sum(5))))));
+        return profiled(profilePrefix + ".group.final", new SqlStageAggregationOperator(
+                allocator,
+                sales,
+                2,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new Sum(3), new Sum(4), new Sum(5))))));
     }
 
     private static Operator projectQuery47CurrentRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)

@@ -3211,6 +3211,47 @@ public final class TrinoTpcdsParquetSupport
 
     private PipelinePlan query78ChannelPlan(TpcdsParquetTables tables, String queryName, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn)
     {
+        List<Type> outputTypes = query78ChannelTypes(tables);
+        List<Page> input = executePipelinePlan(query78ChannelInputPlan(
+                tables,
+                queryName,
+                salesTable,
+                soldDateColumn,
+                itemColumn,
+                customerColumn,
+                orderColumn,
+                quantityColumn,
+                wholesaleCostColumn,
+                salesPriceColumn,
+                returnsTable,
+                returnItemColumn,
+                returnOrderColumn));
+        int operatorOffset = Math.abs(queryName.hashCode() % 100);
+        List<Page> partial = executeSqlAggregationStage(
+                input,
+                outputTypes,
+                2,
+                new int[0],
+                () -> List.of(namedFactoryStep(queryName + ".group.partial", query78ChannelAggregationFactory(78_4 + operatorOffset, outputTypes))),
+                outputTypes,
+                queryName + ".exchange.partial");
+        List<Page> grouped = executeSqlAggregationStage(
+                partial,
+                outputTypes,
+                2,
+                new int[] {0, 1, 2},
+                () -> List.of(namedFactoryStep(queryName + ".group.final", query78ChannelAggregationFactory(78_5 + operatorOffset, outputTypes))),
+                outputTypes,
+                queryName + ".exchange.final");
+        return new PipelinePlan(
+                new PagesPipelineSource(grouped, queryName + ".merge.grouped"),
+                List.of(),
+                queryName + ".sink.channel",
+                outputTypes);
+    }
+
+    private PipelinePlan query78ChannelInputPlan(TpcdsParquetTables tables, String queryName, String salesTable, String soldDateColumn, String itemColumn, String customerColumn, String orderColumn, String quantityColumn, String wholesaleCostColumn, String salesPriceColumn, String returnsTable, String returnItemColumn, String returnOrderColumn)
+    {
         List<Type> factTypes = tableColumnTypes(tables, salesTable, List.of(soldDateColumn, itemColumn, customerColumn, orderColumn, quantityColumn, wholesaleCostColumn, salesPriceColumn));
         List<Type> returnTypes = tableColumnTypes(tables, returnsTable, List.of(returnItemColumn, returnOrderColumn));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year"));
@@ -3262,16 +3303,20 @@ public final class TrinoTpcdsParquetSupport
                                         cast(field(4, factTypes.get(4)), factTypes.get(4), BIGINT),
                                         scaledCents(field(5, factTypes.get(5)), factTypes.get(5)),
                                         scaledCents(field(6, factTypes.get(6)), factTypes.get(6))),
-                                outputTypes)),
-                        namedFactoryStep(queryName + ".group.channel", hashAggregationFactory(
-                                78_4 + Math.abs(queryName.hashCode() % 100),
-                                outputTypes.subList(0, 3),
-                                List.of(0, 1, 2),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty())))),
-                queryName + ".sink.channel",
+                                outputTypes))),
+                queryName + ".sink.group_inputs",
                 outputTypes);
+    }
+
+    private OperatorFactory query78ChannelAggregationFactory(int operatorId, List<Type> outputTypes)
+    {
+        return hashAggregationFactory(
+                operatorId,
+                outputTypes.subList(0, 3),
+                List.of(0, 1, 2),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()));
     }
 
     private List<Type> query78ChannelTypes(TpcdsParquetTables tables)
