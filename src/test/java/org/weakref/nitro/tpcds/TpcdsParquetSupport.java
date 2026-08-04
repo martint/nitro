@@ -2342,7 +2342,13 @@ final class TpcdsParquetSupport
                 List.of(new Sum(2)),
                 grouped);
         grouped = projectQuery86Rollup(allocator, primitiveRegistry, grouped);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {3, 4}, new int[] {2}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
+        grouped = new WindowOperator(
+                allocator,
+                grouped,
+                new int[] {3, 4},
+                new int[] {2},
+                new boolean[] {true},
+                List.of(new RankWindowFunction(new int[] {2}, new boolean[] {true})));
         grouped = new TopNOperator(allocator, 100, new int[] {3, 4, 5}, new boolean[] {true, false, false}, grouped);
         return projectInputs(allocator, primitiveRegistry, grouped, 2, 0, 1, 3, 5);
     }

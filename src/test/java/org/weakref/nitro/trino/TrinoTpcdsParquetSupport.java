@@ -4222,14 +4222,14 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 query86RollupProjections(sourceTypes.get(0), sourceTypes.get(1)),
                                 rolledUpTypes)),
-                        namedFactoryStep("q86.rank.final", topNRankingFactory(
+                        namedFactoryStep("q86.rank.final", windowFactory(
                                 86_13,
                                 rolledUpTypes,
                                 List.of(0, 1, 2, 3, 4),
                                 List.of(3, 4),
                                 List.of(2),
                                 List.of(DESC_NULLS_LAST),
-                                100)),
+                                List.of(rankWindowFunction()))),
                         namedFactoryStep("q86.topn", topNFactory(
                                 86_14,
                                 rankedTypes,
