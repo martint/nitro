@@ -58,7 +58,7 @@ public record HashJoinOutputPolicy(
                 1024,
                 4,
                 true,
-                true,
+                false,
                 true,
                 false,
                 true,
