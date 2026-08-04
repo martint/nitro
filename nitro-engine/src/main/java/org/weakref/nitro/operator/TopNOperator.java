@@ -33,6 +33,7 @@ public class TopNOperator
     private final int n;
     private final Operator source;
     private final TopNState state;
+    private final TopNOperatorPolicy policy;
 
     private boolean done;
 
@@ -72,7 +73,8 @@ public class TopNOperator
                 descending,
                 source,
                 requireNonNull(resources, "resources is null").joinBufferPolicy(),
-                resources.codeGeneration().structuralTypes());
+                resources.codeGeneration().structuralTypes(),
+                resources.topNOperatorPolicy());
     }
 
     public TopNOperator(
@@ -90,7 +92,8 @@ public class TopNOperator
                 descending,
                 source,
                 joinBufferPolicy,
-                new StructuralTypeKernelFactory());
+                new StructuralTypeKernelFactory(),
+                TopNOperatorPolicy.defaults());
     }
 
     private TopNOperator(
@@ -100,7 +103,8 @@ public class TopNOperator
             boolean[] descending,
             Operator source,
             JoinBufferPolicy joinBufferPolicy,
-            StructuralTypeKernelFactory structuralTypes)
+            StructuralTypeKernelFactory structuralTypes,
+            TopNOperatorPolicy policy)
     {
         if (columns.length == 0) {
             throw new IllegalArgumentException("TopN requires at least one ordering column");
@@ -111,6 +115,7 @@ public class TopNOperator
         this.allocator = allocator;
         this.n = n;
         this.source = source;
+        this.policy = requireNonNull(policy, "policy is null");
         state = new TopNState(
                 columns,
                 descending,
@@ -146,6 +151,7 @@ public class TopNOperator
         PriorityQueue<Entry> queue = new PriorityQueue<>(n, (left, right) -> state.compareSlots(left.position(), right.position()));
 
         boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
+        Boolean denseOrdering = null;
         while (source.hasNext()) {
             Batch batch = source.next();
             state.beginBatch();
@@ -155,7 +161,34 @@ public class TopNOperator
             // candidate copies avoid materializing every group merely to retain N rows (ClickBench Q33).
             boolean compactOrderingCandidates = mask.size() > (1 << 16);
 
-            for (int position : mask) {
+            if (denseOrdering == null && !mask.none()) {
+                denseOrdering = n >= policy.columnarOrderingMinLimit() && state.supportsDenseOrdering(batch);
+            }
+
+            int copied = 0;
+            if (Boolean.TRUE.equals(denseOrdering) && queue.size() < n) {
+                copied = Math.min(n - queue.size(), mask.count());
+                Mask initial = copied == mask.count()
+                        ? mask
+                        : allocator.firstMask(allocationContext, mask, copied);
+                int outputStart = queue.size();
+                try {
+                    state.appendDenseOrderingBatch(batch, initial, outputStart, n);
+                    for (int index = 0; index < copied; index++) {
+                        int slot = outputStart + index;
+                        state.deferPayloadRow(batch, initial.position(index), slot);
+                        queue.add(new Entry(slot));
+                    }
+                }
+                finally {
+                    if (initial != mask) {
+                        allocator.release(allocationContext, initial);
+                    }
+                }
+            }
+
+            for (int index = copied; index < mask.count(); index++) {
+                int position = mask.position(index);
                 if (queue.size() < n) {
                     int slot = queue.size();
                     state.copyRow(batch, position, slot);
@@ -165,7 +198,13 @@ public class TopNOperator
                     Entry head = queue.peek();
                     if (state.compareOrderingValue(batch, position, head.position(), compactOrderingCandidates) > 0) {
                         queue.poll();
-                        state.copyRow(batch, position, head.position());
+                        if (Boolean.TRUE.equals(denseOrdering)) {
+                            state.copyDenseOrderingRow(batch, position, head.position(), n);
+                            state.deferPayloadRow(batch, position, head.position());
+                        }
+                        else {
+                            state.copyRow(batch, position, head.position());
+                        }
                         queue.add(new Entry(head.position()));
                     }
                 }
@@ -194,7 +233,16 @@ public class TopNOperator
         }
 
         int count = queue.size();
-        state.setOrderedSlots(orderedSlots(queue));
+        List<Integer> orderedSlots = orderedSlots(queue);
+        if (Boolean.TRUE.equals(denseOrdering)) {
+            int[] primitiveOrderedSlots = orderedSlots.stream()
+                    .mapToInt(Integer::intValue)
+                    .toArray();
+            state.setOrderedSlots(primitiveOrderedSlots, primitiveOrderedSlots.length);
+        }
+        else {
+            state.setOrderedSlots(orderedSlots);
+        }
 
         done = true;
         return allocator.allocateRangeMask(allocationContext, 0, count);

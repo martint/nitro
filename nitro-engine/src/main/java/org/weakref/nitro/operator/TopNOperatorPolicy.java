@@ -13,25 +13,25 @@
  */
 package org.weakref.nitro.operator;
 
-public record TopNSessionPolicy(int columnarOrderingMinLimit)
+public record TopNOperatorPolicy(int columnarOrderingMinLimit)
 {
-    public TopNSessionPolicy
+    public TopNOperatorPolicy
     {
         if (columnarOrderingMinLimit < 1) {
             throw new IllegalArgumentException("columnarOrderingMinLimit must be positive");
         }
     }
 
-    public static TopNSessionPolicy defaults()
+    public static TopNOperatorPolicy defaults()
     {
-        return new TopNSessionPolicy(4_096);
+        return new TopNOperatorPolicy(4_096);
     }
 
-    public static TopNSessionPolicy fromSystemProperties()
+    public static TopNOperatorPolicy fromSystemProperties()
     {
-        TopNSessionPolicy defaults = defaults();
-        return new TopNSessionPolicy(Integer.getInteger(
-                "nitro.topN.session.columnarOrderingMinLimit",
+        TopNOperatorPolicy defaults = defaults();
+        return new TopNOperatorPolicy(Integer.getInteger(
+                "nitro.topN.columnarOrderingMinLimit",
                 defaults.columnarOrderingMinLimit()));
     }
 }

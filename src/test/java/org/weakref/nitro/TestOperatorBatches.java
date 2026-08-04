@@ -73,7 +73,7 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TopNRankingSession;
 import org.weakref.nitro.operator.TopNSession;
-import org.weakref.nitro.operator.TopNSessionPolicy;
+import org.weakref.nitro.operator.TopNOperatorPolicy;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.WindowSession;
@@ -3463,7 +3463,7 @@ public class TestOperatorBatches
                         new int[] {0},
                         new boolean[] {true},
                         first.outputSchema(),
-                        new TopNSessionPolicy(1))) {
+                        new TopNOperatorPolicy(1))) {
             try (Batch batch = first.next()) {
                 session.addInput(batch);
             }
@@ -3510,7 +3510,7 @@ public class TestOperatorBatches
                         new int[] {0, 1},
                         new boolean[] {true, true},
                         first.outputSchema(),
-                        new TopNSessionPolicy(1))) {
+                        new TopNOperatorPolicy(1))) {
             try (Batch batch = first.next()) {
                 session.addInput(batch);
             }

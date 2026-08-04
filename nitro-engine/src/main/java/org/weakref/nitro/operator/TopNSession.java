@@ -41,7 +41,7 @@ public final class TopNSession
     private final Schema outputSchema;
     private final TopNState state;
     private final PriorityQueue<Integer> candidates;
-    private final TopNSessionPolicy policy;
+    private final TopNOperatorPolicy policy;
 
     private boolean finished;
     private boolean closed;
@@ -69,7 +69,7 @@ public final class TopNSession
             int[] orderingColumns,
             boolean[] descending,
             Schema inputSchema,
-            TopNSessionPolicy policy)
+            TopNOperatorPolicy policy)
     {
         this(
                 allocator,
@@ -96,7 +96,7 @@ public final class TopNSession
                 descending,
                 inputSchema,
                 resources,
-                requireNonNull(resources, "resources is null").topNSessionPolicy());
+                requireNonNull(resources, "resources is null").topNOperatorPolicy());
     }
 
     private TopNSession(
@@ -106,7 +106,7 @@ public final class TopNSession
             boolean[] descending,
             Schema inputSchema,
             OperatorResources resources,
-            TopNSessionPolicy policy)
+            TopNOperatorPolicy policy)
     {
         if (limit <= 0) {
             throw new IllegalArgumentException("TopN limit must be positive");

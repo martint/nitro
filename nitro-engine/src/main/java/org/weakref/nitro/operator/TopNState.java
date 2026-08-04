@@ -491,6 +491,17 @@ final class TopNState
         }
     }
 
+    public void deferPayloadRow(Batch batch, int position, int slot)
+    {
+        for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+            if (!isOrderingColumn(outputIndex)) {
+                slotColumns[outputIndex][slot] = null;
+            }
+        }
+        pendingBatches[slot] = batch;
+        pendingPositions[slot] = position;
+    }
+
     public void flushPendingBatch(Batch batch, List<Integer> retainedSlots)
     {
         for (int slot : retainedSlots) {

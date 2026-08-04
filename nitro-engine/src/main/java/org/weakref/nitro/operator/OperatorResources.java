@@ -44,7 +44,7 @@ public final class OperatorResources
     private final GenericJoinIndexFactory genericJoinIndexes;
     private final GroupingStateResources grouping;
     private final SortOperatorPolicy sortPolicy;
-    private final TopNSessionPolicy topNSessionPolicy;
+    private final TopNOperatorPolicy topNOperatorPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
     private final WindowOperatorPolicy windowPolicy;
     private boolean closed;
@@ -67,7 +67,7 @@ public final class OperatorResources
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             SortOperatorPolicy sortPolicy,
-            TopNSessionPolicy topNSessionPolicy,
+            TopNOperatorPolicy topNOperatorPolicy,
             TopNRankingOperatorPolicy topNRankingPolicy,
             WindowOperatorPolicy windowPolicy)
     {
@@ -98,7 +98,7 @@ public final class OperatorResources
                 hashJoin.executionPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
-        this.topNSessionPolicy = requireNonNull(topNSessionPolicy, "topNSessionPolicy is null");
+        this.topNOperatorPolicy = requireNonNull(topNOperatorPolicy, "topNOperatorPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
         this.windowPolicy = requireNonNull(windowPolicy, "windowPolicy is null");
     }
@@ -144,7 +144,7 @@ public final class OperatorResources
                         HashJoinExecutionPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 SortOperatorPolicy.fromSystemProperties(),
-                TopNSessionPolicy.fromSystemProperties(),
+                TopNOperatorPolicy.fromSystemProperties(),
                 TopNRankingOperatorPolicy.fromSystemProperties(),
                 WindowOperatorPolicy.fromSystemProperties());
     }
@@ -267,10 +267,10 @@ public final class OperatorResources
         return sortPolicy;
     }
 
-    public TopNSessionPolicy topNSessionPolicy()
+    public TopNOperatorPolicy topNOperatorPolicy()
     {
         checkOpen();
-        return topNSessionPolicy;
+        return topNOperatorPolicy;
     }
 
     public TopNRankingOperatorPolicy topNRankingPolicy()
