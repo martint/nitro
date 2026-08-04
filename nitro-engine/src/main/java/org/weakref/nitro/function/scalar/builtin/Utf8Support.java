@@ -47,6 +47,32 @@ public final class Utf8Support
         return ((long) startOffset << 32) | ((endOffset - startOffset) & 0xFFFF_FFFFL);
     }
 
+    /** Uses byte coordinates for a positive substring when the inspected prefix is ASCII, with exact UTF-8 fallback. */
+    public static long substringSlicePositiveAsciiFast(byte[] data, int offset, int length, long start, long count)
+    {
+        if (start <= 0) {
+            throw new IllegalArgumentException("start must be positive");
+        }
+        if (count <= 0 || length <= 0) {
+            return (long) offset << 32;
+        }
+
+        int startIndex = toIntExact(start - 1);
+        if (startIndex >= length) {
+            return (long) (offset + length) << 32;
+        }
+        long requestedEnd = (long) startIndex + count;
+        int checkedLength = requestedEnd < 0 || requestedEnd >= length ? length : (int) requestedEnd;
+        for (int index = 0; index < checkedLength; index++) {
+            if (data[offset + index] < 0) {
+                return substringSlice(data, offset, length, start, count);
+            }
+        }
+
+        int startOffset = offset + startIndex;
+        return ((long) startOffset << 32) | ((checkedLength - startIndex) & 0xFFFF_FFFFL);
+    }
+
     public static boolean substringMatchesAny(byte[] data, int offset, int length, long start, long count, byte[][] values)
     {
         int startOffset = substringStartOffset(data, offset, length, start, count);
