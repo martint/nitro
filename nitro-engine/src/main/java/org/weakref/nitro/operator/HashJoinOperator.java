@@ -2471,9 +2471,10 @@ public class HashJoinOperator
     private int[] outerDictionaryIds()
     {
         if (currentOuterDictionaryIds == null) {
-            currentOuterDictionaryIds = aliasBatchDictionaryIds(outputOuterPositions)
-                    ? outputOuterPositions
-                    : Arrays.copyOf(outputOuterPositions, currentOutputCount);
+            // Result vectors can be taken from the batch and outlive this call to next(). The join's position
+            // arrays are reusable operator scratch and are overwritten while producing the following batch, so a
+            // dictionary mapping must own an immutable snapshot even when the current output fills the scratch.
+            currentOuterDictionaryIds = Arrays.copyOf(outputOuterPositions, currentOutputCount);
         }
         return currentOuterDictionaryIds;
     }
@@ -2584,17 +2585,10 @@ public class HashJoinOperator
         }
     }
 
-    private boolean aliasBatchDictionaryIds(int[] positions)
-    {
-        return outputPolicy.aliasBatchDictionaryIds()
-                || (outputPolicy.aliasFullBatchDictionaryIds() && currentOutputCount == positions.length);
-    }
-
     private int[] currentBatchPositions(int[] positions)
     {
-        return aliasBatchDictionaryIds(positions)
-                ? positions
-                : Arrays.copyOf(positions, currentOutputCount);
+        // See outerDictionaryIds(): output ownership cannot be represented by an alias to reusable join scratch.
+        return Arrays.copyOf(positions, currentOutputCount);
     }
 
     private int[] copyCurrentBatchPositions(int[] positions)

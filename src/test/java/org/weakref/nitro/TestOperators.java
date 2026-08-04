@@ -64,6 +64,7 @@ import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.HashJoinExecutionPolicy;
 import org.weakref.nitro.operator.HashJoinOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
@@ -5236,6 +5237,38 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(2L, 20L, 2L, 200L),
                         row(3L, 40L, 3L, 400L)));
+    }
+
+    @Test
+    void testTakenHashJoinDictionarySurvivesFollowingBatch()
+    {
+        int rowCount = HashJoinExecutionPolicy.defaults().maxBatchRows() + 1;
+        long[] keys = new long[rowCount];
+        java.util.Arrays.setAll(keys, index -> index);
+
+        Vector firstValues;
+        try (HashJoinOperator join = new HashJoinOperator(
+                allocator,
+                new TableOperator(1, List.of(TableOperator.Page.values(
+                        rowCount,
+                        new Vector[] {new I64Vector(keys.clone())},
+                        Mask.all(rowCount)))),
+                0,
+                new TableOperator(1, List.of(TableOperator.Page.values(
+                        rowCount,
+                        new Vector[] {new I64Vector(keys.clone())},
+                        Mask.all(rowCount)))),
+                0).withOutputs(1)) {
+            try (Batch first = join.next()) {
+                firstValues = first.output(0).take(Stream.VALUES);
+                assertThat(VectorAccess.longValues(firstValues).value(0)).isZero();
+            }
+            try (Batch second = join.next()) {
+                second.output(0).borrow(Stream.VALUES);
+            }
+
+            assertThat(VectorAccess.longValues(firstValues).value(0)).isZero();
+        }
     }
 
     @Test
