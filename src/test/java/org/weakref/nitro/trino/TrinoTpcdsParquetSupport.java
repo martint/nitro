@@ -814,15 +814,15 @@ public final class TrinoTpcdsParquetSupport
         List<Type> callCenterTypes = tableColumnTypes(tables, "call_center", List.of("cc_call_center_sk", "cc_name"));
         List<Type> projectedTypes = query57JoinedFactTypes(tables);
 
-        PipelinePlan itemKeys = relationPlan(
+        PipelinePlan factRows = relationPlan(
                 tables,
-                "item",
-                List.of("i_item_sk", "i_brand", "i_category"),
+                "catalog_sales",
+                factColumns,
                 Optional.empty(),
-                identityProjections(itemTypes),
-                itemTypes,
-                "q57.scan.item",
-                "q57.sink.item");
+                identityProjections(factTypes),
+                factTypes,
+                "q57.scan.catalog_sales",
+                "q57.sink.catalog_sales");
         PipelinePlan allowedDates = relationPlan(
                 tables,
                 "date_dim",
@@ -843,21 +843,21 @@ public final class TrinoTpcdsParquetSupport
                 "q57.sink.call_center");
 
         return new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles("catalog_sales"), factColumns, "q57.scan.catalog_sales"),
+                new FilesPipelineSource(tables.tableFiles("item"), List.of("i_item_sk", "i_brand", "i_category"), "q57.scan.item"),
                 List.of(
-                        namedHashJoinStep("q57.join.item", new HashJoinSpec(57_0, factTypes, List.of(2), itemKeys, itemTypes, List.of(0))),
-                        namedHashJoinStep("q57.join.date_dim", new HashJoinSpec(57_1, concatTypes(factTypes, itemTypes), List.of(0), allowedDates, dateTypes, List.of(0))),
-                        namedHashJoinStep("q57.join.call_center", new HashJoinSpec(57_2, concatTypes(concatTypes(factTypes, itemTypes), dateTypes), List.of(1), callCenters, callCenterTypes, List.of(0))),
+                        namedHashJoinStep("q57.join.catalog_sales", new HashJoinSpec(57_0, itemTypes, List.of(0), factRows, factTypes, List.of(2))),
+                        namedHashJoinStep("q57.join.date_dim", new HashJoinSpec(57_1, concatTypes(itemTypes, factTypes), List.of(3), allowedDates, dateTypes, List.of(0))),
+                        namedHashJoinStep("q57.join.call_center", new HashJoinSpec(57_2, concatTypes(concatTypes(itemTypes, factTypes), dateTypes), List.of(4), callCenters, callCenterTypes, List.of(0))),
                         namedFactoryStep("q57.project.joined_facts", filterAndProjectFactory(
                                 57_3,
                                 Optional.empty(),
                                 List.of(
-                                        field(6, itemTypes.get(2)),
-                                        field(5, itemTypes.get(1)),
+                                        field(2, itemTypes.get(2)),
+                                        field(1, itemTypes.get(1)),
                                         field(11, callCenterTypes.get(1)),
                                         field(8, dateTypes.get(1)),
                                         field(9, dateTypes.get(2)),
-                                        field(3, salesType)),
+                                        field(6, salesType)),
                                 projectedTypes))),
                 "q57.sink.joined_facts");
     }

@@ -19,6 +19,7 @@ import org.assertj.core.description.Description;
 import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
@@ -132,6 +133,7 @@ public class OperatorAssertions
         {
             return switch (nulls) {
                 case BooleanVector vector -> vector.values()[position];
+                case ConcatenatedBooleanVector vector -> vector.value(position);
                 case DictionaryVector vector -> isNullAt(vector.values(), vector.ids()[position]);
                 case RleVector vector -> isNullAtInRle(vector, position);
                 default -> throw new UnsupportedOperationException("nulls vector type: " + nulls.getClass().getSimpleName());

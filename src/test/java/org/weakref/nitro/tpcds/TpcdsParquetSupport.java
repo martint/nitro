@@ -8787,14 +8787,14 @@ final class TpcdsParquetSupport
         Allocator allocator = context.allocator();
         PrimitiveRegistry primitiveRegistry = context.primitiveRegistry();
         TpcdsParquetTables tables = context.tables();
-        Operator facts = context.profiled("q57.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
-        Operator itemKeys = context.profiled("q57.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"));
-        facts = context.profiled("q57.join.item", new HashJoinOperator(
+        Operator factRows = context.profiled("q57.scan.catalog_sales", factScan(allocator, tables, "catalog_sales", "cs_sold_date_sk", "cs_call_center_sk", "cs_item_sk", "cs_sales_price"));
+        Operator itemRows = context.profiled("q57.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_category"));
+        Operator facts = context.profiled("q57.join.catalog_sales", new HashJoinOperator(
                 allocator,
-                facts,
-                2,
-                itemKeys,
-                0));
+                itemRows,
+                0,
+                factRows,
+                2));
         Operator allowedDates = context.profiled("q57.scan.date_dim", filteredProjectedTable(
                 allocator,
                 primitiveRegistry,
@@ -8806,17 +8806,17 @@ final class TpcdsParquetSupport
         facts = context.profiled("q57.join.date_dim", new HashJoinOperator(
                 allocator,
                 facts,
-                0,
+                3,
                 allowedDates,
                 0));
         Operator callCenters = context.profiled("q57.scan.call_center", scannedTable(allocator, tables, "call_center", "cc_call_center_sk", "cc_name"));
         facts = context.profiled("q57.join.call_center", new HashJoinOperator(
                 allocator,
                 facts,
-                1,
+                4,
                 callCenters,
                 0));
-        return context.profiled("q57.project.joined_facts", projectInputs(allocator, primitiveRegistry, facts, 6, 5, 11, 8, 9, 3));
+        return context.profiled("q57.project.joined_facts", projectInputs(allocator, primitiveRegistry, facts, 2, 1, 11, 8, 9, 6));
     }
 
     static Operator query57MonthlyGroupedSales(TpcdsQueryContext context)
