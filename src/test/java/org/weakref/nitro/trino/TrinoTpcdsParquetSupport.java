@@ -38,6 +38,7 @@ import io.trino.operator.TopNRankingOperator;
 import io.trino.operator.WindowFunctionDefinition;
 import io.trino.operator.WindowOperator;
 import io.trino.operator.aggregation.TestingAggregationFunction;
+import io.trino.operator.aggregation.partial.PartialAggregationController;
 import io.trino.operator.join.JoinBridgeManager;
 import io.trino.operator.join.JoinOperatorFactory;
 import io.trino.operator.join.NestedLoopJoinBridge;
@@ -6242,6 +6243,7 @@ public final class TrinoTpcdsParquetSupport
                 "q23.frequent_items.sink.item");
 
         List<Type> groupInputTypes = groupedTypes.subList(0, 3);
+        PartialAggregationController partialAggregationController = new PartialAggregationController(DataSize.of(16, MEGABYTE), 0.8);
         List<Page> input = executePipelinePlan(new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("store_sales"), factColumns, "q23.frequent_items.scan.store_sales"),
                 List.of(
@@ -6266,7 +6268,9 @@ public final class TrinoTpcdsParquetSupport
                         23_4,
                         groupInputTypes,
                         List.of(0, 1, 2),
-                        COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
+                        Step.PARTIAL,
+                        Optional.of(partialAggregationController),
+                        COUNT_ALL.createAggregatorFactory(Step.PARTIAL, List.of(), OptionalInt.empty())))),
                 groupedTypes,
                 "q23.frequent_items.exchange.partial");
         List<Page> grouped = executeSqlAggregationStage(
@@ -6278,7 +6282,9 @@ public final class TrinoTpcdsParquetSupport
                         23_5,
                         groupInputTypes,
                         List.of(0, 1, 2),
-                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
+                        Step.FINAL,
+                        Optional.empty(),
+                        COUNT_ALL.createAggregatorFactory(Step.FINAL, List.of(3), OptionalInt.empty())))),
                 groupedTypes,
                 "q23.frequent_items.exchange.final");
         return new PipelinePlan(
@@ -14306,7 +14312,10 @@ public final class TrinoTpcdsParquetSupport
         }
         if (hashChannels.length == 0) {
             for (int page = 0; page < pages.size(); page++) {
-                partitions.get(page % partitionCount).add(pages.get(page));
+                Page input = pages.get(page);
+                int[] positions = new int[input.getPositionCount()];
+                Arrays.setAll(positions, index -> index);
+                partitions.get(page % partitionCount).add(input.copyPositions(positions, 0, positions.length));
             }
             return partitions;
         }
@@ -14332,7 +14341,7 @@ public final class TrinoTpcdsParquetSupport
             }
             for (int partition = 0; partition < partitionCount; partition++) {
                 if (counts[partition] > 0) {
-                    partitions.get(partition).add(page.getPositions(positions[partition], 0, counts[partition]));
+                    partitions.get(partition).add(page.copyPositions(positions[partition], 0, counts[partition]));
                 }
             }
         }
@@ -14465,6 +14474,17 @@ public final class TrinoTpcdsParquetSupport
 
     private OperatorFactory hashAggregationFactory(int operatorId, List<Type> groupTypes, List<Integer> groupChannels, io.trino.operator.aggregation.AggregatorFactory... aggregators)
     {
+        return hashAggregationFactory(operatorId, groupTypes, groupChannels, Step.SINGLE, Optional.empty(), aggregators);
+    }
+
+    private OperatorFactory hashAggregationFactory(
+            int operatorId,
+            List<Type> groupTypes,
+            List<Integer> groupChannels,
+            Step step,
+            Optional<PartialAggregationController> partialAggregationController,
+            io.trino.operator.aggregation.AggregatorFactory... aggregators)
+    {
         if (groupChannels.isEmpty()) {
             return new AggregationOperatorFactory(
                     operatorId,
@@ -14478,13 +14498,13 @@ public final class TrinoTpcdsParquetSupport
                 normalizedGroupTypes,
                 groupChannels,
                 List.of(),
-                Step.SINGLE,
+                step,
                 List.of(aggregators),
                 OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 hashStrategyCompiler,
-                Optional.empty());
+                partialAggregationController);
     }
 
     private OperatorFactory topNFactory(int operatorId, List<Type> types, int n, List<Integer> sortChannels, List<SortOrder> sortOrders)

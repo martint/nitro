@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.AdaptiveSqlPartialAggregationOperator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.BatchSliceOperator;
 import org.weakref.nitro.operator.DistinctCount;
@@ -5798,14 +5799,14 @@ final class TpcdsParquetSupport
                 context.profiled("q23.frequent.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_item_desc")),
                 0));
         frequentItems = context.profiled("q23.frequent.project", projectUtf8Prefix(allocator, primitiveRegistry, frequentItems, 5, 30, 1, 3));
-        frequentItems = context.profiled("q23.frequent.group.partial", new SqlStageAggregationOperator(
+        frequentItems = context.profiled("q23.frequent.group.partial", new AdaptiveSqlPartialAggregationOperator(
                 allocator,
                 frequentItems,
                 2,
-                new int[0],
-                List.of(SqlStageAggregationOperator.aggregate(
-                        List.of(0, 1, 2),
-                        () -> List.of(new CountAll())))));
+                List.of(0, 1, 2),
+                () -> List.of(new CountAll()),
+                16L * 1024 * 1024,
+                0.8));
         frequentItems = context.profiled("q23.frequent.group.final", new SqlStageAggregationOperator(
                 allocator,
                 frequentItems,
@@ -5813,8 +5814,7 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2},
                 List.of(SqlStageAggregationOperator.aggregate(
                         List.of(0, 1, 2),
-                        () -> List.of(new Sum(3)))),
-                false));
+                        () -> List.of(new Sum(3))))));
         frequentItems = context.profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(3, 4)));
         frequentItems = context.profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
         return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems, EngineResources.from(allocator).operatorResources()));

@@ -242,9 +242,7 @@ public final class SqlStageAggregationOperator
             }
             int[] selectedPositions = Arrays.copyOf(positions[partition], counts[partition]);
             Output[] outputs = materializeExchange
-                    ? Arrays.stream(streams)
-                            .map(column -> Output.of(allocator.copyStreams(exchangeMaterializationContext, column, selectedPositions)))
-                            .toArray(Output[]::new)
+                    ? copyOutputs(batch, streams, selectedPositions)
                     : Arrays.stream(streams)
                             .map(Output::of)
                             .toArray(Output[]::new);
@@ -258,6 +256,26 @@ public final class SqlStageAggregationOperator
                 sessions[0][partition].addInput(partitionBatch);
             }
         }
+    }
+
+    private Output[] copyOutputs(Batch batch, Streams[] streams, int[] positions)
+    {
+        Output[] outputs = new Output[source.outputCount()];
+        for (int channel = 0; channel < outputs.length; channel++) {
+            Streams copied = batch.output(channel).copyPositions(
+                    null,
+                    positions,
+                    0,
+                    positions.length,
+                    0,
+                    positions.length,
+                    true);
+            if (copied == null) {
+                copied = allocator.copyStreams(exchangeMaterializationContext, streams[channel], positions);
+            }
+            outputs[channel] = Output.of(copied);
+        }
+        return outputs;
     }
 
     private static Streams[] resolveStreams(Batch batch, Mask mask, int outputCount)

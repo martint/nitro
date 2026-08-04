@@ -214,6 +214,18 @@ public final class OperatorCpuProfile
                 stream -> time(metric.outputBorrowCount, metric.outputBorrowNanos, metric.outputBorrowAllocatedBytes, () -> delegate.borrow(stream)),
                 (stream, vector) -> time(metric.outputTakeCount, metric.outputTakeNanos, metric.outputTakeAllocatedBytes, () -> delegate.take(stream)),
                 (_, _) -> {},
+                (_, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange) -> time(
+                        metric.copySinglePositionCount,
+                        metric.copySinglePositionNanos,
+                        metric.copySinglePositionAllocatedBytes,
+                        () -> delegate.copyPositions(
+                                existing,
+                                sourcePositions,
+                                sourceStart,
+                                sourceCount,
+                                outputStart,
+                                size,
+                                assumeClearOutputRange)),
                 (existing, sourcePosition, outputPosition, size) -> time(metric.copySinglePositionCount, metric.copySinglePositionNanos, metric.copySinglePositionAllocatedBytes, () -> delegate.copySinglePosition(existing, sourcePosition, outputPosition, size)));
     }
 
