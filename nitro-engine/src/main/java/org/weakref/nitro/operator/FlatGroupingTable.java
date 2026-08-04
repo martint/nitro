@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -895,9 +896,27 @@ final class FlatGroupingTable
             return output;
         }
         FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
-        if (field.handler().kind() == FlatTypeHandler.Kind.BINARY && outputStart == 0) {
-            BinaryVector existing = output == null ? null : (BinaryVector) output.values();
-            BinaryVector values = layout.tryPrepareIdBackedBinaryOutput(
+        if (outputStart != 0) {
+            Streams result = output;
+            for (int index = 0; index < sourceCount; index++) {
+                result = copyGroupedValuePosition(
+                        groupedColumnIndex,
+                        result,
+                        sourcePositions[sourceStart + index],
+                        outputStart + index,
+                        size,
+                        allocator,
+                        allocationContext);
+            }
+            return result;
+        }
+
+        Vector existingValues = output == null ? null : output.values();
+        Vector values;
+        boolean idBackedBinary = false;
+        if (field.handler().kind() == FlatTypeHandler.Kind.BINARY) {
+            BinaryVector existing = existingValues instanceof BinaryVector binary ? binary : null;
+            BinaryVector binaryValues = layout.tryPrepareIdBackedBinaryOutput(
                     this,
                     groupedColumnIndex,
                     sourcePositions,
@@ -907,7 +926,8 @@ final class FlatGroupingTable
                     existing,
                     allocator,
                     allocationContext);
-            if (values == null) {
+            idBackedBinary = binaryValues != null;
+            if (!idBackedBinary) {
                 long totalBytes = 0;
                 for (int index = 0; index < sourceCount; index++) {
                     int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
@@ -919,31 +939,62 @@ final class FlatGroupingTable
                 if (totalBytes > Integer.MAX_VALUE) {
                     throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
                 }
-                values = BinaryVector.allocateOrGrow(allocator, allocationContext, existing, size, (int) totalBytes);
-                Arrays.fill(values.offsets(), 0);
-                values.clearTraits();
-                values.addTraits(field.binaryTraits());
+                binaryValues = BinaryVector.allocateOrGrow(allocator, allocationContext, existing, size, (int) totalBytes);
+                Arrays.fill(binaryValues.offsets(), 0);
+                binaryValues.clearTraits();
+                binaryValues.addTraits(field.binaryTraits());
             }
-            output = Streams.ofValuesAndNulls(
-                    values,
-                    VectorAccess.writableBooleanVector(
-                            allocator,
-                            allocationContext,
-                            output == null ? null : output.getOrNull(Stream.NULLS),
-                            size));
+            values = binaryValues;
         }
-        Streams result = output;
+        else {
+            values = switch (field.handler().kind()) {
+                case LONG -> allocator.allocateOrGrow(allocationContext, (I64Vector) existingValues, I64Vector.class, size, I64Vector::new);
+                case BOOLEAN -> VectorAccess.writableBooleanVector(allocator, allocationContext, existingValues, size);
+                case DOUBLE -> allocator.allocateOrGrow(allocationContext, (F64Vector) existingValues, F64Vector.class, size, F64Vector::new);
+                case BINARY -> throw new IllegalStateException("binary output was not prepared");
+            };
+        }
+
+        BooleanVector nulls = VectorAccess.writableBooleanVector(
+                allocator,
+                allocationContext,
+                output == null ? null : output.getOrNull(Stream.NULLS),
+                size);
         for (int index = 0; index < sourceCount; index++) {
-            result = copyGroupedValuePosition(
-                    groupedColumnIndex,
-                    result,
-                    sourcePositions[sourceStart + index],
-                    outputStart + index,
-                    size,
-                    allocator,
-                    allocationContext);
+            int outputPosition = index;
+            int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
+            boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+            nulls.values()[outputPosition] = nullValue;
+            if (nullValue) {
+                if (values instanceof BinaryVector binary) {
+                    binary.setNull(outputPosition);
+                }
+                continue;
+            }
+            int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+            switch (field.handler().kind()) {
+                case LONG -> ((I64Vector) values).values()[outputPosition] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset);
+                case BOOLEAN -> ((BooleanVector) values).values()[outputPosition] = field.handler().readBoolean(fixedChunk(recordIndex), fixedOffset);
+                case DOUBLE -> ((F64Vector) values).values()[outputPosition] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset));
+                case BINARY -> {
+                    if (idBackedBinary) {
+                        layout.tryCopyIdBackedBinaryValue(
+                                this,
+                                groupedColumnIndex,
+                                recordIndex,
+                                values,
+                                outputPosition,
+                                size,
+                                allocator,
+                                allocationContext);
+                    }
+                    else {
+                        field.handler().copyBinaryTo(fixedChunk(recordIndex), fixedOffset, variableWidthArena, (BinaryVector) values, outputPosition);
+                    }
+                }
+            }
         }
-        return result;
+        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
