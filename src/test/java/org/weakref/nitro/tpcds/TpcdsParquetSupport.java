@@ -40,6 +40,7 @@ import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
 import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
+import org.weakref.nitro.operator.SqlStageAggregationOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
@@ -2972,11 +2973,22 @@ final class TpcdsParquetSupport
                         {0, 1, 2, 3, 4, 5, 6, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, 7, 8}},
                 EngineResources.from(allocator).operatorResources().groupIdPolicy());
-        grouped = new GroupedAggregationOperator(
+        grouped = profiled("q67.group.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
-                List.of(new Sum(8)),
-                grouped);
+                grouped,
+                2,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
+                        () -> List.of(new Sum(8))))));
+        grouped = profiled("q67.group.final", new SqlStageAggregationOperator(
+                allocator,
+                grouped,
+                2,
+                new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                        () -> List.of(new Sum(9))))));
         grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9);
         grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
         return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped);
@@ -9012,7 +9024,6 @@ final class TpcdsParquetSupport
     private static Operator query67SalesByRollupKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price");
-        facts = projectQuery67FactSales(allocator, primitiveRegistry, facts);
         facts = new HashJoinOperator(
                 allocator,
                 facts,
@@ -9038,7 +9049,7 @@ final class TpcdsParquetSupport
                 1,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_class", "i_category", "i_product_name"),
                 0);
-        return projectInputs(allocator, primitiveRegistry, facts, 13, 12, 11, 14, 5, 6, 7, 9, 3);
+        return projectQuery67RollupKey(allocator, primitiveRegistry, facts);
     }
 
     private static Operator query70SalesByLocation(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -10781,7 +10792,7 @@ final class TpcdsParquetSupport
                 source);
     }
 
-    private static Operator projectQuery67FactSales(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
+    private static Operator projectQuery67RollupKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
     {
         Variable zero = new Variable(0);
         Variable priceIsNull = new Variable(1);
@@ -10808,9 +10819,14 @@ final class TpcdsParquetSupport
         return new ProjectOperator(
                 allocator,
                 new EvaluationPlan(assignments, List.of(
-                        new Reference(new Input(0), Stream.VALUES),
-                        new Reference(new Input(1), Stream.VALUES),
-                        new Reference(new Input(2), Stream.VALUES),
+                        new Reference(new Input(14), Stream.VALUES),
+                        new Reference(new Input(13), Stream.VALUES),
+                        new Reference(new Input(12), Stream.VALUES),
+                        new Reference(new Input(15), Stream.VALUES),
+                        new Reference(new Input(6), Stream.VALUES),
+                        new Reference(new Input(7), Stream.VALUES),
+                        new Reference(new Input(8), Stream.VALUES),
+                        new Reference(new Input(10), Stream.VALUES),
                         new Reference(sales, Stream.VALUES))),
                 primitiveRegistry,
                 source);

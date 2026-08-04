@@ -26,6 +26,7 @@ import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.HashAggregationOperator.HashAggregationOperatorFactory;
 import io.trino.operator.HashArraySizeSupplier;
 import io.trino.operator.HashSemiJoinOperator;
+import io.trino.operator.InterpretedHashGenerator;
 import io.trino.operator.Operator;
 import io.trino.operator.OperatorContext;
 import io.trino.operator.OperatorFactory;
@@ -72,6 +73,7 @@ import org.weakref.nitro.tpcds.TpcdsParquetTables;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
@@ -593,7 +595,37 @@ public final class TrinoTpcdsParquetSupport
 
     public MaterializedResult query67(TpcdsParquetTables tables)
     {
-        return executePipelinePlan(query67Plan(tables), query67OutputTypes(tables));
+        List<Type> rollupTypes = query67SalesByRollupKeyTypes(tables);
+        List<Type> groupIdTypes = concatTypes(rollupTypes, List.of(BIGINT));
+        List<Type> partialTypes = concatTypes(rollupTypes.subList(0, 8), List.of(BIGINT, BIGINT));
+        List<Page> rollup = executePipelinePlan(query67SalesByRollupKeyPlan(tables));
+        List<Page> partial = executeSqlAggregationStage(
+                rollup,
+                rollupTypes,
+                2,
+                new int[0],
+                () -> List.of(
+                        namedGroupIdStep("q67.group_id", query67GroupIdSpec(groupIdTypes)),
+                        namedFactoryStep("q67.group.partial", hashAggregationFactory(
+                                67_11,
+                                groupIdTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty())))),
+                partialTypes,
+                "q67.exchange.partial");
+        List<Page> grouped = executeSqlAggregationStage(
+                partial,
+                partialTypes,
+                2,
+                new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8},
+                () -> List.of(namedFactoryStep("q67.group.final", hashAggregationFactory(
+                        67_12,
+                        partialTypes,
+                        List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(9), OptionalInt.empty())))),
+                partialTypes,
+                "q67.exchange.final");
+        return executePipelinePlan(query67FinalPlan(grouped, partialTypes), query67OutputTypes(tables));
     }
 
     public MaterializedResult query68(TpcdsParquetTables tables)
@@ -3255,49 +3287,29 @@ public final class TrinoTpcdsParquetSupport
         return List.of(channelTypes.get(0), channelTypes.get(1), channelTypes.get(2), BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
     }
 
-    private PipelinePlan query67Plan(TpcdsParquetTables tables)
+    private PipelinePlan query67FinalPlan(List<Page> groupedPages, List<Type> partialTypes)
     {
-        List<Type> rollupKeyTypes = query67SalesByRollupKeyTypes(tables);
-        List<Type> groupIdTypes = concatTypes(rollupKeyTypes, List.of(BIGINT));
-        List<Type> groupedTypes = concatTypes(rollupKeyTypes.subList(0, 8), List.of(BIGINT));
+        List<Type> groupedTypes = concatTypes(partialTypes.subList(0, 8), List.of(BIGINT));
         List<Type> rankedTypes = concatTypes(groupedTypes, List.of(BIGINT));
-        return appendPlan(
-                query67SalesByRollupKeyPlan(tables),
+        return new PipelinePlan(
+                new PagesPipelineSource(groupedPages, "q67.merge.grouped"),
                 List.of(
-                        namedGroupIdStep("q67.group_id", new GroupIdSpec(
-                                67_10,
-                                groupIdTypes,
-                                List.of(
-                                        java.util.Map.of(8, 8),
-                                        java.util.Map.of(0, 0, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8)))),
-                        namedFactoryStep("q67.group.final", hashAggregationFactory(
-                                67_11,
-                                List.of(groupIdTypes.get(0), groupIdTypes.get(1), groupIdTypes.get(2), groupIdTypes.get(3), groupIdTypes.get(4), groupIdTypes.get(5), groupIdTypes.get(6), groupIdTypes.get(7), BIGINT),
-                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty()))),
                         namedFactoryStep("q67.project.final", filterAndProjectFactory(
-                                67_12,
+                                67_13,
                                 Optional.empty(),
                                 List.of(
-                                        field(0, groupedTypes.get(0)),
-                                        field(1, groupedTypes.get(1)),
-                                        field(2, groupedTypes.get(2)),
-                                        field(3, groupedTypes.get(3)),
-                                        field(4, groupedTypes.get(4)),
-                                        field(5, groupedTypes.get(5)),
-                                        field(6, groupedTypes.get(6)),
-                                        field(7, groupedTypes.get(7)),
+                                        field(0, partialTypes.get(0)),
+                                        field(1, partialTypes.get(1)),
+                                        field(2, partialTypes.get(2)),
+                                        field(3, partialTypes.get(3)),
+                                        field(4, partialTypes.get(4)),
+                                        field(5, partialTypes.get(5)),
+                                        field(6, partialTypes.get(6)),
+                                        field(7, partialTypes.get(7)),
                                         field(9, BIGINT)),
                                 groupedTypes)),
                         namedFactoryStep("q67.rank.final", topNRankingFactory(
-                                67_13,
+                                67_14,
                                 groupedTypes,
                                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
                                 List.of(0),
@@ -3305,19 +3317,36 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(DESC_NULLS_LAST),
                                 100)),
                         namedFactoryStep("q67.topn", topNFactory(
-                                67_14,
+                                67_15,
                                 rankedTypes,
                                 100,
                                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9),
                                 List.of(ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST, ASC_NULLS_LAST)))),
-                "q67.sink.final");
+                "q67.sink.final",
+                rankedTypes);
+    }
+
+    private static GroupIdSpec query67GroupIdSpec(List<Type> groupIdTypes)
+    {
+        return new GroupIdSpec(
+                67_10,
+                groupIdTypes,
+                List.of(
+                        java.util.Map.of(8, 8),
+                        java.util.Map.of(0, 0, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8),
+                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8)));
     }
 
     private PipelinePlan query67SalesByRollupKeyPlan(TpcdsParquetTables tables)
     {
         List<String> factColumns = List.of("ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
-        List<Type> factSalesTypes = List.of(factTypes.get(0), factTypes.get(1), factTypes.get(2), BIGINT);
         List<Type> dateSourceTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_qoy", "d_moy", "d_month_seq"));
         List<Type> projectedDateTypes = List.of(dateSourceTypes.get(0), dateSourceTypes.get(1), dateSourceTypes.get(2), dateSourceTypes.get(3));
         List<Type> storeTypes = tableColumnTypes(tables, "store", List.of("s_store_sk", "s_store_id"));
@@ -3325,22 +3354,9 @@ public final class TrinoTpcdsParquetSupport
         return new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("store_sales"), factColumns, "q67.scan.store_sales"),
                 List.of(
-                        namedFactoryStep("q67.project.fact_sales", filterAndProjectFactory(
-                                67_0,
-                                Optional.empty(),
-                                List.of(
-                                        field(0, factTypes.get(0)),
-                                        field(1, factTypes.get(1)),
-                                        field(2, factTypes.get(2)),
-                                        ifExpression(
-                                                or(isNull(field(4, factTypes.get(4))), isNull(field(3, factTypes.get(3)))),
-                                                constant(0L, BIGINT),
-                                                multiply(cast(field(3, factTypes.get(3)), factTypes.get(3), BIGINT), scaledCents(field(4, factTypes.get(4)), factTypes.get(4)), BIGINT),
-                                                BIGINT)),
-                                factSalesTypes)),
                         namedHashJoinStep("q67.join.date_dim", new HashJoinSpec(
                                 67_1,
-                                factSalesTypes,
+                                factTypes,
                                 List.of(0),
                                 relationPlan(
                                 tables,
@@ -3355,7 +3371,7 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0))),
                         namedHashJoinStep("q67.join.store", new HashJoinSpec(
                                 67_2,
-                                concatTypes(factSalesTypes, projectedDateTypes),
+                                concatTypes(factTypes, projectedDateTypes),
                                 List.of(2),
                                 relationPlan(
                                         tables,
@@ -3370,7 +3386,7 @@ public final class TrinoTpcdsParquetSupport
                                 List.of(0))),
                         namedHashJoinStep("q67.join.item", new HashJoinSpec(
                                 67_3,
-                                concatTypes(concatTypes(factSalesTypes, projectedDateTypes), storeTypes),
+                                concatTypes(concatTypes(factTypes, projectedDateTypes), storeTypes),
                                 List.of(1),
                                 relationPlan(
                                         tables,
@@ -3387,15 +3403,19 @@ public final class TrinoTpcdsParquetSupport
                                 67_4,
                                 Optional.empty(),
                                 List.of(
-                                        field(13, itemTypes.get(3)),
-                                        field(12, itemTypes.get(2)),
-                                        field(11, itemTypes.get(1)),
-                                        field(14, itemTypes.get(4)),
-                                        field(5, dateSourceTypes.get(1)),
-                                        field(6, dateSourceTypes.get(2)),
-                                        field(7, dateSourceTypes.get(3)),
-                                        field(9, storeTypes.get(1)),
-                                        field(3, BIGINT)),
+                                        field(14, itemTypes.get(3)),
+                                        field(13, itemTypes.get(2)),
+                                        field(12, itemTypes.get(1)),
+                                        field(15, itemTypes.get(4)),
+                                        field(6, dateSourceTypes.get(1)),
+                                        field(7, dateSourceTypes.get(2)),
+                                        field(8, dateSourceTypes.get(3)),
+                                        field(10, storeTypes.get(1)),
+                                        ifExpression(
+                                                or(isNull(field(4, factTypes.get(4))), isNull(field(3, factTypes.get(3)))),
+                                                constant(0L, BIGINT),
+                                                multiply(cast(field(3, factTypes.get(3)), factTypes.get(3), BIGINT), scaledCents(field(4, factTypes.get(4)), factTypes.get(4)), BIGINT),
+                                                BIGINT)),
                                 query67SalesByRollupKeyTypes(tables)))),
                 "q67.sink.rollup_key");
     }
@@ -14115,6 +14135,68 @@ public final class TrinoTpcdsParquetSupport
         return outputPages;
     }
 
+    private List<Page> executeSqlAggregationStage(
+            List<Page> inputPages,
+            List<Type> inputTypes,
+            int partitionCount,
+            int[] hashChannels,
+            Supplier<List<PipelineStep>> steps,
+            List<Type> outputTypes,
+            String profileName)
+    {
+        List<List<Page>> partitions = partitionPages(inputPages, inputTypes, partitionCount, hashChannels);
+        List<Page> output = new ArrayList<>();
+        for (int partition = 0; partition < partitionCount; partition++) {
+            output.addAll(executePipelinePlan(new PipelinePlan(
+                    new PagesPipelineSource(partitions.get(partition), profileName + ".source"),
+                    steps.get(),
+                    profileName + ".sink",
+                    outputTypes)));
+        }
+        return output;
+    }
+
+    private static List<List<Page>> partitionPages(List<Page> pages, List<Type> inputTypes, int partitionCount, int[] hashChannels)
+    {
+        List<List<Page>> partitions = new ArrayList<>(partitionCount);
+        for (int partition = 0; partition < partitionCount; partition++) {
+            partitions.add(new ArrayList<>());
+        }
+        if (hashChannels.length == 0) {
+            for (int page = 0; page < pages.size(); page++) {
+                partitions.get(page % partitionCount).add(pages.get(page));
+            }
+            return partitions;
+        }
+
+        List<Type> hashTypes = Arrays.stream(hashChannels)
+                .mapToObj(inputTypes::get)
+                .toList();
+        InterpretedHashGenerator hashGenerator = InterpretedHashGenerator.createChannelsHashGenerator(
+                hashTypes,
+                hashChannels,
+                new TypeOperators());
+        for (Page page : pages) {
+            int positionCount = page.getPositionCount();
+            long[] hashes = new long[positionCount];
+            for (int position = 0; position < positionCount; position++) {
+                hashes[position] = hashGenerator.hashPosition(position, page);
+            }
+            int[][] positions = new int[partitionCount][positionCount];
+            int[] counts = new int[partitionCount];
+            for (int position = 0; position < positionCount; position++) {
+                int partition = Math.floorMod(hashes[position], partitionCount);
+                positions[partition][counts[partition]++] = position;
+            }
+            for (int partition = 0; partition < partitionCount; partition++) {
+                if (counts[partition] > 0) {
+                    partitions.get(partition).add(page.getPositions(positions[partition], 0, counts[partition]));
+                }
+            }
+        }
+        return partitions;
+    }
+
     private io.trino.operator.TaskContext taskContext()
     {
         return TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
@@ -14205,6 +14287,13 @@ public final class TrinoTpcdsParquetSupport
                             driverContext.addOperatorContext(0, new PlanNodeId("parquet-source-" + Math.abs(filesSource.profileName().hashCode())), ParquetPageSourceOperator.class.getSimpleName()),
                             filesSource.files(),
                             filesSource.columns()));
+        }
+        if (source instanceof PagesPipelineSource pagesSource) {
+            return profiled(
+                    pagesSource.profileName(),
+                    new PagesSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("pages-source-" + Math.abs(pagesSource.profileName().hashCode())), PagesSourceOperator.class.getSimpleName()),
+                            pagesSource.pages()));
         }
         if (source instanceof UnionPipelineSource unionSource) {
             return profiled(
@@ -15339,7 +15428,7 @@ public final class TrinoTpcdsParquetSupport
     }
 
     private sealed interface PipelineSource
-            permits FilesPipelineSource, UnionPipelineSource
+            permits FilesPipelineSource, PagesPipelineSource, UnionPipelineSource
     {
         String profileName();
     }
@@ -15347,6 +15436,15 @@ public final class TrinoTpcdsParquetSupport
     private record FilesPipelineSource(List<Path> files, List<String> columns, String profileName)
             implements PipelineSource
     {
+    }
+
+    private record PagesPipelineSource(List<Page> pages, String profileName)
+            implements PipelineSource
+    {
+        private PagesPipelineSource
+        {
+            pages = List.copyOf(pages);
+        }
     }
 
     private record UnionPipelineSource(List<PipelinePlan> plans, String profileName)
@@ -15367,6 +15465,62 @@ public final class TrinoTpcdsParquetSupport
     private record DriverOperators(DriverContext driverContext, List<Operator> operators) {}
 
     private record PendingOuterDriver(DriverContext driverContext, List<Operator> operators) {}
+
+    private static final class PagesSourceOperator
+            implements Operator
+    {
+        private final OperatorContext operatorContext;
+        private final List<Page> pages;
+        private int pageIndex;
+        private boolean finished;
+
+        private PagesSourceOperator(OperatorContext operatorContext, List<Page> pages)
+        {
+            this.operatorContext = operatorContext;
+            this.pages = List.copyOf(pages);
+        }
+
+        @Override
+        public OperatorContext getOperatorContext()
+        {
+            return operatorContext;
+        }
+
+        @Override
+        public void finish()
+        {
+            finished = true;
+        }
+
+        @Override
+        public boolean isFinished()
+        {
+            return finished || pageIndex == pages.size();
+        }
+
+        @Override
+        public boolean needsInput()
+        {
+            return false;
+        }
+
+        @Override
+        public void addInput(Page page)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page getOutput()
+        {
+            if (isFinished()) {
+                return null;
+            }
+            Page page = pages.get(pageIndex++);
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            return page;
+        }
+    }
 
     private static final class ParquetPageSourceOperator
             implements Operator
