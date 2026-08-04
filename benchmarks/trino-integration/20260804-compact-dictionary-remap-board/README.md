@@ -30,7 +30,8 @@ Each control uses two warmups and three measurements.
 | TPC-DS q15 | 0.401 | 0.139 | 0.071 | Raw CPU loss is sequencing noise |
 | TPC-DS q20 | 0.561 | 0.174 | 0.082 | Raw CPU loss is sequencing noise |
 | TPC-DS q38 | 0.751 | 0.653 | 0.361 | Raw CPU loss is sequencing noise |
-| TPC-DS q85 | 1.472 | 0.629 | 0.411 | CPU win; real wall/coordination issue |
+| TPC-DS q85, first control | 1.472 | 0.629 | 0.411 | CPU win; apparent wall issue |
+| TPC-DS q85, attributed control | 0.877 | 0.658 | 0.411 | Wall issue did not reproduce |
 | ClickBench q12 | 1.011 | 0.998 | 0.301 | CPU parity; raw CPU loss is noise |
 | ClickBench q40 | 1.240 | 0.983 | 0.597 | Small CPU win; wall issue remains |
 | ClickBench q42, baseline | 1.685 | 1.152 | 0.734 | Genuine CPU and wall regression |
@@ -58,6 +59,13 @@ The same immutable policy now governs the pull `TopNOperator` used when physical
 planning fuses TopN into aggregation. On q42 that reduces fused aggregation
 output from roughly 28--33 ms to 6.9--9.6 ms and brings the complete query to
 0.543x CPU, 0.972x wall, and 0.332x allocation.
+
+Fresh TPC-H controls leave q16 as the only reproducible suite CPU loss: 1.058x
+mean CPU and 1.045x mean wall, with 0.541x allocation. q21 is effectively CPU
+parity at 1.012x and wins wall at 0.904x. q16 attribution localizes the excess to
+the fused partsupp scan, part hash join, and supplier anti-join pipeline; Nitro
+uses about 365 ms there versus roughly 223 ms for Trino's scan plus lookup join.
+Nitro aggregation and sort are already faster.
 
 The rejected native `SINGLE` local-exchange experiment exposed an architectural
 gap: exchange consumers can close vector leases on a different thread from the
