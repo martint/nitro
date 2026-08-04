@@ -6827,19 +6827,24 @@ public final class TrinoTpcdsParquetSupport
     private PipelinePlan query74Plan(TpcdsParquetTables tables)
     {
         List<Type> branchTypes = query74ChannelYearTotalTypes(tables);
-        List<Type> afterStoreSecondYearTypes = concatTypes(branchTypes, branchTypes);
-        List<Type> afterWebFirstYearTypes = concatTypes(afterStoreSecondYearTypes, branchTypes);
+        List<Type> compactTypes = List.of(branchTypes.get(0), BIGINT);
+        List<Type> afterStoreSecondYearTypes = List.of(branchTypes.get(0), BIGINT, branchTypes.get(1), branchTypes.get(2), BIGINT);
+        List<Type> afterWebFirstYearTypes = concatTypes(afterStoreSecondYearTypes, List.of(BIGINT));
+        List<Type> afterWebSecondYearTypes = concatTypes(afterWebFirstYearTypes, List.of(BIGINT));
 
         return appendPlan(
-                query74ChannelYearTotalPlan(tables, "q74.store.2001", "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2001),
+                query74ChannelYearTotalPlan(tables, "q74.store.2001", "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2001, false),
                 List.of(
-                        namedHashJoinStep("q74.join.store.2002", new HashJoinSpec(74_10, branchTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.store.2002", "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2002), branchTypes, List.of(0))),
-                        namedHashJoinStep("q74.join.web.2001", new HashJoinSpec(74_11, afterStoreSecondYearTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.web.2001", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2001), branchTypes, List.of(0))),
-                        namedHashJoinStep("q74.join.web.2002", new HashJoinSpec(74_12, afterWebFirstYearTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.web.2002", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2002), branchTypes, List.of(0))),
+                        namedHashJoinStep("q74.join.store.2002", new HashJoinSpec(74_10, compactTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.store.2002", "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2002, true), branchTypes, List.of(0))),
+                        namedFactoryStep("q74.project.store.2002", filterAndProjectFactory(74_15, Optional.empty(), selectedProjections(concatTypes(compactTypes, branchTypes), 0, 1, 3, 4, 5), afterStoreSecondYearTypes)),
+                        namedHashJoinStep("q74.join.web.2001", new HashJoinSpec(74_11, afterStoreSecondYearTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.web.2001", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2001, false), compactTypes, List.of(0))),
+                        namedFactoryStep("q74.project.web.2001", filterAndProjectFactory(74_16, Optional.empty(), selectedProjections(concatTypes(afterStoreSecondYearTypes, compactTypes), 0, 1, 2, 3, 4, 6), afterWebFirstYearTypes)),
+                        namedHashJoinStep("q74.join.web.2002", new HashJoinSpec(74_12, afterWebFirstYearTypes, List.of(0), query74ChannelYearTotalPlan(tables, "q74.web.2002", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2002, false), compactTypes, List.of(0))),
+                        namedFactoryStep("q74.project.web.2002", filterAndProjectFactory(74_17, Optional.empty(), selectedProjections(concatTypes(afterWebFirstYearTypes, compactTypes), 0, 1, 2, 3, 4, 5, 7), afterWebSecondYearTypes)),
                         namedFactoryStep("q74.filter.growth", filterAndProjectFactory(
                                 74_13,
                                 Optional.of(query74GrowthPredicate()),
-                                List.of(field(0, branchTypes.get(0)), field(1, branchTypes.get(1)), field(2, branchTypes.get(2))),
+                                List.of(field(0, branchTypes.get(0)), field(2, branchTypes.get(1)), field(3, branchTypes.get(2))),
                                 query74OutputTypes(tables))),
                         namedFactoryStep("q74.topn", topNFactory(
                                 74_14,
@@ -6850,53 +6855,56 @@ public final class TrinoTpcdsParquetSupport
                 "q74.sink.final");
     }
 
-    private PipelinePlan query74ChannelYearTotalPlan(TpcdsParquetTables tables, String queryName, String salesTable, String customerColumn, String soldDateColumn, String netPaidColumn, long year)
+    private PipelinePlan query74ChannelYearTotalPlan(TpcdsParquetTables tables, String queryName, String salesTable, String customerColumn, String soldDateColumn, String netPaidColumn, long year, boolean retainCustomerDetails)
     {
-        List<String> factColumns = List.of(customerColumn, soldDateColumn, netPaidColumn);
+        List<String> factColumns = List.of(soldDateColumn, customerColumn, netPaidColumn);
         List<Type> factTypes = tableColumnTypes(tables, salesTable, factColumns);
         List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_customer_id", "c_first_name", "c_last_name"));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year"));
         List<Type> outputTypes = query74ChannelYearTotalTypes(tables);
+        List<Type> groupedTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), dateTypes.get(1), BIGINT);
+        List<Type> compactTypes = List.of(outputTypes.get(0), BIGINT);
+        List<Type> resultTypes = retainCustomerDetails ? outputTypes : compactTypes;
+        List<Type> afterCustomerTypes = List.of(customerTypes.get(1), customerTypes.get(2), customerTypes.get(3), factTypes.get(0), factTypes.get(2));
 
-        PipelinePlan customers = relationPlan(
-                tables,
-                "customer",
-                List.of("c_customer_sk", "c_customer_id", "c_first_name", "c_last_name"),
-                Optional.empty(),
-                identityProjections(customerTypes),
-                customerTypes,
-                queryName + ".scan.customer",
-                queryName + ".sink.customer");
         PipelinePlan dates = relationPlan(
                 tables,
                 "date_dim",
                 List.of("d_date_sk", "d_year"),
                 Optional.of(equal(1, year, dateTypes.get(1))),
-                List.of(field(0, dateTypes.get(0))),
-                List.of(dateTypes.get(0)),
+                identityProjections(dateTypes),
+                dateTypes,
                 queryName + ".scan.date_dim",
                 queryName + ".sink.date_dim");
 
-        return new PipelinePlan(
-                new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"),
+        return appendPlan(
+                relationPlan(tables, "customer", List.of("c_customer_sk", "c_customer_id", "c_first_name", "c_last_name"), Optional.empty(), identityProjections(customerTypes), customerTypes, queryName + ".scan.customer", queryName + ".sink.customer"),
                 List.of(
-                        namedHashJoinStep(queryName + ".join.customer", new HashJoinSpec(74_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(0), customers, customerTypes, List.of(0))),
-                        namedSemiJoinStep(queryName + ".semi.date_dim", new SemiJoinSpec(74_200 + Math.abs(queryName.hashCode() % 100), concatTypes(factTypes, customerTypes), 1, dates, dateTypes.get(0), 0)),
-                        namedFactoryStep(queryName + ".filter.date_match", filterAndProjectFactory(
+                        namedHashJoinStep(queryName + ".join.customer", new HashJoinSpec(74_100 + Math.abs(queryName.hashCode() % 100), customerTypes, List.of(0), new PipelinePlan(new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"), List.of(), queryName + ".sink.sales"), factTypes, List.of(1))),
+                        namedFactoryStep(queryName + ".project.customer", filterAndProjectFactory(74_250 + Math.abs(queryName.hashCode() % 100), Optional.empty(), selectedProjections(concatTypes(customerTypes, factTypes), 1, 2, 3, 4, 6), afterCustomerTypes)),
+                        namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(74_200 + Math.abs(queryName.hashCode() % 100), afterCustomerTypes, List.of(3), dates, dateTypes, List.of(0))),
+                        namedFactoryStep(queryName + ".project.group_input", filterAndProjectFactory(
                                 74_300 + Math.abs(queryName.hashCode() % 100),
-                                Optional.of(field(factTypes.size() + customerTypes.size(), BOOLEAN)),
+                                Optional.empty(),
                                 List.of(
-                                        field(4, customerTypes.get(1)),
-                                        field(5, customerTypes.get(2)),
-                                        field(6, customerTypes.get(3)),
-                                        scaledCents(field(2, factTypes.get(2)), factTypes.get(2))),
-                                outputTypes)),
+                                        field(0, customerTypes.get(1)),
+                                        field(1, customerTypes.get(2)),
+                                        field(2, customerTypes.get(3)),
+                                        field(6, dateTypes.get(1)),
+                                        scaledCents(field(4, factTypes.get(2)), factTypes.get(2))),
+                                groupedTypes)),
                         namedFactoryStep(queryName + ".group.customer", hashAggregationFactory(
                                 74_400 + Math.abs(queryName.hashCode() % 100),
-                                outputTypes.subList(0, 3),
-                                List.of(0, 1, 2),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
-                queryName + ".sink.final");
+                                groupedTypes.subList(0, 4),
+                                List.of(0, 1, 2, 3),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()))),
+                        namedFactoryStep(queryName + ".project.result", filterAndProjectFactory(
+                                74_500 + Math.abs(queryName.hashCode() % 100),
+                                Optional.empty(),
+                                retainCustomerDetails ? selectedProjections(groupedTypes, 0, 1, 2, 4) : selectedProjections(groupedTypes, 0, 4),
+                                resultTypes))),
+                queryName + ".sink.final",
+                resultTypes);
     }
 
     private List<Type> query74ChannelYearTotalTypes(TpcdsParquetTables tables)
@@ -14869,10 +14877,10 @@ public final class TrinoTpcdsParquetSupport
     private static RowExpression query74GrowthPredicate()
     {
         RowExpression zero = constant(0L, BIGINT);
-        RowExpression storeFirstYear = field(3, BIGINT);
-        RowExpression storeSecondYear = field(7, BIGINT);
-        RowExpression webFirstYear = field(11, BIGINT);
-        RowExpression webSecondYear = field(15, BIGINT);
+        RowExpression storeFirstYear = field(1, BIGINT);
+        RowExpression storeSecondYear = field(4, BIGINT);
+        RowExpression webFirstYear = field(5, BIGINT);
+        RowExpression webSecondYear = field(6, BIGINT);
         return and(
                 and(
                         and(not(isNull(storeFirstYear)), not(isNull(storeSecondYear))),

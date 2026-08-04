@@ -3788,12 +3788,15 @@ final class TpcdsParquetSupport
 
     public static Operator query74(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator joined = query74ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2001);
-        joined = profiled("q74.join.store.2002", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2002), 0));
-        joined = profiled("q74.join.web.2001", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2001), 0));
-        joined = profiled("q74.join.web.2002", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2002), 0));
-        joined = profiled("q74.filter.growth", filter(allocator, primitiveRegistry, joined, query11GrowthPredicate(3, 7, 11, 15)));
-        joined = profiled("q74.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 1, 2));
+        Operator joined = query74ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2001, false);
+        joined = profiled("q74.join.store.2002", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_net_paid", 2002, true), 0)
+                .withOutputs(0, 1, 3, 4, 5));
+        joined = profiled("q74.join.web.2001", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2001, false), 0)
+                .withOutputs(0, 1, 2, 3, 4, 6));
+        joined = profiled("q74.join.web.2002", new HashJoinOperator(allocator, joined, 0, query74ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_net_paid", 2002, false), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 7));
+        joined = profiled("q74.filter.growth", filter(allocator, primitiveRegistry, joined, query11GrowthPredicate(1, 4, 5, 6)));
+        joined = profiled("q74.project.output", projectInputs(allocator, primitiveRegistry, joined, 0, 2, 3));
         return profiled("q74.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2}, new boolean[] {false, false, false}, joined));
     }
 
@@ -9266,20 +9269,21 @@ final class TpcdsParquetSupport
             String customerColumn,
             String soldDateColumn,
             String netPaidColumn,
-            int year)
+            int year,
+            boolean retainCustomerDetails)
     {
         String profile = "q74." + (salesTable.equals("store_sales") ? "store" : "web") + "." + year;
-        Operator sales = profiled(profile + ".scan.sales", factScan(allocator, tables, salesTable, customerColumn, soldDateColumn, netPaidColumn));
+        Operator sales = profiled(profile + ".scan.sales", factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, netPaidColumn));
         sales = profiled(profile + ".join.customer", new HashJoinOperator(
                 allocator,
-                sales,
-                0,
                 profiled(profile + ".scan.customer", customerScan(allocator, tables, "c_customer_sk", "c_customer_id", "c_first_name", "c_last_name")),
-                0));
-        sales = profiled(profile + ".semi.date_dim", new SemiJoinOperator(
+                0,
+                sales,
+                1).withOutputs(1, 2, 3, 4, 6));
+        sales = profiled(profile + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
-                1,
+                3,
                 profiled(profile + ".scan.date_dim", filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9287,14 +9291,18 @@ final class TpcdsParquetSupport
                         "date_dim",
                         equal(1, year),
                         new String[] {"d_date_sk", "d_year"},
-                        0)),
+                        0, 1)),
                 0));
-        sales = profiled(profile + ".project.group_input", projectInputs(allocator, primitiveRegistry, sales, 4, 5, 6, 2));
-        return profiled(profile + ".group.customer", new GroupedAggregationOperator(
+        sales = profiled(profile + ".project.group_input", projectInputs(allocator, primitiveRegistry, sales, 0, 1, 2, 6, 4));
+        sales = profiled(profile + ".group.customer", new GroupedAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(new Sum(3)),
+                List.of(0, 1, 2, 3),
+                List.of(new Sum(4)),
                 sales));
+        if (retainCustomerDetails) {
+            return projectInputs(allocator, primitiveRegistry, sales, 0, 1, 2, 4);
+        }
+        return projectInputs(allocator, primitiveRegistry, sales, 0, 4);
     }
 
     private static Operator query87ChannelPresence(
