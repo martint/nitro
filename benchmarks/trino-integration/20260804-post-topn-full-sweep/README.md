@@ -55,6 +55,19 @@ contains different GC and scheduler intervals. The normalized counters rule
 out a branch, cache, or instruction-efficiency regression and identify retained
 heap/lifecycle behavior as the next q40 target.
 
+The heap follow-up does not find an exchange or operator leak. A live histogram
+taken during a deliberately extended Nitro sequence sees 8.27 GiB used before
+a forced full collection and 2.50 GiB afterward. The remaining live set is
+primitive working storage: `int[]` contributes 1.52 GiB, followed by 414 MiB of
+`byte[]`, 192 MiB of `boolean[]`, and 174 MiB of `long[]`; exchange-batch and
+operator objects are not material retainers. A clean 20-measurement pool A/B
+confirms that retention is useful. The default 1 GiB primitive pool reports
+216.131 ms median wall and 441.8 CPU-ms mean. Capping it at 256 MiB removes
+major collections but regresses to 238.547 ms and 449.0 CPU-ms. The default
+median also matches the paired Trino control's 218.421 ms. Therefore neither
+the exchange lifetime nor the pool cap warrants a production change from q40;
+the short-control wall loss was sequencing variance.
+
 The attempted q16 join-payload liveness attribution was also neutral within
 large run-to-run variance. The SQL pipeline already uses Nitro's prepared
 single-long build representation and native Parquet source. Adding cross-
@@ -69,5 +82,10 @@ Artifacts:
   attribution.
 - `clickbench-q40-{nitro,trino}-perf.log` and corresponding `-perf-stat.txt`:
   separate-engine ten-measurement query and hardware-counter controls.
+- `clickbench-q40-nitro-heap-lifecycle.log` and
+  `clickbench-q40-nitro-live-histogram.txt`: extended diagnostic run and live
+  class histogram; its intentionally perturbed timings are not benchmark data.
+- `clickbench-q40-nitro-pool-{default,256m}.log`: clean 20-measurement primitive
+  retention-cap A/B.
 - `tpch-q16-standalone-profile.log`: exact SQL-shaped standalone operator CPU
   and allocation attribution.
