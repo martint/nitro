@@ -359,8 +359,21 @@ public class VectorColumnGeneration
         if (sourceCount == 1 && singlePositionResolver != null) {
             return singlePositionResolver.copySinglePosition(existing, sourcePositions[sourceStart], outputStart, size);
         }
-        boolean hit = positionsResolver != null;
-        return hit ? positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange) : null;
+        if (positionsResolver != null) {
+            return positionsResolver.copyPositions(streams(), existing, sourcePositions, sourceStart, sourceCount, outputStart, size, assumeClearOutputRange);
+        }
+        if (singlePositionResolver == null) {
+            return null;
+        }
+        Streams output = existing;
+        for (int index = 0; index < sourceCount; index++) {
+            output = singlePositionResolver.copySinglePosition(
+                    output,
+                    sourcePositions[sourceStart + index],
+                    outputStart + index,
+                    size);
+        }
+        return output;
     }
 
     public VectorColumnGeneration select(Set<Stream> selectedStreams)

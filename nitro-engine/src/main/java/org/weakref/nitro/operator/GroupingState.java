@@ -2486,6 +2486,43 @@ final class GroupingState
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    public Streams copyGroupedValuePositions(
+            int groupedColumnIndex,
+            Streams output,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.copyGroupedValuePositions(
+                    groupedColumnIndex,
+                    output,
+                    sourcePositions,
+                    sourceStart,
+                    sourceCount,
+                    outputStart,
+                    size,
+                    allocator,
+                    allocationContext);
+        }
+        Streams result = output;
+        for (int index = 0; index < sourceCount; index++) {
+            result = copyGroupedValuePosition(
+                    groupedColumnIndex,
+                    result,
+                    sourcePositions[sourceStart + index],
+                    outputStart + index,
+                    size,
+                    allocator,
+                    allocationContext);
+        }
+        return result;
+    }
+
     Streams groupedValueRangeAsDictionary(
             int groupedColumnIndex,
             int sourceStart,

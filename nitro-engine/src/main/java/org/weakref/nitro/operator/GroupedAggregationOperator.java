@@ -535,6 +535,15 @@ public class GroupedAggregationOperator
                     stream -> batchState.output(outputIndex).get(stream),
                     (_, vector) -> allocator.transfer(allocationContext, vector),
                     (_, vector) -> allocator.release(allocationContext, vector),
+                    (_, existing, sourcePositions, sourcePositionStart, sourcePositionCount, outputStart, size, _) -> copyDenseOutputPositions(
+                            outputIndex,
+                            existing,
+                            batchState.sourceStart,
+                            sourcePositions,
+                            sourcePositionStart,
+                            sourcePositionCount,
+                            outputStart,
+                            size),
                     (existing, sourcePosition, outputPosition, size) -> copyDenseOutputPosition(
                             outputIndex,
                             existing,
@@ -564,6 +573,35 @@ public class GroupedAggregationOperator
             throw new IllegalStateException("Grouped key output %s does not support dense position copying".formatted(output));
         }
         return null;
+    }
+
+    private Streams copyDenseOutputPositions(
+            int output,
+            Streams existing,
+            int sourceBase,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            int outputStart,
+            int size)
+    {
+        if (output >= groupedResults.length || groupByColumns == null) {
+            return null;
+        }
+        int[] groupedPositions = new int[sourceCount];
+        for (int index = 0; index < sourceCount; index++) {
+            groupedPositions[index] = sourceBase + sourcePositions[sourceStart + index];
+        }
+        return inlineGroupingState.copyGroupedValuePositions(
+                groupedKeyIndexes[output],
+                existing,
+                groupedPositions,
+                0,
+                sourceCount,
+                outputStart,
+                size,
+                allocator,
+                allocationContext);
     }
 
     private void startInlineGrouping()
@@ -1149,6 +1187,18 @@ public class GroupedAggregationOperator
                     // one output before constraining the batch; invalidating that cached borrow must not return its
                     // backing vector to this context's pool while groupedResults still owns it.
                     (stream, vector) -> {},
+                    (_, existing, sourcePositions, sourceStart, sourceCount, outputStart, size, _) -> groupByColumns == null
+                            ? null
+                            : inlineGroupingState.copyGroupedValuePositions(
+                                    groupedKeyIndexes[groupedOutput],
+                                    existing,
+                                    sourcePositions,
+                                    sourceStart,
+                                    sourceCount,
+                                    outputStart,
+                                    size,
+                                    allocator,
+                                    allocationContext),
                     (existing, sourcePosition, outputPosition, size) -> groupedKeyCopyPosition(groupedOutput, existing, sourcePosition, outputPosition, size));
         }
 

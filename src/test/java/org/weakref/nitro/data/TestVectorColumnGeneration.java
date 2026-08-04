@@ -74,4 +74,25 @@ class TestVectorColumnGeneration
                 .withMessageContaining("taken");
         column.close();
     }
+
+    @Test
+    void testComposesSinglePositionCopyCapabilityForBulkCopy()
+    {
+        I64Vector source = new I64Vector(new long[] {11, 22, 33, 44});
+        VectorColumnGeneration column = new VectorColumnGeneration(
+                Set.of(Stream.VALUES),
+                _ -> source,
+                (_, vector) -> vector,
+                (_, _) -> {},
+                (existing, sourcePosition, outputPosition, size) -> {
+                    I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
+                    output.values()[outputPosition] = source.values()[sourcePosition];
+                    return Streams.ofValues(output);
+                });
+
+        Streams copied = column.copyPositions(null, new int[] {3, 1}, 0, 2, 0, 2, true);
+
+        assertThat(((I64Vector) copied.values()).values()).containsExactly(44, 22);
+        column.close();
+    }
 }

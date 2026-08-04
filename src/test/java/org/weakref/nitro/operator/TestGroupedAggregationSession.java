@@ -145,6 +145,39 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testBulkCopiesDenseBinaryGroupOutput()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        new Schema(List.of(new Field(binaryType(), false))),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        4)) {
+            allocator.beginExecution();
+            BinaryVector keys = new BinaryVector(4, 20);
+            keys.setBytes(0, "alpha".getBytes(UTF_8));
+            keys.setBytes(1, "beta".getBytes(UTF_8));
+            keys.setBytes(2, "gamma".getBytes(UTF_8));
+            keys.setBytes(3, "delta".getBytes(UTF_8));
+            try (Batch input = new Batch(Mask.all(4), Output.of(Streams.ofValues(keys)))) {
+                session.addInput(input);
+            }
+
+            try (Batch result = session.finish()) {
+                Streams copied = result.output(0).copyPositions(null, new int[] {3, 1}, 0, 2, 0, 2, true);
+                BinaryVector values = (BinaryVector) copied.values();
+                assertThat(new String(values.data(), values.startOffset(0), values.length(0), UTF_8)).isEqualTo("delta");
+                assertThat(new String(values.data(), values.startOffset(1), values.length(1), UTF_8)).isEqualTo("beta");
+            }
+        }
+    }
+
+    @Test
     void testNarrowsBoundedFinalBatchBeforeMaterializingOutputs()
     {
         try (EngineResources resources = EngineResources.createDefault();

@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -1970,6 +1971,49 @@ class FlatKeyLayout
                 FlatTypeHandlers.BINARY.copyBinaryTo(chunk, offset, table.variableWidthArena(), result, outputPosition);
             }
         }
+        return result;
+    }
+
+    BinaryVector tryPrepareIdBackedBinaryOutput(
+            FlatGroupingTable table,
+            int fieldIndex,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            int size,
+            BinaryVector output,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
+            return null;
+        }
+        long totalBytes = 0;
+        for (int index = 0; index < sourceCount; index++) {
+            int recordIndex = table.recordIndex(sourcePositions[sourceStart + index]);
+            if (recordIndex < 0 || table.fieldNull(recordIndex, fieldIndex)) {
+                continue;
+            }
+            byte[] chunk = table.fixedChunk(recordIndex);
+            int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+            if (compactBinaryRecord(fieldIndex)) {
+                int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+                totalBytes += token >= 0
+                        ? fieldInterners[fieldIndex].valueLength(token)
+                        : compactBinaryLength(compactBinaryFallback(fieldIndex, ~token));
+            }
+            else {
+                int length = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+                totalBytes += length < 0 ? fieldInterners[fieldIndex].valueLength(recordDictionaryId(fieldIndex, chunk, offset, recordIndex)) : length;
+            }
+        }
+        if (totalBytes > Integer.MAX_VALUE) {
+            throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
+        }
+        BinaryVector result = BinaryVector.allocateOrGrow(allocator, allocationContext, output, size, (int) totalBytes);
+        Arrays.fill(result.offsets(), 0);
+        result.clearTraits();
+        result.addTraits(field(fieldIndex).binaryTraits());
         return result;
     }
 

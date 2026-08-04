@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -877,6 +878,72 @@ final class FlatGroupingTable
                 size);
         outputNulls.values()[outputPosition] = nullValue;
         return Streams.ofValuesAndNulls(outputValues, outputNulls);
+    }
+
+    public Streams copyGroupedValuePositions(
+            int groupedColumnIndex,
+            Streams output,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        if (sourceCount == 0) {
+            return output;
+        }
+        FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
+        if (field.handler().kind() == FlatTypeHandler.Kind.BINARY && outputStart == 0) {
+            BinaryVector existing = output == null ? null : (BinaryVector) output.values();
+            BinaryVector values = layout.tryPrepareIdBackedBinaryOutput(
+                    this,
+                    groupedColumnIndex,
+                    sourcePositions,
+                    sourceStart,
+                    sourceCount,
+                    size,
+                    existing,
+                    allocator,
+                    allocationContext);
+            if (values == null) {
+                long totalBytes = 0;
+                for (int index = 0; index < sourceCount; index++) {
+                    int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
+                    if (recordIndex >= 0 && !fieldNull(recordIndex, groupedColumnIndex)) {
+                        int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+                        totalBytes += field.handler().binaryLength(fixedChunk(recordIndex), fixedOffset);
+                    }
+                }
+                if (totalBytes > Integer.MAX_VALUE) {
+                    throw new IllegalStateException("Grouped binary output exceeds maximum byte capacity: " + totalBytes);
+                }
+                values = BinaryVector.allocateOrGrow(allocator, allocationContext, existing, size, (int) totalBytes);
+                Arrays.fill(values.offsets(), 0);
+                values.clearTraits();
+                values.addTraits(field.binaryTraits());
+            }
+            output = Streams.ofValuesAndNulls(
+                    values,
+                    VectorAccess.writableBooleanVector(
+                            allocator,
+                            allocationContext,
+                            output == null ? null : output.getOrNull(Stream.NULLS),
+                            size));
+        }
+        Streams result = output;
+        for (int index = 0; index < sourceCount; index++) {
+            result = copyGroupedValuePosition(
+                    groupedColumnIndex,
+                    result,
+                    sourcePositions[sourceStart + index],
+                    outputStart + index,
+                    size,
+                    allocator,
+                    allocationContext);
+        }
+        return result;
     }
 
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
