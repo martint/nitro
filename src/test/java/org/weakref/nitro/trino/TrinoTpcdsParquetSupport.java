@@ -6241,7 +6241,8 @@ public final class TrinoTpcdsParquetSupport
                 "q23.frequent_items.scan.item",
                 "q23.frequent_items.sink.item");
 
-        return new PipelinePlan(
+        List<Type> groupInputTypes = groupedTypes.subList(0, 3);
+        List<Page> input = executePipelinePlan(new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("store_sales"), factColumns, "q23.frequent_items.scan.store_sales"),
                 List.of(
                         namedHashJoinStep("q23.frequent_items.join.date_dim", new HashJoinSpec(23_1, factTypes, List.of(0), allowedDates, dateTypes, List.of(0))),
@@ -6253,18 +6254,42 @@ public final class TrinoTpcdsParquetSupport
                                         field(1, factTypes.get(1)),
                                         field(4, dateTypes.get(2)),
                                         substring(field(6, itemTypes.get(1)), 1, 30, itemTypes.get(1))),
-                                groupedTypes.subList(0, 3))),
-                        namedFactoryStep("q23.frequent_items.group", hashAggregationFactory(
-                                23_4,
-                                groupedTypes.subList(0, 3),
-                                List.of(0, 1, 2),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
-                        namedFactoryStep("q23.frequent_items.filter", filterAndProjectFactory(
-                                23_5,
-                                Optional.of(greaterThan(field(3, BIGINT), constant(4L, BIGINT), BIGINT)),
-                                List.of(field(0, factTypes.get(1))),
-                                List.of(factTypes.get(1))))),
-                "q23.frequent_items.sink.final");
+                                groupInputTypes))),
+                "q23.frequent_items.sink.group_inputs",
+                groupInputTypes));
+        List<Page> partial = executeSqlAggregationStage(
+                input,
+                groupInputTypes,
+                2,
+                new int[0],
+                () -> List.of(namedFactoryStep("q23.frequent_items.group.partial", hashAggregationFactory(
+                        23_4,
+                        groupInputTypes,
+                        List.of(0, 1, 2),
+                        COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
+                groupedTypes,
+                "q23.frequent_items.exchange.partial");
+        List<Page> grouped = executeSqlAggregationStage(
+                partial,
+                groupedTypes,
+                2,
+                new int[] {0, 1, 2},
+                () -> List.of(namedFactoryStep("q23.frequent_items.group.final", hashAggregationFactory(
+                        23_5,
+                        groupInputTypes,
+                        List.of(0, 1, 2),
+                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
+                groupedTypes,
+                "q23.frequent_items.exchange.final");
+        return new PipelinePlan(
+                new PagesPipelineSource(grouped, "q23.frequent_items.merge.grouped"),
+                List.of(namedFactoryStep("q23.frequent_items.filter", filterAndProjectFactory(
+                        23_6,
+                        Optional.of(greaterThan(field(3, BIGINT), constant(4L, BIGINT), BIGINT)),
+                        List.of(field(0, factTypes.get(1))),
+                        List.of(factTypes.get(1))))),
+                "q23.frequent_items.sink.final",
+                List.of(factTypes.get(1)));
     }
 
     private PipelinePlan query23CustomerSalesPlan(TpcdsParquetTables tables, boolean filterYears)

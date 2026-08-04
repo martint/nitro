@@ -5798,11 +5798,23 @@ final class TpcdsParquetSupport
                 context.profiled("q23.frequent.scan.item", scannedTable(allocator, tables, "item", "i_item_sk", "i_item_desc")),
                 0));
         frequentItems = context.profiled("q23.frequent.project", projectUtf8Prefix(allocator, primitiveRegistry, frequentItems, 5, 30, 1, 3));
-        frequentItems = context.profiled("q23.frequent.group", new GroupedAggregationOperator(
+        frequentItems = context.profiled("q23.frequent.group.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(new CountAll()),
-                frequentItems));
+                frequentItems,
+                2,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new CountAll())))));
+        frequentItems = context.profiled("q23.frequent.group.final", new SqlStageAggregationOperator(
+                allocator,
+                frequentItems,
+                2,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new Sum(3)))),
+                false));
         frequentItems = context.profiled("q23.frequent.filter", filter(allocator, primitiveRegistry, frequentItems, greaterThan(3, 4)));
         frequentItems = context.profiled("q23.frequent.project_item", projectInputs(allocator, primitiveRegistry, frequentItems, 0));
         return context.profiled("q23.frequent.distinct", new MarkDistinctOperator(allocator, 0, frequentItems, EngineResources.from(allocator).operatorResources()));
