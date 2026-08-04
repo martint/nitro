@@ -191,6 +191,29 @@ class TestAllocator
     }
 
     @Test
+    void testRejectedRetainedStateReservationDoesNotCorruptTeardownAccounting()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("rejected-index-state");
+        Object index = new Object();
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            allocator.setRetainedBytes(context, index, 100);
+            memory.failure = new IllegalStateException("memory limit exceeded");
+
+            assertThatThrownBy(() -> allocator.setRetainedBytes(context, index, 250))
+                    .isSameAs(memory.failure);
+
+            assertThat(allocator.residentBytes()).isEqualTo(100);
+            assertThat(allocator.currentBytes(context)).isEqualTo(100);
+            assertThat(memory.reservedBytes()).isEqualTo(100);
+            memory.failure = null;
+            allocator.release(context);
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
     void testClosingAllocatorReleasesResidentConstantsAndPools()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();
@@ -542,10 +565,14 @@ class TestAllocator
     {
         private long reserved;
         private CompletableFuture<Void> blocked = CompletableFuture.completedFuture(null);
+        private RuntimeException failure;
 
         @Override
         public CompletionStage<Void> reserve(long bytes)
         {
+            if (failure != null) {
+                throw failure;
+            }
             reserved += bytes;
             return blocked;
         }

@@ -1777,20 +1777,22 @@ public class Allocator
             if (retainedBytes == previousRetainedBytes) {
                 return;
             }
-            if (retainedBytes == 0) {
-                retainedBytesByOwner.remove(owner);
-            }
-            else {
-                retainedBytesByOwner.put(owner, retainedBytes);
-            }
             long delta = retainedBytes - previousRetainedBytes;
             if (delta > 0) {
+                // Reserve before publishing the new owner value. A host reservation may reject the increase; context
+                // teardown must then release only the amount that was successfully admitted.
                 allocator.reserveResident(delta);
                 stats.acquire(delta, false);
             }
             else {
                 allocator.releaseResident(-delta);
                 stats.releaseBytes(-delta);
+            }
+            if (retainedBytes == 0) {
+                retainedBytesByOwner.remove(owner);
+            }
+            else {
+                retainedBytesByOwner.put(owner, retainedBytes);
             }
         }
 
