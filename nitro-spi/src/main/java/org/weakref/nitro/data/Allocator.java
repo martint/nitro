@@ -1242,14 +1242,9 @@ public class Allocator
             return vector.copy(this, context);
         }
 
-        Vector copy = null;
-        int outputPosition = 0;
-        int outputSize = mask.selectedCount();
-        for (int sourcePosition : mask) {
-            copy = vector.copySinglePositionInto(this, context, copy, sourcePosition, outputPosition, outputSize);
-            outputPosition++;
-        }
-        return copy == null ? vector.emptyLike(this, context) : copy;
+        // Let each vector implementation size its compact result once. Building variable-width vectors one
+        // position at a time repeatedly grows and recopies the accumulated payload when the selection is sparse.
+        return vector.copy(this, context, positions(mask));
     }
 
     private void transferMask(Mask mask, Context preferredContext)

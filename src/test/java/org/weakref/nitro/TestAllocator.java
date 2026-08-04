@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.AllocatorPolicy;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
@@ -41,6 +42,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestAllocator
 {
+    @Test
+    void testSparseVariableWidthCopyIsCompactAndIndependent()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("sparse-copy");
+            BinaryVector source = new BinaryVector(5, 32);
+            source.setBytes(0, "ignored-0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            source.setBytes(1, "alpha".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            source.setBytes(2, "ignored-2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            source.setBytes(3, "beta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            BinaryVector copy = (BinaryVector) allocator.copyVector(context, source, Mask.sparse(new int[] {1, 3}, 5));
+
+            assertThat(copy.length()).isEqualTo(2);
+            assertThat(copy.offsets()).containsExactly(0, 5, 9);
+            assertThat(copy.data()).containsExactly("alphabeta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            source.data()[source.startOffset(1)] = 'x';
+            assertThat(copy.data()).containsExactly("alphabeta".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
     @Test
     void testEngineResourcesAreIsolatedAndExplicitlyClosed()
     {
