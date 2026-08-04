@@ -35,6 +35,7 @@ Each control uses two warmups and three measurements.
 | ClickBench q40 | 1.240 | 0.983 | 0.597 | Small CPU win; wall issue remains |
 | ClickBench q42, baseline | 1.685 | 1.152 | 0.734 | Genuine CPU and wall regression |
 | ClickBench q42, columnar ordering candidate | 1.045--1.393 | 0.760 | 0.413--0.452 | CPU regression removed; wall remains noisy |
+| ClickBench q42, shared pull/session candidate | 0.972 | 0.543 | 0.332 | Fused aggregation TopN also columnar |
 
 Earlier current-code fresh controls already cover TPC-DS q22, q23a, and q67,
 and ClickBench q19/q30.  They are not reclassified from this single-iteration
@@ -52,6 +53,11 @@ stages fall from about 22--24 ms of input CPU apiece to 3.5--4.4 ms. Variable-
 width and structural ordering retain the established row-backed path. ClickBench
 q40 and TPC-DS q85 remain scheduling or coordination targets because CPU is at
 or below parity while wall time is higher.
+
+The same immutable policy now governs the pull `TopNOperator` used when physical
+planning fuses TopN into aggregation. On q42 that reduces fused aggregation
+output from roughly 28--33 ms to 6.9--9.6 ms and brings the complete query to
+0.543x CPU, 0.972x wall, and 0.332x allocation.
 
 The rejected native `SINGLE` local-exchange experiment exposed an architectural
 gap: exchange consumers can close vector leases on a different thread from the
