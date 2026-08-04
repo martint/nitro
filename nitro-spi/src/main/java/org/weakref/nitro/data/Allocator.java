@@ -41,6 +41,7 @@ public class Allocator
     private final Map<Context, ContextState> states = new HashMap<>();
     private final Map<Object, PoolState> pools = new HashMap<>();
     private final Map<Vector, VectorLeaseState> vectorLeases = new IdentityHashMap<>();
+    private final Map<Vector, AsyncVectorLeaseState> asyncVectorLeases = new IdentityHashMap<>();
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -1063,6 +1064,50 @@ public class Allocator
     }
 
     /**
+     * Detaches every allocator-owned buffer reachable from the supplied roots for release by an asynchronous
+     * consumer.
+     *
+     * <p>Unlike {@link #leaseVectorTree(List)}, final close never re-enters a producer-local reuse pool. Detachment
+     * immediately removes the vectors from the producer context and its memory reservation. The last consumer may
+     * then close on any thread; reusable storage is offered only to the explicitly owned, thread-safe primitive
+     * resource pool. This is intended for host boundaries such as buffered exchanges whose consumer is not confined
+     * to the producer driver's execution thread.
+     */
+    public synchronized AsyncVectorTreeLease detachVectorTreeForAsyncRelease(List<? extends Vector> roots)
+    {
+        requireNonNull(roots, "roots is null");
+        Set<Vector> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<Vector> vectors = new java.util.ArrayList<>();
+        for (Vector root : roots) {
+            collectVectorTree(requireNonNull(root, "root is null"), visited, vectors);
+        }
+        for (Vector vector : vectors) {
+            if (vectorLeases.containsKey(vector)) {
+                throw new IllegalStateException("vector already has a producer-context lease");
+            }
+        }
+
+        List<Vector> detached = new java.util.ArrayList<>();
+        for (Vector vector : vectors) {
+            AsyncVectorLeaseState existing = asyncVectorLeases.get(vector);
+            if (existing != null) {
+                existing.references++;
+                detached.add(vector);
+                continue;
+            }
+            for (ContextState state : states.values()) {
+                AsyncVectorLeaseState lease = state.detachForAsyncRelease(vector);
+                if (lease != null) {
+                    asyncVectorLeases.put(vector, lease);
+                    detached.add(vector);
+                    break;
+                }
+            }
+        }
+        return new AsyncVectorTreeLease(this, detached);
+    }
+
+    /**
      * Releases the owned nodes in {@code vector}'s tree except identities reachable from a replacement tree.
      * This supports copy/compact operations that may preserve selected encoded children while replacing their
      * wrappers and all unrelated buffers.
@@ -1305,6 +1350,22 @@ public class Allocator
         }
     }
 
+    private void collectVectorTree(Vector vector, Set<Vector> visited, List<Vector> vectors)
+    {
+        if (!visited.add(vector)) {
+            return;
+        }
+        if (policy.indexedVectorTreeTraversal()) {
+            for (int index = 0; index < vector.childVectorCount(); index++) {
+                collectVectorTree(vector.childVector(index), visited, vectors);
+            }
+        }
+        else {
+            vector.forEachChildVector(child -> collectVectorTree(child, visited, vectors));
+        }
+        vectors.add(vector);
+    }
+
     private boolean leaseVector(Vector vector)
     {
         VectorLeaseState existing = vectorLeases.get(vector);
@@ -1333,6 +1394,29 @@ public class Allocator
         }
         vectorLeases.remove(vector);
         lease.owner.restoreAfterLease(vector, lease.ownerEpoch, lease.ownerReleased, lease.ownerDiscarded);
+    }
+
+    private synchronized void releaseAsyncVectorLease(Vector vector)
+    {
+        AsyncVectorLeaseState lease = asyncVectorLeases.get(vector);
+        if (lease == null) {
+            return;
+        }
+        lease.references--;
+        if (lease.references > 0) {
+            return;
+        }
+        asyncVectorLeases.remove(vector);
+        if (!lease.recyclable) {
+            return;
+        }
+        try {
+            primitiveArrays.retain(vector.poolFamily(), vector.poolCapacity(), vector.retainedBytes(), vector);
+        }
+        catch (IllegalStateException ignored) {
+            // The embedding may close its resource owner while an asynchronous host boundary is unwinding.
+            // In that case the detached vector is simply left for GC rather than re-entering a closed pool.
+        }
     }
 
     private void transferOwnedVector(Context context, Vector vector)
@@ -1744,6 +1828,16 @@ public class Allocator
             }
             stats.releaseBytes(vector.retainedBytes());
             return true;
+        }
+
+        private AsyncVectorLeaseState detachForAsyncRelease(Vector vector)
+        {
+            if (vector.poolFamily() == null || !untrackVector(vector)) {
+                return null;
+            }
+            stats.releaseBytes(vector.retainedBytes());
+            allocator.releaseResident(vector.retainedBytes());
+            return new AsyncVectorLeaseState(maxRetained(vector) > 0);
         }
 
         private void restoreAfterLease(Vector vector, long ownerEpoch, boolean ownerReleased, boolean ownerDiscarded)
@@ -2236,6 +2330,32 @@ public class Allocator
         }
     }
 
+    public static final class AsyncVectorTreeLease
+            implements AutoCloseable
+    {
+        private final Allocator allocator;
+        private final List<Vector> vectors;
+        private boolean closed;
+
+        private AsyncVectorTreeLease(Allocator allocator, List<Vector> vectors)
+        {
+            this.allocator = requireNonNull(allocator, "allocator is null");
+            this.vectors = List.copyOf(requireNonNull(vectors, "vectors is null"));
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            for (Vector vector : vectors) {
+                allocator.releaseAsyncVectorLease(vector);
+            }
+        }
+    }
+
     private static final class VectorLeaseState
     {
         private final ContextState owner;
@@ -2248,6 +2368,17 @@ public class Allocator
         {
             this.owner = requireNonNull(owner, "owner is null");
             this.ownerEpoch = ownerEpoch;
+        }
+    }
+
+    private static final class AsyncVectorLeaseState
+    {
+        private final boolean recyclable;
+        private int references = 1;
+
+        private AsyncVectorLeaseState(boolean recyclable)
+        {
+            this.recyclable = recyclable;
         }
     }
 

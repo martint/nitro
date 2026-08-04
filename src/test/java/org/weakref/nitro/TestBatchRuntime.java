@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.stream.StreamSupport;
 
@@ -1116,6 +1117,51 @@ public class TestBatchRuntime
         lease.close();
 
         assertThat(allocator.allocate(owner, I64Vector.class, 4, I64Vector::new)).isNotSameAs(values);
+    }
+
+    @Test
+    void testAsyncVectorTreeDetachRecyclesWithoutProducerThreadAffinity()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator producer = new Allocator(resources)) {
+            Allocator.Context owner = new Allocator.Context("Owner");
+            I64Vector values = producer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+
+            Allocator.AsyncVectorTreeLease lease = producer.detachVectorTreeForAsyncRelease(List.of(values));
+            assertThat(producer.residentBytes()).isZero();
+            producer.close();
+
+            CompletableFuture.runAsync(lease::close).join();
+
+            try (Allocator consumer = new Allocator(resources)) {
+                I64Vector reused = consumer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+                assertThat(reused).isSameAs(values);
+            }
+        }
+    }
+
+    @Test
+    void testAsyncVectorTreeDetachReferenceCountsSharedChildren()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context owner = new Allocator.Context("Owner");
+            I64Vector values = allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+            DictionaryVector first = DictionaryVector.wrap(new int[] {0}, values);
+            DictionaryVector second = DictionaryVector.wrap(new int[] {1}, values);
+
+            Allocator.AsyncVectorTreeLease firstLease = allocator.detachVectorTreeForAsyncRelease(List.of(first));
+            Allocator.AsyncVectorTreeLease secondLease = allocator.detachVectorTreeForAsyncRelease(List.of(second));
+            firstLease.close();
+
+            I64Vector whilePinned = allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+            assertThat(whilePinned).isNotSameAs(values);
+            allocator.discard(owner, whilePinned);
+
+            CompletableFuture.runAsync(secondLease::close).join();
+
+            assertThat(allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new)).isSameAs(values);
+        }
     }
 
     @Test
