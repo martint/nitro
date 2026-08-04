@@ -195,12 +195,44 @@ final class TopNState
         fallbackBatch = null;
     }
 
+    public void appendDenseOrderingBatch(Batch batch, Mask mask, int outputStart, int capacity)
+    {
+        captureSchema(batch, true);
+        if (denseColumns == null) {
+            denseColumns = new Streams[slotColumns.length];
+        }
+        int copied = mask.count();
+        for (int orderingColumn : orderingColumns) {
+            denseColumns[orderingColumn] = buffers.copyAndCompact(
+                    batch.output(orderingColumn),
+                    mask,
+                    0,
+                    denseColumns[orderingColumn],
+                    outputStart,
+                    copied,
+                    capacity);
+            schema[orderingColumn] = denseColumns[orderingColumn];
+        }
+    }
+
+    public boolean supportsDenseOrdering(Batch batch)
+    {
+        for (int orderingColumn : orderingColumns) {
+            Vector values = OperatorVectorSupport.flatten(batch.output(orderingColumn).borrow(Stream.VALUES));
+            if (!(values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public int compareOrderingValue(Batch batch, int position, int slot, boolean compactCandidate)
     {
         for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
             int orderingColumn = orderingColumns[orderingIndex];
             Output output = batch.output(orderingColumn);
-            Streams slotOrdering = slotColumns[orderingColumn][slot];
+            Streams slotOrdering = denseColumns == null ? slotColumns[orderingColumn][slot] : denseColumns[orderingColumn];
+            int slotPosition = denseColumns == null ? 0 : slot;
             Streams currentOrdering = null;
             if (compactCandidate) {
                 // Prefer the producer's compact single-position path for very large lazy results.
@@ -213,7 +245,7 @@ final class TopNState
             boolean currentNull = compactCandidate
                     ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
                     : candidateIsNull(orderingColumn, output, position);
-            boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), 0);
+            boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), slotPosition);
             int comparison;
             if (currentNull || slotNull) {
                 if (currentNull == slotNull) {
@@ -228,11 +260,11 @@ final class TopNState
                         0,
                         slotOrdering.values(),
                         slotOrdering.getOrNull(Stream.NULLS),
-                        0);
+                        slotPosition);
             }
             else {
                 comparison = comparisonKernels[orderingColumn].allowsLegacyPhysicalShortcuts()
-                        ? tryCompareDirectOrderingValue(orderingColumn, output, position, slotOrdering)
+                        ? tryCompareDirectOrderingValue(orderingColumn, output, position, slotOrdering, slotPosition)
                         : Integer.MIN_VALUE;
                 if (comparison == Integer.MIN_VALUE) {
                     comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
@@ -243,7 +275,7 @@ final class TopNState
                             0,
                             slotOrdering.values(),
                             slotOrdering.getOrNull(Stream.NULLS),
-                            0);
+                            slotPosition);
                 }
             }
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
@@ -272,7 +304,7 @@ final class TopNState
         return candidateNullAccessors[orderingColumn].value(position);
     }
 
-    private int tryCompareDirectOrderingValue(int orderingColumn, Output output, int position, Streams slotOrdering)
+    private int tryCompareDirectOrderingValue(int orderingColumn, Output output, int position, Streams slotOrdering, int slotPosition)
     {
         if (!candidateValueInitialized[orderingColumn]) {
             candidateValueVectors[orderingColumn] = output.borrow(Stream.VALUES);
@@ -292,7 +324,7 @@ final class TopNState
             }
             return Long.compare(
                     candidateLongAccessors[orderingColumn].value(position),
-                    OperatorVectorSupport.longValue(slotValues, 0));
+                    OperatorVectorSupport.longValue(slotValues, slotPosition));
         }
         if (flattenedCurrent instanceof BinaryVector && flattenedSlot instanceof BinaryVector) {
             if (candidateBinaryAccessors[orderingColumn] == null) {
@@ -303,7 +335,7 @@ final class TopNState
             byte[] data = current.data(position);
             int offset = current.offset(position);
             int length = current.length(position);
-            return -OperatorVectorSupport.binaryCompare(slotValues, 0, data, offset, length);
+            return -OperatorVectorSupport.binaryCompare(slotValues, slotPosition, data, offset, length);
         }
         return Integer.MIN_VALUE;
     }
@@ -429,6 +461,36 @@ final class TopNState
         pendingPositions[slot] = position;
     }
 
+    public void copyDenseOrderingRow(Batch batch, int position, int slot, int capacity)
+    {
+        if (denseColumns == null) {
+            throw new IllegalStateException("dense TopN columns are not initialized");
+        }
+        for (int orderingColumn : orderingColumns) {
+            denseColumns[orderingColumn] = buffers.copySinglePosition(
+                    batch.output(orderingColumn),
+                    denseColumns[orderingColumn],
+                    capacity,
+                    slot,
+                    position);
+            schema[orderingColumn] = denseColumns[orderingColumn];
+        }
+    }
+
+    public void copyPayloadRow(Batch batch, int position, int slot)
+    {
+        for (int outputIndex = 0; outputIndex < slotColumns.length; outputIndex++) {
+            if (isOrderingColumn(outputIndex)) {
+                continue;
+            }
+            slotColumns[outputIndex][slot] = buffers.copyPosition(
+                    batch.output(outputIndex),
+                    slotColumns[outputIndex][slot],
+                    position);
+            schema[outputIndex] = slotColumns[outputIndex][slot];
+        }
+    }
+
     public void flushPendingBatch(Batch batch, List<Integer> retainedSlots)
     {
         for (int slot : retainedSlots) {
@@ -503,7 +565,7 @@ final class TopNState
             Streams columnSchema = ensureEmptySchema(index);
             output = buffers.emptyLike(columnSchema);
         }
-        else if (denseColumns != null) {
+        else if (denseColumns != null && denseColumns[index] != null) {
             output = materializeDenseSortedColumn(index);
         }
         else {

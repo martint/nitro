@@ -73,6 +73,7 @@ import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TopNRankingSession;
 import org.weakref.nitro.operator.TopNSession;
+import org.weakref.nitro.operator.TopNSessionPolicy;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.WindowSession;
@@ -3461,7 +3462,8 @@ public class TestOperatorBatches
                         3,
                         new int[] {0},
                         new boolean[] {true},
-                        first.outputSchema())) {
+                        first.outputSchema(),
+                        new TopNSessionPolicy(1))) {
             try (Batch batch = first.next()) {
                 session.addInput(batch);
             }
@@ -3476,12 +3478,59 @@ public class TestOperatorBatches
             }
 
             try (Batch result = session.finish().orElseThrow()) {
-                I64Vector keys = (I64Vector) result.output(0).borrow(Stream.VALUES);
-                BinaryVector payload = (BinaryVector) result.output(1).borrow(Stream.VALUES);
-                assertThat(Arrays.copyOf(keys.values(), result.borrowMask().count())).containsExactly(12L, 9L, 5L);
-                assertThat(utf8(payload, 0)).isEqualTo("fourth");
-                assertThat(utf8(payload, 1)).isEqualTo("second");
-                assertThat(utf8(payload, 2)).isEqualTo("third");
+                VectorAccess.LongValues keys = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                VectorAccess.BinaryRegions payload = VectorAccess.binaryRegions(result.output(1).borrow(Stream.VALUES));
+                assertThat(java.util.stream.IntStream.range(0, result.borrowMask().count())
+                        .mapToLong(keys::value)
+                        .toArray())
+                        .containsExactly(12L, 9L, 5L);
+                assertThat(binaryValue(payload, 0)).isEqualTo("fourth");
+                assertThat(binaryValue(payload, 1)).isEqualTo("second");
+                assertThat(binaryValue(payload, 2)).isEqualTo("third");
+            }
+        }
+    }
+
+    private static String binaryValue(VectorAccess.BinaryRegions values, int position)
+    {
+        return new String(values.data(position), values.offset(position), values.length(position), UTF_8);
+    }
+
+    @Test
+    void testTopNSessionRetainsVariableWidthOrderingAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(row("a", 1L), row("d", 5L)));
+                TopNSession session = new TopNSession(
+                        allocator,
+                        3,
+                        new int[] {0, 1},
+                        new boolean[] {true, true},
+                        first.outputSchema(),
+                        new TopNSessionPolicy(1))) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(
+                    allocator,
+                    2,
+                    List.of(row("f", 3L), row("d", 7L), row("e", 6L), row("b", 9L)));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+
+            try (Batch result = session.finish().orElseThrow()) {
+                VectorAccess.BinaryRegions keys = VectorAccess.binaryRegions(result.output(0).borrow(Stream.VALUES));
+                VectorAccess.LongValues values = VectorAccess.longValues(result.output(1).borrow(Stream.VALUES));
+                assertThat(binaryValue(keys, 0)).isEqualTo("f");
+                assertThat(values.value(0)).isEqualTo(3);
+                assertThat(binaryValue(keys, 1)).isEqualTo("e");
+                assertThat(values.value(1)).isEqualTo(6);
+                assertThat(binaryValue(keys, 2)).isEqualTo("d");
+                assertThat(values.value(2)).isEqualTo(7);
             }
         }
     }

@@ -44,6 +44,7 @@ public final class OperatorResources
     private final GenericJoinIndexFactory genericJoinIndexes;
     private final GroupingStateResources grouping;
     private final SortOperatorPolicy sortPolicy;
+    private final TopNSessionPolicy topNSessionPolicy;
     private final TopNRankingOperatorPolicy topNRankingPolicy;
     private final WindowOperatorPolicy windowPolicy;
     private boolean closed;
@@ -66,6 +67,7 @@ public final class OperatorResources
             HashJoinOperatorResources hashJoin,
             GroupingStateResources grouping,
             SortOperatorPolicy sortPolicy,
+            TopNSessionPolicy topNSessionPolicy,
             TopNRankingOperatorPolicy topNRankingPolicy,
             WindowOperatorPolicy windowPolicy)
     {
@@ -96,6 +98,7 @@ public final class OperatorResources
                 hashJoin.executionPolicy());
         this.grouping = requireNonNull(grouping, "grouping is null");
         this.sortPolicy = requireNonNull(sortPolicy, "sortPolicy is null");
+        this.topNSessionPolicy = requireNonNull(topNSessionPolicy, "topNSessionPolicy is null");
         this.topNRankingPolicy = requireNonNull(topNRankingPolicy, "topNRankingPolicy is null");
         this.windowPolicy = requireNonNull(windowPolicy, "windowPolicy is null");
     }
@@ -141,6 +144,7 @@ public final class OperatorResources
                         HashJoinExecutionPolicy.fromSystemProperties()),
                 createDefaultGroupingResources(),
                 SortOperatorPolicy.fromSystemProperties(),
+                TopNSessionPolicy.fromSystemProperties(),
                 TopNRankingOperatorPolicy.fromSystemProperties(),
                 WindowOperatorPolicy.fromSystemProperties());
     }
@@ -261,6 +265,12 @@ public final class OperatorResources
     {
         checkOpen();
         return sortPolicy;
+    }
+
+    public TopNSessionPolicy topNSessionPolicy()
+    {
+        checkOpen();
+        return topNSessionPolicy;
     }
 
     public TopNRankingOperatorPolicy topNRankingPolicy()

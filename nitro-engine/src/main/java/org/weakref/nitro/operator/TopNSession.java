@@ -41,9 +41,11 @@ public final class TopNSession
     private final Schema outputSchema;
     private final TopNState state;
     private final PriorityQueue<Integer> candidates;
+    private final TopNSessionPolicy policy;
 
     private boolean finished;
     private boolean closed;
+    private Boolean denseOrdering;
 
     public TopNSession(
             Allocator allocator,
@@ -67,7 +69,44 @@ public final class TopNSession
             int[] orderingColumns,
             boolean[] descending,
             Schema inputSchema,
+            TopNSessionPolicy policy)
+    {
+        this(
+                allocator,
+                limit,
+                orderingColumns,
+                descending,
+                inputSchema,
+                EngineResources.from(allocator).operatorResources(),
+                policy);
+    }
+
+    public TopNSession(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descending,
+            Schema inputSchema,
             OperatorResources resources)
+    {
+        this(
+                allocator,
+                limit,
+                orderingColumns,
+                descending,
+                inputSchema,
+                resources,
+                requireNonNull(resources, "resources is null").topNSessionPolicy());
+    }
+
+    private TopNSession(
+            Allocator allocator,
+            int limit,
+            int[] orderingColumns,
+            boolean[] descending,
+            Schema inputSchema,
+            OperatorResources resources,
+            TopNSessionPolicy policy)
     {
         if (limit <= 0) {
             throw new IllegalArgumentException("TopN limit must be positive");
@@ -84,6 +123,7 @@ public final class TopNSession
         this.limit = limit;
         this.outputSchema = requireNonNull(inputSchema, "inputSchema is null");
         OperatorResources operatorResources = requireNonNull(resources, "resources is null");
+        this.policy = requireNonNull(policy, "policy is null");
         state = new TopNState(
                 orderingColumns,
                 descending,
@@ -110,26 +150,73 @@ public final class TopNSession
         state.captureSchema(batch, true);
         Mask mask = batch.borrowMask();
         boolean compactOrderingCandidates = mask.size() > (1 << 16);
+        if (mask.none()) {
+            state.discardFallbackBatch();
+            return;
+        }
+        if (denseOrdering == null) {
+            denseOrdering = limit >= policy.columnarOrderingMinLimit() &&
+                    mask.count() <= limit &&
+                    state.supportsDenseOrdering(batch);
+        }
         try {
-            for (int position : mask) {
-                if (candidates.size() < limit) {
-                    int slot = candidates.size();
-                    state.copyRow(batch, position, slot);
-                    candidates.add(slot);
-                    continue;
+            if (!denseOrdering) {
+                addRowCandidates(batch, mask, compactOrderingCandidates);
+                return;
+            }
+            int copied = Math.min(limit - candidates.size(), mask.count());
+            if (copied > 0) {
+                Mask initial = copied == mask.count()
+                        ? mask
+                        : allocator.firstMask(allocationContext, mask, copied);
+                int outputStart = candidates.size();
+                try {
+                    state.appendDenseOrderingBatch(batch, initial, outputStart, limit);
+                    for (int index = 0; index < copied; index++) {
+                        int slot = outputStart + index;
+                        state.copyPayloadRow(batch, initial.position(index), slot);
+                        candidates.add(slot);
+                    }
                 }
+                finally {
+                    if (initial != mask) {
+                        allocator.release(allocationContext, initial);
+                    }
+                }
+            }
+            for (int index = copied; index < mask.count(); index++) {
+                int position = mask.position(index);
                 int head = candidates.element();
                 if (state.compareOrderingValue(batch, position, head, compactOrderingCandidates) > 0) {
                     candidates.remove();
-                    state.copyRow(batch, position, head);
+                    state.copyDenseOrderingRow(batch, position, head, limit);
+                    state.copyPayloadRow(batch, position, head);
                     candidates.add(head);
                 }
             }
-            state.flushPendingBatch(batch, candidates.stream().toList());
         }
         finally {
             state.discardFallbackBatch();
         }
+    }
+
+    private void addRowCandidates(Batch batch, Mask mask, boolean compactOrderingCandidates)
+    {
+        for (int position : mask) {
+            if (candidates.size() < limit) {
+                int slot = candidates.size();
+                state.copyRow(batch, position, slot);
+                candidates.add(slot);
+                continue;
+            }
+            int head = candidates.element();
+            if (state.compareOrderingValue(batch, position, head, compactOrderingCandidates) > 0) {
+                candidates.remove();
+                state.copyRow(batch, position, head);
+                candidates.add(head);
+            }
+        }
+        state.flushPendingBatch(batch, candidates.stream().toList());
     }
 
     /**
@@ -149,7 +236,15 @@ public final class TopNSession
 
         List<Integer> orderedSlots = new ArrayList<>(candidates);
         orderedSlots.sort((left, right) -> state.compareSlots(right, left));
-        state.setOrderedSlots(orderedSlots);
+        if (Boolean.TRUE.equals(denseOrdering)) {
+            int[] primitiveOrderedSlots = orderedSlots.stream()
+                    .mapToInt(Integer::intValue)
+                    .toArray();
+            state.setOrderedSlots(primitiveOrderedSlots, primitiveOrderedSlots.length);
+        }
+        else {
+            state.setOrderedSlots(orderedSlots);
+        }
 
         Mask outputMask = allocator.allocateRangeMask(allocationContext, 0, orderedSlots.size());
         Output[] outputs = new Output[outputSchema.size()];
