@@ -197,29 +197,23 @@ final class TpcdsParquetSupport
     static Operator query04Filtered(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
         Operator joined = query04Joined(allocator, primitiveRegistry, tables);
-        joined = filter(allocator, primitiveRegistry, joined, query04GrowthPredicate(1, 2, 3, 4, 5, 6));
-        joined = new HashJoinOperator(
-                allocator,
-                joined,
-                0,
-                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_customer_id", "c_first_name", "c_last_name", "c_preferred_cust_flag"),
-                0);
-        return projectInputs(allocator, primitiveRegistry, joined, 8, 9, 10, 11);
+        joined = filter(allocator, primitiveRegistry, joined, query04GrowthPredicate(1, 5, 6, 7, 8, 9));
+        return projectInputs(allocator, primitiveRegistry, joined, 0, 2, 3, 4);
     }
 
     private static Operator query04Joined(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator joined = query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2001);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2002), 0)
-                .withOutputs(0, 1, 3);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2001), 0)
-                .withOutputs(0, 1, 2, 4);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2002), 0)
-                .withOutputs(0, 1, 2, 3, 5);
-        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2001), 0)
-                .withOutputs(0, 1, 2, 3, 4, 6);
-        return new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2002), 0)
+        Operator joined = query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2001, false);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", "ss_ext_list_price", "ss_ext_wholesale_cost", "ss_ext_discount_amt", "ss_ext_sales_price", 2002, true), 0)
+                .withOutputs(0, 1, 3, 4, 5, 6);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2001, false), 0)
                 .withOutputs(0, 1, 2, 3, 4, 5, 7);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", "cs_ext_list_price", "cs_ext_wholesale_cost", "cs_ext_discount_amt", "cs_ext_sales_price", 2002, false), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 8);
+        joined = new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2001, false), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 9);
+        return new HashJoinOperator(allocator, joined, 0, query04ChannelYearTotal(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", "ws_ext_list_price", "ws_ext_wholesale_cost", "ws_ext_discount_amt", "ws_ext_sales_price", 2002, false), 0)
+                .withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 10);
     }
 
     public static Operator query06(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -7404,21 +7398,50 @@ final class TpcdsParquetSupport
                 inventory));
     }
 
-    private static Operator query04ChannelYearTotal(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String customerColumn, String soldDateColumn, String listPriceColumn, String wholesaleCostColumn, String discountColumn, String salesPriceColumn, int year)
+    private static Operator query04ChannelYearTotal(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables, String salesTable, String customerColumn, String soldDateColumn, String listPriceColumn, String wholesaleCostColumn, String discountColumn, String salesPriceColumn, int year, boolean retainCustomerDetails)
     {
-        Operator sales = factScan(allocator, tables, salesTable, customerColumn, soldDateColumn, listPriceColumn, wholesaleCostColumn, discountColumn, salesPriceColumn);
-        Operator eligibleDates = filteredProjectedTable(
+        Operator sales = factScan(allocator, tables, salesTable, soldDateColumn, customerColumn, discountColumn, salesPriceColumn, wholesaleCostColumn, listPriceColumn);
+        sales = new HashJoinOperator(
                 allocator,
-                primitiveRegistry,
-                tables,
-                "date_dim",
-                equal(1, year),
-                new String[] {"d_date_sk", "d_year"},
+                scannedTable(allocator, tables, "customer", "c_customer_sk", "c_customer_id", "c_first_name", "c_last_name", "c_preferred_cust_flag", "c_birth_country", "c_login", "c_email_address"),
+                0,
+                sales,
+                1).withOutputs(1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13);
+        sales = new HashJoinOperator(
+                allocator,
+                sales,
+                7,
+                filteredProjectedTable(allocator, primitiveRegistry, tables, "date_dim", equal(1, year), new String[] {"d_date_sk", "d_year"}, 0, 1),
                 0);
-        sales = new SemiJoinOperator(allocator, sales, 1, eligibleDates, 0);
-        sales = filter(allocator, primitiveRegistry, sales, and(isNotNullI64(2), isNotNullI64(3), isNotNullI64(4), isNotNullI64(5)));
-        sales = projectQuery04YearTotal(allocator, primitiveRegistry, sales, 0, 2, 3, 4, 5);
-        return new GroupedAggregationOperator(allocator, List.of(0), List.of(new Sum(1)), sales);
+        sales = filter(allocator, primitiveRegistry, sales, and(isNotNullI64(8), isNotNullI64(9), isNotNullI64(10), isNotNullI64(11)));
+        sales = projectQuery04GroupedYearTotal(allocator, primitiveRegistry, sales, new int[] {0, 1, 2, 3, 4, 5, 6, 13}, 11, 10, 8, 9);
+        sales = new GroupedAggregationOperator(allocator, List.of(0, 1, 2, 3, 4, 5, 6, 7), List.of(new Sum(8)), sales);
+        if (retainCustomerDetails) {
+            return projectInputs(allocator, primitiveRegistry, sales, 0, 1, 2, 3, 8);
+        }
+        return projectInputs(allocator, primitiveRegistry, sales, 0, 8);
+    }
+
+    private static Operator projectQuery04GroupedYearTotal(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int[] groupKeyIndices, int listPriceIndex, int wholesaleCostIndex, int discountIndex, int salesPriceIndex)
+    {
+        Variable listMinusWholesale = new Variable(0);
+        Variable grossMargin = new Variable(1);
+        Variable yearTotal = new Variable(2);
+        List<Reference> outputs = new ArrayList<>();
+        for (int groupKeyIndex : groupKeyIndices) {
+            outputs.add(new Reference(new Input(groupKeyIndex), Stream.VALUES));
+        }
+        outputs.add(new Reference(yearTotal, Stream.VALUES));
+        return new ProjectOperator(
+                allocator,
+                new EvaluationPlan(
+                        List.of(
+                                new Assignment(listMinusWholesale, new Call("subtract", List.of(new Reference(new Input(listPriceIndex), Stream.VALUES), new Reference(new Input(wholesaleCostIndex), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(grossMargin, new Call("subtract", List.of(new Reference(listMinusWholesale, Stream.VALUES), new Reference(new Input(discountIndex), Stream.VALUES))), AllMask.ALL),
+                                new Assignment(yearTotal, new Call("add", List.of(new Reference(grossMargin, Stream.VALUES), new Reference(new Input(salesPriceIndex), Stream.VALUES))), AllMask.ALL)),
+                        List.copyOf(outputs)),
+                primitiveRegistry,
+                source);
     }
 
     private static Operator projectQuery04YearTotal(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source, int customerKeyIndex, int listPriceIndex, int wholesaleCostIndex, int discountIndex, int salesPriceIndex)
