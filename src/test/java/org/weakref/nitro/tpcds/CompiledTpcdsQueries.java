@@ -5425,7 +5425,7 @@ public final class CompiledTpcdsQueries
         return new LabeledUnion(stages, branches, "q23_sales", main, List.of());
     }
 
-    /** Q23's (item, sold day) pairs occurring more than four times in 1999-2003: the frequent-item raw counts. */
+    /** Q23's (item, sold day, description prefix) groups occurring more than four times in 2000-2003. */
     private static QueryLowering query23FrequentItemDays()
     {
         QueryLowering pairs = QueryLowering.scan("store_sales",
@@ -5436,13 +5436,14 @@ public final class CompiledTpcdsQueries
                         new QueryLowering.Column("d_year", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("d_date", ColumnEncoding.FLAT, false))
                 .join("item", "ss_item_sk", "i_item_sk",
-                        new QueryLowering.Column("i_item_sk"));
+                        new QueryLowering.Column("i_item_sk"),
+                        QueryLowering.Column.substring("i_item_desc", false, 1, 30));
         pairs.where(
                         new Plan.Predicate(">", pairs.column("d_year"), new Plan.Lit(1999)),
                         new Plan.Predicate("<", pairs.column("d_year"), new Plan.Lit(2004)))
-                .groupBy("ss_item_sk", "d_date")
+                .groupBy("ss_item_sk", "d_date", "i_item_desc")
                 .count();
-        pairs.having(new Plan.Predicate(">", new Plan.Col(2), new Plan.Lit(4)));
+        pairs.having(new Plan.Predicate(">", new Plan.Col(3), new Plan.Lit(4)));
         pairs.select(new Plan.Col(0));
         return pairs;
     }

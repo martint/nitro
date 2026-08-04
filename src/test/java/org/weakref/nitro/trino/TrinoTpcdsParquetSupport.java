@@ -6219,8 +6219,8 @@ public final class TrinoTpcdsParquetSupport
         List<String> factColumns = List.of("ss_sold_date_sk", "ss_item_sk");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_year", "d_date"));
-        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk"));
-        List<Type> groupedTypes = List.of(factTypes.get(1), dateTypes.get(2), BIGINT);
+        List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_item_desc"));
+        List<Type> groupedTypes = List.of(factTypes.get(1), dateTypes.get(2), itemTypes.get(1), BIGINT);
 
         PipelinePlan allowedDates = relationPlan(
                 tables,
@@ -6234,7 +6234,7 @@ public final class TrinoTpcdsParquetSupport
         PipelinePlan items = relationPlan(
                 tables,
                 "item",
-                List.of("i_item_sk"),
+                List.of("i_item_sk", "i_item_desc"),
                 Optional.empty(),
                 identityProjections(itemTypes),
                 itemTypes,
@@ -6251,16 +6251,17 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 List.of(
                                         field(1, factTypes.get(1)),
-                                        field(4, dateTypes.get(2))),
-                                groupedTypes.subList(0, 2))),
+                                        field(4, dateTypes.get(2)),
+                                        substring(field(6, itemTypes.get(1)), 1, 30, itemTypes.get(1))),
+                                groupedTypes.subList(0, 3))),
                         namedFactoryStep("q23.frequent_items.group", hashAggregationFactory(
                                 23_4,
-                                groupedTypes.subList(0, 2),
-                                List.of(0, 1),
+                                groupedTypes.subList(0, 3),
+                                List.of(0, 1, 2),
                                 COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()))),
                         namedFactoryStep("q23.frequent_items.filter", filterAndProjectFactory(
                                 23_5,
-                                Optional.of(greaterThan(field(2, BIGINT), constant(4L, BIGINT), BIGINT)),
+                                Optional.of(greaterThan(field(3, BIGINT), constant(4L, BIGINT), BIGINT)),
                                 List.of(field(0, factTypes.get(1))),
                                 List.of(factTypes.get(1))))),
                 "q23.frequent_items.sink.final");
