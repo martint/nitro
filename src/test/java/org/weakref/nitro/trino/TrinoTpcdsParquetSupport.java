@@ -11203,6 +11203,47 @@ public final class TrinoTpcdsParquetSupport
 
     private PipelinePlan query64CsUiPlan(TpcdsParquetTables tables)
     {
+        List<Type> groupedTypes = List.of(BIGINT, BIGINT, BIGINT);
+        List<Page> input = executePipelinePlan(query64CsUiInputPlan(tables));
+        List<Page> partial = executeSqlAggregationStage(
+                input,
+                groupedTypes,
+                2,
+                new int[0],
+                () -> List.of(namedFactoryStep("q64.group.cs_ui.partial", query64CsUiAggregationFactory(64_2, groupedTypes))),
+                groupedTypes,
+                "q64.exchange.cs_ui.partial");
+        List<Page> grouped = executeSqlAggregationStage(
+                partial,
+                groupedTypes,
+                2,
+                new int[] {0},
+                () -> List.of(namedFactoryStep("q64.group.cs_ui.final", query64CsUiAggregationFactory(64_3, groupedTypes))),
+                groupedTypes,
+                "q64.exchange.cs_ui.final");
+        return new PipelinePlan(
+                new PagesPipelineSource(grouped, "q64.merge.cs_ui"),
+                List.of(namedFactoryStep("q64.filter.item_sk", filterAndProjectFactory(
+                        64_4,
+                        Optional.of(greaterThan(field(1, BIGINT), multiply(field(2, BIGINT), constant(2L, BIGINT), BIGINT), BIGINT)),
+                        List.of(field(0, BIGINT)),
+                        List.of(BIGINT)))),
+                "q64.sink.cs_ui",
+                List.of(BIGINT));
+    }
+
+    private OperatorFactory query64CsUiAggregationFactory(int operatorId, List<Type> groupedTypes)
+    {
+        return hashAggregationFactory(
+                operatorId,
+                groupedTypes,
+                List.of(0),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()));
+    }
+
+    private PipelinePlan query64CsUiInputPlan(TpcdsParquetTables tables)
+    {
         List<Type> salesTypes = tableColumnTypes(tables, "catalog_sales", List.of("cs_item_sk", "cs_order_number", "cs_ext_list_price"));
         List<Type> returnsTypes = tableColumnTypes(tables, "catalog_returns", List.of("cr_item_sk", "cr_order_number", "cr_refunded_cash", "cr_reversed_charge", "cr_store_credit"));
         List<Type> groupedTypes = List.of(BIGINT, BIGINT, BIGINT);
@@ -11238,22 +11279,60 @@ public final class TrinoTpcdsParquetSupport
                                                         BIGINT),
                                                 scaledCents(field(7, returnsTypes.get(4)), returnsTypes.get(4)),
                                                 BIGINT)),
-                                groupedTypes)),
-                        namedFactoryStep("q64.group.cs_ui", hashAggregationFactory(
-                                64_2,
-                                groupedTypes,
-                                List.of(0),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty()))),
-                        namedFactoryStep("q64.filter.item_sk", filterAndProjectFactory(
-                                64_3,
-                                Optional.of(greaterThan(field(1, BIGINT), multiply(field(2, BIGINT), constant(2L, BIGINT), BIGINT), BIGINT)),
-                                List.of(field(0, BIGINT)),
-                                List.of(BIGINT)))),
-                "q64.sink.cs_ui");
+                                groupedTypes))),
+                "q64.sink.cs_ui.input",
+                groupedTypes);
     }
 
     private PipelinePlan query64CrossSalesPlan(TpcdsParquetTables tables, String queryName, long soldYear)
+    {
+        List<Type> crossSalesTypes = query64CrossSalesTypes(tables);
+        List<Page> input = executePipelinePlan(query64CrossSalesInputPlan(tables, queryName, soldYear));
+        int operatorOffset = Math.abs(queryName.hashCode() % 100);
+        // The optimized SQL plan partitions the item join on item_sk, then runs partial and final aggregation in
+        // the same task with only a local exchange between them.
+        List<Page> grouped = executeSqlAggregationStage(
+                input,
+                crossSalesTypes,
+                2,
+                new int[] {1},
+                () -> List.of(
+                        namedFactoryStep(queryName + ".group.partial", query64CrossSalesPartialAggregationFactory(64_1810 + operatorOffset, crossSalesTypes)),
+                        namedFactoryStep(queryName + ".group.final", query64CrossSalesFinalAggregationFactory(64_1811 + operatorOffset, crossSalesTypes))),
+                crossSalesTypes,
+                queryName + ".exchange.cross_sales");
+        return new PipelinePlan(
+                new PagesPipelineSource(grouped, queryName + ".merge.cross_sales"),
+                List.of(),
+                queryName + ".sink.final",
+                crossSalesTypes);
+    }
+
+    private OperatorFactory query64CrossSalesPartialAggregationFactory(int operatorId, List<Type> types)
+    {
+        return hashAggregationFactory(
+                operatorId,
+                types,
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(16), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(17), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(18), OptionalInt.empty()));
+    }
+
+    private OperatorFactory query64CrossSalesFinalAggregationFactory(int operatorId, List<Type> types)
+    {
+        return hashAggregationFactory(
+                operatorId,
+                types,
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(15), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(16), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(17), OptionalInt.empty()),
+                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(18), OptionalInt.empty()));
+    }
+
+    private PipelinePlan query64CrossSalesInputPlan(TpcdsParquetTables tables, String queryName, long soldYear)
     {
         List<String> factColumns = List.of("ss_store_sk", "ss_sold_date_sk", "ss_customer_sk", "ss_cdemo_sk", "ss_hdemo_sk", "ss_addr_sk", "ss_item_sk", "ss_ticket_number", "ss_promo_sk", "ss_wholesale_cost", "ss_list_price", "ss_coupon_amt");
         List<Type> factTypes = tableColumnTypes(tables, "store_sales", factColumns);
@@ -11521,16 +11600,8 @@ public final class TrinoTpcdsParquetSupport
                                         scaledCents(field(1, factTypes.get(9)), factTypes.get(9)),
                                         scaledCents(field(2, factTypes.get(10)), factTypes.get(10)),
                                         scaledCents(field(3, factTypes.get(11)), factTypes.get(11))),
-                                projectedTypes)),
-                        namedFactoryStep(queryName + ".group.cross_sales", hashAggregationFactory(
-                                64_1810 + Math.abs(queryName.hashCode() % 100),
-                                projectedTypes,
-                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(16), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(17), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(18), OptionalInt.empty())))),
-                queryName + ".sink.final",
+                                projectedTypes))),
+                queryName + ".sink.input",
                 projectedTypes);
     }
 

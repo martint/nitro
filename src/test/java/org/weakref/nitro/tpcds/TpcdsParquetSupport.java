@@ -9724,11 +9724,22 @@ final class TpcdsParquetSupport
                 scannedTable(allocator, tables, "catalog_returns", "cr_item_sk", "cr_order_number", "cr_refunded_cash", "cr_reversed_charge", "cr_store_credit"),
                 new int[] {0, 1}));
         sales = context.profiled(profilePrefix + ".project.sales_refunds", projectQuery64CatalogRefunds(allocator, primitiveRegistry, sales));
-        sales = context.profiled(profilePrefix + ".group.cs_ui", new GroupedAggregationOperator(
+        sales = context.profiled(profilePrefix + ".group.cs_ui.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0),
-                List.of(new Sum(1), new Sum(2)),
-                sales));
+                sales,
+                2,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0),
+                        () -> List.of(new Sum(1), new Sum(2))))));
+        sales = context.profiled(profilePrefix + ".group.cs_ui.final", new SqlStageAggregationOperator(
+                allocator,
+                sales,
+                2,
+                new int[] {0},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0),
+                        () -> List.of(new Sum(1), new Sum(2))))));
         sales = context.profiled(profilePrefix + ".filter.item_sk", filter(allocator, primitiveRegistry, sales, query64RefundThresholdPredicate(1, 2)));
         return context.profiled(profilePrefix + ".project.item_sk", projectInputs(allocator, primitiveRegistry, sales, 0));
     }
@@ -9894,11 +9905,20 @@ final class TpcdsParquetSupport
                 0).withOutputs(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20));
         sales = context.profiled(profilePrefix + ".filter.same_address", filter(allocator, primitiveRegistry, sales, notEqualUtf8Columns(6, 7)));
         sales = context.profiled(profilePrefix + ".project.group_rows", projectQuery64CrossSalesRows(allocator, primitiveRegistry, sales));
-        return context.profiled(profilePrefix + ".group.cross_sales", new GroupedAggregationOperator(
+        // The optimized SQL plan partitions the item join on item_sk, then runs partial and final aggregation in
+        // the same task with only a local exchange between them.
+        return context.profiled(profilePrefix + ".group.cross_sales", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
-                List.of(new CountAll(), new Sum(15), new Sum(16), new Sum(17)),
-                sales));
+                sales,
+                2,
+                new int[] {1},
+                List.of(
+                        SqlStageAggregationOperator.aggregate(
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+                                () -> List.of(new CountAll(), new Sum(15), new Sum(16), new Sum(17))),
+                        SqlStageAggregationOperator.aggregate(
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
+                                () -> List.of(new Sum(15), new Sum(16), new Sum(17), new Sum(18))))));
     }
 
     private static Operator projectQuery64CrossSalesRows(Allocator allocator, PrimitiveRegistry primitiveRegistry, Operator source)
