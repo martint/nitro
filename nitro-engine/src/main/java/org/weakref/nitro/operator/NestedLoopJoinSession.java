@@ -16,6 +16,8 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 
+import java.util.function.UnaryOperator;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -29,6 +31,7 @@ public final class NestedLoopJoinSession
 {
     private final ExternallyScheduledBatchFeed outer;
     private final NestedLoopJoinOperator join;
+    private Operator outputRoot;
 
     private Batch output;
     private boolean finishing;
@@ -46,12 +49,31 @@ public final class NestedLoopJoinSession
                 requireNonNull(allocator, "allocator is null"),
                 outer,
                 requireNonNull(inner, "inner is null"));
+        outputRoot = join;
     }
 
     @Override
     public Schema outputSchema()
     {
-        return join.outputSchema();
+        return outputRoot.outputSchema();
+    }
+
+    /**
+     * Composes a stateless output pipeline directly over native cross-join batches.
+     *
+     * <p>The pipeline must preserve the externally scheduled input boundary while the current
+     * outer batch is drained. Filter and projection pipelines satisfy this contract.
+     */
+    public NestedLoopJoinSession withOutputPipeline(UnaryOperator<Operator> outputPipeline)
+    {
+        checkAcceptingInput();
+        if (outputRoot != join) {
+            throw new IllegalStateException("nested loop join output pipeline is already configured");
+        }
+        outputRoot = requireNonNull(
+                requireNonNull(outputPipeline, "outputPipeline is null").apply(join),
+                "outputPipeline returned null");
+        return this;
     }
 
     @Override
@@ -75,8 +97,8 @@ public final class NestedLoopJoinSession
             return false;
         }
 
-        while (join.hasNext()) {
-            Batch candidate = join.next();
+        while (outputRoot.hasNext()) {
+            Batch candidate = outputRoot.next();
             if (!candidate.borrowMask().none()) {
                 output = candidate;
                 return true;
@@ -119,7 +141,7 @@ public final class NestedLoopJoinSession
             return false;
         }
         hasOutput();
-        return !join.hasNext();
+        return !outputRoot.hasNext();
     }
 
     private void checkAcceptingInput()
@@ -148,6 +170,6 @@ public final class NestedLoopJoinSession
             output.close();
             output = null;
         }
-        join.close();
+        outputRoot.close();
     }
 }

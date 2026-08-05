@@ -84,6 +84,32 @@ class TestNestedLoopJoinSession
         }
     }
 
+    @Test
+    void testComposesOutputPipelineOverNativeCrossJoinBatches()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                NestedLoopJoinSession session = new NestedLoopJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        table(10, 20))
+                        .withOutputPipeline(source -> new LimitOperator(allocator, 2, source))) {
+            allocator.beginExecution();
+
+            List<Long> outerValues = new ArrayList<>();
+            List<Long> innerValues = new ArrayList<>();
+            session.addInput(batch(1, 2));
+            drain(session, outerValues, innerValues);
+            session.finish();
+            drain(session, outerValues, innerValues);
+
+            assertThat(outerValues).containsExactly(1L, 2L);
+            assertThat(innerValues).containsExactly(10L, 10L);
+            assertThat(session.isFinished()).isTrue();
+        }
+    }
+
     private static void drain(NestedLoopJoinSession session, List<Long> outerValues, List<Long> innerValues)
     {
         while (session.hasOutput()) {
