@@ -7202,6 +7202,12 @@ public final class TrinoTpcdsParquetSupport
                 customerTypes,
                 queryName + ".scan.customer",
                 queryName + ".sink.customer");
+        customers = appendPlan(
+                customers,
+                List.of(namedFactoryStep(
+                        queryName + ".exchange.customer",
+                        new TrinoPageExchangeOperatorFactory(nextDynamicOperatorId.getAndIncrement(), queryName + ".exchange.customer"))),
+                queryName + ".sink.customer.exchange");
         PipelinePlan dates = relationPlan(
                 tables,
                 "date_dim",
@@ -7211,16 +7217,28 @@ public final class TrinoTpcdsParquetSupport
                 List.of(dateTypes.get(0), dateTypes.get(2)),
                 queryName + ".scan.date_dim",
                 queryName + ".sink.date_dim");
+        dates = appendPlan(
+                dates,
+                List.of(namedFactoryStep(
+                        queryName + ".exchange.date_dim",
+                        new TrinoPageExchangeOperatorFactory(nextDynamicOperatorId.getAndIncrement(), queryName + ".exchange.date_dim"))),
+                queryName + ".sink.date_dim.exchange");
 
         PipelinePlan distinctInput = new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"),
                 List.of(
+                        namedFactoryStep(
+                                queryName + ".exchange.sales_by_date",
+                                new TrinoPageExchangeOperatorFactory(nextDynamicOperatorId.getAndIncrement(), queryName + ".exchange.sales_by_date")),
                         namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(87_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(1), dates, List.of(dateTypes.get(0), dateTypes.get(2)), List.of(0))),
                         namedFactoryStep(queryName + ".project.date_dim", filterAndProjectFactory(
                                 87_200 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
                                 selectedProjections(concatTypes(factTypes, List.of(dateTypes.get(0), dateTypes.get(2))), 0, 3),
                                 afterDateTypes)),
+                        namedFactoryStep(
+                                queryName + ".exchange.sales_by_customer",
+                                new TrinoPageExchangeOperatorFactory(nextDynamicOperatorId.getAndIncrement(), queryName + ".exchange.sales_by_customer")),
                         namedHashJoinStep(queryName + ".join.customer", new HashJoinSpec(87_300 + Math.abs(queryName.hashCode() % 100), afterDateTypes, List.of(0), customers, customerTypes, List.of(0))),
                         namedFactoryStep(queryName + ".project.distinct_keys", filterAndProjectFactory(
                                 87_400 + Math.abs(queryName.hashCode() % 100),

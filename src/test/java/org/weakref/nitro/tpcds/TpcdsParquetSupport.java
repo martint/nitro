@@ -41,6 +41,7 @@ import org.weakref.nitro.operator.RunningMaxI64WindowFunction;
 import org.weakref.nitro.operator.RunningSumI64WindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
+import org.weakref.nitro.operator.SqlExchangeOperator;
 import org.weakref.nitro.operator.SqlStageAggregationOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
@@ -9383,11 +9384,12 @@ final class TpcdsParquetSupport
             String soldDateColumn,
             int activeChannel)
     {
-        Operator sales = factScan(allocator, tables, salesTable, customerColumn, soldDateColumn);
-        sales = profiled("q87." + activeChannel + ".join.date_dim", new HashJoinOperator(
+        String profile = "q87." + activeChannel;
+        Operator sales = profiled(profile + ".exchange.sales_by_date", new SqlExchangeOperator(
                 allocator,
-                sales,
-                1,
+                factScan(allocator, tables, salesTable, customerColumn, soldDateColumn)));
+        Operator dates = profiled(profile + ".exchange.date_dim", new SqlExchangeOperator(
+                allocator,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9395,13 +9397,22 @@ final class TpcdsParquetSupport
                         "date_dim",
                         and(greaterThan(1, 1199), lessThan(1, 1212)),
                         new String[] {"d_date_sk", "d_month_seq", "d_date"},
-                        0, 2),
+                        0, 2)));
+        sales = profiled("q87." + activeChannel + ".join.date_dim", new HashJoinOperator(
+                allocator,
+                sales,
+                1,
+                dates,
                 0).withOutputs(0, 3));
+        sales = profiled(profile + ".exchange.sales_by_customer", new SqlExchangeOperator(allocator, sales));
+        Operator customers = profiled(profile + ".exchange.customer", new SqlExchangeOperator(
+                allocator,
+                customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name")));
         sales = profiled("q87." + activeChannel + ".join.customer", new HashJoinOperator(
                 allocator,
                 sales,
                 0,
-                customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name"),
+                customers,
                 0).withOutputs(3, 4, 1));
         sales = profiled("q87." + activeChannel + ".group.distinct.partial", new SqlStageAggregationOperator(
                 allocator,

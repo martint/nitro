@@ -113,3 +113,34 @@ this short run, so normalized counters are the stronger signal. Symmetric exchan
 changes the instruction ratio only from 0.531x to 0.525x. The remaining difference from integrated
 SQL CPU (0.703x) is therefore not aggregation exchange copying; partitioned join topology and its
 remote Page boundaries are the next fixture gap.
+
+## Partitioned-join exchange topology
+
+At task concurrency one, each of q87's date and customer joins still has four material transport
+inputs: the sales/date sides of the first join and the joined-sales/customer sides of the second.
+The standalone fixtures now copy each input at that boundary while retaining runtime-filter
+propagation. Nitro copies native vectors and Trino copies Pages; neither helper invents a scheduler
+or a multi-destination partition policy.
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Median elapsed (ms) | 1,592.828 | 2,697.290 | 0.591 |
+| Instructions | 37.76B | 68.61B | 0.550 |
+| Cycles | 12.40B | 19.19B | 0.646 |
+| Branch misses | 35.89M | 106.26M | 0.338 |
+| L1 data-load misses | 399.74M | 582.28M | 0.686 |
+| Allocation | 1.025 GB | 7.650 GB | 0.134 |
+
+The accepted artifact is `q87-join-exchange-topology.json`. Nitro elapsed samples remain multimodal,
+but the cycle ratio moves from 0.517x to 0.646x and is now close to the integrated CPU ratio. A fresh
+one-warmup/one-measurement SQL attribution check reported 0.671x CPU; the controlled five-warmup gate
+remains 0.703x and is still the board value.
+
+The attribution also exposes a physical runtime-filter difference. The standalone Nitro date filter
+reaches the Parquet scan before probe consumption and reduces the three sales inputs from about 50.4M
+to 9.8M rows. The standalone Trino fixture's synthetic source sends all 50.4M rows. Current integrated
+SQL is between those endpoints: its Nitro pipeline sources emitted 11.33M rows, while Trino scan/filter
+operators emitted 41.59M. This is not a function-adaptation or join-kernel regression. Runtime-filter
+arrival and connector wait policy are part of the SQL execution shape and must be reported separately
+from pure operator efficiency; forcing either standalone fixture to the other engine's row counts
+would cease to model the corresponding integrated engine.
