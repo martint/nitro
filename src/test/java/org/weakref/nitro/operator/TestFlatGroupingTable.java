@@ -1495,6 +1495,8 @@ class TestFlatGroupingTable
                 new I64Vector(new long[] {10, 10, 20, 11})};
         Vector[] nulls = {null, null, null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
+        assertThat(layout.supportsNormalizedRecordWrite()).isFalse();
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("normalizedIntKeyOutput");
@@ -1542,6 +1544,23 @@ class TestFlatGroupingTable
         finally {
             table.releaseBuffers();
             allocator.release(allocationContext);
+        }
+    }
+
+    @Test
+    void testAllLongNormalizedKeyCanWriteExactNormalizedRecords()
+    {
+        Vector[] values = {
+                new I64Vector(new long[] {1, 2}),
+                new I64Vector(new long[] {10, 20}),
+                new I64Vector(new long[] {100, 200})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
+            assertThat(layout.supportsNormalizedRecordWrite()).isTrue();
+        }
+        finally {
+            layout.releaseBuffers();
         }
     }
 

@@ -557,7 +557,13 @@ class FlatKeyLayout
 
     boolean supportsNormalizedRecordWrite()
     {
+        // A normalized lookup can be declined by a later row or batch (for example after a value-id interner
+        // reaches its ceiling). All-long normalized records are still exact ordinary records, but an id-only
+        // binary record cannot satisfy the ensuing byte-oriented fallback without relying on transient batch
+        // representation state. Retain exact binary records while continuing to use the normalized lanes for
+        // hashing and equality whenever both sides admit them.
         return normalizedIntKeyShape &&
+                !anyVariableWidth &&
                 policy.idOnlyBinaryRecords() &&
                 embedIdOnlyBinaryIds;
     }
