@@ -193,3 +193,31 @@ them as Page transport and pays Page-to-vector and vector-to-Page adaptation. Th
 also targets stock Trino 479, while the production adapters are in the 484 integration tree, so a
 faithful boundary benchmark must live with the integration code rather than copy a second adapter
 implementation into the fixture.
+
+## Production Page-boundary encoding
+
+The Trino integration now records top-level flat, dictionary, and RLE channel positions at materialized Nitro Page
+ingress and egress. It deliberately does not inspect `SourcePage` blocks because doing so would force lazy scan
+materialization. A production-adapter JMH benchmark models q87's two name columns and date column. Five one-second
+warmups preceded five one-second measurements:
+
+| Input representation | ns/row | Instructions/row | Cycles/row | Allocation B/row |
+| --- | ---: | ---: | ---: | ---: |
+| Dictionary names + flat date | 1.667 | 45.689 | 8.766 | 14.432 |
+| Flat names + flat date | 5.715 | 179.068 | 30.015 | 29.150 |
+
+The accepted JMH artifact is `/tmp/q87-page-boundary.json`. The benchmark isolates adapter cost and must not be
+multiplied by total Page positions without accounting for the actual channel shape.
+
+With dynamic filtering disabled, five warmups and seven alternating integrated measurements report 1.020x median
+wall, 1.006x median CPU, and 1.017x mean CPU for Nitro/Trino. Per Nitro query, materialized Page ingress contains only
+about 151 thousand dictionary channel positions versus 131.147 million flat channel positions. Egress contains about
+10.074 million dictionary positions versus 125.726 million flat positions. Thus Nitro produces useful dictionary
+identity, but almost none survives remote transport.
+
+The loss is not in `PagePartitioner` alone. Trino's standard `DictionaryBlockEncoding.readBlock` deliberately expands
+the dictionary mapping with `copyPositions`, so even a compact dictionary serialized on the producer becomes a flat
+block on the consumer. A trial that flushed every encoded Nitro partition page was rejected and removed: it preserved
+the producer encoding but the receiver still flattened it, while producing more network pages. The next integration
+slice must negotiate a Nitro-native remote exchange representation between Nitro fragments. Ordinary Trino exchange
+semantics must remain unchanged.
