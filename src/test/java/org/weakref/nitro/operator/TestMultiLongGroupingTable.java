@@ -100,6 +100,7 @@ class TestMultiLongGroupingTable
         AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
                 2,
                 16,
+                0b11,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
         AbstractMultiLongGroupingTable ordinaryTable = codeGeneration.multiLongGrouping().create(
@@ -114,6 +115,10 @@ class TestMultiLongGroupingTable
         long groupCount = table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, positions.length, 0);
 
         assertThat(groupCount).isEqualTo(3);
+        assertThat(table.compactKeysByGroup[0]).isNull();
+        assertThat(table.keysByGroup[0]).isNotNull();
+        assertThat(table.compactKeysByGroup[1]).isNotNull();
+        assertThat(table.keysByGroup[1]).isNull();
         assertThat(table.groupedValue(0, 0)).isEqualTo(1L << 40);
         assertThat(table.groupedValue(1, 0)).isEqualTo(3);
         assertThat(table.groupedValue(0, 1)).isEqualTo(7);
@@ -122,6 +127,39 @@ class TestMultiLongGroupingTable
         assertThat(table.groupedValue(1, 2)).isEqualTo(5);
         table.releaseBuffers();
         ordinaryTable.releaseBuffers();
+    }
+
+    @Test
+    void testCompactRetainedColumnWidensAfterExistingGroups()
+    {
+        long[][] keys = {
+                {11, 22, 1L << 40, 11},
+                {1, 2, 3, 1},
+        };
+        VectorAccess.LongValues[] keyAccessors = {
+                position -> keys[0][position],
+                position -> keys[1][position],
+        };
+        VectorAccess.BooleanValues[] nullAccessors = {_ -> false, _ -> false};
+        int[] positions = {0, 1, 2, 3};
+
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
+                2,
+                16,
+                0b11,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
+        assertThat(table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, positions.length, 0))
+                .isEqualTo(3);
+
+        assertThat(table.compactKeysByGroup[0]).isNull();
+        assertThat(table.keysByGroup[0]).isNotNull();
+        assertThat(table.groupedValue(0, 0)).isEqualTo(11);
+        assertThat(table.groupedValue(0, 1)).isEqualTo(22);
+        assertThat(table.groupedValue(0, 2)).isEqualTo(1L << 40);
+        assertThat(table.compactKeysByGroup[1]).isNotNull();
+        assertThat(table.groupedValue(1, 2)).isEqualTo(3);
+        table.releaseBuffers();
     }
 
     @Test

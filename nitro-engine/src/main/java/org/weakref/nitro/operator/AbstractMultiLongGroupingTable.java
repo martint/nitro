@@ -67,6 +67,7 @@ abstract class AbstractMultiLongGroupingTable
     int maxFill;
     int size;
     long[][] keysByGroup;
+    int[][] compactKeysByGroup;
     byte[] nullMasksByGroup;
 
     /** The control fragment for {@code hash}: high byte with the top bit set so it is never the empty marker (0). */
@@ -81,6 +82,7 @@ abstract class AbstractMultiLongGroupingTable
             int expectedSize,
             boolean storesGroupIds,
             boolean retainGroupKeys,
+            int compactRetainedColumns,
             AdaptiveLongGroupingPolicy policy)
     {
         this.arrayPool = arrayPool;
@@ -103,8 +105,14 @@ abstract class AbstractMultiLongGroupingTable
         if (retainsGroupKeys) {
             int reverse = Math.max(16, expectedSize);
             keysByGroup = new long[arity][];
+            compactKeysByGroup = new int[arity][];
             for (int column = 0; column < arity; column++) {
-                keysByGroup[column] = arrayPool.borrowLongs(reverse);
+                if ((compactRetainedColumns & (1 << column)) != 0) {
+                    compactKeysByGroup[column] = arrayPool.borrowInts(reverse);
+                }
+                else {
+                    keysByGroup[column] = arrayPool.borrowLongs(reverse);
+                }
             }
             nullMasksByGroup = arrayPool.borrowBytes(reverse);
         }
@@ -174,7 +182,8 @@ abstract class AbstractMultiLongGroupingTable
     @Override
     public final long groupedValue(int column, int groupId)
     {
-        return keysByGroup[column][groupId];
+        int[] compactKeys = compactKeysByGroup[column];
+        return compactKeys == null ? keysByGroup[column][groupId] : compactKeys[groupId];
     }
 
     @Override
@@ -249,15 +258,46 @@ abstract class AbstractMultiLongGroupingTable
             newSize *= 2;
         }
         for (int column = 0; column < arity; column++) {
-            long[] previous = keysByGroup[column];
-            keysByGroup[column] = arrayPool.borrowLongs(newSize);
-            System.arraycopy(previous, 0, keysByGroup[column], 0, previous.length);
-            arrayPool.release(previous);
+            int[] previousCompact = compactKeysByGroup[column];
+            if (previousCompact != null) {
+                compactKeysByGroup[column] = arrayPool.borrowInts(newSize);
+                System.arraycopy(previousCompact, 0, compactKeysByGroup[column], 0, previousCompact.length);
+                arrayPool.release(previousCompact);
+            }
+            else {
+                long[] previous = keysByGroup[column];
+                keysByGroup[column] = arrayPool.borrowLongs(newSize);
+                System.arraycopy(previous, 0, keysByGroup[column], 0, previous.length);
+                arrayPool.release(previous);
+            }
         }
         byte[] previousNullMasks = nullMasksByGroup;
         nullMasksByGroup = arrayPool.borrowBytes(newSize);
         System.arraycopy(previousNullMasks, 0, nullMasksByGroup, 0, previousNullMasks.length);
         arrayPool.release(previousNullMasks);
+    }
+
+    /** Stores an output key at its admitted width, widening exactly if a later batch requires it. */
+    final void storeCompactRetainedKey(int column, int groupId, long value)
+    {
+        int[] compactKeys = compactKeysByGroup[column];
+        if (compactKeys == null) {
+            keysByGroup[column][groupId] = value;
+            return;
+        }
+        if ((long) (int) value == value) {
+            compactKeys[groupId] = (int) value;
+            return;
+        }
+
+        long[] widened = arrayPool.borrowLongs(compactKeys.length);
+        for (int index = 0; index < size; index++) {
+            widened[index] = compactKeys[index];
+        }
+        arrayPool.release(compactKeys);
+        compactKeysByGroup[column] = null;
+        keysByGroup[column] = widened;
+        widened[groupId] = value;
     }
 
     @Override
@@ -268,8 +308,10 @@ abstract class AbstractMultiLongGroupingTable
         bytes += control == null ? 0 : control.length;
         if (keysByGroup != null) {
             bytes += (long) keysByGroup.length * Long.BYTES;
-            for (long[] keys : keysByGroup) {
-                bytes += keys == null ? 0 : (long) keys.length * Long.BYTES;
+            for (int column = 0; column < keysByGroup.length; column++) {
+                long[] keys = keysByGroup[column];
+                int[] compactKeys = compactKeysByGroup[column];
+                bytes += keys == null ? (long) compactKeys.length * Integer.BYTES : (long) keys.length * Long.BYTES;
             }
         }
         bytes += nullMasksByGroup == null ? 0 : nullMasksByGroup.length;
@@ -298,8 +340,11 @@ abstract class AbstractMultiLongGroupingTable
             for (int column = 0; column < arity; column++) {
                 arrayPool.release(keysByGroup[column]);
                 keysByGroup[column] = null;
+                arrayPool.release(compactKeysByGroup[column]);
+                compactKeysByGroup[column] = null;
             }
             keysByGroup = null;
+            compactKeysByGroup = null;
         }
         if (nullMasksByGroup != null) {
             arrayPool.release(nullMasksByGroup);

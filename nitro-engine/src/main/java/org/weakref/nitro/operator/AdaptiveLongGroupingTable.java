@@ -69,6 +69,7 @@ class AdaptiveLongGroupingTable
 
     private LongGroupingTable promoted;
     private boolean promotedForDiscardedResults;
+    private int compactRetainedColumns;
     private VectorAccess.BooleanValues[] nonNullAccessors;
     private VectorAccess.BooleanValues[] promotionNullAccessors;
     private int debugNullFreeBatches;
@@ -144,6 +145,14 @@ class AdaptiveLongGroupingTable
         }
         promote(groupCount, true);
         return true;
+    }
+
+    void compactRetainedColumns(int compactRetainedColumns)
+    {
+        if (promoted != null) {
+            throw new IllegalStateException("Retained key widths must be selected before promotion");
+        }
+        this.compactRetainedColumns = compactRetainedColumns;
     }
 
     @Override
@@ -670,7 +679,7 @@ class AdaptiveLongGroupingTable
         }
         LongGroupingTable target = discardResults
                 ? codeGeneration.multiLongGrouping().createDiscardingResults(
-                        arity, Math.max(16, toIntExact(groupCount)), arrayPool, policy)
+                        arity, Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy)
                 : codeGeneration.multiLongGrouping().create(
                         arity, Math.max(16, toIntExact(groupCount)), arrayPool, policy);
         if (groupCount != 0) {

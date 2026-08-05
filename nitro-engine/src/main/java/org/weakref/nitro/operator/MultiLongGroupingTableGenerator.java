@@ -51,6 +51,7 @@ final class MultiLongGroupingTableGenerator
     private static final ClassDesc CD_LONG_ARRAY_2D = CD_long.arrayType().arrayType();
     private static final ClassDesc CD_BYTE_ARRAY = CD_byte.arrayType();
     private static final ClassDesc CD_INT_ARRAY = CD_int.arrayType();
+    private static final ClassDesc CD_INT_ARRAY_2D = CD_int.arrayType().arrayType();
     private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_LONG_VALUES_ARRAY = CD_LONG_VALUES.arrayType();
@@ -69,7 +70,7 @@ final class MultiLongGroupingTableGenerator
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(arity, expectedSize, true, true, arrayPool, policy);
+        return create(arity, expectedSize, true, true, 0, arrayPool, policy);
     }
 
     AbstractMultiLongGroupingTable createDistinct(
@@ -78,7 +79,7 @@ final class MultiLongGroupingTableGenerator
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(arity, expectedSize, false, false, arrayPool, policy);
+        return create(arity, expectedSize, false, false, 0, arrayPool, policy);
     }
 
     AbstractMultiLongGroupingTable createDiscardingResults(
@@ -87,7 +88,17 @@ final class MultiLongGroupingTableGenerator
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
-        return create(arity, expectedSize, false, true, arrayPool, policy);
+        return createDiscardingResults(arity, expectedSize, 0, arrayPool, policy);
+    }
+
+    AbstractMultiLongGroupingTable createDiscardingResults(
+            int arity,
+            int expectedSize,
+            int compactRetainedColumns,
+            PrimitiveArrayPool arrayPool,
+            AdaptiveLongGroupingPolicy policy)
+    {
+        return create(arity, expectedSize, false, true, compactRetainedColumns, arrayPool, policy);
     }
 
     private AbstractMultiLongGroupingTable create(
@@ -95,6 +106,7 @@ final class MultiLongGroupingTableGenerator
             int expectedSize,
             boolean storesGroupIds,
             boolean retainGroupKeys,
+            int compactRetainedColumns,
             PrimitiveArrayPool arrayPool,
             AdaptiveLongGroupingPolicy policy)
     {
@@ -102,9 +114,10 @@ final class MultiLongGroupingTableGenerator
         if (arity < 2 || arity > AbstractMultiLongGroupingTable.MAX_ARITY) {
             throw new IllegalArgumentException("Unsupported grouping arity: " + arity);
         }
-        MethodHandle constructor = constructors.computeIfAbsent(arity, MultiLongGroupingTableGenerator::generate);
+        int shape = arity | (compactRetainedColumns << 8);
+        MethodHandle constructor = constructors.computeIfAbsent(shape, MultiLongGroupingTableGenerator::generate);
         try {
-            return (AbstractMultiLongGroupingTable) constructor.invoke(arrayPool, expectedSize, storesGroupIds, retainGroupKeys, policy);
+            return (AbstractMultiLongGroupingTable) constructor.invoke(arrayPool, expectedSize, storesGroupIds, retainGroupKeys, compactRetainedColumns, policy);
         }
         catch (Throwable e) {
             throw new RuntimeException("Failed to instantiate generated grouping table for arity " + arity, e);
@@ -125,33 +138,36 @@ final class MultiLongGroupingTableGenerator
         }
     }
 
-    private static MethodHandle generate(int arity)
+    private static MethodHandle generate(int shape)
     {
-        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedMultiLongGroupingTable" + arity);
+        int arity = shape & 0xFF;
+        int compactRetainedColumns = shape >>> 8;
+        ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedMultiLongGroupingTable" + arity + "_" + compactRetainedColumns);
         MethodTypeDesc assignGroupType = assignGroupType(arity);
 
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(CD_BASE);
             builder.withFlags(ClassFile.ACC_FINAL | ClassFile.ACC_SYNTHETIC);
 
-            // <init>(PrimitiveArrayPool, int, boolean, boolean, policy) {
-            //     super(pool, arity, expectedSize, storesGroupIds, retainGroupKeys, policy);
+            // <init>(PrimitiveArrayPool, int, boolean, boolean, int, policy) {
+            //     super(pool, arity, expectedSize, storesGroupIds, retainGroupKeys, compactRetainedColumns, policy);
             // }
-            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_boolean, CD_boolean, CD_POLICY), ClassFile.ACC_PUBLIC, code -> {
+            builder.withMethodBody("<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_boolean, CD_boolean, CD_int, CD_POLICY), ClassFile.ACC_PUBLIC, code -> {
                 code.aload(0);
                 code.aload(1);
                 code.loadConstant(arity);
                 code.iload(2);
                 code.iload(3);
                 code.iload(4);
-                code.aload(5);
-                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_int, CD_boolean, CD_boolean, CD_POLICY));
+                code.iload(5);
+                code.aload(6);
+                code.invokespecial(CD_BASE, "<init>", MethodTypeDesc.of(CD_void, CD_PRIMITIVE_ARRAY_POOL, CD_int, CD_int, CD_boolean, CD_boolean, CD_int, CD_POLICY));
                 code.return_();
             });
 
-            builder.withMethodBody("assignGroup", assignGroupType, ClassFile.ACC_PUBLIC, code -> emitAssignGroup(code, arity, thisClass, true, true));
-            builder.withMethodBody("assignRetainedGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false, true));
-            builder.withMethodBody("assignDistinctGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false, false));
+            builder.withMethodBody("assignGroup", assignGroupType, ClassFile.ACC_PUBLIC, code -> emitAssignGroup(code, arity, thisClass, true, true, 0));
+            builder.withMethodBody("assignRetainedGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false, true, compactRetainedColumns));
+            builder.withMethodBody("assignDistinctGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false, false, 0));
             builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, true));
             builder.withMethodBody("assignBatchDiscardingResults", assignBatchDiscardingResultsType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatchDiscardingResults(code, thisClass));
             builder.withMethodBody("assignBatchWithoutResults", assignBatchType(), ClassFile.ACC_PRIVATE, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, false));
@@ -172,6 +188,7 @@ final class MultiLongGroupingTableGenerator
                             int.class,
                             boolean.class,
                             boolean.class,
+                            int.class,
                             AdaptiveLongGroupingPolicy.class));
         }
         catch (ReflectiveOperationException e) {
@@ -234,7 +251,7 @@ final class MultiLongGroupingTableGenerator
 
     // long assignGroup(long k0..kN-1, byte nullMask, long newGroupId)
     // locals: this=0, k_i=1+2i, nullMask=1+2N, newGroupId=2+2N
-    private static void emitAssignGroup(CodeBuilder code, int arity, ClassDesc thisClass, boolean storesGroupIds, boolean retainGroupKeys)
+    private static void emitAssignGroup(CodeBuilder code, int arity, ClassDesc thisClass, boolean storesGroupIds, boolean retainGroupKeys, int compactRetainedColumns)
     {
         int nullMaskSlot = 1 + 2 * arity;
         int newGroupIdSlot = 2 + 2 * arity;
@@ -242,6 +259,7 @@ final class MultiLongGroupingTableGenerator
         int baseVar = 5 + 2 * arity;
         int fragVar = 6 + 2 * arity;
         int controlVar = 7 + 2 * arity;
+        int compactKeysVar = 8 + 2 * arity;
         int recordStride = arity + (storesGroupIds ? 1 : 0);
 
         // hash = hash(keys, nullMask)
@@ -363,14 +381,48 @@ final class MultiLongGroupingTableGenerator
             code.invokevirtual(CD_BASE, "ensureReverseCapacity", MethodTypeDesc.of(CD_void, CD_int));
             // keysByGroup[key][(int) newGroupId] = k_key
             for (int key = 0; key < arity; key++) {
-                code.aload(0);
-                code.getfield(CD_BASE, "keysByGroup", CD_LONG_ARRAY_2D);
-                code.loadConstant(key);
-                code.aaload();
-                code.lload(newGroupIdSlot);
-                code.l2i();
-                code.lload(1 + 2 * key);
-                code.lastore();
+                if ((compactRetainedColumns & (1 << key)) != 0) {
+                    Label widened = code.newLabel();
+                    Label stored = code.newLabel();
+                    code.aload(0);
+                    code.getfield(CD_BASE, "compactKeysByGroup", CD_INT_ARRAY_2D);
+                    code.loadConstant(key);
+                    code.aaload();
+                    code.astore(compactKeysVar);
+                    code.aload(compactKeysVar);
+                    code.ifnull(widened);
+                    code.lload(1 + 2 * key);
+                    code.dup2();
+                    code.l2i();
+                    code.i2l();
+                    code.lcmp();
+                    code.ifne(widened);
+                    code.aload(compactKeysVar);
+                    code.lload(newGroupIdSlot);
+                    code.l2i();
+                    code.lload(1 + 2 * key);
+                    code.l2i();
+                    code.iastore();
+                    code.goto_(stored);
+                    code.labelBinding(widened);
+                    code.aload(0);
+                    code.loadConstant(key);
+                    code.lload(newGroupIdSlot);
+                    code.l2i();
+                    code.lload(1 + 2 * key);
+                    code.invokevirtual(CD_BASE, "storeCompactRetainedKey", MethodTypeDesc.of(CD_void, CD_int, CD_int, CD_long));
+                    code.labelBinding(stored);
+                }
+                else {
+                    code.aload(0);
+                    code.getfield(CD_BASE, "keysByGroup", CD_LONG_ARRAY_2D);
+                    code.loadConstant(key);
+                    code.aaload();
+                    code.lload(newGroupIdSlot);
+                    code.l2i();
+                    code.lload(1 + 2 * key);
+                    code.lastore();
+                }
             }
             code.aload(0);
             code.getfield(CD_BASE, "nullMasksByGroup", CD_BYTE_ARRAY);

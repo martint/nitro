@@ -1094,6 +1094,7 @@ final class GroupingState
                         arrayPool,
                         codeGeneration,
                         adaptiveLongGroupingPolicy);
+                ((AdaptiveLongGroupingTable) multiLongTable).compactRetainedColumns(compactRetainedLongColumns(values, nulls, mask));
                 discardMultiLongResults = mask != null && sampleContainsValueOutsideCompactDomain(values, nulls, mask);
                 return;
             }
@@ -1166,6 +1167,28 @@ final class GroupingState
         }
 
         initializeObjectKeyGrouping(values);
+    }
+
+    private int compactRetainedLongColumns(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        int compactColumns = (1 << values.length) - 1;
+        int rowCount = mask == null ? values[0].length() : mask.count();
+        int sampleSize = Math.min(rowCount, compositePolicy.flatSingleKeyRecordIdentitySampleSize());
+        for (int column = 0; column < values.length; column++) {
+            VectorAccess.LongValues accessor = VectorAccess.longValues(values[column]);
+            for (int sample = 0; sample < sampleSize; sample++) {
+                int selectedIndex = (int) ((long) sample * rowCount / sampleSize);
+                int position = mask == null ? selectedIndex : mask.position(selectedIndex);
+                if (!OperatorVectorSupport.isNull(nulls[column], position)) {
+                    long value = accessor.value(position);
+                    if ((long) (int) value != value) {
+                        compactColumns &= ~(1 << column);
+                        break;
+                    }
+                }
+            }
+        }
+        return compactColumns;
     }
 
     private int initialLongGroupExpectedSize(Vector values, Vector nulls, Mask mask)
