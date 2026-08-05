@@ -144,3 +144,52 @@ operators emitted 41.59M. This is not a function-adaptation or join-kernel regre
 arrival and connector wait policy are part of the SQL execution shape and must be reported separately
 from pure operator efficiency; forcing either standalone fixture to the other engine's row counts
 would cease to model the corresponding integrated engine.
+
+## Dynamic-filter-disabled control
+
+Disabling dynamic filtering symmetrically removes that row-count confound. With three warmups and
+five measurements, the pre-partition-correction standalone fixture reports:
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Mean elapsed (ms) | 1,983.640 | 2,785.786 | 0.712 |
+| Instructions | 42.613B | 68.460B | 0.622 |
+| Cycles | 11.994B | 19.642B | 0.611 |
+| Allocation | 2.099 GB | 7.650 GB | 0.274 |
+
+The corresponding integrated SQL control, after five warmups, is effectively at parity: median
+wall is 1,085.328 ms versus 1,055.043 ms (1.029x), and median CPU is 3,503 ms versus 3,440 ms
+(1.018x). A separate allocation run measured 8,395 MiB for Nitro and 11,858 MiB for Trino (0.708x),
+so allocation remains materially better even though CPU does not.
+
+Direct hardware counters around one warmed measured integrated query confirm that this is real work,
+not just scheduling noise: Nitro executed 103.001B instructions and 45.055B cycles versus Trino's
+86.642B instructions and 39.822B cycles, ratios of 1.189x and 1.131x. The perf events were
+multiplexed with comparable coverage, so absolute counts are approximate but the same-run ratios are
+the useful signal.
+
+Inclusive plan-node attribution had initially made the Nitro join appear slower. The Nitro hash-join
+operator also owns its fused downstream partial DISTINCT. Comparing the composed units instead shows
+Nitro saving about 206 ms across the three join-plus-partial-DISTINCT stages. That saving is then
+largely consumed by later presence/final grouping, where the Nitro stages use about 193 ms more CPU.
+
+## Task-partitioned aggregation topology
+
+The SQL plan runs the DISTINCT partial/final and presence partial/final stages with two task
+partitions. Both fixtures now do the same: partial input is round-robin partitioned and final input is
+hash partitioned on the grouping keys. The one-row global count remains single partition because the
+standalone grouped-session helper deliberately does not implement ungrouped aggregation.
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Mean elapsed (ms) | 1,958.377 | 2,912.936 | 0.672 |
+| Instructions | 42.803B | 73.963B | 0.579 |
+| Cycles | 12.236B | 21.061B | 0.581 |
+| Allocation | 2.149 GB | 8.269 GB | 0.260 |
+
+This is a more faithful physical topology, but it does not close the integrated gap. The standalone
+Nitro fixture still represents remote exchanges as native-vector copies; integrated Trino represents
+them as Page transport and pays Page-to-vector and vector-to-Page adaptation. The standalone module
+also targets stock Trino 479, while the production adapters are in the 484 integration tree, so a
+faithful boundary benchmark must live with the integration code rather than copy a second adapter
+implementation into the fixture.

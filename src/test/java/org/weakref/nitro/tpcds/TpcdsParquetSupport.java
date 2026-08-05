@@ -3924,7 +3924,7 @@ final class TpcdsParquetSupport
         union = profiled("q87.group.presence.partial", new SqlStageAggregationOperator(
                 allocator,
                 union,
-                1,
+                2,
                 new int[0],
                 List.of(SqlStageAggregationOperator.aggregate(
                         List.of(0, 1, 2),
@@ -3933,7 +3933,7 @@ final class TpcdsParquetSupport
         union = profiled("q87.group.presence.final", new SqlStageAggregationOperator(
                 allocator,
                 union,
-                1,
+                2,
                 new int[] {0, 1, 2},
                 List.of(SqlStageAggregationOperator.aggregate(
                         List.of(0, 1, 2),
@@ -9417,14 +9417,14 @@ final class TpcdsParquetSupport
         sales = profiled("q87." + activeChannel + ".group.distinct.partial", new SqlStageAggregationOperator(
                 allocator,
                 sales,
-                1,
+                2,
                 new int[0],
                 List.of(SqlStageAggregationOperator.distinct(List.of(0, 1, 2))),
                 false));
         sales = profiled("q87." + activeChannel + ".group.distinct.final", new SqlStageAggregationOperator(
                 allocator,
                 sales,
-                1,
+                2,
                 new int[] {0, 1, 2},
                 List.of(SqlStageAggregationOperator.distinct(List.of(0, 1, 2)))));
         return projectQuery87ChannelPresence(allocator, primitiveRegistry, sales, activeChannel);
