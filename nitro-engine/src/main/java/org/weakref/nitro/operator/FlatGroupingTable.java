@@ -1099,7 +1099,12 @@ final class FlatGroupingTable
         if (!packedHashRecordSlots) {
             LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
         }
-        layout.writeRecord(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
+        if (normalized && layout.supportsNormalizedRecordWrite()) {
+            layout.writeNormalizedRecord(fixedChunk, keyOffset(fixedOffset), normalizedFirst, normalizedSecond);
+        }
+        else {
+            layout.writeRecord(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
+        }
         if (normalized) {
             ensureNormalizedRecordCapacity(recordIndex + 1);
             normalizedFirstByRecord[recordIndex] = normalizedFirst;

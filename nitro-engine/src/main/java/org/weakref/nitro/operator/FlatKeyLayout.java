@@ -554,6 +554,49 @@ class FlatKeyLayout
         return preparedNormalizedSecond;
     }
 
+    boolean supportsNormalizedRecordWrite()
+    {
+        return normalizedIntKeyShape &&
+                policy.idOnlyBinaryRecords() &&
+                embedIdOnlyBinaryIds;
+    }
+
+    /**
+     * Writes the exact normalized key without copying variable-width values into the record arena. Binary lanes
+     * contain query-stable value ids, so the ordinary id-only record representation remains readable by fallback
+     * equality and grouped-output materialization. Long and null fields retain their ordinary flat encoding.
+     */
+    void writeNormalizedRecord(byte[] fixedChunk, int fixedOffset, long first, long second)
+    {
+        if (!supportsNormalizedRecordWrite()) {
+            throw new IllegalStateException("Normalized record writes are not supported by this layout");
+        }
+        if (nullByteCount > 0) {
+            Arrays.fill(fixedChunk, fixedOffset, fixedOffset + nullByteCount, (byte) 0);
+        }
+        for (int field = 0; field < fieldKinds.length; field++) {
+            long packed = field < 2 ? first : second;
+            int encoded = (int) (packed >>> ((field & 1) * Integer.SIZE));
+            if (encoded == 0) {
+                setNullBit(fixedChunk, fixedOffset, field);
+                continue;
+            }
+            int fieldOffset = fixedOffset + fixedOffsets[field];
+            switch (fieldKinds[field]) {
+                case LONG -> GROUP_LONG_HANDLE.set(fixedChunk, fieldOffset, (long) encoded - 1);
+                case BINARY -> {
+                    GROUP_INT_HANDLE.set(fixedChunk, fieldOffset, encoded - 1);
+                    if (!compactBinaryRecord(field)) {
+                        GROUP_INT_HANDLE.set(fixedChunk, fieldOffset + Integer.BYTES, 0);
+                        GROUP_INT_HANDLE.set(fixedChunk, fieldOffset + Integer.BYTES * 2, -1);
+                    }
+                    fieldUsesIdOnlyRecords[field] = true;
+                }
+                case BOOLEAN, DOUBLE -> throw new IllegalStateException("Normalized key contains an unsupported field");
+            }
+        }
+    }
+
     static long normalizedIntKeyHash(long first, long second)
     {
         long hash = first * 0x9E37_79B9_7F4A_7C15L + second * 0xC2B2_AE3D_27D4_EB4FL;

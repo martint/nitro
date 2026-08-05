@@ -1414,6 +1414,8 @@ class TestFlatGroupingTable
         Vector[] nulls = {null, null, null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("normalizedIntKeyOutput");
         try {
             table.beginBatch(firstValues, nulls);
             table.prepareBatchHashes(firstValues, nulls, Mask.all(4));
@@ -1434,9 +1436,30 @@ class TestFlatGroupingTable
             assertThat(table.assignGroup(laterValues, nulls, 0, 3)).isEqualTo(1);
             assertThat(table.assignGroup(laterValues, nulls, 1, 3)).isEqualTo(3);
             table.endBatch();
+
+            Streams binaryOutput = table.groupedValues(0, Mask.all(4), null, allocator, allocationContext);
+            BinaryVector binaryValues = (BinaryVector) binaryOutput.values();
+            assertThat(new String(
+                    binaryValues.data(),
+                    binaryValues.startOffset(0),
+                    binaryValues.length(0),
+                    StandardCharsets.UTF_8))
+                    .isEqualTo("alpha");
+            assertThat(new String(
+                    binaryValues.data(),
+                    binaryValues.startOffset(1),
+                    binaryValues.length(1),
+                    StandardCharsets.UTF_8))
+                    .isEqualTo("beta");
+
+            I64Vector firstLongOutput = (I64Vector) table.groupedValues(1, Mask.all(4), null, allocator, allocationContext).values();
+            I64Vector secondLongOutput = (I64Vector) table.groupedValues(2, Mask.all(4), null, allocator, allocationContext).values();
+            assertThat(firstLongOutput.values()).containsExactly(1, 2, 1, 1);
+            assertThat(secondLongOutput.values()).containsExactly(10, 20, 11, -10);
         }
         finally {
             table.releaseBuffers();
+            allocator.release(allocationContext);
         }
     }
 
