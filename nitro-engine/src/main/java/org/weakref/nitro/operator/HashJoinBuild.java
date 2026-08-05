@@ -40,6 +40,14 @@ public final class HashJoinBuild
         return owner.newPreparedProbeIndex();
     }
 
+    boolean sharePayloadWith(BufferedJoinInput probeInput)
+    {
+        if (closed) {
+            throw new IllegalStateException("Hash join build is closed");
+        }
+        return probeInput.shareLoadedNonRetainedBatches(owner.bufferedInner());
+    }
+
     @Override
     public void close()
     {

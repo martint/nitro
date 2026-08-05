@@ -1349,13 +1349,16 @@ public class HashJoinOperator
         BufferedJoinInput.BatchMaskPruner maskPruner = buildPolicy.pruneZeroBitwiseOverlapRows() && singleLongBitwiseOverlapJoinFilter
                 ? this::pruneZeroBitwiseOverlapBuildMask
                 : null;
-        bufferedInner.loadAll(
-                inner,
-                buildPolicy.maxBuildBatchRows(),
-                innerJoinColumns,
-                inner.supportsRetainedBatches(),
-                !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow(),
-                maskPruner);
+        boolean sharedPreparedPayload = preparedBuild != null && preparedBuild.sharePayloadWith(bufferedInner);
+        if (!sharedPreparedPayload) {
+            bufferedInner.loadAll(
+                    inner,
+                    buildPolicy.maxBuildBatchRows(),
+                    innerJoinColumns,
+                    inner.supportsRetainedBatches(),
+                    !inner.supportsRetainedBatches() && inner.supportsConstrainedReborrow(),
+                    maskPruner);
+        }
         ensureRetainedConstraintCacheCapacity(bufferedInner.batches().size());
         copySchema(bufferedInner.schema(), innerSchema);
         cacheInnerFilterInputs();
@@ -2086,6 +2089,11 @@ public class HashJoinOperator
             return flatJoinIndex.newProbeView();
         }
         throw new IllegalStateException("Hash join build is not prepared");
+    }
+
+    BufferedJoinInput bufferedInner()
+    {
+        return bufferedInner;
     }
 
     public HashJoinOperator withProfileName(String profileName)
@@ -4189,7 +4197,7 @@ public class HashJoinOperator
             this.finalized = prepared.finalized;
             this.directLookup = prepared.directLookup;
             this.sparseMembership = prepared.sparseMembership;
-            this.denseSequence = prepared.denseSequence;
+            this.denseSequence = new DenseJoinSequence(prepared.denseSequence);
             this.compactChains = prepared.compactChains;
             this.compressDuplicateReferences = prepared.compressDuplicateReferences;
             this.expectedBuildRows = prepared.expectedBuildRows;
@@ -4203,7 +4211,7 @@ public class HashJoinOperator
         long retainedBytes()
         {
             if (!ownsStorage) {
-                return 0;
+                return denseSequence.retainedBytes();
             }
             long bytes = Math.addExact(hashTable.retainedBytes(), rows.retainedBytes());
             bytes = Math.addExact(bytes, directLookup.retainedBytes());
@@ -6284,6 +6292,14 @@ public class HashJoinOperator
             compactedRows.release();
             compressedRanges.release();
             denseSequence.release();
+        }
+
+        @Override
+        void releaseProbeBuffers()
+        {
+            if (!ownsStorage) {
+                denseSequence.release();
+            }
         }
 
         private void releaseHashTable()

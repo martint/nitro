@@ -188,6 +188,63 @@ class TestHashJoinSession
     }
 
     @Test
+    void testPreparedProbeReusesCompactedBuildPayload()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(2, 3, 2),
+                            new int[] {0},
+                            false,
+                            new int[] {0, 1})
+                    .orElseThrow();
+            Operator unconsumableBuild = new Operator()
+            {
+                @Override
+                public int outputCount()
+                {
+                    return 1;
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    throw new AssertionError("prepared probe reloaded the raw build");
+                }
+
+                @Override
+                public Batch next()
+                {
+                    throw new AssertionError("prepared probe reloaded the raw build");
+                }
+
+                @Override
+                public void constrain(Mask mask) {}
+
+                @Override
+                public void close() {}
+            };
+            try (build;
+                    HashJoinSession session = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            unconsumableBuild,
+                            new int[] {0},
+                            false,
+                            build)) {
+                assertSessionOutput(session, 2);
+            }
+        }
+    }
+
+    @Test
     void testSharesPreparedPairBuildAcrossProbeSessions()
     {
         try (EngineResources resources = EngineResources.createDefault();

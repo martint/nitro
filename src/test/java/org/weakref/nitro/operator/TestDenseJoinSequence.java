@@ -95,4 +95,26 @@ class TestDenseJoinSequence
         sequence.release();
         assertThat(arrayPool.retainedBytes()).isGreaterThan(0);
     }
+
+    @Test
+    void preparedProbeViewsOwnIndependentDictionaryScratch()
+    {
+        PrimitiveArrayPool arrayPool = new PrimitiveArrayPool(16 * 1024, 0);
+        DenseJoinSequence build = new DenseJoinSequence(arrayPool, true, true);
+        build.activateReferences(5, 7, JoinRowReference.pack(5, 7));
+        DenseJoinSequence firstProbe = new DenseJoinSequence(build);
+        DenseJoinSequence secondProbe = new DenseJoinSequence(build);
+
+        int[] firstPositions = firstProbe.dictionaryPositions(new long[1_000], 10, 11);
+        int[] secondPositions = secondProbe.dictionaryPositions(new long[821], 10, 11);
+
+        assertThat(firstPositions).hasSize(1_000);
+        assertThat(secondPositions).hasSize(821);
+        assertThat(firstPositions).isNotSameAs(secondPositions);
+        assertThat(build.retainedBytes()).isZero();
+
+        firstProbe.release();
+        secondProbe.release();
+        build.release();
+    }
 }

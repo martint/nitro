@@ -56,6 +56,7 @@ final class BufferedJoinInput
     private final JoinBufferSupport.PositionMappingCache compactionMappings;
 
     private boolean loaded;
+    private boolean sharedNonRetainedBatches;
     private long rowCount;
     private boolean directExactCoalesce;
     private boolean directBoundedCoalesce;
@@ -79,6 +80,32 @@ final class BufferedJoinInput
     public void loadAll(Operator source, int batchSize)
     {
         loadAll(source, batchSize, new int[0], false, false);
+    }
+
+    /**
+     * Initializes this probe-local view from a completed build owner's immutable compacted payload.
+     *
+     * <p>Only non-retained batches are shareable: their streams are detached, dense, and never constrained during
+     * probe materialization. Retained and deferred batches contain mutable batch selections and must continue to be
+     * recreated independently for each probe session.
+     */
+    boolean shareLoadedNonRetainedBatches(BufferedJoinInput owner)
+    {
+        if (loaded) {
+            throw new IllegalStateException("Build input is already loaded");
+        }
+        if (!owner.loaded || owner.batches.stream().anyMatch(InnerBatch::retained)) {
+            return false;
+        }
+        loaded = true;
+        sharedNonRetainedBatches = true;
+        rowCount = owner.rowCount;
+        batches.addAll(owner.batches);
+        System.arraycopy(owner.schema, 0, schema, 0, columnCount);
+        System.arraycopy(owner.outputStreams, 0, outputStreams, 0, columnCount);
+        System.arraycopy(owner.outputKnownAllFalseFlags, 0, outputKnownAllFalseFlags, 0, columnCount);
+        System.arraycopy(owner.outputKnownAllFalseInitialized, 0, outputKnownAllFalseInitialized, 0, columnCount);
+        return true;
     }
 
     void enableDirectExactCoalesce()
@@ -486,8 +513,10 @@ final class BufferedJoinInput
 
     public void releaseBuffers()
     {
-        for (InnerBatch batch : batches) {
-            batch.releasePositions(arrayPool);
+        if (!sharedNonRetainedBatches) {
+            for (InnerBatch batch : batches) {
+                batch.releasePositions(arrayPool);
+            }
         }
         batches.clear();
         for (InnerBatch batch : coalescedSources) {

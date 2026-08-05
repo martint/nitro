@@ -43,6 +43,26 @@ final class DenseJoinSequence
         this.referenceCandidate = referenceCandidate;
     }
 
+    /**
+     * Creates a probe-local view of completed dense-build state.
+     *
+     * <p>The scalar sequence metadata is immutable after build finalization, but dictionary-position scratch is
+     * mutated for every probe batch. Prepared hash builds are shared by concurrent probe drivers, so that scratch
+     * must never be inherited from the build owner or another probe view.
+     */
+    DenseJoinSequence(DenseJoinSequence prepared)
+    {
+        this.arrayPool = prepared.arrayPool;
+        this.keyCandidate = prepared.keyCandidate;
+        this.referenceCandidate = prepared.referenceCandidate;
+        this.firstKey = prepared.firstKey;
+        this.nextKey = prepared.nextKey;
+        this.referencesActive = prepared.referencesActive;
+        this.referenceBatchIndex = prepared.referenceBatchIndex;
+        this.firstReferencePosition = prepared.firstReferencePosition;
+        this.referenceBase = prepared.referenceBase;
+    }
+
     boolean keyCandidate()
     {
         return keyCandidate;
