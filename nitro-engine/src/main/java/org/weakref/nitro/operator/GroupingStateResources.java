@@ -78,6 +78,23 @@ public final class GroupingStateResources
                 semiJoinBufferPool);
     }
 
+    public GroupingStateResources forGroupingOnlyAggregation()
+    {
+        CompositeGroupingPolicy scopedPolicy = compositeGroupingPolicy.forGroupingOnlyAggregation();
+        if (scopedPolicy == compositeGroupingPolicy) {
+            return this;
+        }
+        return new GroupingStateResources(
+                poolZeroedLongDirectIds,
+                longGroupingPolicy,
+                scopedPolicy,
+                zeroedLongDirectIdsFamily,
+                groupOperatorBufferPool,
+                markDistinctMaskPool,
+                markDistinctMarkerBufferPool,
+                semiJoinBufferPool);
+    }
+
     boolean poolZeroedLongDirectIds()
     {
         return poolZeroedLongDirectIds;

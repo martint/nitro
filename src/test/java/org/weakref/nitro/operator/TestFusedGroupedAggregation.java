@@ -503,6 +503,36 @@ class TestFusedGroupedAggregation
         assertThat(actual).isEqualTo(expected);
     }
 
+    @Test
+    void groupingOnlyFullWidthPairKeepsGeneratedRepresentation()
+    {
+        int size = 1 << 10;
+        long[] first = new long[size];
+        long[] second = new long[size];
+        for (int position = 0; position < size; position++) {
+            first[position] = (1L << 40) + position;
+            second[position] = position * 3L;
+        }
+        List<TableOperator.Page> pages = List.of(TableOperator.Page.values(
+                size,
+                new Vector[] {new I64Vector(first), new I64Vector(second)},
+                Mask.all(size)));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        GroupedAggregationOperator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(),
+                new TableOperator(2, pages));
+        try (operator) {
+            assertThat(operator.hasNext()).isTrue();
+            try (Batch result = operator.next()) {
+                assertThat(result.borrowMask().count()).isEqualTo(size);
+            }
+            assertThat(operator.usesPackedFlatIdentitySlots()).isFalse();
+        }
+    }
+
     private static List<TableOperator.Page> buildNullFreePages(int rows, int groups, int batch, Map<Long, long[]> reference)
     {
         List<TableOperator.Page> pages = new ArrayList<>();

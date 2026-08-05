@@ -152,6 +152,52 @@ public record CompositeGroupingPolicy(
                 adaptiveFlatLookaheadMinNewPercent);
     }
 
+    /**
+     * Grouping-only aggregation has no accumulator state indexed by group id, so the identity-record layout does
+     * not recover its extra record indirection through cheaper accumulator access. Keep full-width pairs on the
+     * generated adaptive table for that semantic shape while preserving every other composite-grouping policy.
+     */
+    public CompositeGroupingPolicy forGroupingOnlyAggregation()
+    {
+        if (!fullWidthPairPackedIdentity) {
+            return this;
+        }
+        return new CompositeGroupingPolicy(
+                debugGroupingShapes,
+                debugFlatPackedIdentity,
+                sharedDictionaryComposite,
+                sharedDictionaryMaxFields,
+                sharedDictionarySampleSize,
+                sharedDictionaryMaxDistinctPercent,
+                sharedDictionaryFlatBacking,
+                sharedDictionaryFlatBackingMinFields,
+                sharedDictionaryFlatBackingMinRows,
+                packedIntPair,
+                packedIntTriple,
+                packedIntTripleCombinedControl,
+                packedIntTriplePackedTail,
+                adaptiveCompactLong,
+                generatedCompactLongPair,
+                generatedCompactLongMinArity,
+                earlyRejectMixedComposite,
+                flatSingleKeyRecordIdentity,
+                flatSingleKeyRecordIdentityMinBatchRows,
+                flatSingleKeyRecordIdentitySampleSize,
+                flatSingleKeyRecordIdentityMinDistinctPercent,
+                packedFlatIdentitySlots,
+                packedFlatIdentityMaxFields,
+                packedFlatIdentityMinBatchRows,
+                packedFlatIdentityBlockingMinBatchRows,
+                packedFlatIdentityMinDistinctPercent,
+                false,
+                fullWidthPairPackedIdentityMinBatchRows,
+                adaptiveFlatLookahead,
+                adaptiveFlatLookaheadStartBatch,
+                adaptiveFlatLookaheadBatches,
+                adaptiveFlatLookaheadMinRows,
+                adaptiveFlatLookaheadMinNewPercent);
+    }
+
     public static CompositeGroupingPolicy fromSystemProperties()
     {
         CompositeGroupingPolicy defaults = defaults();

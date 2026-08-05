@@ -326,12 +326,15 @@ public class GroupedAggregationOperator
         this.filteredAggregationIndexes = distinctAggregationPlan.filteredAggregationIndexes();
         this.distinctAggregationGroups = distinctAggregationPlan.distinctAggregationGroups();
         this.source = source;
+        GroupingStateResources effectiveGroupingResources = this.aggregations.length == 0
+                ? groupingResources.forGroupingOnlyAggregation()
+                : groupingResources;
         this.inlineGroupingState = groupByColumns == null
                 ? null
                 : new GroupingState(
                         allocator.primitiveArrays(),
                         operatorResources.codeGeneration(),
-                        groupingResources,
+                        effectiveGroupingResources,
                         operatorResources.adaptiveLongGroupingPolicy(),
                         operatorResources.flatKeyTablePolicy(),
                         inlineGroupingTypes,
@@ -342,6 +345,11 @@ public class GroupedAggregationOperator
 
         groupedResults = new Streams[this.groupedColumns.length];
         result = new Streams[program.outputs().size()];
+    }
+
+    boolean usesPackedFlatIdentitySlots()
+    {
+        return inlineGroupingState != null && inlineGroupingState.usesPackedFlatIdentitySlots();
     }
 
     @Override
