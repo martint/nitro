@@ -530,6 +530,7 @@ class TestFusedGroupedAggregation
                 assertThat(result.borrowMask().count()).isEqualTo(size);
             }
             assertThat(operator.usesPackedFlatIdentitySlots()).isFalse();
+            assertThat(operator.discardsInlineGroupIds()).isTrue();
         }
     }
 

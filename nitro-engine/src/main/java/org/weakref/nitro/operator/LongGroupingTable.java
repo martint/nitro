@@ -44,6 +44,22 @@ interface LongGroupingTable
             long[] result,
             long startGroupId);
 
+    /**
+     * Assigns groups without materializing the per-row group ids.
+     *
+     * This capability is intended for grouping-only consumers that need the retained keys but have no aggregate
+     * state to address. Implementations that do not provide an outputless assignment kernel reject the operation.
+     */
+    default long assignBatchDiscardingResults(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] nullAccessors,
+            int[] positions,
+            int positionCount,
+            long startGroupId)
+    {
+        throw new UnsupportedOperationException("Grouping table does not support outputless assignment");
+    }
+
     void ensureCapacity(long expectedSize);
 
     long groupedValue(int column, int groupId);

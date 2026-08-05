@@ -126,6 +126,7 @@ final class GroupingState
     private boolean sharedDictionaryFlatBacking;
     private boolean initialized;
     private LongGroupingTable multiLongTable;
+    private boolean discardMultiLongResults;
     private StructuralGroupingIndex structuralGrouping;
 
     GroupingState(
@@ -643,6 +644,27 @@ final class GroupingState
         assignGroups(values, nulls, mask, result, false, true);
     }
 
+    boolean assignGroupsDiscardingResults(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        try {
+            if (!initialized) {
+                initializeIfNecessary(values, nulls, mask);
+            }
+            if (!discardMultiLongResults) {
+                return false;
+            }
+            boolean promotedNow = ((AdaptiveLongGroupingTable) multiLongTable).promoteForDiscardedResults(nextGroupId);
+            if (!promotedNow) {
+                reserveAdditionalGroups(mask.count() + 1L);
+            }
+            assignMultiLongGroupsDiscardingResults(values, nulls, mask);
+            return true;
+        }
+        finally {
+            accountRetainedState();
+        }
+    }
+
     private void assignGroups(
             Vector[] values,
             Vector[] nulls,
@@ -1072,6 +1094,7 @@ final class GroupingState
                         arrayPool,
                         codeGeneration,
                         adaptiveLongGroupingPolicy);
+                discardMultiLongResults = values.length == 2 && mask != null && sampleContainsFullWidthPairValue(values, nulls, mask);
                 return;
             }
             if (values.length == 2 && compositePolicy.packedIntPair()) {
@@ -2335,6 +2358,28 @@ final class GroupingState
                 ? multiLongTable.supportsImplicitDensePositions() ? null : densePositions(mask.count())
                 : mask.selectedPositions();
         nextGroupId = multiLongTable.assignBatch(keyAccessors, nullAccessors, positions, mask.count(), result.values(), nextGroupId);
+    }
+
+    private void assignMultiLongGroupsDiscardingResults(Vector[] values, Vector[] nulls, Mask mask)
+    {
+        int arity = multiLongArity;
+        VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[arity];
+        VectorAccess.BooleanValues[] nullAccessors = new VectorAccess.BooleanValues[arity];
+        int nullableColumns = 0;
+        for (int column = 0; column < arity; column++) {
+            keyAccessors[column] = VectorAccess.longValues(values[column]);
+            if (nulls != null && nulls[column] != null) {
+                nullAccessors[column] = VectorAccess.booleanValues(nulls[column]);
+                nullableColumns++;
+            }
+        }
+        if (nullableColumns == 0 && multiLongTable.supportsSparseNullAccessors()) {
+            nullAccessors = null;
+        }
+        int[] positions = mask.all()
+                ? multiLongTable.supportsImplicitDensePositions() ? null : densePositions(mask.count())
+                : mask.selectedPositions();
+        nextGroupId = multiLongTable.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, mask.count(), nextGroupId);
     }
 
     // Reused 0..size-1 index array for the all-selected case (the generated batch kernel takes an int[]).

@@ -77,6 +77,44 @@ class TestMultiLongGroupingTable
     }
 
     @Test
+    void testGeneratedTableAssignsGroupsWithoutMaterializingIds()
+    {
+        long[][] keys = {
+                {1L << 40, 1L << 40, 7, 9, 7},
+                {3, 3, 4, 5, 4},
+        };
+        boolean[][] nulls = {
+                {false, false, false, true, false},
+                {false, false, false, false, false},
+        };
+        VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[2];
+        VectorAccess.BooleanValues[] nullAccessors = new VectorAccess.BooleanValues[2];
+        for (int column = 0; column < 2; column++) {
+            long[] columnKeys = keys[column];
+            boolean[] columnNulls = nulls[column];
+            keyAccessors[column] = position -> columnKeys[position];
+            nullAccessors[column] = position -> columnNulls[position];
+        }
+        int[] positions = {0, 1, 2, 3, 4};
+
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().create(
+                2,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
+        long groupCount = table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, positions.length, 0);
+
+        assertThat(groupCount).isEqualTo(3);
+        assertThat(table.groupedValue(0, 0)).isEqualTo(1L << 40);
+        assertThat(table.groupedValue(1, 0)).isEqualTo(3);
+        assertThat(table.groupedValue(0, 1)).isEqualTo(7);
+        assertThat(table.groupedValue(1, 1)).isEqualTo(4);
+        assertThat(table.groupedValueIsNull(0, 2)).isTrue();
+        assertThat(table.groupedValue(1, 2)).isEqualTo(5);
+        table.releaseBuffers();
+    }
+
+    @Test
     void testAdaptiveCompactTableAllAritiesAndExactWidePromotion()
     {
         for (int arity = 2; arity <= AbstractMultiLongGroupingTable.MAX_ARITY; arity++) {

@@ -133,6 +133,14 @@ abstract class AbstractMultiLongGroupingTable
             long[] result,
             long startGroupId);
 
+    @Override
+    public abstract long assignBatchDiscardingResults(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] nullAccessors,
+            int[] positions,
+            int positionCount,
+            long startGroupId);
+
     /** Distinct-set variant of {@link #assignBatch}: writes only the first position for each newly inserted key. */
     abstract int assignDistinctBatch(
             VectorAccess.LongValues[] keyAccessors,

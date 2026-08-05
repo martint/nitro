@@ -136,6 +136,15 @@ class AdaptiveLongGroupingTable
         return codeGeneration.adaptiveLongGrouping().create(arity, expectedSize, true, arrayPool, codeGeneration, policy);
     }
 
+    boolean promoteForDiscardedResults(long groupCount)
+    {
+        if (promoted != null) {
+            return false;
+        }
+        promote(groupCount);
+        return true;
+    }
+
     @Override
     public int arity()
     {
@@ -201,6 +210,25 @@ class AdaptiveLongGroupingTable
         long compactGroupCount = size;
         promote(compactGroupCount);
         return promoted.assignBatch(keyAccessors, nullableAccessors(nullAccessors), explicitPositions(positions, positionCount), positionCount, result, compactGroupCount);
+    }
+
+    @Override
+    public long assignBatchDiscardingResults(
+            VectorAccess.LongValues[] keyAccessors,
+            VectorAccess.BooleanValues[] nullAccessors,
+            int[] positions,
+            int positionCount,
+            long startGroupId)
+    {
+        if (promoted == null) {
+            throw new IllegalStateException("Outputless assignment requires a generated grouping table");
+        }
+        return promoted.assignBatchDiscardingResults(
+                keyAccessors,
+                nullableAccessors(nullAccessors),
+                explicitPositions(positions, positionCount),
+                positionCount,
+                startGroupId);
     }
 
     /**

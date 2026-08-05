@@ -94,6 +94,7 @@ public class GroupedAggregationOperator
     private long maxObservedGroup = -1;
     private int maxGroup = -1;
     private boolean done;
+    private boolean groupIdsDiscarded;
     private GroupedKeySource groupedKeySource;
     private I64Vector reusableGroups;
     // Fused single-long-key path: assign the group and accumulate every aggregation in one inlined pass, no
@@ -350,6 +351,11 @@ public class GroupedAggregationOperator
     boolean usesPackedFlatIdentitySlots()
     {
         return inlineGroupingState != null && inlineGroupingState.usesPackedFlatIdentitySlots();
+    }
+
+    boolean discardsInlineGroupIds()
+    {
+        return groupIdsDiscarded;
     }
 
     @Override
@@ -653,6 +659,11 @@ public class GroupedAggregationOperator
         }
 
         long previousMaxGroup = maxObservedGroup;
+        if (aggregations.length == 0 && assignInlineGroupsDiscardingResults(batch, mask)) {
+            groupIdsDiscarded = true;
+            maxObservedGroup = inlineGroupingState.groupCount() - 1;
+            return;
+        }
         reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
         assignInlineGroups(batch, mask, reusableGroups);
         // The grouping state knows the max assigned group id (group ids are dense 0..count-1),
@@ -998,6 +1009,22 @@ public class GroupedAggregationOperator
                 inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
             }
             inlineGroupingState.assignGroupsForBlockingAggregation(inlineGroupValues, inlineGroupNulls, mask, groups);
+        }
+        finally {
+            Arrays.fill(inlineGroupValues, null);
+            Arrays.fill(inlineGroupNulls, null);
+        }
+    }
+
+    private boolean assignInlineGroupsDiscardingResults(Batch batch, Mask mask)
+    {
+        try {
+            for (int index = 0; index < groupByColumns.length; index++) {
+                Output output = batch.output(groupByColumns[index]);
+                inlineGroupValues[index] = output.borrow(Stream.VALUES);
+                inlineGroupNulls[index] = output.borrowOrNull(Stream.NULLS);
+            }
+            return inlineGroupingState.assignGroupsDiscardingResults(inlineGroupValues, inlineGroupNulls, mask);
         }
         finally {
             Arrays.fill(inlineGroupValues, null);

@@ -140,9 +140,11 @@ final class MultiLongGroupingTableGenerator
 
             builder.withMethodBody("assignGroup", assignGroupType, ClassFile.ACC_PUBLIC, code -> emitAssignGroup(code, arity, thisClass, true));
             builder.withMethodBody("assignDistinctGroup", assignGroupType, ClassFile.ACC_PRIVATE, code -> emitAssignGroup(code, arity, thisClass, false));
-            builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false));
-            builder.withMethodBody("assignDistinctBatch", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, false));
-            builder.withMethodBody("assignDistinctBatchNullFree", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, true));
+            builder.withMethodBody("assignBatch", assignBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, true));
+            builder.withMethodBody("assignBatchDiscardingResults", assignBatchDiscardingResultsType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatchDiscardingResults(code, thisClass));
+            builder.withMethodBody("assignBatchWithoutResults", assignBatchType(), ClassFile.ACC_PRIVATE, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignGroup", false, false, false));
+            builder.withMethodBody("assignDistinctBatch", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, false, false));
+            builder.withMethodBody("assignDistinctBatchNullFree", assignDistinctBatchType(), ClassFile.ACC_PUBLIC, code -> emitAssignBatch(code, arity, thisClass, assignGroupType, "assignDistinctGroup", true, true, false));
             builder.withMethodBody("hashEntry", MethodTypeDesc.of(CD_int, CD_LONG_ARRAY, CD_int, CD_byte), ClassFile.ACC_PUBLIC, code -> emitHashEntry(code, arity));
         });
 
@@ -182,6 +184,24 @@ final class MultiLongGroupingTableGenerator
     private static MethodTypeDesc assignDistinctBatchType()
     {
         return MethodTypeDesc.of(CD_int, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_INT_ARRAY, CD_long);
+    }
+
+    private static MethodTypeDesc assignBatchDiscardingResultsType()
+    {
+        return MethodTypeDesc.of(CD_long, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_INT_ARRAY, CD_int, CD_long);
+    }
+
+    private static void emitAssignBatchDiscardingResults(CodeBuilder code, ClassDesc thisClass)
+    {
+        code.aload(0);
+        code.aload(1);
+        code.aload(2);
+        code.aload(3);
+        code.iload(4);
+        code.aconst_null();
+        code.lload(5);
+        code.invokevirtual(thisClass, "assignBatchWithoutResults", assignBatchType());
+        code.lreturn();
     }
 
     // long assignGroup(long k0..kN-1, byte nullMask, long newGroupId)
@@ -365,7 +385,7 @@ final class MultiLongGroupingTableGenerator
 
     // long assignBatch(LongValues[] keyAcc, BooleanValues[] nullAcc, int[] positions, int count, long[] result, long startGroupId)
     // locals: this=0, keyAcc=1, nullAcc=2, positions=3, count=4, result=5, startGroupId/groupId=6
-    private static void emitAssignBatch(CodeBuilder code, int arity, ClassDesc thisClass, MethodTypeDesc assignGroupType, String assignGroupMethod, boolean distinct, boolean nullFree)
+    private static void emitAssignBatch(CodeBuilder code, int arity, ClassDesc thisClass, MethodTypeDesc assignGroupType, String assignGroupMethod, boolean distinct, boolean nullFree, boolean writeResults)
     {
         int accBase = 8;                       // hoisted key accessors a0..a(N-1)
         int nullAccBase = 8 + arity;           // hoisted null accessors n0..n(N-1)
@@ -457,7 +477,7 @@ final class MultiLongGroupingTableGenerator
         code.lload(groupIdVar);
         code.invokevirtual(thisClass, assignGroupMethod, assignGroupType);
         code.lstore(gidVar);
-        if (!distinct) {
+        if (writeResults) {
             // result[pos] = gid
             code.aload(5);
             code.iload(pos);
