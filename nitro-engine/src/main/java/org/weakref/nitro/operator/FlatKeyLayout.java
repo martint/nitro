@@ -685,6 +685,16 @@ class FlatKeyLayout
                 handlers.length <= policy.mixedCompositeMaxFields() &&
                 hasLongField() &&
                 (handlers.length <= 3 || hasCompactDirectBinaryDictionary(values));
+        // Narrow mixed-composite packing reserves only four bits for every long lane. Reject that representation
+        // before eagerly interning a large binary dictionary: otherwise a plainly out-of-domain long (dates are a
+        // common example) can make us scan an entire join-build dictionary merely to discover radices for a direct
+        // cache that cannot be used. Wider shapes retain their compact-range discovery below.
+        if (mixedCompositeShape &&
+                handlers.length <= 3 &&
+                policy.earlyRejectMixedComposite() &&
+                hasEarlyOutOfRangeLong(values)) {
+            mixedCompositeShape = false;
+        }
         boolean eagerMixedComposite = mixedCompositeShape && hasLargeBinaryDictionary(values);
         batchMixedComposite = mixedCompositeShape;
         if (policy.debugMixedComposite() && mixedCompositeShape && handlers.length > 3 && !debugMixedCompositePrinted) {
@@ -1210,6 +1220,31 @@ class FlatKeyLayout
             }
         }
         return false;
+    }
+
+    private boolean hasEarlyOutOfRangeLong(Vector[] values)
+    {
+        for (int fieldIndex = 0; fieldIndex < fieldKinds.length; fieldIndex++) {
+            if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.LONG) {
+                continue;
+            }
+            int channel = inputChannels[fieldIndex];
+            VectorAccess.LongValues longValues = VectorAccess.longValues(values[channel]);
+            int sampleSize = Math.min(values[channel].length(), 32);
+            for (int position = 0; position < sampleSize; position++) {
+                long value = longValues.value(position);
+                if (value < 0 || value >= LONG_COMPOSITE_CARDINALITY) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    int internedValueCount(int fieldIndex)
+    {
+        ValueIdInterner interner = fieldInterners == null ? null : fieldInterners[fieldIndex];
+        return interner == null ? 0 : interner.distinctCount();
     }
 
     private void prepareWideMixedLongDomains(Vector[] values)
