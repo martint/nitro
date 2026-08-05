@@ -72,3 +72,20 @@ three-warmup/five-measurement result:
 The accepted counter artifact is `q87-current-plan-no-early-distinct.json`. The fixture still
 collapses partitioned joins, remote exchanges, and partial/final aggregation pairs, so 0.389x is not
 yet the integrated SQL target.
+
+## Partial/final topology correction
+
+Adding the physical plan's partial/final DISTINCT, presence-sum, and global-count stages produces:
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Median elapsed (ms) | 1,508.952 | 2,444.916 | 0.617 |
+| Instructions | 34.99B | 65.85B | 0.531 |
+| Cycles | 9.479B | 18.28B | 0.519 |
+| Branch misses | 31.55M | 100.63M | 0.313 |
+| L1 data-load misses | 306.09M | 512.73M | 0.597 |
+| Allocation | 497.5 MB | 5.930 GB | 0.084 |
+
+The accepted counter artifact is `q87-partial-final-topology.json`. The warmed integrated CPU ratio
+is 0.703x, leaving about nine ratio points to explain. Partitioned joins and remote exchanges remain
+collapsed, and exchange materialization is not yet symmetric between the two fixtures.

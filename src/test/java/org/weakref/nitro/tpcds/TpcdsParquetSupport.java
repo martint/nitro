@@ -3920,9 +3920,26 @@ final class TpcdsParquetSupport
                 query87ChannelPresence(allocator, primitiveRegistry, tables, "store_sales", "ss_customer_sk", "ss_sold_date_sk", 0),
                 query87ChannelPresence(allocator, primitiveRegistry, tables, "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", 1),
                 query87ChannelPresence(allocator, primitiveRegistry, tables, "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", 2)));
-        union = new GroupedAggregationOperator(allocator, List.of(0, 1, 2), List.of(new Sum(3), new Sum(4), new Sum(5)), union);
+        union = profiled("q87.group.presence.partial", new SqlStageAggregationOperator(
+                allocator,
+                union,
+                1,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new Sum(3), new Sum(4), new Sum(5)))),
+                false));
+        union = profiled("q87.group.presence.final", new SqlStageAggregationOperator(
+                allocator,
+                union,
+                1,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new Sum(3), new Sum(4), new Sum(5))))));
         union = filter(allocator, primitiveRegistry, union, and(greaterThan(3, 0), equal(4, 0), equal(5, 0)));
-        return new AggregationOperator(allocator, List.of(new CountAll()), union);
+        Operator count = profiled("q87.aggregate.count.partial", new AggregationOperator(allocator, List.of(new CountAll()), union));
+        return profiled("q87.aggregate.count.final", new AggregationOperator(allocator, List.of(new Sum(0)), count));
     }
 
     public static Operator query85(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -9386,11 +9403,19 @@ final class TpcdsParquetSupport
                 0,
                 customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name"),
                 0).withOutputs(3, 4, 1));
-        sales = profiled("q87." + activeChannel + ".group.distinct", new GroupedAggregationOperator(
+        sales = profiled("q87." + activeChannel + ".group.distinct.partial", new SqlStageAggregationOperator(
                 allocator,
-                List.of(0, 1, 2),
-                List.of(),
-                sales));
+                sales,
+                1,
+                new int[0],
+                List.of(SqlStageAggregationOperator.distinct(List.of(0, 1, 2))),
+                false));
+        sales = profiled("q87." + activeChannel + ".group.distinct.final", new SqlStageAggregationOperator(
+                allocator,
+                sales,
+                1,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.distinct(List.of(0, 1, 2)))));
         return projectQuery87ChannelPresence(allocator, primitiveRegistry, sales, activeChannel);
     }
 

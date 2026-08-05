@@ -7128,13 +7128,24 @@ public final class TrinoTpcdsParquetSupport
                         List.of(),
                         "q87.sink.union"),
                 List.of(
-                        namedFactoryStep("q87.group.presence", hashAggregationFactory(
+                        namedFactoryStep("q87.group.presence.partial", hashAggregationFactory(
                                 87_10,
                                 presenceTypes.subList(0, 3),
                                 List.of(0, 1, 2),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
+                                Step.PARTIAL,
+                                Optional.empty(),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(3), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(4), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(5), OptionalInt.empty()))),
+                        namedFactoryStep("q87.group.presence.final", hashAggregationFactory(
+                                87_13,
+                                presenceTypes.subList(0, 3),
+                                List.of(0, 1, 2),
+                                Step.FINAL,
+                                Optional.empty(),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.FINAL, List.of(3), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.FINAL, List.of(4), OptionalInt.empty()),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.FINAL, List.of(5), OptionalInt.empty()))),
                         namedFactoryStep("q87.filter.store_only", filterAndProjectFactory(
                                 87_11,
                                 Optional.of(and(
@@ -7142,11 +7153,16 @@ public final class TrinoTpcdsParquetSupport
                                         and(equal(field(4, BIGINT), constant(0L, BIGINT), BIGINT), equal(field(5, BIGINT), constant(0L, BIGINT), BIGINT)))),
                                 allFields(presenceTypes),
                                 presenceTypes)),
-                        namedFactoryStep("q87.aggregate.count", hashAggregationFactory(
+                        namedFactoryStep("q87.aggregate.count.partial", hashAggregationFactory(
                                 87_12,
                                 List.of(),
                                 List.of(),
-                                COUNT_ALL.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())))),
+                                COUNT_ALL.createAggregatorFactory(Step.PARTIAL, List.of(), OptionalInt.empty()))),
+                        namedFactoryStep("q87.aggregate.count.final", hashAggregationFactory(
+                                87_14,
+                                List.of(),
+                                List.of(),
+                                COUNT_ALL.createAggregatorFactory(Step.FINAL, List.of(0), OptionalInt.empty())))),
                 "q87.sink.final");
     }
 
@@ -7193,10 +7209,18 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 selectedProjections(concatTypes(afterDateTypes, customerTypes), 3, 4, 1),
                                 distinctTypes)),
-                        namedFactoryStep(queryName + ".group.distinct", hashAggregationFactory(
+                        namedFactoryStep(queryName + ".group.distinct.partial", hashAggregationFactory(
                                 87_500 + Math.abs(queryName.hashCode() % 100),
                                 distinctTypes,
-                                List.of(0, 1, 2))),
+                                List.of(0, 1, 2),
+                                Step.PARTIAL,
+                                Optional.empty())),
+                        namedFactoryStep(queryName + ".group.distinct.final", hashAggregationFactory(
+                                87_550 + Math.abs(queryName.hashCode() % 100),
+                                distinctTypes,
+                                List.of(0, 1, 2),
+                                Step.FINAL,
+                                Optional.empty())),
                         namedFactoryStep(queryName + ".project.presence", filterAndProjectFactory(
                                 87_600 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
