@@ -21,6 +21,7 @@ import org.weakref.nitro.data.Streams;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import static java.util.Objects.requireNonNull;
 
@@ -39,7 +40,12 @@ public final class FullJoinSession
     private final int[] innerJoinColumns;
     private final OperatorResources resources;
     private final boolean inputsOrderedByJoinKeys;
-    private final Schema outputSchema;
+    private final Schema fullOutputSchema;
+    private Schema outputSchema;
+    private int[] outputChannels;
+    private boolean identityOutputs = true;
+    private ExternallyScheduledBatchFeed outputFeed;
+    private Operator outputRoot;
 
     private FullJoinOperator join;
     private Batch output;
@@ -76,7 +82,9 @@ public final class FullJoinSession
         List<org.weakref.nitro.core.type.Field> fields = new ArrayList<>();
         outerSchema.fields().forEach(field -> fields.add(nullable(field)));
         inner.outputSchema().fields().forEach(field -> fields.add(nullable(field)));
-        outputSchema = new Schema(fields);
+        fullOutputSchema = new Schema(fields);
+        outputSchema = fullOutputSchema;
+        outputChannels = java.util.stream.IntStream.range(0, outputSchema.size()).toArray();
     }
 
     private static org.weakref.nitro.core.type.Field nullable(org.weakref.nitro.core.type.Field field)
@@ -87,7 +95,45 @@ public final class FullJoinSession
     @Override
     public Schema outputSchema()
     {
-        return outputSchema;
+        return outputRoot == null ? outputSchema : outputRoot.outputSchema();
+    }
+
+    /** Selects and orders public output columns before any composed output pipeline. */
+    public FullJoinSession withOutputs(int... outputChannels)
+    {
+        checkAcceptingInput();
+        if (outputFeed != null) {
+            throw new IllegalStateException("full join output pipeline is already configured");
+        }
+        int[] selected = requireNonNull(outputChannels, "outputChannels is null").clone();
+        List<org.weakref.nitro.core.type.Field> fields = new ArrayList<>(selected.length);
+        for (int outputChannel : selected) {
+            if (outputChannel < 0 || outputChannel >= fullOutputSchema.size()) {
+                throw new IllegalArgumentException("Join output column is out of bounds: " + outputChannel);
+            }
+            fields.add(fullOutputSchema.field(outputChannel));
+        }
+        this.outputChannels = selected;
+        identityOutputs = selected.length == fullOutputSchema.size();
+        for (int index = 0; identityOutputs && index < selected.length; index++) {
+            identityOutputs = selected[index] == index;
+        }
+        outputSchema = new Schema(fields);
+        return this;
+    }
+
+    /** Composes a stateless output pipeline over selected full-join output. */
+    public FullJoinSession withOutputPipeline(UnaryOperator<Operator> outputPipeline)
+    {
+        checkAcceptingInput();
+        if (outputFeed != null) {
+            throw new IllegalStateException("full join output pipeline is already configured");
+        }
+        outputFeed = new ExternallyScheduledBatchFeed(outputSchema);
+        outputRoot = requireNonNull(
+                requireNonNull(outputPipeline, "outputPipeline is null").apply(outputFeed),
+                "outputPipeline returned null");
+        return this;
     }
 
     @Override
@@ -126,11 +172,8 @@ public final class FullJoinSession
         if (output != null) {
             return true;
         }
-        if (join.hasNext()) {
-            output = join.next();
-            return true;
-        }
-        return false;
+        output = outputRoot == null ? nextJoinOutput() : nextPipelinedOutput();
+        return output != null;
     }
 
     @Override
@@ -163,7 +206,67 @@ public final class FullJoinSession
     public boolean isFinished()
     {
         checkOpen();
-        return finishing && output == null && !join.hasNext();
+        if (!finishing || output != null) {
+            return false;
+        }
+        hasOutput();
+        return output == null && !join.hasNext() && (outputRoot == null || !outputRoot.hasNext());
+    }
+
+    private Batch nextPipelinedOutput()
+    {
+        while (true) {
+            while (outputRoot.hasNext()) {
+                Batch candidate = outputRoot.next();
+                if (!candidate.borrowMask().none()) {
+                    return candidate;
+                }
+                candidate.close();
+            }
+            if (outputFeed.hasInput()) {
+                outputFeed.releaseInput();
+            }
+            Batch joinOutput = nextJoinOutput();
+            if (joinOutput == null) {
+                outputFeed.finish();
+                return null;
+            }
+            outputFeed.addInput(joinOutput);
+        }
+    }
+
+    private Batch nextJoinOutput()
+    {
+        return join.hasNext() ? selectOutputs(join.next()) : null;
+    }
+
+    private Batch selectOutputs(Batch source)
+    {
+        if (identityOutputs) {
+            return source;
+        }
+        Output[] outputs = new Output[outputChannels.length];
+        for (int index = 0; index < outputChannels.length; index++) {
+            Output sourceOutput = source.output(outputChannels[index]);
+            outputs[index] = sourceOutput.forward(
+                    (stream, _) -> sourceOutput.take(stream),
+                    (_, _) -> {});
+        }
+        return new Batch(
+                source.borrowMask(),
+                source::constrain,
+                _ -> source.takeMask(),
+                _ -> {},
+                source::close,
+                outputs);
+    }
+
+    private void checkAcceptingInput()
+    {
+        checkOpen();
+        if (finishing) {
+            throw new IllegalStateException("full join session is finishing");
+        }
     }
 
     private void checkOpen()
@@ -183,6 +286,9 @@ public final class FullJoinSession
         if (output != null) {
             output.close();
             output = null;
+        }
+        if (outputRoot != null) {
+            outputRoot.close();
         }
         if (join != null) {
             join.close();

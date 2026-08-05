@@ -19,6 +19,10 @@ import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.List;
 
@@ -85,6 +89,42 @@ class TestFullJoinSession
             }
             assertThat(session.isFinished()).isTrue();
             session.close();
+        }
+    }
+
+    @Test
+    void testSelectsOutputsBeforeComposedPipeline()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            ConstantTableOperator outer = new ConstantTableOperator(allocator, 2, List.of(row(1L, 10L), row(2L, 20L)));
+            try (FullJoinSession session = new FullJoinSession(
+                    resources.operatorResources(),
+                    allocator,
+                    outer.outputSchema(),
+                    new int[] {0},
+                    new ConstantTableOperator(allocator, 2, List.of(row(2L, 200L), row(3L, 300L))),
+                    new int[] {0})
+                    .withOutputs(3, 1)
+                    .withOutputPipeline(source -> new ProjectOperator(
+                            allocator,
+                            new EvaluationPlan(List.of(), List.of(
+                                    new Reference(new Input(1), Stream.VALUES),
+                                    new Reference(new Input(0), Stream.VALUES))),
+                            new PrimitiveRegistry(),
+                            source))) {
+                session.addInput(outer.next());
+                outer.close();
+                session.finish();
+
+                assertThat(session.hasOutput()).isTrue();
+                try (Batch output = session.getOutput()) {
+                    assertThat(((I64Vector) output.output(0).borrow(Stream.VALUES)).values()).containsExactly(10, 20, 0);
+                    assertThat(((I64Vector) output.output(1).borrow(Stream.VALUES)).values()).containsExactly(0, 200, 300);
+                }
+                assertThat(session.isFinished()).isTrue();
+            }
         }
     }
 }
