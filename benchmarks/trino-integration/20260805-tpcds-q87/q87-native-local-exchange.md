@@ -1,0 +1,55 @@
+# TPC-DS q87 native local exchange
+
+Trino change `5afc38be` lets composed Nitro pipelines negotiate native input and output across the
+partitioned local exchange in q87. The ordinary Trino exchange remains unchanged.
+
+## Boundary attribution
+
+| Metric | Page path | Native path | Difference |
+| --- | ---: | ---: | ---: |
+| Page ingress positions | 23,740,693 | 22,838,765 | -901,928 |
+| Page egress positions | 25,241,792 | 24,339,864 | -901,928 |
+| Native batches | 0 | 6 | +6 |
+| Native rows | 0 | 901,928 | +901,928 |
+| Native bytes | 0 | 44,868,276 | +44,868,276 |
+| Producing projection output CPU | ~19 ms | 3.4--3.6 ms | ~-15.5 ms |
+| Local exchange sink CPU | ~23 ms | ~40 ms | ~+17 ms |
+
+The native transfer removes exactly one Page egress/ingress round trip. The current general native
+hash partitioner consumes the saved CPU while hashing and compacting independently owned partition
+batches, identifying partition-output construction as the next optimization target.
+
+The benchmark fixes task concurrency at one, so this exchange has only one destination. A follow-up
+ownership-transfer path avoids hashing and copying in that case. It retains the same detached batch;
+real fan-out continues to use the partitioner's compact, independently owned outputs. Local exchange
+sink CPU falls from roughly 40 ms to 0.7 ms.
+
+## Warmed alternating SQL gate
+
+Five warmups preceded seven measurements of each engine.
+
+| Engine | Median wall (ms) | Median CPU (ms) | Mean CPU (ms) |
+| --- | ---: | ---: | ---: |
+| Trino | 1,033.325 | 3,164 | 3,161.714 |
+| Nitro | 951.234 | 2,267 | 2,285.143 |
+| Nitro / Trino | 0.921 | 0.717 | 0.723 |
+
+Across the seven measured Nitro queries, native exchange transferred 42 batches, 6,313,496 rows,
+and 314,077,932 bytes. Page ingress still handled 159,871,355 positions and Page egress handled
+170,379,048 positions, principally because remote exchanges retain the explicit Page transport
+boundary.
+
+## Single-partition ownership-transfer gate
+
+Five warmups again preceded seven alternating measurements.
+
+| Engine | Median wall (ms) | Median CPU (ms) | Mean CPU (ms) |
+| --- | ---: | ---: | ---: |
+| Trino | 1,077.607 | 3,163 | 3,184.143 |
+| Nitro | 945.561 | 2,223 | 2,216.857 |
+| Nitro / Trino | 0.877 | 0.703 | 0.696 |
+
+The native exchange still transfers 42 batches, 6,313,496 rows, and 314,077,932 bytes across the
+seven measurements. Result comparison is exact. The roughly 39 ms/query sink reduction explains the
+CPU ratio movement from 0.717 to 0.703; the remaining integrated/operator gap is elsewhere in the
+distributed plan.
