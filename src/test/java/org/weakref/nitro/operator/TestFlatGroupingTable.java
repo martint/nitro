@@ -2202,6 +2202,77 @@ class TestFlatGroupingTable
         }
     }
 
+    @Test
+    void testSparseMixedCompositeDictionaryInternsOnlyReferencedEntries()
+    {
+        int dictionarySize = 2_048;
+        String[] firstDictionary = new String[dictionarySize];
+        String[] secondDictionary = new String[dictionarySize];
+        for (int index = 0; index < dictionarySize; index++) {
+            firstDictionary[index] = "first-" + index;
+            secondDictionary[index] = "second-" + index;
+        }
+        Vector[] values = {
+                DictionaryVector.wrapNested(new int[] {17}, 1, utf8(firstDictionary)),
+                DictionaryVector.wrapNested(new int[] {29}, 1, utf8(secondDictionary)),
+                new I64Vector(new long[] {1})};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 1, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(layout.internedValueCount(0)).isZero();
+            assertThat(layout.internedValueCount(1)).isZero();
+
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+            assertThat(layout.internedValueCount(0)).isEqualTo(1);
+            assertThat(layout.internedValueCount(1)).isEqualTo(1);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testDenseMixedCompositeFieldDoesNotForceSparseFieldInterning()
+    {
+        int positions = 2_048;
+        String[] sparseDictionary = new String[positions * 2];
+        String[] denseDictionary = new String[positions];
+        int[] sparseIds = new int[positions];
+        int[] denseIds = new int[positions];
+        long[] longValues = new long[positions];
+        Arrays.fill(sparseIds, 17);
+        Arrays.fill(longValues, 1);
+        for (int index = 0; index < sparseDictionary.length; index++) {
+            sparseDictionary[index] = "sparse-" + index;
+        }
+        for (int index = 0; index < denseDictionary.length; index++) {
+            denseDictionary[index] = "dense-" + index;
+            denseIds[index] = index;
+        }
+        Vector[] values = {
+                DictionaryVector.wrapNested(sparseIds, positions, utf8(sparseDictionary)),
+                DictionaryVector.wrapNested(denseIds, positions, utf8(denseDictionary)),
+                new I64Vector(longValues)};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 1, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(layout.internedValueCount(0)).isZero();
+            assertThat(layout.internedValueCount(1)).isEqualTo(positions);
+
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+            assertThat(layout.internedValueCount(0)).isEqualTo(1);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
     private static BinaryVector utf8(String... values)
     {
         int bytes = 0;

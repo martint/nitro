@@ -779,7 +779,11 @@ class FlatKeyLayout
                 hasEarlyOutOfRangeLong(values)) {
             mixedCompositeShape = false;
         }
-        boolean eagerMixedComposite = mixedCompositeShape && hasLargeBinaryDictionary(values);
+        // Compact mixed keys need the final binary radices before their generated batch kernel can run. Eagerly
+        // discover those radices only when the dictionary base is dense for this batch. Join output commonly wraps
+        // a small output batch over an entire build column; scanning that sparse base makes grouping cost scale with
+        // unreferenced build rows, so leave it on the existing lazy, referenced-entry path.
+        boolean eagerMixedComposite = mixedCompositeShape;
         batchMixedComposite = mixedCompositeShape;
         if (policy.debugMixedComposite() && mixedCompositeShape && handlers.length > 3 && !debugMixedCompositePrinted) {
             System.err.printf("[mixed-composite-shape] fields=%d max=%d has-long=%s mixed=%s eager=%s%n",
@@ -951,7 +955,10 @@ class FlatKeyLayout
             // dictionary instance. Id equality only applies to variable-width fields -- the byte-compare those
             // would otherwise pay is what we avoid.
             if (handlers[index].variableWidth()) {
-                int[] entryGlobalIds = internDictionaryEntries(index, dictionaryValues, eagerMixedComposite);
+                int[] entryGlobalIds = internDictionaryEntries(
+                        index,
+                        dictionaryValues,
+                        eagerMixedComposite && dictionaryValues.length() <= dictionary.length());
                 if (entryGlobalIds != null) {
                     boundDictionary[index] = dictionaryValues;
                     batchDictionaryIds[index] = dictionaryIds;
@@ -1782,20 +1789,6 @@ class FlatKeyLayout
     {
         for (FlatTypeHandler.Kind kind : fieldKinds) {
             if (kind == FlatTypeHandler.Kind.LONG) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasLargeBinaryDictionary(Vector[] values)
-    {
-        for (int index = 0; index < fieldKinds.length; index++) {
-            int channel = inputChannels[index];
-            if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY &&
-                    channel < values.length &&
-                    values[channel] instanceof DictionaryVector dictionary &&
-                    dictionary.values().length() > COMPOSITE_STRIDE) {
                 return true;
             }
         }
