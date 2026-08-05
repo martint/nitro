@@ -928,7 +928,7 @@ final class GroupingState
 
     private int currentSharedDictionaryGeneration(Vector[] dictionaryValues)
     {
-        if (!sameVectorIdentities(cachedSharedDictionaryValues, dictionaryValues)) {
+        if (!binaryContentsReusable(dictionaryValues) || !sameVectorIdentities(cachedSharedDictionaryValues, dictionaryValues)) {
             cachedSharedDictionaryValues = dictionaryValues.clone();
             if (sharedDictionaryGeneration == Integer.MAX_VALUE) {
                 Arrays.fill(sharedDictionaryEntriesById, 0);
@@ -937,6 +937,21 @@ final class GroupingState
             return ++sharedDictionaryGeneration;
         }
         return sharedDictionaryGeneration;
+    }
+
+    private static boolean binaryContentsReusable(Vector[] values)
+    {
+        for (Vector value : values) {
+            if (!binaryContentReusable(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean binaryContentReusable(Vector value)
+    {
+        return !value.isVariableWidth() || value instanceof BinaryVector binary && binary.contentImmutable();
     }
 
     private static boolean sameVectorIdentities(Vector[] left, Vector[] right)
@@ -2378,7 +2393,7 @@ final class GroupingState
 
     private int currentDictionaryGeneration(Vector dictionaryValues)
     {
-        if (cachedDictionaryValues != dictionaryValues) {
+        if (!binaryContentReusable(dictionaryValues) || cachedDictionaryValues != dictionaryValues) {
             cachedDictionaryValues = dictionaryValues;
             if (dictionaryGeneration == Integer.MAX_VALUE) {
                 Arrays.fill(dictionaryGenerations, 0);

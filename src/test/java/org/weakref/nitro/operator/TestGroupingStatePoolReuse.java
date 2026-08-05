@@ -363,6 +363,37 @@ public class TestGroupingStatePoolReuse
     }
 
     @Test
+    public void testSharedDictionaryCacheDoesNotReuseMutableRawBinaryContent()
+    {
+        BinaryVector firstValues = dictionaryValues(2, "a");
+        BinaryVector secondValues = dictionaryValues(2, "b");
+        int[] ids = {0, 1};
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+
+        I64Vector firstGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(ids, firstValues), DictionaryVector.wrap(ids, secondValues)},
+                new Vector[] {null, null},
+                Mask.all(2),
+                firstGroups);
+        assertThat(firstGroups.values()).containsExactly(0, 1);
+
+        for (int dictionaryId = 0; dictionaryId < 2; dictionaryId++) {
+            firstValues.data()[firstValues.startOffset(dictionaryId)] = (byte) 'c';
+            secondValues.data()[secondValues.startOffset(dictionaryId)] = (byte) 'd';
+        }
+        I64Vector secondGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(ids, firstValues), DictionaryVector.wrap(ids, secondValues)},
+                new Vector[] {null, null},
+                Mask.all(2),
+                secondGroups);
+        assertThat(secondGroups.values()).containsExactly(2, 3);
+
+        state.releaseBuffers();
+    }
+
+    @Test
     public void testPooledFlatRecordDoesNotReadNullVariableWidthPayload()
     {
         GroupingState first = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
