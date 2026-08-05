@@ -30,7 +30,7 @@ public final class QueryDriver
     public static void main(String[] args)
     {
         String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
-        if (!query.equals("query05") && !query.equals("query06") && !query.equals("query10") && !query.equals("query12") && !query.equals("query18") && !query.equals("query22") && !query.equals("query29") && !query.equals("query30") && !query.equals("query33") && !query.equals("query34") && !query.equals("query36") && !query.equals("query40") && !query.equals("query43")) {
+        if (!query.equals("query05") && !query.equals("query06") && !query.equals("query09") && !query.equals("query10") && !query.equals("query12") && !query.equals("query18") && !query.equals("query22") && !query.equals("query29") && !query.equals("query30") && !query.equals("query33") && !query.equals("query34") && !query.equals("query36") && !query.equals("query40") && !query.equals("query43")) {
             throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
         }
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
@@ -66,6 +66,7 @@ public final class QueryDriver
         return switch (query) {
             case "query05" -> ClickBenchHitsSupport.query05(allocator, hits, profile);
             case "query06" -> ClickBenchHitsSupport.query06(allocator, hits);
+            case "query09" -> ClickBenchHitsSupport.query09(allocator, hits, profile);
             case "query10" -> ClickBenchHitsSupport.query10(allocator, hits, profile);
             case "query12" -> ClickBenchHitsSupport.query12(allocator, org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(), hits, profile);
             case "query18" -> ClickBenchHitsSupport.query18(allocator, hits, profile);

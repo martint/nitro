@@ -39,6 +39,7 @@ import org.weakref.nitro.operator.MaterializeOperator;
 import org.weakref.nitro.operator.OffsetOperator;
 import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
+import org.weakref.nitro.operator.SqlStageAggregationOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
@@ -321,28 +322,36 @@ public final class ClickBenchHitsSupport
 
     public static Operator query09(Allocator allocator, Path file)
     {
+        return query09(allocator, file, null);
+    }
+
+    static Operator query09(Allocator allocator, Path file, OperatorCpuProfile profile)
+    {
         try {
             List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<Operator> partials = new ArrayList<>(splits.size());
             for (Path split : splits) {
-                partials.add(new GroupedAggregationOperator(
+                Operator scan = profiled(profile, "q09.partial-scan", clickBenchScan(allocator, split, "RegionID", "UserID"));
+                partials.add(profiled(profile, "q09.partial-pairs", new SqlStageAggregationOperator(
                         allocator,
-                        List.of(0, 1),
-                        List.of(),
-                        clickBenchScan(allocator, split, "RegionID", "UserID")));
+                        scan,
+                        1,
+                        new int[0],
+                        List.of(SqlStageAggregationOperator.distinct(List.of(0, 1))))));
             }
-            Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(2, partials));
-            Operator finalPairs = new GroupedAggregationOperator(
+            Operator exchange = profiled(
+                    profile,
+                    "q09.exchange",
+                    new MaterializeOperator(allocator, new UnionAllOperator(2, partials)));
+            Operator finalCount = profiled(profile, "q09.final-count", new SqlStageAggregationOperator(
                     allocator,
-                    List.of(0, 1),
-                    List.of(),
-                    exchange);
-            Operator counts = new GroupedAggregationOperator(
-                    allocator,
-                    List.of(0),
-                    List.of(new CountAll()),
-                    finalPairs);
-            return new TopNOperator(allocator, 10, 1, counts);
+                    exchange,
+                    1,
+                    new int[0],
+                    List.of(
+                            SqlStageAggregationOperator.distinct(List.of(0, 1)),
+                            SqlStageAggregationOperator.aggregate(List.of(0), () -> List.of(new CountAll())))));
+            return profiled(profile, "q09.topn", new TopNOperator(allocator, 10, 1, finalCount));
         }
         catch (IOException exception) {
             throw new UncheckedIOException("Unable to list ClickBench splits for " + file, exception);
