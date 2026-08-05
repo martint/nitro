@@ -14,11 +14,11 @@
 package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
-import org.weakref.nitro.core.function.mask.DictionaryMaskOptimization;
-import org.weakref.nitro.core.function.mask.DictionaryMaskOptimizationProvider;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.mask.RangeConstraint;
+import org.weakref.nitro.core.function.mask.SourceMaskOptimization;
+import org.weakref.nitro.core.function.mask.SourceMaskOptimizationProvider;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeVectorFactory;
@@ -101,7 +101,7 @@ public final class PlanEvaluator
     private final VectorAllocator vectorAllocator;
     private final PrimitiveExecutionContext executionContext;
     private final Map<Variable, Assignment> assignments;
-    private final Map<Variable, BoundDictionaryMaskOptimization> dictionaryMaskOptimizations;
+    private final Map<Variable, BoundSourceMaskOptimization> sourceMaskOptimizations;
     private final Map<Variable, PreboundMask> preboundMasks;
     private final Set<Allocator.Context> primitiveAllocationContexts;
     private final Set<org.weakref.nitro.operator.evaluator.ir.Producer> memoizedProducers;
@@ -181,7 +181,7 @@ public final class PlanEvaluator
         this.executionContext = new PrimitiveExecutionContext(allocator);
         this.assignments = indexAssignments(plan.assignments());
         registerResolvedCalls(plan, primitiveRegistry);
-        this.dictionaryMaskOptimizations = bindDictionaryMaskOptimizations(assignments, primitiveRegistry);
+        this.sourceMaskOptimizations = bindSourceMaskOptimizations(assignments, primitiveRegistry);
         this.preboundMasks = bindPreboundMasks(
                 plan,
                 primitiveRegistry,
@@ -195,28 +195,28 @@ public final class PlanEvaluator
         this.memoizedStreamsByProducer = memoizedStreamsByProducer(plan.streamPlans());
     }
 
-    private static Map<Variable, BoundDictionaryMaskOptimization> bindDictionaryMaskOptimizations(
+    private static Map<Variable, BoundSourceMaskOptimization> bindSourceMaskOptimizations(
             Map<Variable, Assignment> assignments,
             PrimitiveRegistry primitiveRegistry)
     {
-        Map<Variable, BoundDictionaryMaskOptimization> bindings = new HashMap<>();
+        Map<Variable, BoundSourceMaskOptimization> bindings = new HashMap<>();
         for (Map.Entry<Variable, Assignment> entry : assignments.entrySet()) {
             if (!(entry.getValue().operation() instanceof Call call)) {
                 continue;
             }
-            DictionaryMaskOptimizationProvider provider =
-                    primitiveRegistry.capabilityOrNull(call, DictionaryMaskOptimizationProvider.class);
+            SourceMaskOptimizationProvider provider =
+                    primitiveRegistry.capabilityOrNull(call, SourceMaskOptimizationProvider.class);
             if (provider == null) {
                 continue;
             }
-            DictionaryMaskOptimization optimization =
+            SourceMaskOptimization optimization =
                     provider.bind(new EvaluatorFunctionCallSite(call, assignments, primitiveRegistry)).orElse(null);
             if (optimization == null) {
                 continue;
             }
             Reference source = resolveArgumentPath(call, optimization.sourceArgumentPath(), assignments);
             if (source != null) {
-                bindings.put(entry.getKey(), new BoundDictionaryMaskOptimization(source, optimization.predicate()));
+                bindings.put(entry.getKey(), new BoundSourceMaskOptimization(source, optimization.predicate()));
             }
         }
         return Map.copyOf(bindings);
@@ -1668,6 +1668,11 @@ public final class PlanEvaluator
 
     private MaskOutcome tryEvaluatePrimitiveMaskOutcome(Reference reference, Mask mask)
     {
+        MaskOutcome sourcePredicateOutcome = tryEvaluateSourcePredicateMaskOutcome(reference, mask);
+        if (sourcePredicateOutcome != null) {
+            return sourcePredicateOutcome;
+        }
+
         CompiledPreboundMask compiled = compiledPreboundMask(reference);
         if (compiled != null) {
             prepareCompiledMaskInputs(compiled, mask);
@@ -1686,9 +1691,9 @@ public final class PlanEvaluator
 
     private Mask tryEvaluatePrimitiveMask(Reference reference, Mask mask, boolean selectTrue)
     {
-        Mask dictionaryPredicateMask = tryEvaluateDictionaryPredicateMask(reference, mask, selectTrue);
-        if (dictionaryPredicateMask != null) {
-            return dictionaryPredicateMask;
+        Mask sourcePredicateMask = tryEvaluateSourcePredicateMask(reference, mask, selectTrue);
+        if (sourcePredicateMask != null) {
+            return sourcePredicateMask;
         }
 
         CompiledPreboundMask compiled = compiledPreboundMask(reference);
@@ -1722,7 +1727,7 @@ public final class PlanEvaluator
             }
             return true;
         }
-        if (tryEvaluateDictionaryPredicateMaskInPlace(reference, mask, selectTrue)) {
+        if (tryEvaluateSourcePredicateMaskInPlace(reference, mask, selectTrue)) {
             return true;
         }
 
@@ -1853,18 +1858,63 @@ public final class PlanEvaluator
         mask.retainIf(position -> !values.value(position));
     }
 
-    private Mask tryEvaluateDictionaryPredicateMask(Reference reference, Mask mask, boolean selectMatches)
+    private Mask tryEvaluateSourcePredicateMask(Reference reference, Mask mask, boolean selectMatches)
     {
-        DictionaryPredicateInputs inputs = resolveDictionaryPredicateInputs(reference, mask);
-        if (inputs == null) {
+        SourcePredicateInputs source = resolveSourcePredicateInputs(reference, mask);
+        if (source == null) {
             return null;
         }
-        return evaluateDictionaryPredicateMask(inputs, mask, selectMatches);
+        return evaluateSourcePredicateMask(source, mask, selectMatches);
     }
 
-    private boolean tryEvaluateDictionaryPredicateMaskInPlace(Reference reference, Mask mask, boolean selectMatches)
+    private MaskOutcome tryEvaluateSourcePredicateMaskOutcome(Reference reference, Mask mask)
     {
-        DictionaryPredicateInputs inputs = resolveDictionaryPredicateInputs(reference, mask);
+        SourcePredicateInputs source = resolveSourcePredicateInputs(reference, mask);
+        if (source == null) {
+            return null;
+        }
+        Mask trueMask = evaluateSourcePredicateMask(source, mask, true);
+        if (trueMask == null) {
+            return null;
+        }
+        Mask nullMask = VectorAccess.isAllFalseNulls(source.nulls())
+                ? emptyMask(mask.size())
+                : classifyTrueBooleanMask(source.nulls(), null, null, mask);
+        return new MaskOutcome(trueMask, nullMask, emptyMask(mask.size()));
+    }
+
+    private Mask evaluateSourcePredicateMask(SourcePredicateInputs source, Mask mask, boolean selectMatches)
+    {
+        if (source.values() instanceof DictionaryVector) {
+            DictionaryPredicateInputs inputs = bindDictionaryPredicateInputs(source);
+            return inputs == null ? null : evaluateDictionaryPredicateMask(inputs, mask, selectMatches);
+        }
+
+        SourceMaskOptimization.PositionPredicate predicate = source.predicate().bind(source.values()).orElse(null);
+        if (predicate == null) {
+            return null;
+        }
+        Mask result = allocator.copyMask(allocationContext, mask);
+        retainSourcePredicate(result, source.nulls(), predicate, selectMatches);
+        return result;
+    }
+
+    private boolean tryEvaluateSourcePredicateMaskInPlace(Reference reference, Mask mask, boolean selectMatches)
+    {
+        SourcePredicateInputs source = resolveSourcePredicateInputs(reference, mask);
+        if (source == null) {
+            return false;
+        }
+        if (!(source.values() instanceof DictionaryVector)) {
+            SourceMaskOptimization.PositionPredicate predicate = source.predicate().bind(source.values()).orElse(null);
+            if (predicate == null) {
+                return false;
+            }
+            retainSourcePredicate(mask, source.nulls(), predicate, selectMatches);
+            return true;
+        }
+
+        DictionaryPredicateInputs inputs = bindDictionaryPredicateInputs(source);
         if (inputs == null) {
             return false;
         }
@@ -1945,6 +1995,21 @@ public final class PlanEvaluator
             return true;
         }
         return tryEvaluateGenericDictionaryPredicateMaskInPlace(inputs, mask, selectMatches);
+    }
+
+    private static void retainSourcePredicate(
+            Mask mask,
+            Vector nullVector,
+            SourceMaskOptimization.PositionPredicate predicate,
+            boolean selectMatches)
+    {
+        VectorAccess.BooleanValues nulls = nullFreeValues(nullVector);
+        if (nulls == null) {
+            mask.retainIf(position -> predicate.test(position) == selectMatches);
+        }
+        else {
+            mask.retainIf(position -> !nulls.value(position) && predicate.test(position) == selectMatches);
+        }
     }
 
     private boolean tryEvaluateGenericDictionaryPredicateMaskInPlace(DictionaryPredicateInputs inputs, Mask mask, boolean selectMatches)
@@ -2419,31 +2484,37 @@ public final class PlanEvaluator
         return Arrays.copyOf(positions, Math.min(maxCount, positions.length * 2));
     }
 
-    private DictionaryPredicateInputs resolveDictionaryPredicateInputs(Reference reference, Mask mask)
+    private SourcePredicateInputs resolveSourcePredicateInputs(Reference reference, Mask mask)
     {
         if (reference.stream() != Stream.VALUES || !(reference.producer() instanceof Variable variable)) {
             return null;
         }
 
-        BoundDictionaryMaskOptimization optimization = dictionaryMaskOptimizations.get(variable);
+        BoundSourceMaskOptimization optimization = sourceMaskOptimizations.get(variable);
         if (optimization == null) {
             return null;
         }
 
         Streams source = evaluateArgument(optimization.source(), mask, PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS, true);
-        if (!source.has(Stream.VALUES) || !(source.values() instanceof DictionaryVector dictionary)) {
+        if (!source.has(Stream.VALUES)) {
             return null;
         }
+
+        return new SourcePredicateInputs(source.values(), source.getOrNull(Stream.NULLS), optimization.predicate());
+    }
+
+    private static DictionaryPredicateInputs bindDictionaryPredicateInputs(SourcePredicateInputs source)
+    {
+        DictionaryVector dictionary = (DictionaryVector) source.values();
 
         Vector dictionaryValues = dictionary.values();
         while (dictionaryValues instanceof DictionaryVector nested) {
             dictionaryValues = nested.values();
         }
-        DictionaryMaskOptimization.PositionPredicate predicate =
-                optimization.predicate().bind(dictionaryValues).orElse(null);
+        SourceMaskOptimization.PositionPredicate predicate = source.predicate().bind(dictionaryValues).orElse(null);
         return predicate == null
                 ? null
-                : new DictionaryPredicateInputs(dictionary, source.getOrNull(Stream.NULLS), predicate);
+                : new DictionaryPredicateInputs(dictionary, source.nulls(), predicate);
     }
 
     private static boolean[] evaluateDictionaryPredicate(BinaryVector values, DictionaryPredicateInputs inputs)
@@ -2563,14 +2634,19 @@ public final class PlanEvaluator
         return maskInvocation;
     }
 
-    private record BoundDictionaryMaskOptimization(
+    private record BoundSourceMaskOptimization(
             Reference source,
-            DictionaryMaskOptimization.DictionaryValuePredicate predicate) {}
+            SourceMaskOptimization.SourceValuePredicate predicate) {}
+
+    private record SourcePredicateInputs(
+            Vector values,
+            Vector nulls,
+            SourceMaskOptimization.SourceValuePredicate predicate) {}
 
     private record DictionaryPredicateInputs(
             DictionaryVector dictionary,
             Vector nulls,
-            DictionaryMaskOptimization.PositionPredicate predicate) {}
+            SourceMaskOptimization.PositionPredicate predicate) {}
 
     private static long readLong(Vector vector, int position)
     {

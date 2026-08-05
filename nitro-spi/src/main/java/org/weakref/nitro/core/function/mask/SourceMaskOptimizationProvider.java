@@ -18,10 +18,10 @@ import org.weakref.nitro.core.function.FunctionCapability;
 import java.util.Optional;
 
 /**
- * Optional function-owned lowering for a predicate over dictionary values.
+ * Optional function-owned lowering for a predicate over one source argument.
  */
-public interface DictionaryMaskOptimizationProvider
+public interface SourceMaskOptimizationProvider
         extends FunctionCapability
 {
-    Optional<DictionaryMaskOptimization> bind(FunctionCallSite callSite);
+    Optional<SourceMaskOptimization> bind(FunctionCallSite callSite);
 }

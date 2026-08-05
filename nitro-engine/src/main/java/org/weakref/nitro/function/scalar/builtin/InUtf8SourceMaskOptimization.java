@@ -14,9 +14,9 @@
 package org.weakref.nitro.function.scalar.builtin;
 
 import org.weakref.nitro.core.function.mask.BinarySliceProjectionProvider;
-import org.weakref.nitro.core.function.mask.DictionaryMaskOptimization;
-import org.weakref.nitro.core.function.mask.DictionaryMaskOptimizationProvider;
 import org.weakref.nitro.core.function.mask.FunctionCallSite;
+import org.weakref.nitro.core.function.mask.SourceMaskOptimization;
+import org.weakref.nitro.core.function.mask.SourceMaskOptimizationProvider;
 import org.weakref.nitro.data.VectorAccess;
 
 import java.nio.charset.StandardCharsets;
@@ -26,11 +26,11 @@ import java.util.Optional;
 /**
  * Registry-owned composition of literal UTF-8 membership with a non-copying binary projection.
  */
-public final class InUtf8DictionaryMaskOptimization
-        implements DictionaryMaskOptimizationProvider
+public final class InUtf8SourceMaskOptimization
+        implements SourceMaskOptimizationProvider
 {
     @Override
-    public Optional<DictionaryMaskOptimization> bind(FunctionCallSite callSite)
+    public Optional<SourceMaskOptimization> bind(FunctionCallSite callSite)
     {
         if (callSite.argumentCount() < 2) {
             return Optional.empty();
@@ -59,7 +59,7 @@ public final class InUtf8DictionaryMaskOptimization
             candidates[index - 1] = value.getBytes(StandardCharsets.UTF_8);
         }
 
-        return Optional.of(new DictionaryMaskOptimization(
+        return Optional.of(new SourceMaskOptimization(
                 List.of(0, projection.sourceArgument()),
                 values -> projection.transform().bind(values)
                         .map(accessor -> position -> matchesAny(accessor.get(position), candidates))));

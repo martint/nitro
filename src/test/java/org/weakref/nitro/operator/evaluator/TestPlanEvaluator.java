@@ -49,7 +49,7 @@ import org.weakref.nitro.function.scalar.builtin.CoalesceI64Policy;
 import org.weakref.nitro.function.scalar.builtin.DivideScaleRoundI64;
 import org.weakref.nitro.function.scalar.builtin.EqualI64;
 import org.weakref.nitro.function.scalar.builtin.InUtf8;
-import org.weakref.nitro.function.scalar.builtin.InUtf8DictionaryMaskOptimization;
+import org.weakref.nitro.function.scalar.builtin.InUtf8SourceMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
@@ -3668,7 +3668,7 @@ public class TestPlanEvaluator
     }
 
     @Test
-    void testDictionaryMaskOptimizationUsesCapabilitiesInsteadOfFunctionNames()
+    void testSourceMaskOptimizationUsesCapabilitiesInsteadOfFunctionNames()
     {
         PrimitiveRegistry registry = primitiveRegistry();
         registry.register(
@@ -3678,7 +3678,7 @@ public class TestPlanEvaluator
         registry.register(
                 "test_membership_alias",
                 new InUtf8(),
-                new InUtf8DictionaryMaskOptimization());
+                new InUtf8SourceMaskOptimization());
 
         Variable start = new Variable(0);
         Variable length = new Variable(1);
@@ -3736,6 +3736,79 @@ public class TestPlanEvaluator
         Mask falseResult = evaluator.evaluate(new NotMask(new ReferenceMask(new Reference(matches, Stream.VALUES))), Mask.all(5));
         assertThat(falseResult.selectedCount()).isEqualTo(1);
         assertThat(falseResult.position(0)).isEqualTo(1);
+    }
+
+    @Test
+    void testConditionalSourceMaskOptimizationAvoidsFlatProjectionMaterialization()
+    {
+        PrimitiveRegistry registry = primitiveRegistry();
+        registry.register(
+                "test_slice_alias",
+                (_, _, _, _, _) -> {
+                    throw new AssertionError("source projection was materialized");
+                },
+                new SubstringUtf8BinarySliceProjection());
+        registry.register(
+                "test_membership_alias",
+                new InUtf8(),
+                new InUtf8SourceMaskOptimization());
+
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable substring = new Variable(2);
+        Variable firstLiteral = new Variable(3);
+        Variable secondLiteral = new Variable(4);
+        Variable matches = new Variable(5);
+        Variable whenTrue = new Variable(6);
+        Variable whenFalse = new Variable(7);
+        Variable result = new Variable(8);
+        EvaluationPlan plan = IrNormalizer.standard().normalizePlan(new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(5L), AllMask.ALL),
+                        new Assignment(
+                                substring,
+                                new Call("test_slice_alias", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(firstLiteral, new Literal("80348"), AllMask.ALL),
+                        new Assignment(secondLiteral, new Literal("81792"), AllMask.ALL),
+                        new Assignment(
+                                matches,
+                                new Call("test_membership_alias", List.of(
+                                        new Reference(substring, Stream.VALUES),
+                                        new Reference(firstLiteral, Stream.VALUES),
+                                        new Reference(secondLiteral, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(whenTrue, new Literal(1L), AllMask.ALL),
+                        new Assignment(whenFalse, new Literal(0L), AllMask.ALL),
+                        new Assignment(
+                                result,
+                                new Conditional(
+                                        new Reference(matches, Stream.VALUES),
+                                        new Reference(whenTrue, Stream.VALUES),
+                                        new Reference(whenFalse, Stream.VALUES)),
+                                AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES))));
+
+        BinaryVector values = utf8Vector("80348-1234", "99999-1234", "81792-1234", "80348-9999");
+        BooleanVector nulls = new BooleanVector(new boolean[] {false, false, false, true});
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                registry,
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), values,
+                        new Reference(new Input(0), Stream.NULLS), nulls)),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams output = evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4));
+        VectorAccess.LongValues resultValues = VectorAccess.longValues(output.values());
+        assertThat(resultValues.value(0)).isEqualTo(1);
+        assertThat(resultValues.value(1)).isZero();
+        assertThat(resultValues.value(2)).isEqualTo(1);
+        assertThat(resultValues.value(3)).isZero();
     }
 
     @Test

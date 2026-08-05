@@ -21,11 +21,13 @@ import java.util.Optional;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A provider-bound predicate that can be evaluated once per distinct dictionary value.
+ * A provider-bound predicate over one source argument.
+ *
+ * <p>The engine may evaluate the predicate directly over source positions or once per distinct dictionary value.
  */
-public record DictionaryMaskOptimization(List<Integer> sourceArgumentPath, DictionaryValuePredicate predicate)
+public record SourceMaskOptimization(List<Integer> sourceArgumentPath, SourceValuePredicate predicate)
 {
-    public DictionaryMaskOptimization
+    public SourceMaskOptimization
     {
         sourceArgumentPath = List.copyOf(sourceArgumentPath);
         if (sourceArgumentPath.isEmpty()) {
@@ -35,9 +37,9 @@ public record DictionaryMaskOptimization(List<Integer> sourceArgumentPath, Dicti
     }
 
     @FunctionalInterface
-    public interface DictionaryValuePredicate
+    public interface SourceValuePredicate
     {
-        Optional<PositionPredicate> bind(Vector dictionaryValues);
+        Optional<PositionPredicate> bind(Vector sourceValues);
     }
 
     @FunctionalInterface
