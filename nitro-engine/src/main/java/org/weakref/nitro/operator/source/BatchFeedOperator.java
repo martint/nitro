@@ -45,6 +45,7 @@ public final class BatchFeedOperator
     private final List<DynamicFilter> dynamicFilters = new ArrayList<>();
 
     private SourceBatch sourceBatch;
+    private Batch nativeBatch;
     private Batch currentBatch;
     private boolean emitted;
     private boolean closed;
@@ -79,7 +80,7 @@ public final class BatchFeedOperator
     public void addInput(SourceBatch sourceBatch)
     {
         checkOpen();
-        if (this.sourceBatch != null) {
+        if (hasInput()) {
             throw new IllegalStateException("operator already has input");
         }
         sourceBatch = requireNonNull(sourceBatch, "sourceBatch is null");
@@ -90,14 +91,30 @@ public final class BatchFeedOperator
         emitted = false;
     }
 
+    /// Offers the next native batch without adapting or copying it.
+    ///
+    /// Ownership transfers to this feed on success. The schema supplied at construction is the
+    /// contract for the native batch because [Batch] intentionally carries physical columns rather
+    /// than logical type metadata.
+    public void addInput(Batch batch)
+    {
+        checkOpen();
+        if (hasInput()) {
+            throw new IllegalStateException("operator already has input");
+        }
+        nativeBatch = requireNonNull(batch, "batch is null");
+        emitted = false;
+    }
+
     /// Completes the current host input after its adapted batch has been closed.
     public void finishInput()
     {
         checkOpen();
-        if (sourceBatch == null || !emitted) {
+        if (!hasInput() || !emitted) {
             throw new IllegalStateException("operator has no consumed input");
         }
         sourceBatch = null;
+        nativeBatch = null;
         currentBatch = null;
         emitted = false;
     }
@@ -117,7 +134,7 @@ public final class BatchFeedOperator
     @Override
     public boolean hasNext()
     {
-        return !closed && sourceBatch != null && !emitted;
+        return !closed && hasInput() && !emitted;
     }
 
     @Override
@@ -127,6 +144,10 @@ public final class BatchFeedOperator
             throw new IllegalStateException("No more rows");
         }
         emitted = true;
+        if (nativeBatch != null) {
+            currentBatch = nativeBatch;
+            return currentBatch;
+        }
         try {
             currentBatch = ingress.adapt(sourceBatch);
             return currentBatch;
@@ -148,8 +169,12 @@ public final class BatchFeedOperator
             currentBatch.constrain(mask);
             return;
         }
-        if (sourceBatch == null) {
+        if (!hasInput()) {
             throw new IllegalStateException("operator has no input");
+        }
+        if (nativeBatch != null) {
+            nativeBatch.constrain(mask);
+            return;
         }
         sourceBatch.select(ingress.selection(mask));
     }
@@ -220,8 +245,17 @@ public final class BatchFeedOperator
         if (!emitted && sourceBatch != null) {
             sourceBatch.close();
         }
+        if (!emitted && nativeBatch != null) {
+            nativeBatch.close();
+        }
         sourceBatch = null;
+        nativeBatch = null;
         currentBatch = null;
+    }
+
+    private boolean hasInput()
+    {
+        return sourceBatch != null || nativeBatch != null;
     }
 
     private boolean compatibleSchema(Schema inputSchema)

@@ -119,6 +119,56 @@ class TestBatchFeedOperator
     }
 
     @Test
+    void testFeedsNativeBatchWithoutIngressAdaptation()
+    {
+        AtomicInteger adaptations = new AtomicInteger();
+        AtomicBoolean closed = new AtomicBoolean();
+        Batch batch = new Batch(
+                Mask.all(3),
+                _ -> {},
+                mask -> mask,
+                _ -> {},
+                () -> closed.set(true),
+                new Output[0]);
+
+        try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, new TestingIngress(
+                adaptations,
+                new AtomicReference<>()))) {
+            feed.addInput(batch);
+            assertThat(feed.hasNext()).isTrue();
+            try (Batch output = feed.next()) {
+                assertThat(output).isSameAs(batch);
+                assertThat(output.borrowMask().count()).isEqualTo(3);
+            }
+            feed.finishInput();
+        }
+
+        assertThat(adaptations).hasValue(0);
+        assertThat(closed).isTrue();
+    }
+
+    @Test
+    void testClosesUnconsumedNativeBatch()
+    {
+        AtomicBoolean closed = new AtomicBoolean();
+        Batch batch = new Batch(
+                Mask.all(3),
+                _ -> {},
+                mask -> mask,
+                _ -> {},
+                () -> closed.set(true),
+                new Output[0]);
+
+        try (BatchFeedOperator feed = new BatchFeedOperator(SCHEMA, new TestingIngress(
+                new AtomicInteger(),
+                new AtomicReference<>()))) {
+            feed.addInput(batch);
+        }
+
+        assertThat(closed).isTrue();
+    }
+
+    @Test
     void testRejectsOverlappingOrUnconsumedInputs()
     {
         AtomicBoolean firstClosed = new AtomicBoolean();
