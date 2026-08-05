@@ -12501,17 +12501,17 @@ public final class TrinoTpcdsParquetSupport
                                 22_10,
                                 groupIdTypes,
                                 List.of(
-                                        java.util.Map.of(4, 4, 5, 5),
-                                        java.util.Map.of(0, 0, 4, 4, 5, 5),
-                                        java.util.Map.of(0, 0, 1, 1, 4, 4, 5, 5),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 4, 4, 5, 5),
-                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5)))),
+                                        java.util.Map.of(4, 4),
+                                        java.util.Map.of(0, 0, 4, 4),
+                                        java.util.Map.of(0, 0, 1, 1, 4, 4),
+                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 4, 4),
+                                        java.util.Map.of(0, 0, 1, 1, 2, 2, 3, 3, 4, 4)))),
                         namedFactoryStep("q22.group.rollup", hashAggregationFactory(
                                 22_11,
-                                List.of(groupIdTypes.get(0), groupIdTypes.get(1), groupIdTypes.get(2), groupIdTypes.get(3), groupIdTypes.get(6)),
-                                List.of(0, 1, 2, 3, 6),
+                                List.of(groupIdTypes.get(0), groupIdTypes.get(1), groupIdTypes.get(2), groupIdTypes.get(3), groupIdTypes.get(5)),
+                                List.of(0, 1, 2, 3, 5),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(5), OptionalInt.empty()))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(4), OptionalInt.empty()))),
                         namedFactoryStep("q22.project.output", filterAndProjectFactory(
                                 22_12,
                                 Optional.empty(),
@@ -12535,7 +12535,7 @@ public final class TrinoTpcdsParquetSupport
     {
         List<Type> inventoryTypes = tableColumnTypes(tables, "inventory", List.of("inv_date_sk", "inv_item_sk", "inv_quantity_on_hand"));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq"));
-        List<Type> preGroupedTypes = List.of(inventoryTypes.get(1), BIGINT, BIGINT);
+        List<Type> contributionTypes = List.of(inventoryTypes.get(1), BIGINT);
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_product_name", "i_brand", "i_class", "i_category"));
         List<Type> outputTypes = query22InventoryRollupSourceTypes(tables);
 
@@ -12558,7 +12558,7 @@ public final class TrinoTpcdsParquetSupport
                 "q22.scan.item",
                 "q22.sink.item");
 
-        PipelinePlan groupedInventory = new PipelinePlan(
+        PipelinePlan inventoryContributions = new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("inventory"), List.of("inv_date_sk", "inv_item_sk", "inv_quantity_on_hand"), "q22.scan.inventory"),
                 List.of(
                         namedHashJoinStep("q22.join.date_dim", new HashJoinSpec(22_0, inventoryTypes, List.of(0), dates, List.of(dateTypes.get(0)), List.of(0))),
@@ -12567,33 +12567,23 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 List.of(
                                         field(1, inventoryTypes.get(1)),
-                                        ifExpression(isNull(field(2, inventoryTypes.get(2))), constant(0L, BIGINT), cast(field(2, inventoryTypes.get(2)), inventoryTypes.get(2), BIGINT), BIGINT),
-                                        // SQL avg(inv_quantity_on_hand) ignores NULLs: count only non-null rows so the
-                                        // average denominator matches (a constant 1 would also count null rows).
-                                        ifExpression(isNull(field(2, inventoryTypes.get(2))), constant(0L, BIGINT), constant(1L, BIGINT), BIGINT)),
-                                preGroupedTypes)),
-                        namedFactoryStep("q22.group.by_item", hashAggregationFactory(
-                                22_2,
-                                List.of(preGroupedTypes.get(0)),
-                                List.of(0),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(2), OptionalInt.empty())))),
-                "q22.sink.grouped_inventory");
+                                        cast(field(2, inventoryTypes.get(2)), inventoryTypes.get(2), BIGINT)),
+                                contributionTypes))),
+                "q22.sink.inventory_contributions");
 
         return appendPlan(
-                groupedInventory,
+                inventoryContributions,
                 List.of(
-                        namedHashJoinStep("q22.join.item", new HashJoinSpec(22_3, preGroupedTypes, List.of(0), items, itemTypes, List.of(0))),
+                        namedHashJoinStep("q22.join.item", new HashJoinSpec(22_3, contributionTypes, List.of(0), items, itemTypes, List.of(0))),
                         namedFactoryStep("q22.project.rollup_source", filterAndProjectFactory(
                                 22_4,
                                 Optional.empty(),
                                 List.of(
-                                        field(4, itemTypes.get(1)),
-                                        field(5, itemTypes.get(2)),
-                                        field(6, itemTypes.get(3)),
-                                        field(7, itemTypes.get(4)),
-                                        field(1, BIGINT),
-                                        field(2, BIGINT)),
+                                        field(3, itemTypes.get(1)),
+                                        field(4, itemTypes.get(2)),
+                                        field(5, itemTypes.get(3)),
+                                        field(6, itemTypes.get(4)),
+                                        field(1, BIGINT)),
                                 outputTypes))),
                 "q22.sink.rollup_source");
     }
@@ -12601,7 +12591,7 @@ public final class TrinoTpcdsParquetSupport
     private List<Type> query22InventoryRollupSourceTypes(TpcdsParquetTables tables)
     {
         List<Type> itemTypes = tableColumnTypes(tables, "item", List.of("i_item_sk", "i_product_name", "i_brand", "i_class", "i_category"));
-        return List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), BIGINT, BIGINT);
+        return List.of(itemTypes.get(1), itemTypes.get(2), itemTypes.get(3), itemTypes.get(4), BIGINT);
     }
 
     private List<Type> query22OutputTypes(TpcdsParquetTables tables)

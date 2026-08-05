@@ -7443,48 +7443,35 @@ public final class CompiledTpcdsQueries
 
     public static Composite query22()
     {
-        // inventory ⋈ date_dim(d_month_seq in [1200, 1211]); PRE-AGGREGATE by inv_item_sk into a partial sum
-        // (sum(coalesce(qoh, 0))) and a partial count (count(*)) -- exactly the harness's per-item grouping that
-        // breaks the pipeline before the rollup -- then ⋈ item; ROLLUP(i_product_name, i_brand, i_class, i_category)
-        // re-summing the two partials; avg = sum/count as a true double. ORDER BY the average then the four item keys;
-        // top 100. The rollup's 5x grouping-set expand now runs over the small per-item relation, not the ~11M-row
-        // fact. Re-summing the partials is algebraically identical to summing the raw fact, so the result is byte-exact.
-        QueryLowering inventoryByItem = QueryLowering.scan("inventory",
+        // Match the SQL physical order: filter inventory through date_dim, join item at fact cardinality, then expand
+        // the five rollup grouping sets and aggregate. In particular, do not introduce an algebraically valid
+        // pre-aggregation that the Trino SQL plan did not choose; it would remove the dominant join/output workload
+        // from the operator benchmark.
+        QueryLowering main = QueryLowering.scan("inventory",
                         new QueryLowering.Column("inv_date_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("inv_item_sk", ColumnEncoding.FLAT, true),
                         new QueryLowering.Column("inv_quantity_on_hand", ColumnEncoding.FLAT, true))
                 .join("date_dim", "inv_date_sk", "d_date_sk",
                         new QueryLowering.Column("d_date_sk"),
-                        new QueryLowering.Column("d_month_seq"));
-        inventoryByItem.where(
-                        new Plan.Predicate(">", inventoryByItem.column("d_month_seq"), new Plan.Lit(1199)),
-                        new Plan.Predicate("<", inventoryByItem.column("d_month_seq"), new Plan.Lit(1212)))
-                .groupBy("inv_item_sk")
-                .aggregate("sum", "inv_quantity_on_hand")
-                .aggregate("count", "inv_quantity_on_hand");
-        // Pre-aggregation output: (item_sk = 0, partial_sum = 1, partial_count = 2).
-
-        // Every item has non-null observations in the selected 12-month window, so the partial sum is non-null; the
-        // count of non-null quantity values is always non-null. Preserve CountColumn semantics from the harness.
-        QueryLowering main = QueryLowering.scan("q22_inv_by_item",
-                        new QueryLowering.Column("ibi_item_sk", ColumnEncoding.FLAT, false),
-                        new QueryLowering.Column("ibi_partial_sum", ColumnEncoding.FLAT, false),
-                        new QueryLowering.Column("ibi_partial_count", ColumnEncoding.FLAT, false))
-                .join("item", "ibi_item_sk", "i_item_sk",
+                        new QueryLowering.Column("d_month_seq"))
+                .join("item", "inv_item_sk", "i_item_sk",
                         new QueryLowering.Column("i_item_sk"),
                         new QueryLowering.Column("i_product_name", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("i_brand", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("i_class", ColumnEncoding.STRING, false),
                         new QueryLowering.Column("i_category", ColumnEncoding.STRING, false));
-        main.groupBy("i_product_name", "i_brand", "i_class", "i_category")
+        main.where(
+                        new Plan.Predicate(">", main.column("d_month_seq"), new Plan.Lit(1199)),
+                        new Plan.Predicate("<", main.column("d_month_seq"), new Plan.Lit(1212)))
+                .groupBy("i_product_name", "i_brand", "i_class", "i_category")
                 .groupingSets(List.of(
                         new int[] {0, 1, 2, 3},
                         new int[] {0, 1, 2},
                         new int[] {0, 1},
                         new int[] {0},
                         new int[0]))
-                .aggregate("sum", "ibi_partial_sum")
-                .aggregate("sum", "ibi_partial_count");
+                .aggregate("sum", "inv_quantity_on_hand")
+                .aggregate("count", "inv_quantity_on_hand");
         // Main result columns: i_product_name (0), i_brand (1), i_class (2), i_category (3), sum (4), count (5),
         // grouping_id (6). The average is the computed quotient sum/count as a true double.
         Plan.Expr average = new Plan.Call("divide_i64_to_f64", new Plan.Col(4), new Plan.Col(5));
@@ -7501,10 +7488,9 @@ public final class CompiledTpcdsQueries
                         new Plan.SortKey(2, false),
                         new Plan.SortKey(3, false)), 100));
 
-        List<Stage> stages = List.of(new Stage(inventoryByItem, "q22_inv_by_item"));
-        // The four rolled-up string keys reconstruct from the item build (main input 1): i_product_name/i_brand/
+        // The four rolled-up string keys reconstruct from the item build (main input 2): i_product_name/i_brand/
         // i_class/i_category are item columns 1/2/3/4. ROLLUP nulls trailing keys per level; the null mask wins.
-        return new Composite(stages, main, List.of(
-                new DictRef(0, 1, 1), new DictRef(1, 1, 2), new DictRef(2, 1, 3), new DictRef(3, 1, 4)));
+        return new Composite(List.of(), main, List.of(
+                new DictRef(0, 2, 1), new DictRef(1, 2, 2), new DictRef(2, 2, 3), new DictRef(3, 2, 4)));
     }
 }

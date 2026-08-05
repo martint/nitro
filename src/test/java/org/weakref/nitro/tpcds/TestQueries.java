@@ -1149,12 +1149,15 @@ public class TestQueries
         TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
         assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
 
-        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
         try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            int warmups = Integer.getInteger("nitro.operatorCpuProfile.warmups", 0);
+            for (int iteration = 0; iteration < warmups; iteration++) {
+                support.query22(tables);
+            }
+            TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
             TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query22(tables));
+            System.out.println(profile.formatReport());
         }
-
-        System.out.println(profile.formatReport());
     }
 
     @Test
