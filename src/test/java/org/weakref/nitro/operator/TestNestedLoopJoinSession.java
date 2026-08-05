@@ -110,6 +110,31 @@ class TestNestedLoopJoinSession
         }
     }
 
+    @Test
+    void testReordersOutputsBeforeComposingPipeline()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                NestedLoopJoinSession session = new NestedLoopJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(2),
+                        table(10, 20))
+                        .withOutputs(1, 0, 2)
+                        .withOutputPipeline(source -> new LimitOperator(allocator, 2, source))) {
+            allocator.beginExecution();
+
+            session.addInput(multiBatch(new long[] {1, 2}, new long[] {101, 102}));
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                Mask mask = output.borrowMask();
+                assertThat(values(output, 0, mask)).containsExactly(101L, 102L);
+                assertThat(values(output, 1, mask)).containsExactly(1L, 2L);
+                assertThat(values(output, 2, mask)).containsExactly(10L, 10L);
+            }
+        }
+    }
+
     private static void drain(NestedLoopJoinSession session, List<Long> outerValues, List<Long> innerValues)
     {
         while (session.hasOutput()) {
@@ -130,6 +155,25 @@ class TestNestedLoopJoinSession
         return new Batch(
                 Mask.all(values.length),
                 Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(values))));
+    }
+
+    private static Batch multiBatch(long[]... columns)
+    {
+        Output[] outputs = new Output[columns.length];
+        for (int channel = 0; channel < columns.length; channel++) {
+            outputs[channel] = Output.of(org.weakref.nitro.data.Streams.ofValues(new I64Vector(columns[channel])));
+        }
+        return new Batch(Mask.all(columns[0].length), outputs);
+    }
+
+    private static List<Long> values(Batch batch, int channel, Mask mask)
+    {
+        VectorAccess.LongValues values = VectorAccess.longValues(batch.output(channel).borrow(Stream.VALUES));
+        List<Long> result = new ArrayList<>();
+        for (int position : mask) {
+            result.add(values.value(position));
+        }
+        return result;
     }
 
     private static Operator table(long... values)

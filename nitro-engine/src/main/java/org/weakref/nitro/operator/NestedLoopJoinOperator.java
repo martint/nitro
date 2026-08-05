@@ -49,7 +49,9 @@ public class NestedLoopJoinOperator
     private final int[] retainedInnerPositionsScratch;
     private final int[] retainedInnerMaskPositionsScratch;
     private final Streams[] currentOutputs;
-    private final Schema outputSchema;
+    private final Schema fullOutputSchema;
+    private int[] outputChannels;
+    private Schema outputSchema;
 
     private int currentInnerBatch;
     private int currentInnerPosition;
@@ -177,14 +179,17 @@ public class NestedLoopJoinOperator
         this.buffers = new JoinBufferSupport(joinBufferPolicy, allocator, allocationContext);
         this.bufferedInner = new BufferedJoinInput(bufferedJoinInputPolicy, buffers, inner.outputCount());
         this.outputBuffer = new JoinOutputBuffer(buffers, maxBatchRows, outer.outputCount(), inner.outputCount());
-        this.currentOutputs = new Streams[outputCount()];
-        this.outputSchema = outputSchema(outer.outputSchema(), inner.outputSchema());
+        int totalOutputCount = outer.outputCount() + inner.outputCount();
+        this.currentOutputs = new Streams[totalOutputCount];
+        this.fullOutputSchema = outputSchema(outer.outputSchema(), inner.outputSchema());
+        this.outputChannels = java.util.stream.IntStream.range(0, totalOutputCount).toArray();
+        this.outputSchema = fullOutputSchema;
     }
 
     @Override
     public int outputCount()
     {
-        return outer.outputCount() + inner.outputCount();
+        return outputChannels.length;
     }
 
     @Override
@@ -199,6 +204,29 @@ public class NestedLoopJoinOperator
         fields.addAll(outerSchema.fields());
         fields.addAll(innerSchema.fields());
         return new Schema(fields);
+    }
+
+    /**
+     * Selects and orders the join's public outputs using physical concatenated column ordinals
+     * ({@code outer columns} followed by {@code inner columns}).
+     */
+    public NestedLoopJoinOperator withOutputs(int... outputChannels)
+    {
+        requireNonNull(outputChannels, "outputChannels is null");
+        if (started) {
+            throw new IllegalStateException("nested loop join has started");
+        }
+        int[] selected = outputChannels.clone();
+        List<Field> fields = new ArrayList<>(selected.length);
+        for (int outputChannel : selected) {
+            if (outputChannel < 0 || outputChannel >= currentOutputs.length) {
+                throw new IllegalArgumentException("Join output column is out of bounds: " + outputChannel);
+            }
+            fields.add(fullOutputSchema.field(outputChannel));
+        }
+        this.outputChannels = selected;
+        this.outputSchema = new Schema(fields);
+        return this;
     }
 
     @Override
@@ -379,9 +407,10 @@ public class NestedLoopJoinOperator
         java.util.Arrays.fill(currentOutputs, null);
         Output[] outputs = new Output[outputCount()];
         for (int outputIndex = 0; outputIndex < outputs.length; outputIndex++) {
+            int physicalOutput = outputChannels[outputIndex];
             outputs[outputIndex] = matcher.producesFullCrossProduct()
-                    ? outputBuffer.resultOutputForNestedLoop(outputIndex, currentOuterBatch, allocator, allocationContext)
-                    : resultOutput(outputIndex);
+                    ? outputBuffer.resultOutputForNestedLoop(physicalOutput, currentOuterBatch, allocator, allocationContext)
+                    : resultOutput(physicalOutput);
         }
         Batch outerBatch = currentOuterBatch;
         boolean outerBatchConsumed = outerRemaining == 0;

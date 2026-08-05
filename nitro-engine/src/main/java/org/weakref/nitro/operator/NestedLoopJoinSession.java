@@ -76,6 +76,16 @@ public final class NestedLoopJoinSession
         return this;
     }
 
+    public NestedLoopJoinSession withOutputs(int... outputChannels)
+    {
+        checkAcceptingInput();
+        if (outputRoot != join) {
+            throw new IllegalStateException("nested loop join output pipeline is already configured");
+        }
+        join.withOutputs(outputChannels);
+        return this;
+    }
+
     @Override
     public void addInput(Batch batch)
     {
