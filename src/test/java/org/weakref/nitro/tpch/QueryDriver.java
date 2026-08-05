@@ -32,7 +32,7 @@ public final class QueryDriver
     public static void main(String[] args)
     {
         String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
-        if (!query.equals("query05") && !query.equals("query07") && !query.equals("query08") && !query.equals("query09") && !query.equals("query11") && !query.equals("query12") && !query.equals("query13") && !query.equals("query14") && !query.equals("query15") && !query.equals("query16") && !query.equals("query19") && !query.equals("query20") && !query.equals("query21") && !query.equals("query22")) {
+        if (!query.equals("query03") && !query.equals("query05") && !query.equals("query07") && !query.equals("query08") && !query.equals("query09") && !query.equals("query11") && !query.equals("query12") && !query.equals("query13") && !query.equals("query14") && !query.equals("query15") && !query.equals("query16") && !query.equals("query19") && !query.equals("query20") && !query.equals("query21") && !query.equals("query22")) {
             throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
         }
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
@@ -96,6 +96,7 @@ public final class QueryDriver
             OperatorCpuProfile profile)
     {
         return switch (query) {
+            case "query03" -> TpchParquetSupport.query03(allocator, registry, tables, profile);
             case "query05" -> TpchParquetSupport.query05(allocator, registry, tables, profile);
             case "query07" -> TpchParquetSupport.query07(allocator, registry, tables, profile);
             case "query08" -> TpchParquetSupport.query08(allocator, registry, tables);

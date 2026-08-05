@@ -168,7 +168,7 @@ public final class TrinoTpchParquetSupport
      */
     public MaterializedResult query03(TpchParquetTables tables)
     {
-        return executePipelinePlan(query03Plan(tables), query03OutputTypes(tables));
+        return executeQuery03(tables);
     }
 
     /**
@@ -558,7 +558,7 @@ public final class TrinoTpchParquetSupport
         return List.of(DOUBLE);
     }
 
-    private PipelinePlan query03Plan(TpchParquetTables tables)
+    private MaterializedResult executeQuery03(TpchParquetTables tables)
     {
         List<String> customerColumns = List.of("c_custkey", "c_mktsegment");
         List<Type> customerScanTypes = tableColumnTypes(tables, "customer", customerColumns);
@@ -594,37 +594,69 @@ public final class TrinoTpchParquetSupport
         List<String> lineitemColumns = List.of("l_orderkey", "l_extendedprice", "l_discount", "l_shipdate");
         List<Type> lineitemTypes = tableColumnTypes(tables, "lineitem", lineitemColumns);
         Type shipDateType = lineitemTypes.get(3);
+        List<Type> lineitemAggregationInputTypes = List.of(BIGINT, DOUBLE);
+        List<Type> partialRevenueTypes = List.of(BIGINT, DOUBLE);
         // [orderkey, orderdate, shippriority, discPrice]
         List<Type> groupedTypes = List.of(BIGINT, orderDateType, shipPriorityType, DOUBLE);
         List<Type> outputTypes = query03OutputTypes(tables);
-        return new PipelinePlan(
+        List<Page> projectedLineitem = executePipelinePlan(new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles("lineitem"), lineitemColumns, "q03.scan.lineitem"),
-                List.of(
-                        namedFactoryStep("q03.filter.lineitem", filterAndProjectFactory(
+                List.of(namedFactoryStep("q03.filter.project.lineitem", filterAndProjectFactory(
                                 3_2,
                                 Optional.of(greaterThan(field(3, shipDateType), constant(LocalDate.of(1995, 3, 15).toEpochDay(), shipDateType), shipDateType)),
-                                identityProjections(lineitemTypes),
-                                lineitemTypes)),
-                        // [l_orderkey, l_extendedprice, l_discount, l_shipdate, o_orderkey, o_custkey, o_orderdate, o_shippriority, c_custkey]
-                        namedHashJoinStep("q03.join.orders", new HashJoinSpec(3_3, lineitemTypes, List.of(0), ordersWithCustomer, ordersWithCustomerTypes, List.of(0))),
+                                List.of(field(0, BIGINT), discountedPrice(1, 2)),
+                                lineitemAggregationInputTypes))),
+                "q03.sink.lineitem",
+                lineitemAggregationInputTypes));
+        List<Page> partialRevenue = executeSqlAggregationStage(
+                projectedLineitem,
+                lineitemAggregationInputTypes,
+                19,
+                new int[0],
+                () -> List.of(namedFactoryStep("q03.aggregate.partial", hashAggregationFactory(
+                        3_3,
+                        List.of(BIGINT),
+                        List.of(0),
+                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(DOUBLE)).createAggregatorFactory(Step.SINGLE, List.of(1), OptionalInt.empty())))),
+                partialRevenueTypes,
+                "q03.exchange.partial");
+        List<Page> joined = executePipelinePlan(new PipelinePlan(
+                new PagesPipelineSource(partialRevenue, "q03.merge.partial"),
+                List.of(
+                        // [l_orderkey, partialRevenue, o_orderkey, o_custkey, o_orderdate, o_shippriority, c_custkey]
+                        namedHashJoinStep("q03.join.orders", new HashJoinSpec(3_4, partialRevenueTypes, List.of(0), ordersWithCustomer, ordersWithCustomerTypes, List.of(0))),
                         namedFactoryStep("q03.project.disc_price", filterAndProjectFactory(
-                                3_4,
-                                Optional.empty(),
-                                List.of(field(0, BIGINT), field(6, orderDateType), field(7, shipPriorityType), discountedPrice(1, 2)),
-                                groupedTypes)),
-                        namedFactoryStep("q03.group", hashAggregationFactory(
                                 3_5,
-                                List.of(BIGINT, orderDateType, shipPriorityType),
-                                List.of(0, 1, 2),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(DOUBLE)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty()))),
-                        namedFactoryStep("q03.topn", topNFactory(3_6, groupedTypes, 10, List.of(3, 1), List.of(DESC_NULLS_LAST, ASC_NULLS_LAST))),
-                        // SQL order: l_orderkey, revenue, o_orderdate, o_shippriority
-                        namedFactoryStep("q03.project.final", filterAndProjectFactory(
-                                3_7,
                                 Optional.empty(),
-                                List.of(field(0, BIGINT), field(3, DOUBLE), field(1, orderDateType), field(2, shipPriorityType)),
-                                outputTypes))),
-                "q03.sink.final",
+                                List.of(field(0, BIGINT), field(4, orderDateType), field(5, shipPriorityType), field(1, DOUBLE)),
+                                groupedTypes))),
+                "q03.sink.join",
+                groupedTypes));
+        List<Page> grouped = executeSqlAggregationStage(
+                joined,
+                groupedTypes,
+                2,
+                new int[] {0, 1, 2},
+                () -> List.of(namedFactoryStep("q03.group.final", hashAggregationFactory(
+                        3_6,
+                        List.of(BIGINT, orderDateType, shipPriorityType),
+                        List.of(0, 1, 2),
+                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(DOUBLE)).createAggregatorFactory(Step.SINGLE, List.of(3), OptionalInt.empty())))),
+                groupedTypes,
+                "q03.exchange.final");
+        return executePipelinePlan(
+                new PipelinePlan(
+                        new PagesPipelineSource(grouped, "q03.merge.grouped"),
+                        List.of(
+                                namedFactoryStep("q03.topn", topNFactory(3_7, groupedTypes, 10, List.of(3, 1), List.of(DESC_NULLS_LAST, ASC_NULLS_LAST))),
+                        // SQL order: l_orderkey, revenue, o_orderdate, o_shippriority
+                                namedFactoryStep("q03.project.final", filterAndProjectFactory(
+                                        3_8,
+                                        Optional.empty(),
+                                        List.of(field(0, BIGINT), field(3, DOUBLE), field(1, orderDateType), field(2, shipPriorityType)),
+                                        outputTypes))),
+                        "q03.sink.final",
+                        outputTypes),
                 outputTypes);
     }
 

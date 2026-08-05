@@ -1,0 +1,35 @@
+query03: 1 iters, 2592.8 ms/iter, sink=200
+Operator CPU profile (thread CPU time)
+Operator                           Type                         cpu_ms    share     alloc_mb alloc_kb/batch steady_kb/batch  batches         rows
+q03.project.final                  ProjectOperator            2456.500   13.63%     1852.123    1896573.898    1896573.898        1           10
+  hasNext=  0.035 next=2456.378  borrow=  0.067  take=  0.000  constrain=  0.000  close=  0.020  alloc[hasNext=   0.000 next=1852.117 borrow=   0.003 take=   0.000 constrain=   0.000 close=   0.003] MB
+q03.topn                           TopNOperator               2456.450   13.63%     1852.120    1896570.625    1896570.625        1           10
+  hasNext=  0.002 next=2456.364  borrow=  0.065  take=  0.000  constrain=  0.000  close=  0.018  alloc[hasNext=   0.000 next=1852.114 borrow=   0.003 take=   0.000 constrain=   0.000 close=   0.002] MB
+q03.group.final                    SqlStageAggregationOperator   2425.986   13.47%     1851.038     236932.921     236932.921        8       114003
+  hasNext=2406.878 next=  0.001  borrow=  2.307  take=  0.000  constrain=  0.000  close=  0.021  alloc[hasNext=1841.716 next=   0.000 borrow=   9.297 take=   0.000 constrain=   0.000 close=   0.007] MB
+q03.project.join                   ProjectOperator            2395.201   13.29%     1835.000       3655.721       3655.721      514       114051
+  hasNext=  0.230 next=2250.019  borrow=142.055  take=  0.000  constrain=  0.000  close=  2.830  alloc[hasNext=   0.000 next=1323.218 borrow= 511.377 take=   0.000 constrain=   0.000 close=   0.405] MB
+q03.join.orders                    HashJoinOperator           2393.057   13.28%     1833.795       3653.320       3653.320      514       114051
+  hasNext=  0.088 next=2249.490  borrow=140.974  take=  0.000  constrain=  0.000  close=  2.439  alloc[hasNext=   0.000 next=1322.138 borrow= 511.377 take=   0.000 constrain=   0.000 close=   0.280] MB
+q03.group.partial                  SqlStageAggregationOperator   1858.222   10.31%     1666.174       3325.852       3325.852      513      8283509
+  hasNext=1665.556 next=  0.081  borrow=192.189  take=  0.000  constrain=  0.000  close=  0.328  alloc[hasNext= 898.520 next=   0.000 borrow= 766.998 take=   0.000 constrain=   0.000 close=   0.656] MB
+q03.project.revenue                ProjectOperator            1025.988    5.69%      102.121         17.431         17.431     5999     32334250
+  hasNext=  5.936 next=136.680  borrow=858.563  take=  0.000  constrain=  0.000  close= 24.005  alloc[hasNext=   3.749 next=  30.525 borrow=  56.529 take=   0.000 constrain=   0.000 close=  11.317] MB
+q03.filter.lineitem                FilterOperator              956.344    5.31%       54.305          9.270          9.270     5999     32334250
+  hasNext=  3.963 next=129.918  borrow=806.386  take=  0.000  constrain=  0.000  close= 15.242  alloc[hasNext=   3.729 next=  22.232 borrow=  21.177 take=   0.000 constrain=   0.000 close=   7.168] MB
+q03.scan.lineitem                  BatchSourceOperator         859.436    4.77%       41.890          7.150          7.150     5999     59986052
+  hasNext=  2.154 next=  2.641  borrow=837.512  take=  0.000  constrain=  4.024  close= 12.080  alloc[hasNext=   3.708 next=   6.088 borrow=  26.005 take=   0.000 constrain=   0.000 close=   6.088] MB
+q03.join.customer                  HashJoinOperator            424.668    2.36%       53.248        173.098        173.098      315      1461923
+  hasNext=  0.081 next=419.776  borrow=  2.744  take=  0.000  constrain=  0.000  close=  2.003  alloc[hasNext=   0.000 next=  41.765 borrow=  11.432 take=   0.000 constrain=   0.000 close=   0.050] MB
+q03.filter.orders                  FilterOperator              362.526    2.01%       18.371         59.911         59.911      314      1461923
+  hasNext=349.017 next= 10.301  borrow=  1.019  take=  0.000  constrain=  0.000  close=  2.141  alloc[hasNext=  16.889 next=   0.968 borrow=   0.023 take=   0.000 constrain=   0.000 close=   0.492] MB
+q03.scan.orders                    BatchSourceOperator         351.787    1.95%       17.636         57.513         57.513      314      3004382
+  hasNext=348.897 next=  0.154  borrow=  0.475  take=  0.000  constrain=  0.246  close=  1.960  alloc[hasNext=  16.884 next=   0.320 borrow=   0.000 take=   0.000 constrain=   0.000 close=   0.432] MB
+q03.project.customer               ProjectOperator              18.655    0.10%        3.729         25.454         25.454      150       300276
+  hasNext=  0.300 next=  5.668  borrow= 12.130  take=  0.000  constrain=  0.000  close=  0.526  alloc[hasNext=   0.060 next=   1.202 borrow=   2.201 take=   0.000 constrain=   0.000 close=   0.266] MB
+q03.filter.customer                FilterOperator               17.965    0.10%        3.542         24.182         24.182      150       300276
+  hasNext=  0.216 next=  5.331  borrow= 11.994  take=  0.000  constrain=  0.000  close=  0.392  alloc[hasNext=   0.058 next=   1.065 borrow=   2.194 take=   0.000 constrain=   0.000 close=   0.226] MB
+q03.scan.customer                  BatchSourceOperator          13.536    0.08%        2.885         19.695         19.695      150      1500000
+  hasNext=  0.113 next=  0.081  borrow= 12.854  take=  0.000  constrain=  0.189  close=  0.264  alloc[hasNext=   0.055 next=   0.094 borrow=   2.539 take=   0.000 constrain=   0.000 close=   0.197] MB
+Total attributed cpu_ms: 18016.322
+

@@ -178,35 +178,66 @@ final class TpchParquetSupport
 
     /**
      * Q3: customer(BUILDING) builds against the date-filtered orders probe, that result builds against the
-     * shipdate-filtered lineitem probe; aggregate revenue by (orderkey, orderdate, shippriority); TopN 10 by
-     * (revenue DESC, orderdate).
+     * shipdate-filtered lineitem probe. Match Trino's distributed physical shape by partially aggregating revenue
+     * by lineitem orderkey before that join, then aggregate the partial revenue by
+     * (orderkey, orderdate, shippriority); TopN 10 by (revenue DESC, orderdate).
      */
     public static Operator query03(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpchParquetTables tables)
     {
-        Operator customer = projectInputs(allocator, primitiveRegistry,
-                filter(allocator, primitiveRegistry,
-                        scannedTable(allocator, tables, "customer", "c_custkey", "c_mktsegment"),
-                        equalUtf8(1, "BUILDING")),
-                0);
-        Operator orders = filter(allocator, primitiveRegistry,
-                scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate", "o_shippriority"),
-                lessThan(2, LocalDate.of(1995, 3, 15).toEpochDay()));
+        return query03(allocator, primitiveRegistry, tables, null);
+    }
+
+    static Operator query03(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            TpchParquetTables tables,
+            OperatorCpuProfile profile)
+    {
+        Operator customer = profiled(profile, "q03.project.customer", projectInputs(allocator, primitiveRegistry,
+                profiled(profile, "q03.filter.customer", filter(allocator, primitiveRegistry,
+                        profiled(profile, "q03.scan.customer", scannedTable(allocator, tables, "customer", "c_custkey", "c_mktsegment")),
+                        equalUtf8(1, "BUILDING"))),
+                0));
+        Operator orders = profiled(profile, "q03.filter.orders", filter(allocator, primitiveRegistry,
+                profiled(profile, "q03.scan.orders", scannedTable(allocator, tables, "orders", "o_orderkey", "o_custkey", "o_orderdate", "o_shippriority")),
+                lessThan(2, LocalDate.of(1995, 3, 15).toEpochDay())));
         // [o_orderkey, o_custkey, o_orderdate, o_shippriority, c_custkey]
-        Operator ordersWithCustomer = new HashJoinOperator(allocator, orders, 1, customer, 0);
+        Operator ordersWithCustomer = profiled(profile, "q03.join.customer", new HashJoinOperator(allocator, orders, 1, customer, 0));
 
-        Operator lineitem = filter(allocator, primitiveRegistry,
-                scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_extendedprice", "l_discount", "l_shipdate"),
-                greaterThan(3, LocalDate.of(1995, 3, 15).toEpochDay()));
-        // [l_orderkey, l_extendedprice, l_discount, l_shipdate, o_orderkey, o_custkey, o_orderdate, o_shippriority, c_custkey]
-        Operator joined = new HashJoinOperator(allocator, lineitem, 0, ordersWithCustomer, 0);
+        Operator lineitem = profiled(profile, "q03.filter.lineitem", filter(allocator, primitiveRegistry,
+                profiled(profile, "q03.scan.lineitem", scannedTable(allocator, tables, "lineitem", "l_orderkey", "l_extendedprice", "l_discount", "l_shipdate")),
+                greaterThan(3, LocalDate.of(1995, 3, 15).toEpochDay())));
+        Operator lineitemRevenue = profiled(profile, "q03.project.revenue", projectWithDiscPrice(allocator, primitiveRegistry, lineitem, 1, 2, 0));
+        // Fragment 2 has independent source-driver partial states. This boundary deliberately does not propagate
+        // the later orders-join runtime filter into the scan: in the distributed SQL execution those partial states
+        // are upstream of the join and begin consuming splits before that fragment's replicated build is available.
+        Operator partialRevenue = profiled(profile, "q03.group.partial", new SqlStageAggregationOperator(
+                allocator,
+                lineitemRevenue,
+                19,
+                new int[0],
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0),
+                        () -> List.of(new SumF64(1)))),
+                false));
+        // [l_orderkey, partialRevenue, o_orderkey, o_custkey, o_orderdate, o_shippriority, c_custkey]
+        Operator joined = profiled(profile, "q03.join.orders", new HashJoinOperator(allocator, partialRevenue, 0, ordersWithCustomer, 0));
 
-        // [orderkey, orderdate, shippriority, discPrice]
-        Operator projected = projectWithDiscPrice(allocator, primitiveRegistry, joined, 1, 2, 0, 6, 7);
+        // [orderkey, orderdate, shippriority, partialRevenue]
+        Operator projected = profiled(profile, "q03.project.join", projectInputs(allocator, primitiveRegistry, joined, 0, 4, 5, 1));
         // [orderkey, orderdate, shippriority, revenue]
-        Operator aggregated = new GroupedAggregationOperator(allocator, List.of(0, 1, 2), List.of(new SumF64(3)), projected);
-        Operator top = new TopNOperator(allocator, 10, new int[] {3, 1}, new boolean[] {true, false}, aggregated);
+        Operator aggregated = profiled(profile, "q03.group.final", new SqlStageAggregationOperator(
+                allocator,
+                projected,
+                2,
+                new int[] {0, 1, 2},
+                List.of(SqlStageAggregationOperator.aggregate(
+                        List.of(0, 1, 2),
+                        () -> List.of(new SumF64(3)))),
+                false));
+        Operator top = profiled(profile, "q03.topn", new TopNOperator(allocator, 10, new int[] {3, 1}, new boolean[] {true, false}, aggregated));
         // SQL order: l_orderkey, revenue, o_orderdate, o_shippriority
-        return projectInputs(allocator, primitiveRegistry, top, 0, 3, 1, 2);
+        return profiled(profile, "q03.project.final", projectInputs(allocator, primitiveRegistry, top, 0, 3, 1, 2));
     }
 
     /**
