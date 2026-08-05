@@ -89,3 +89,27 @@ Adding the physical plan's partial/final DISTINCT, presence-sum, and global-coun
 The accepted counter artifact is `q87-partial-final-topology.json`. The warmed integrated CPU ratio
 is 0.703x, leaving about nine ratio points to explain. Partitioned joins and remote exchanges remain
 collapsed, and exchange materialization is not yet symmetric between the two fixtures.
+
+## Symmetric aggregation exchanges
+
+The Trino fixture now terminates each partial aggregation pipeline, copies/hash-partitions its Page
+output, and starts the corresponding final aggregation from the exchanged Pages. This matches the
+native-vector materialization that the Nitro fixture was already performing for DISTINCT and grouped
+presence aggregation. The final global count exchanges one row and remains a negligible harness
+special case.
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Median elapsed (ms) | 1,730.437 | 2,517.397 | 0.687 |
+| Instructions | 35.12B | 66.95B | 0.525 |
+| Cycles | 9.788B | 18.94B | 0.517 |
+| Branch misses | 32.06M | 105.76M | 0.303 |
+| L1 data-load misses | 317.09M | 517.33M | 0.613 |
+| Allocation | 497.4 MB | 6.020 GB | 0.083 |
+
+The accepted counter artifact is `q87-symmetric-aggregation-exchanges.json`; the distinct-only
+control is `q87-distinct-exchange-symmetric.json`. Wall time for Nitro remains visibly multimodal in
+this short run, so normalized counters are the stronger signal. Symmetric exchange materialization
+changes the instruction ratio only from 0.531x to 0.525x. The remaining difference from integrated
+SQL CPU (0.703x) is therefore not aggregation exchange copying; partitioned join topology and its
+remote Page boundaries are the next fixture gap.

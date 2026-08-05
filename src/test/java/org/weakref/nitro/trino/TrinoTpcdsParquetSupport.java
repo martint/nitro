@@ -7117,16 +7117,18 @@ public final class TrinoTpcdsParquetSupport
     private PipelinePlan query87Plan(TpcdsParquetTables tables)
     {
         List<Type> presenceTypes = query87ChannelPresenceTypes(tables);
-        return appendPlan(
-                new PipelinePlan(
-                        new UnionPipelineSource(
-                                List.of(
-                                        query87ChannelPresencePlan(tables, "q87.store", "store_sales", "ss_customer_sk", "ss_sold_date_sk", 1L, 0L, 0L),
-                                        query87ChannelPresencePlan(tables, "q87.catalog", "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", 0L, 1L, 0L),
-                                        query87ChannelPresencePlan(tables, "q87.web", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", 0L, 0L, 1L)),
-                                "q87.union.channels"),
-                        List.of(),
-                        "q87.sink.union"),
+        PipelinePlan union = new PipelinePlan(
+                new UnionPipelineSource(
+                        List.of(
+                                query87ChannelPresencePlan(tables, "q87.store", "store_sales", "ss_customer_sk", "ss_sold_date_sk", 1L, 0L, 0L),
+                                query87ChannelPresencePlan(tables, "q87.catalog", "catalog_sales", "cs_bill_customer_sk", "cs_sold_date_sk", 0L, 1L, 0L),
+                                query87ChannelPresencePlan(tables, "q87.web", "web_sales", "ws_bill_customer_sk", "ws_sold_date_sk", 0L, 0L, 1L)),
+                        "q87.union.channels"),
+                List.of(),
+                "q87.sink.union",
+                presenceTypes);
+        List<Page> partialPresence = executePipelinePlan(appendPlan(
+                union,
                 List.of(
                         namedFactoryStep("q87.group.presence.partial", hashAggregationFactory(
                                 87_10,
@@ -7136,7 +7138,14 @@ public final class TrinoTpcdsParquetSupport
                                 Optional.empty(),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(3), OptionalInt.empty()),
                                 FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(4), OptionalInt.empty()),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(5), OptionalInt.empty()))),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(5), OptionalInt.empty())))),
+                "q87.sink.presence.partial",
+                presenceTypes));
+        PipelinePlan countPartial = new PipelinePlan(
+                new PagesPipelineSource(
+                        partitionPages(partialPresence, presenceTypes, 1, new int[] {0, 1, 2}).getFirst(),
+                        "q87.exchange.presence"),
+                List.of(
                         namedFactoryStep("q87.group.presence.final", hashAggregationFactory(
                                 87_13,
                                 presenceTypes.subList(0, 3),
@@ -7157,13 +7166,22 @@ public final class TrinoTpcdsParquetSupport
                                 87_12,
                                 List.of(),
                                 List.of(),
-                                COUNT_ALL.createAggregatorFactory(Step.PARTIAL, List.of(), OptionalInt.empty()))),
+                                COUNT_ALL.createAggregatorFactory(Step.PARTIAL, List.of(), OptionalInt.empty())))),
+                "q87.sink.count.partial",
+                List.of(BIGINT));
+        List<Page> partialCount = executePipelinePlan(countPartial);
+        return new PipelinePlan(
+                new PagesPipelineSource(
+                        partitionPages(partialCount, List.of(BIGINT), 1, new int[0]).getFirst(),
+                        "q87.exchange.count"),
+                List.of(
                         namedFactoryStep("q87.aggregate.count.final", hashAggregationFactory(
                                 87_14,
                                 List.of(),
                                 List.of(),
                                 COUNT_ALL.createAggregatorFactory(Step.FINAL, List.of(0), OptionalInt.empty())))),
-                "q87.sink.final");
+                "q87.sink.final",
+                List.of(BIGINT));
     }
 
     private PipelinePlan query87ChannelPresencePlan(TpcdsParquetTables tables, String queryName, String salesTable, String customerColumn, String soldDateColumn, long storeFlag, long catalogFlag, long webFlag)
@@ -7194,7 +7212,7 @@ public final class TrinoTpcdsParquetSupport
                 queryName + ".scan.date_dim",
                 queryName + ".sink.date_dim");
 
-        return new PipelinePlan(
+        PipelinePlan distinctInput = new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"),
                 List.of(
                         namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(87_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(1), dates, List.of(dateTypes.get(0), dateTypes.get(2)), List.of(0))),
@@ -7214,7 +7232,15 @@ public final class TrinoTpcdsParquetSupport
                                 distinctTypes,
                                 List.of(0, 1, 2),
                                 Step.PARTIAL,
-                                Optional.empty())),
+                                Optional.empty()))),
+                queryName + ".sink.distinct.partial",
+                distinctTypes);
+        List<Page> partialDistinct = executePipelinePlan(distinctInput);
+        return new PipelinePlan(
+                new PagesPipelineSource(
+                        partitionPages(partialDistinct, distinctTypes, 1, new int[] {0, 1, 2}).getFirst(),
+                        queryName + ".exchange.distinct"),
+                List.of(
                         namedFactoryStep(queryName + ".group.distinct.final", hashAggregationFactory(
                                 87_550 + Math.abs(queryName.hashCode() % 100),
                                 distinctTypes,
