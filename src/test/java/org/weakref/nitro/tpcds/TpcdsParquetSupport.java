@@ -9367,11 +9367,6 @@ final class TpcdsParquetSupport
             int activeChannel)
     {
         Operator sales = factScan(allocator, tables, salesTable, customerColumn, soldDateColumn);
-        sales = profiled("q87." + activeChannel + ".group.sales_keys", new GroupedAggregationOperator(
-                allocator,
-                List.of(0, 1),
-                List.of(),
-                sales));
         sales = profiled("q87." + activeChannel + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,

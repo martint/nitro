@@ -7181,10 +7181,6 @@ public final class TrinoTpcdsParquetSupport
         return new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"),
                 List.of(
-                        namedFactoryStep(queryName + ".group.sales_keys", hashAggregationFactory(
-                                87_50 + Math.abs(queryName.hashCode() % 100),
-                                factTypes,
-                                List.of(0, 1))),
                         namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(87_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(1), dates, List.of(dateTypes.get(0), dateTypes.get(2)), List.of(0))),
                         namedFactoryStep(queryName + ".project.date_dim", filterAndProjectFactory(
                                 87_200 + Math.abs(queryName.hashCode() % 100),

@@ -53,3 +53,22 @@ The native exchange still transfers 42 batches, 6,313,496 rows, and 314,077,932 
 seven measurements. Result comparison is exact. The roughly 39 ms/query sink reduction explains the
 CPU ratio movement from 0.717 to 0.703; the remaining integrated/operator gap is elsewhere in the
 distributed plan.
+
+## Current-plan fixture correction
+
+A fresh distributed explain showed that the fixture's sales-key DISTINCT does not exist in the SQL
+plan. Removing it from both operator fixtures preserves exact results and produces the following
+three-warmup/five-measurement result:
+
+| Metric | Nitro | Trino | Nitro / Trino |
+| --- | ---: | ---: | ---: |
+| Median elapsed (ms) | 878.782 | 2,257.706 | 0.389 |
+| Instructions | 22.78B | 63.14B | 0.361 |
+| Cycles | 5.326B | 19.02B | 0.280 |
+| Branch misses | 17.96M | 94.57M | 0.190 |
+| L1 data-load misses | 189.24M | 542.25M | 0.349 |
+| Allocation | 282.2 MB | 5.666 GB | 0.050 |
+
+The accepted counter artifact is `q87-current-plan-no-early-distinct.json`. The fixture still
+collapses partitioned joins, remote exchanges, and partial/final aggregation pairs, so 0.389x is not
+yet the integrated SQL target.
