@@ -94,6 +94,14 @@ public class F64Vector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        F64Vector target = allocator.allocateOrGrow(allocationContext, (F64Vector) existing, F64Vector.class, size, F64Vector::new);
+        Arrays.fill(target.values(), outputStart, outputEnd, values[sourcePosition]);
+        return target;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocate(allocationContext, F64Vector.class, 0, F64Vector::new);

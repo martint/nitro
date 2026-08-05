@@ -18,6 +18,28 @@ import org.weakref.nitro.data.Vector;
 interface StructuralComparisonKernel
         extends StructuralIdentityKernel
 {
+    default PositionEquality bindPartitionEquality(
+            Vector leftValues,
+            Vector leftNulls,
+            Vector rightValues,
+            Vector rightNulls)
+    {
+        return (leftPosition, rightPosition) -> {
+            boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+            if (leftNull || rightNull) {
+                return leftNull == rightNull;
+            }
+            return identical(leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition);
+        };
+    }
+
+    @FunctionalInterface
+    interface PositionEquality
+    {
+        boolean identical(int leftPosition, int rightPosition);
+    }
+
     default boolean allowsLegacyPhysicalShortcuts()
     {
         return false;

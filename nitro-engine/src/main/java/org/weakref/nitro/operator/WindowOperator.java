@@ -47,6 +47,7 @@ public final class WindowOperator
     private final int[] orderingColumns;
     private final boolean[] descendingByColumn;
     private final List<RunningWindowFunction> windowFunctions;
+    private final WindowInputOrder inputOrder;
     private final boolean lazyOutputs;
     private final Schema outputSchema;
     private final StructuralComparisonKernel[] comparisonKernels;
@@ -122,7 +123,32 @@ public final class WindowOperator
                 windowFunctions,
                 windowSchema,
                 requireNonNull(resources, "resources is null").windowPolicy(),
-                resources.codeGeneration().structuralTypes());
+                resources.codeGeneration().structuralTypes(),
+                WindowInputOrder.unordered());
+    }
+
+    public WindowOperator(
+            Allocator allocator,
+            Operator source,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descendingByColumn,
+            List<RunningWindowFunction> windowFunctions,
+            Schema windowSchema,
+            OperatorResources resources,
+            WindowInputOrder inputOrder)
+    {
+        this(
+                allocator,
+                source,
+                partitionColumns,
+                orderingColumns,
+                descendingByColumn,
+                windowFunctions,
+                windowSchema,
+                requireNonNull(resources, "resources is null").windowPolicy(),
+                resources.codeGeneration().structuralTypes(),
+                inputOrder);
     }
 
     public WindowOperator(
@@ -144,7 +170,8 @@ public final class WindowOperator
                 windowFunctions,
                 windowSchema,
                 policy,
-                new StructuralTypeKernelFactory());
+                new StructuralTypeKernelFactory(),
+                WindowInputOrder.unordered());
     }
 
     private WindowOperator(
@@ -156,7 +183,8 @@ public final class WindowOperator
             List<RunningWindowFunction> windowFunctions,
             Schema windowSchema,
             WindowOperatorPolicy policy,
-            StructuralTypeKernelFactory structuralTypes)
+            StructuralTypeKernelFactory structuralTypes,
+            WindowInputOrder inputOrder)
     {
         if (orderingColumns.length != descendingByColumn.length) {
             throw new IllegalArgumentException("Ordering columns and directions must have the same length");
@@ -176,6 +204,7 @@ public final class WindowOperator
         this.orderingColumns = orderingColumns.clone();
         this.descendingByColumn = descendingByColumn.clone();
         this.windowFunctions = List.copyOf(windowFunctions);
+        this.inputOrder = requireNonNull(inputOrder, "inputOrder is null");
         this.outputSchema = outputSchema(source.outputSchema(), windowSchema);
         this.comparisonKernels = comparisonKernels(
                 source.outputSchema(),
@@ -187,7 +216,8 @@ public final class WindowOperator
         // A single-function window normally exposes a narrow result whose consumers read every stream, leaving
         // nothing for lazy output to eliminate. Multiple cooperating functions create the wider filter/project
         // boundary where downstream operators can consume function results without gathering every source lane.
-        this.lazyOutputs = policy.lazyOutputs() && windowFunctions.size() > 1;
+        this.lazyOutputs = policy.lazyOutputs() &&
+                (windowFunctions.size() > 1 || inputOrder.isFullyOrdered(orderingColumns.length));
     }
 
     private static StructuralComparisonKernel[] comparisonKernels(
@@ -259,6 +289,12 @@ public final class WindowOperator
             load();
         }
         int batchSize = Math.min(policy.maxBatchRows(), rowCount() - currentOutputPosition);
+        if (!singlePage && inputOrder.isFullyOrdered(orderingColumns.length)) {
+            long firstRow = rowReferences[currentOutputPosition];
+            batchSize = Math.min(
+                    batchSize,
+                    pages.get(pageIndex(firstRow)).rows() - pagePosition(firstRow));
+        }
         if (lazyOutputs) {
             return lazyBatch(currentOutputPosition, batchSize);
         }
@@ -403,12 +439,11 @@ public final class WindowOperator
                 pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
             }
         }
-
         windowOutputs = new Streams[windowFunctions.size()];
         if (pages.size() == 1) {
             singlePage = true;
             singlePageRowCount = pages.getFirst().mask().count();
-            singlePageIdentityOrder = canReuseIdentityOrder(pages.getFirst());
+            singlePageIdentityOrder = inputOrder.isFullyOrdered(orderingColumns.length) || canReuseIdentityOrder(pages.getFirst());
             if (!singlePageIdentityOrder) {
                 singlePageOrder = selectedPositions(pages.getFirst());
                 stableSortSinglePagePositions(singlePageOrder);
@@ -425,10 +460,14 @@ public final class WindowOperator
         }
         else {
             rowReferences = rowReferences(pages);
-            stableSortRowReferences(rowReferences);
+            if (!inputOrder.isFullyOrdered(orderingColumns.length)) {
+                stableSortRowReferences(rowReferences);
+            }
             accountRetainedArrays();
             for (int functionIndex = 0; functionIndex < windowFunctions.size(); functionIndex++) {
-                windowOutputs[functionIndex] = materializeWindow(windowFunctions.get(functionIndex));
+                windowOutputs[functionIndex] = inputOrder.isFullyOrdered(orderingColumns.length)
+                        ? materializeOrderedWindow(windowFunctions.get(functionIndex))
+                        : materializeWindow(windowFunctions.get(functionIndex));
             }
         }
     }
@@ -463,7 +502,8 @@ public final class WindowOperator
                             allocationContext,
                             windowOutputs[functionIndex],
                             partitionStart,
-                            outputPosition);
+                            outputPosition,
+                            singlePageRowCount);
                     function.reset();
                 }
                 partitionStart = outputPosition;
@@ -488,6 +528,7 @@ public final class WindowOperator
                         allocationContext,
                         windowOutputs[functionIndex],
                         partitionStart,
+                        singlePageRowCount,
                         singlePageRowCount);
             }
         }
@@ -965,7 +1006,7 @@ public final class WindowOperator
         for (int outputPosition = 0; outputPosition < singlePageRowCount; outputPosition++) {
             int inputPosition = identityOrder ? outputPosition : order[outputPosition];
             if (previousPosition >= 0 && !samePartition(columns, previousPosition, inputPosition)) {
-                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
+                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, singlePageRowCount);
                 function.reset();
                 partitionStart = outputPosition;
             }
@@ -973,7 +1014,7 @@ public final class WindowOperator
             previousPosition = inputPosition;
         }
         if (singlePageRowCount > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageRowCount);
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, singlePageRowCount, singlePageRowCount);
         }
         return output;
     }
@@ -1015,7 +1056,7 @@ public final class WindowOperator
         for (int outputPosition = 0; outputPosition < rowReferences.length; outputPosition++) {
             long row = rowReferences[outputPosition];
             if (previous != -1 && !samePartition(previous, row)) {
-                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition);
+                output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, rowReferences.length);
                 function.reset();
                 partitionStart = outputPosition;
             }
@@ -1030,9 +1071,79 @@ public final class WindowOperator
             previous = row;
         }
         if (rowReferences.length > 0) {
-            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rowReferences.length);
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, rowReferences.length, rowReferences.length);
         }
         return output;
+    }
+
+    private Streams materializeOrderedWindow(RunningWindowFunction function)
+    {
+        int outputSize = rowReferences.length;
+        Streams output = function.emptyOutput(allocator, allocationContext, outputSize);
+        Streams[] previousColumns = null;
+        int previousPosition = -1;
+        function.reset();
+        int partitionStart = 0;
+        int outputPosition = 0;
+        for (TableOperator.Page page : pages) {
+            Streams[] columns = page.columns();
+            Mask mask = page.mask();
+            StructuralComparisonKernel.PositionEquality[] withinPage = bindPartitionEquality(columns, columns);
+            StructuralComparisonKernel.PositionEquality[] acrossPages = previousColumns == null || previousColumns == columns
+                    ? withinPage
+                    : bindPartitionEquality(previousColumns, columns);
+            for (int index = 0; index < mask.count(); index++) {
+                int inputPosition = mask.all() ? index : mask.position(index);
+                StructuralComparisonKernel.PositionEquality[] partitionEquality = index == 0 ? acrossPages : withinPage;
+                if (previousColumns != null && !samePartition(partitionEquality, previousPosition, inputPosition)) {
+                    output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, outputSize);
+                    function.reset();
+                    partitionStart = outputPosition;
+                }
+                output = function.append(
+                        allocator,
+                        allocationContext,
+                        output,
+                        columns,
+                        inputPosition,
+                        outputPosition,
+                        outputSize);
+                previousColumns = columns;
+                previousPosition = inputPosition;
+                outputPosition++;
+            }
+        }
+        if (outputPosition > 0) {
+            output = function.finishPartition(allocator, allocationContext, output, partitionStart, outputPosition, outputSize);
+        }
+        return output;
+    }
+
+    private StructuralComparisonKernel.PositionEquality[] bindPartitionEquality(Streams[] leftColumns, Streams[] rightColumns)
+    {
+        StructuralComparisonKernel.PositionEquality[] equality =
+                new StructuralComparisonKernel.PositionEquality[partitionColumns.length];
+        for (int index = 0; index < partitionColumns.length; index++) {
+            int column = partitionColumns[index];
+            Streams left = leftColumns[column];
+            Streams right = rightColumns[column];
+            equality[index] = comparisonKernels[column].bindPartitionEquality(
+                    left.values(), left.getOrNull(Stream.NULLS), right.values(), right.getOrNull(Stream.NULLS));
+        }
+        return equality;
+    }
+
+    private static boolean samePartition(
+            StructuralComparisonKernel.PositionEquality[] equality,
+            int leftPosition,
+            int rightPosition)
+    {
+        for (StructuralComparisonKernel.PositionEquality key : equality) {
+            if (!key.identical(leftPosition, rightPosition)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private int compareRows(long left, long right)

@@ -127,6 +127,22 @@ public interface Vector
     }
 
     /**
+     * Copies one logical position into every position in the contiguous output range.
+     *
+     * <p>The default preserves compatibility for uncommon vector shapes. Flat and nested vectors
+     * override this operation so full-partition window results can be broadcast without one
+     * allocation-aware copy dispatch per output row.
+     */
+    default Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        Vector output = existing;
+        for (int outputPosition = outputStart; outputPosition < outputEnd; outputPosition++) {
+            output = copySinglePositionInto(allocator, allocationContext, output, sourcePosition, outputPosition, size);
+        }
+        return output;
+    }
+
+    /**
      * Creates an empty vector with the same logical type/shape as this vector.
      * <p>
      * Traits or nested stream schemas should be preserved, while the returned vector has length

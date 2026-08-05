@@ -115,6 +115,14 @@ public class I64Vector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        I64Vector target = allocator.allocateOrGrow(allocationContext, (I64Vector) existing, I64Vector.class, size, I64Vector::new);
+        Arrays.fill(target.values(), outputStart, outputEnd, values[sourcePosition]);
+        return target;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocate(allocationContext, I64Vector.class, 0, I64Vector::new);

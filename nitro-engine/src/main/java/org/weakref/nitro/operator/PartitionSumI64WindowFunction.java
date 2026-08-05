@@ -61,7 +61,7 @@ public final class PartitionSumI64WindowFunction
     }
 
     @Override
-    public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd)
+    public Streams finishPartition(Allocator allocator, Allocator.Context allocationContext, Streams output, int partitionStart, int partitionEnd, int outputSize)
     {
         I64Vector outputValues = (I64Vector) output.values();
         WindowFunctionSupport.WritableNulls writableNulls = WindowFunctionSupport.writableOutputNulls(allocator, allocationContext, output);

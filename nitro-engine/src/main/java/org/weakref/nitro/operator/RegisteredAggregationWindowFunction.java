@@ -152,16 +152,14 @@ public final class RegisteredAggregationWindowFunction
             Allocator.Context allocationContext,
             Streams output,
             int partitionStart,
-            int partitionEnd)
+            int partitionEnd,
+            int outputSize)
     {
         if (frame == Frame.RUNNING_ROWS || partitionStart == partitionEnd) {
             return output;
         }
         result = implementation.result(0, state, result, allocator, allocationContext);
-        for (int outputPosition = partitionStart; outputPosition < partitionEnd; outputPosition++) {
-            output = copyResultPosition(allocator, allocationContext, result, output, outputPosition, partitionEnd);
-        }
-        return output;
+        return copyResultRange(allocator, allocationContext, result, output, partitionStart, partitionEnd, outputSize);
     }
 
     private void requireInitialized()
@@ -200,6 +198,32 @@ public final class RegisteredAggregationWindowFunction
                             existing,
                             0,
                             outputPosition,
+                            outputSize));
+        }
+        return output.build();
+    }
+
+    private static Streams copyResultRange(
+            Allocator allocator,
+            Allocator.Context allocationContext,
+            Streams source,
+            Streams target,
+            int outputStart,
+            int outputEnd,
+            int outputSize)
+    {
+        Streams.Builder output = Streams.builder();
+        for (Stream stream : source.streams()) {
+            Vector existing = target.getOrNull(stream);
+            output.put(
+                    stream,
+                    source.get(stream).copySinglePositionRangeInto(
+                            allocator,
+                            allocationContext,
+                            existing,
+                            0,
+                            outputStart,
+                            outputEnd,
                             outputSize));
         }
         return output.build();

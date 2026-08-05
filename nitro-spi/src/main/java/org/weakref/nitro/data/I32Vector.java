@@ -101,6 +101,14 @@ public class I32Vector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        I32Vector target = allocator.allocateOrGrow(allocationContext, (I32Vector) existing, I32Vector.class, size, I32Vector::new);
+        Arrays.fill(target.values(), outputStart, outputEnd, values[sourcePosition]);
+        return target;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocate(allocationContext, I32Vector.class, 0, I32Vector::new);

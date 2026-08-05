@@ -162,6 +162,20 @@ public final class StructVector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        StructVector output = allocator.reallocateIfNecessary(allocationContext, existing instanceof StructVector vector ? vector : null, StructVector.class, size, StructVector::new);
+        if (outputStart == 0) {
+            output.clearFields();
+        }
+        Map<String, Streams> existingFields = existing instanceof StructVector vector ? vector.fields() : Map.of();
+        for (Map.Entry<String, Streams> entry : fields.entrySet()) {
+            output.setField(entry.getKey(), copySingleRangeStreams(entry.getValue(), existingFields.get(entry.getKey()), allocator, allocationContext, sourcePosition, outputStart, outputEnd, size));
+        }
+        return output;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         StructVector empty = allocator.allocate(allocationContext, StructVector.class, 0, StructVector::new);
@@ -274,6 +288,16 @@ public final class StructVector
         for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
             Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
             result.put(entry.getKey(), entry.getValue().copySinglePositionInto(allocator, allocationContext, existingVector, sourcePosition, outputPosition, size));
+        }
+        return result.build();
+    }
+
+    private static Streams copySingleRangeStreams(Streams source, Streams existing, Allocator allocator, Allocator.Context allocationContext, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        Streams.Builder result = Streams.builder();
+        for (Map.Entry<Stream, Vector> entry : source.asMap().entrySet()) {
+            Vector existingVector = existing != null ? existing.getOrNull(entry.getKey()) : null;
+            result.put(entry.getKey(), entry.getValue().copySinglePositionRangeInto(allocator, allocationContext, existingVector, sourcePosition, outputStart, outputEnd, size));
         }
         return result.build();
     }

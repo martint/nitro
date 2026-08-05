@@ -567,6 +567,16 @@ public final class StructuralTypeKernelFactory
         }
 
         @Override
+        public PositionEquality bindPartitionEquality(
+                Vector leftValues,
+                Vector leftNulls,
+                Vector rightValues,
+                Vector rightNulls)
+        {
+            return OperatorEqualitySemantics.bindPartitionEquality(leftValues, leftNulls, rightValues, rightNulls);
+        }
+
+        @Override
         public int compare(
                 Vector leftValues,
                 Vector leftNulls,

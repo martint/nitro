@@ -38,6 +38,7 @@ public final class WindowSession
     private final Allocator.Context allocationContext = new Allocator.Context("WindowSession", WindowSession.class);
     private final Allocator allocator;
     private final int inputColumns;
+    private final boolean inputFullyOrdered;
     private final List<TableOperator.Page> pages = new ArrayList<>();
     private final WindowOperator window;
     private boolean finished;
@@ -53,8 +54,32 @@ public final class WindowSession
             Schema windowSchema,
             OperatorResources resources)
     {
+        this(
+                allocator,
+                inputSchema,
+                partitionColumns,
+                orderingColumns,
+                descending,
+                functions,
+                windowSchema,
+                resources,
+                WindowInputOrder.unordered());
+    }
+
+    public WindowSession(
+            Allocator allocator,
+            Schema inputSchema,
+            int[] partitionColumns,
+            int[] orderingColumns,
+            boolean[] descending,
+            List<RunningWindowFunction> functions,
+            Schema windowSchema,
+            OperatorResources resources,
+            WindowInputOrder inputOrder)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         inputColumns = requireNonNull(inputSchema, "inputSchema is null").size();
+        inputFullyOrdered = requireNonNull(inputOrder, "inputOrder is null").isFullyOrdered(orderingColumns.length);
         window = new WindowOperator(
                 allocator,
                 TableOperator.retained(inputSchema, pages),
@@ -63,7 +88,8 @@ public final class WindowSession
                 descending,
                 functions,
                 windowSchema,
-                resources);
+                resources,
+                inputOrder);
     }
 
     public void addInput(Batch batch)
@@ -109,7 +135,7 @@ public final class WindowSession
 
     private void coalescePages()
     {
-        if (pages.size() < 2 || !haveConsistentStreams()) {
+        if (inputFullyOrdered || pages.size() < 2 || !haveConsistentStreams()) {
             return;
         }
         int rows = 0;

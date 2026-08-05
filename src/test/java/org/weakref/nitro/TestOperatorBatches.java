@@ -75,6 +75,7 @@ import org.weakref.nitro.operator.TopNRankingOperator;
 import org.weakref.nitro.operator.TopNRankingSession;
 import org.weakref.nitro.operator.TopNSession;
 import org.weakref.nitro.operator.UnionAllOperator;
+import org.weakref.nitro.operator.WindowInputOrder;
 import org.weakref.nitro.operator.WindowOperator;
 import org.weakref.nitro.operator.WindowSession;
 import org.weakref.nitro.operator.aggregation.AggregationExecutionContext;
@@ -1022,6 +1023,82 @@ public class TestOperatorBatches
                             row(1L, "first-b", 1L),
                             row(2L, "second", 3L),
                             row(3L, "third", 4L));
+        }
+    }
+
+    @Test
+    void testWindowSessionUsesGuaranteedContiguousPartitionOrderAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 2, List.of(
+                row(2L, 10L),
+                row(2L, 20L)));
+                WindowSession session = new WindowSession(
+                        allocator,
+                        first.outputSchema(),
+                        new int[] {0},
+                        new int[0],
+                        new boolean[0],
+                        List.of(new PartitionAverageI64WindowFunction(1)),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources(),
+                        new WindowInputOrder(true, 0))) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 2, List.of(
+                    row(2L, 30L),
+                    row(1L, 40L)));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactly(
+                            row(2L, 10L, 20L),
+                            row(2L, 20L, 20L),
+                            row(2L, 30L, 20L),
+                            row(1L, 40L, 40L));
+        }
+    }
+
+    @Test
+    void testWindowSessionUsesBoundBinaryAndNullPartitionEqualityAcrossHostBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator first = new ConstantTableOperator(allocator, 2, List.of(
+                row("b", 10L),
+                row("b", 20L)));
+                WindowSession session = new WindowSession(
+                        allocator,
+                        first.outputSchema(),
+                        new int[] {0},
+                        new int[0],
+                        new boolean[0],
+                        List.of(new PartitionAverageI64WindowFunction(1)),
+                        Schema.unspecified(1),
+                        EngineResources.from(allocator).operatorResources(),
+                        new WindowInputOrder(true, 0))) {
+            try (Batch batch = first.next()) {
+                session.addInput(batch);
+            }
+            try (Operator second = new ConstantTableOperator(allocator, 2, List.of(
+                    row("b", 30L),
+                    row(null, 40L),
+                    row(null, 60L)));
+                    Batch batch = second.next()) {
+                session.addInput(batch);
+            }
+            session.finishInput();
+
+            assertThat(OperatorAssertions.OperatorAssert.toRows(session))
+                    .containsExactly(
+                            row("b", 10L, 20L),
+                            row("b", 20L, 20L),
+                            row("b", 30L, 20L),
+                            row(null, 40L, 50L),
+                            row(null, 60L, 50L));
         }
     }
 

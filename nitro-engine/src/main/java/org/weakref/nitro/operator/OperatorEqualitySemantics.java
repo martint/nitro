@@ -20,6 +20,8 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Vector;
 
+import java.util.Arrays;
+
 final class OperatorEqualitySemantics
 {
     private OperatorEqualitySemantics() {}
@@ -49,5 +51,57 @@ final class OperatorEqualitySemantics
         throw new IllegalArgumentException("Unsupported equality comparison between %s and %s".formatted(
                 left.getClass().getSimpleName(),
                 right.getClass().getSimpleName()));
+    }
+
+    public static StructuralComparisonKernel.PositionEquality bindPartitionEquality(
+            Vector leftValues,
+            Vector leftNulls,
+            Vector rightValues,
+            Vector rightNulls)
+    {
+        Vector left = OperatorVectorSupport.flatten(leftValues);
+        Vector right = OperatorVectorSupport.flatten(rightValues);
+        if (left == leftValues && right == rightValues) {
+            if (left instanceof I64Vector leftLongs && right instanceof I64Vector rightLongs) {
+                return (leftPosition, rightPosition) -> partitionEqual(
+                        leftNulls, leftPosition, rightNulls, rightPosition,
+                        leftLongs.values()[leftPosition] == rightLongs.values()[rightPosition]);
+            }
+            if (left instanceof I32Vector leftIntegers && right instanceof I32Vector rightIntegers) {
+                return (leftPosition, rightPosition) -> partitionEqual(
+                        leftNulls, leftPosition, rightNulls, rightPosition,
+                        leftIntegers.values()[leftPosition] == rightIntegers.values()[rightPosition]);
+            }
+            if (left instanceof BinaryVector leftBinary && right instanceof BinaryVector rightBinary) {
+                return (leftPosition, rightPosition) -> partitionEqual(
+                        leftNulls, leftPosition, rightNulls, rightPosition,
+                        Arrays.equals(
+                                leftBinary.data(), leftBinary.offsets()[leftPosition], leftBinary.offsets()[leftPosition + 1],
+                                rightBinary.data(), rightBinary.offsets()[rightPosition], rightBinary.offsets()[rightPosition + 1]));
+            }
+        }
+        return (leftPosition, rightPosition) -> {
+            boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+            if (leftNull || rightNull) {
+                return leftNull == rightNull;
+            }
+            return equal(leftValues, leftNulls, leftPosition, rightValues, rightNulls, rightPosition);
+        };
+    }
+
+    private static boolean partitionEqual(
+            Vector leftNulls,
+            int leftPosition,
+            Vector rightNulls,
+            int rightPosition,
+            boolean valuesEqual)
+    {
+        boolean leftNull = OperatorVectorSupport.isNull(leftNulls, leftPosition);
+        boolean rightNull = OperatorVectorSupport.isNull(rightNulls, rightPosition);
+        if (leftNull || rightNull) {
+            return leftNull == rightNull;
+        }
+        return valuesEqual;
     }
 }

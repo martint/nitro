@@ -170,6 +170,14 @@ public class BooleanVector
     }
 
     @Override
+    public Vector copySinglePositionRangeInto(Allocator allocator, Allocator.Context allocationContext, Vector existing, int sourcePosition, int outputStart, int outputEnd, int size)
+    {
+        BooleanVector target = allocator.allocateOrGrow(allocationContext, (BooleanVector) existing, BooleanVector.class, size, BooleanVector::new);
+        Arrays.fill(target.values(), outputStart, outputEnd, values[sourcePosition]);
+        return target;
+    }
+
+    @Override
     public Vector emptyLike(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocate(allocationContext, BooleanVector.class, 0, BooleanVector::new);
