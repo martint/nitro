@@ -31,6 +31,7 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -48,7 +49,7 @@ public final class BuildOuterJoinSession
     private final Allocator.Context allocationContext = new Allocator.Context("BuildOuterJoinSession", BuildOuterJoinSession.class);
     private final Schema probeSchema;
     private final Schema buildSchema;
-    private final Schema outputSchema;
+    private final Schema joinOutputSchema;
     private final int[] outputChannels;
     private final int maxOutputRows;
     private final Streams[] probeStreams;
@@ -56,6 +57,8 @@ public final class BuildOuterJoinSession
     private final int[] buildPageStarts;
     private final boolean[] matchedBuildRows;
     private final HashJoinSession join;
+    private ExternallyScheduledBatchFeed outputFeed;
+    private Operator outputRoot;
 
     private Batch output;
     private boolean finishing;
@@ -102,13 +105,27 @@ public final class BuildOuterJoinSession
                 false,
                 requireNonNull(joinFilters, "joinFilters is null"))
                 .withOutputs(joinOutputs);
-        outputSchema = selectOutputSchema(probeSchema, buildSchema, this.outputChannels);
+        joinOutputSchema = selectOutputSchema(probeSchema, buildSchema, this.outputChannels);
     }
 
     @Override
     public Schema outputSchema()
     {
-        return outputSchema;
+        return outputRoot == null ? joinOutputSchema : outputRoot.outputSchema();
+    }
+
+    /** Composes a stateless filter/project pipeline over both matched and unmatched build output. */
+    public BuildOuterJoinSession withOutputPipeline(UnaryOperator<Operator> outputPipeline)
+    {
+        checkAcceptingInput();
+        if (outputRoot != null) {
+            throw new IllegalStateException("build-outer join output pipeline is already configured");
+        }
+        outputFeed = new ExternallyScheduledBatchFeed(joinOutputSchema);
+        outputRoot = requireNonNull(
+                requireNonNull(outputPipeline, "outputPipeline is null").apply(outputFeed),
+                "outputPipeline returned null");
+        return this;
     }
 
     @Override
@@ -127,16 +144,7 @@ public final class BuildOuterJoinSession
         if (output != null) {
             return true;
         }
-        if (!emittingUnmatchedBuild && join.hasOutput()) {
-            output = matchedOutput(join.getOutput());
-            return true;
-        }
-        if (finishing && !emittingUnmatchedBuild && join.isFinished()) {
-            emittingUnmatchedBuild = true;
-        }
-        if (emittingUnmatchedBuild) {
-            output = nextUnmatchedBuildOutput();
-        }
+        output = outputRoot == null ? nextJoinOutput() : nextPipelinedOutput();
         return output != null;
     }
 
@@ -171,7 +179,7 @@ public final class BuildOuterJoinSession
             return false;
         }
         hasOutput();
-        return output == null && emittingUnmatchedBuild && unmatchedPageIndex == buildPages.size();
+        return output == null && rawOutputFinished() && (outputRoot == null || !outputRoot.hasNext());
     }
 
     @Override
@@ -186,11 +194,55 @@ public final class BuildOuterJoinSession
             output = null;
         }
         try {
+            if (outputRoot != null) {
+                outputRoot.close();
+            }
             join.close();
         }
         finally {
             allocator.release(allocationContext);
         }
+    }
+
+    private Batch nextPipelinedOutput()
+    {
+        while (true) {
+            while (outputRoot.hasNext()) {
+                Batch candidate = outputRoot.next();
+                if (!candidate.borrowMask().none()) {
+                    return candidate;
+                }
+                candidate.close();
+            }
+            if (outputFeed.hasInput()) {
+                outputFeed.releaseInput();
+            }
+
+            Batch joinOutput = nextJoinOutput();
+            if (joinOutput == null) {
+                if (rawOutputFinished()) {
+                    outputFeed.finish();
+                }
+                return null;
+            }
+            outputFeed.addInput(joinOutput);
+        }
+    }
+
+    private Batch nextJoinOutput()
+    {
+        if (!emittingUnmatchedBuild && join.hasOutput()) {
+            return matchedOutput(join.getOutput());
+        }
+        if (finishing && !emittingUnmatchedBuild && join.isFinished()) {
+            emittingUnmatchedBuild = true;
+        }
+        return emittingUnmatchedBuild ? nextUnmatchedBuildOutput() : null;
+    }
+
+    private boolean rawOutputFinished()
+    {
+        return emittingUnmatchedBuild && unmatchedPageIndex == buildPages.size();
     }
 
     private Batch matchedOutput(Batch source)

@@ -18,6 +18,10 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
+import org.weakref.nitro.operator.evaluator.PrimitiveRegistry;
+import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
+import org.weakref.nitro.operator.evaluator.ir.Input;
+import org.weakref.nitro.operator.evaluator.ir.Reference;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +58,57 @@ class TestBuildOuterJoinSession
                 assertThat(probeValues).containsExactly(2L, 2L, 0L, 0L);
                 assertThat(probeNulls).containsExactly(false, false, true, true);
                 assertThat(buildValues).containsExactly(2L, 2L, 3L, 3L);
+                assertThat(session.isFinished()).isTrue();
+            }
+            probe.close();
+        }
+    }
+
+    @Test
+    void testComposesOutputPipelineOverMatchedAndUnmatchedRows()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            ConstantTableOperator probe = new ConstantTableOperator(allocator, 1, List.of(row(2L)));
+            try (BuildOuterJoinSession session = new BuildOuterJoinSession(
+                    resources.operatorResources(),
+                    allocator,
+                    probe.outputSchema(),
+                    new int[] {0},
+                    new ConstantTableOperator(allocator, 1, List.of(row(2L), row(3L))),
+                    new int[] {0},
+                    new int[] {0, 1})
+                    .withOutputPipeline(source -> new ProjectOperator(
+                            allocator,
+                            new EvaluationPlan(List.of(), List.of(
+                                    new Reference(new Input(1), Stream.VALUES),
+                                    new Reference(new Input(0), Stream.VALUES))),
+                            new PrimitiveRegistry(),
+                            source))) {
+                List<Long> buildValues = new ArrayList<>();
+                List<Long> probeValues = new ArrayList<>();
+                List<Boolean> probeNulls = new ArrayList<>();
+
+                session.addInput(probe.next());
+                session.finish();
+                while (session.hasOutput()) {
+                    try (Batch output = session.getOutput()) {
+                        var mask = output.borrowMask();
+                        var builds = VectorAccess.longValues(output.output(0).borrow(Stream.VALUES));
+                        var probes = VectorAccess.longValues(output.output(1).borrow(Stream.VALUES));
+                        var nulls = VectorAccess.booleanValues(output.output(1).borrowOrNull(Stream.NULLS));
+                        for (int position : mask) {
+                            buildValues.add(builds.value(position));
+                            probeValues.add(probes.value(position));
+                            probeNulls.add(nulls.value(position));
+                        }
+                    }
+                }
+
+                assertThat(buildValues).containsExactly(2L, 3L);
+                assertThat(probeValues).containsExactly(2L, 0L);
+                assertThat(probeNulls).containsExactly(false, true);
                 assertThat(session.isFinished()).isTrue();
             }
             probe.close();
