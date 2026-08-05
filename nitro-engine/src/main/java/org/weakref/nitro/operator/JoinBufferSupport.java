@@ -665,7 +665,14 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, int[] sourcePositions, int sourceStart, int sourceCount, int outputStart, int size, boolean assumeClearOutputRange, PositionMappingCache positionCache)
     {
-        Vector compactFalse = compactAllFalseCopy(existing, source, outputStart, sourceCount, size);
+        Vector compactFalse = compactAllFalseCopy(
+                existing,
+                source,
+                sourcePositions,
+                sourceStart,
+                sourceCount,
+                outputStart,
+                size);
         if (compactFalse != null) {
             return compactFalse;
         }
@@ -719,7 +726,7 @@ final class JoinBufferSupport
 
     private Vector copyVectorPositions(Vector existing, Vector source, SelectedPositions sourcePositions, int outputStart, int size, boolean assumeClearOutputRange)
     {
-        Vector compactFalse = compactAllFalseCopy(existing, source, outputStart, sourcePositions.count(), size);
+        Vector compactFalse = compactAllFalseCopy(existing, source, sourcePositions, outputStart, size);
         if (compactFalse != null) {
             return compactFalse;
         }
@@ -772,11 +779,37 @@ final class JoinBufferSupport
         return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
     }
 
-    private Vector compactAllFalseCopy(Vector existing, Vector source, int outputStart, int count, int size)
+    private Vector compactAllFalseCopy(
+            Vector existing,
+            Vector source,
+            int[] sourcePositions,
+            int sourceStart,
+            int count,
+            int outputStart,
+            int size)
     {
-        if (!policy.compactAllFalsePositionCopies() || !isAllFalseBoolean(source)) {
+        if (!policy.compactAllFalsePositionCopies() ||
+                !selectedAllFalse(source, sourcePositions, sourceStart, count)) {
             return null;
         }
+        return compactAllFalseCopy(existing, outputStart, count, size);
+    }
+
+    private Vector compactAllFalseCopy(
+            Vector existing,
+            Vector source,
+            SelectedPositions sourcePositions,
+            int outputStart,
+            int size)
+    {
+        if (!policy.compactAllFalsePositionCopies() || !selectedAllFalse(source, sourcePositions)) {
+            return null;
+        }
+        return compactAllFalseCopy(existing, outputStart, sourcePositions.count(), size);
+    }
+
+    private Vector compactAllFalseCopy(Vector existing, int outputStart, int count, int size)
+    {
         if (existing == null || (!(existing instanceof BooleanVector) && isAllFalseBoolean(existing) && existing.length() < size)) {
             BooleanVector sentinel = allocator.allocate(allocationContext, BooleanVector.class, 1, BooleanVector::new);
             sentinel.markAllFalse();
@@ -793,6 +826,44 @@ final class JoinBufferSupport
             return output;
         }
         return null;
+    }
+
+    private static boolean selectedAllFalse(Vector source, int[] positions, int start, int count)
+    {
+        if (!isBooleanBacked(source)) {
+            return false;
+        }
+        VectorAccess.BooleanValues values = VectorAccess.booleanValues(source);
+        for (int index = 0; index < count; index++) {
+            if (values.value(positions[start + index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean selectedAllFalse(Vector source, SelectedPositions positions)
+    {
+        if (!isBooleanBacked(source)) {
+            return false;
+        }
+        VectorAccess.BooleanValues values = VectorAccess.booleanValues(source);
+        for (int index = 0; index < positions.count(); index++) {
+            if (values.value(positions.position(index))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isBooleanBacked(Vector vector)
+    {
+        return switch (vector) {
+            case BooleanVector _ -> true;
+            case DictionaryVector dictionary -> isBooleanBacked(dictionary.values());
+            case RleVector rle -> isBooleanBacked(rle.values());
+            default -> false;
+        };
     }
 
     private static boolean isAllFalseBoolean(Vector vector)

@@ -16,9 +16,11 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
@@ -132,6 +134,40 @@ class TestNestedLoopJoinSession
                 assertThat(values(output, 1, mask)).containsExactly(1L, 2L);
                 assertThat(values(output, 2, mask)).containsExactly(10L, 10L);
             }
+        }
+    }
+
+    @Test
+    void testReplicatesSelectedNullInsteadOfCachedAllFalseMetadata()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                NestedLoopJoinSession session = new NestedLoopJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        table(10, 20))) {
+            allocator.beginExecution();
+
+            BooleanVector inputNulls = new BooleanVector(new boolean[2]);
+            assertThat(inputNulls.isAllFalse()).isTrue();
+            inputNulls.values()[0] = true;
+            session.addInput(new Batch(
+                    Mask.all(2),
+                    Output.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {0, 1}),
+                            inputNulls))));
+
+            List<Boolean> nulls = new ArrayList<>();
+            while (session.hasOutput()) {
+                try (Batch output = session.getOutput()) {
+                    VectorAccess.BooleanValues outputNulls = VectorAccess.booleanValues(output.output(0).borrowOrNull(Stream.NULLS));
+                    for (int position : output.borrowMask()) {
+                        nulls.add(outputNulls.value(position));
+                    }
+                }
+            }
+            assertThat(nulls).containsExactly(true, false, true, false);
         }
     }
 
