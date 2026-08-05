@@ -97,11 +97,20 @@ class TestMultiLongGroupingTable
         }
         int[] positions = {0, 1, 2, 3, 4};
 
-        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().create(
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
                 2,
                 16,
                 arrayPool,
                 AdaptiveLongGroupingPolicy.defaults());
+        AbstractMultiLongGroupingTable ordinaryTable = codeGeneration.multiLongGrouping().create(
+                2,
+                16,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
+        assertThat(table.storesGroupIds).isFalse();
+        assertThat(table.retainsGroupKeys).isTrue();
+        assertThat(table.stride).isEqualTo(2);
+        assertThat(table.retainedBytes()).isLessThan(ordinaryTable.retainedBytes());
         long groupCount = table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, positions.length, 0);
 
         assertThat(groupCount).isEqualTo(3);
@@ -111,6 +120,54 @@ class TestMultiLongGroupingTable
         assertThat(table.groupedValue(1, 1)).isEqualTo(4);
         assertThat(table.groupedValueIsNull(0, 2)).isTrue();
         assertThat(table.groupedValue(1, 2)).isEqualTo(5);
+        table.releaseBuffers();
+        ordinaryTable.releaseBuffers();
+    }
+
+    @Test
+    void testAdaptiveTablePromotesExistingGroupsWithoutMaterializingIds()
+    {
+        long[][] keys = {
+                {11, 22, 11, 1L << 40, 22},
+                {1, 2, 1, 3, 2},
+        };
+        boolean[][] nulls = {
+                {false, false, false, false, false},
+                {false, true, false, false, true},
+        };
+        VectorAccess.LongValues[] keyAccessors = new VectorAccess.LongValues[2];
+        VectorAccess.BooleanValues[] nullAccessors = new VectorAccess.BooleanValues[2];
+        for (int column = 0; column < 2; column++) {
+            long[] columnKeys = keys[column];
+            boolean[] columnNulls = nulls[column];
+            keyAccessors[column] = position -> columnKeys[position];
+            nullAccessors[column] = position -> columnNulls[position];
+        }
+
+        AdaptiveLongGroupingTable table = AdaptiveLongGroupingTable.create(
+                2,
+                16,
+                arrayPool,
+                codeGeneration,
+                adaptiveLongGroupingPolicy);
+        int[] compactPositions = {0, 1, 2};
+        long[] compactResults = new long[keys[0].length];
+        long groupCount = table.assignBatch(
+                keyAccessors, nullAccessors, compactPositions, compactPositions.length, compactResults, 0);
+        assertThat(groupCount).isEqualTo(2);
+
+        assertThat(table.promoteForDiscardedResults(groupCount)).isTrue();
+        int[] widePositions = {3, 4};
+        groupCount = table.assignBatchDiscardingResults(
+                keyAccessors, nullAccessors, widePositions, widePositions.length, groupCount);
+
+        assertThat(groupCount).isEqualTo(3);
+        assertThat(table.groupedValue(0, 0)).isEqualTo(11);
+        assertThat(table.groupedValue(1, 0)).isEqualTo(1);
+        assertThat(table.groupedValue(0, 1)).isEqualTo(22);
+        assertThat(table.groupedValueIsNull(1, 1)).isTrue();
+        assertThat(table.groupedValue(0, 2)).isEqualTo(1L << 40);
+        assertThat(table.groupedValue(1, 2)).isEqualTo(3);
         table.releaseBuffers();
     }
 

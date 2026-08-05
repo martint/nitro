@@ -1094,7 +1094,7 @@ final class GroupingState
                         arrayPool,
                         codeGeneration,
                         adaptiveLongGroupingPolicy);
-                discardMultiLongResults = values.length == 2 && mask != null && sampleContainsFullWidthPairValue(values, nulls, mask);
+                discardMultiLongResults = mask != null && sampleContainsValueOutsideCompactDomain(values, nulls, mask);
                 return;
             }
             if (values.length == 2 && compositePolicy.packedIntPair()) {
@@ -1215,7 +1215,7 @@ final class GroupingState
                 values[0] instanceof DictionaryVector || values[1] instanceof DictionaryVector ||
                 mask.count() < compositePolicy.fullWidthPairPackedIdentityMinBatchRows() ||
                 !allSingleLongGroupingCandidates(values) ||
-                !sampleContainsFullWidthPairValue(values, nulls, mask)) {
+                !sampleContainsValueOutsideCompactDomain(values, nulls, mask)) {
             return false;
         }
         int sampled = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
@@ -1230,27 +1230,26 @@ final class GroupingState
     }
 
     /**
-     * Keep signed-32 pairs on the generated compact table, where both keys share one packed reverse-map lane.
-     * The wider identity-record layout pays only when the actual key domain would promote that compact table to
-     * duplicate full-width slot and reverse-map storage. Sampling uses the same evenly spaced first-batch positions
-     * as cardinality admission and is conservative: a missed later wide value preserves exact generated promotion.
+     * Detect whether any sampled key falls outside the generated compact table's signed-32 domain. Pair identity
+     * admission uses this to avoid duplicate full-width storage; grouping-only consumers use the same physical
+     * evidence to select a generated table that retains output keys without storing unconsumed per-row group ids.
+     * Sampling is conservative: a missed later wide value preserves the ordinary exact promotion path.
      */
-    private boolean sampleContainsFullWidthPairValue(Vector[] values, Vector[] nulls, Mask mask)
+    private boolean sampleContainsValueOutsideCompactDomain(Vector[] values, Vector[] nulls, Mask mask)
     {
         int sampleSize = Math.min(mask.count(), compositePolicy.flatSingleKeyRecordIdentitySampleSize());
-        VectorAccess.LongValues first = VectorAccess.longValues(values[0]);
-        VectorAccess.LongValues second = VectorAccess.longValues(values[1]);
+        VectorAccess.LongValues[] accessors = new VectorAccess.LongValues[values.length];
+        for (int column = 0; column < values.length; column++) {
+            accessors[column] = VectorAccess.longValues(values[column]);
+        }
         for (int sample = 0; sample < sampleSize; sample++) {
             int selectedIndex = (int) ((long) sample * mask.count() / sampleSize);
             int position = mask.position(selectedIndex);
-            if (!OperatorVectorSupport.isNull(nulls[0], position)) {
-                long value = first.value(position);
-                if ((long) (int) value != value) {
-                    return true;
+            for (int column = 0; column < accessors.length; column++) {
+                if (OperatorVectorSupport.isNull(nulls[column], position)) {
+                    continue;
                 }
-            }
-            if (!OperatorVectorSupport.isNull(nulls[1], position)) {
-                long value = second.value(position);
+                long value = accessors[column].value(position);
                 if ((long) (int) value != value) {
                     return true;
                 }

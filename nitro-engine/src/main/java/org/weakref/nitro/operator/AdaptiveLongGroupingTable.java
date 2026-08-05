@@ -68,6 +68,7 @@ class AdaptiveLongGroupingTable
     int[] batchHashes = new int[0];
 
     private LongGroupingTable promoted;
+    private boolean promotedForDiscardedResults;
     private VectorAccess.BooleanValues[] nonNullAccessors;
     private VectorAccess.BooleanValues[] promotionNullAccessors;
     private int debugNullFreeBatches;
@@ -141,7 +142,7 @@ class AdaptiveLongGroupingTable
         if (promoted != null) {
             return false;
         }
-        promote(groupCount);
+        promote(groupCount, true);
         return true;
     }
 
@@ -173,6 +174,9 @@ class AdaptiveLongGroupingTable
             long startGroupId)
     {
         if (promoted != null) {
+            if (promotedForDiscardedResults) {
+                throw new IllegalStateException("Grouping table was promoted without per-row group ids");
+            }
             return promoted.assignBatch(keyAccessors, nullableAccessors(nullAccessors), explicitPositions(positions, positionCount), positionCount, result, startGroupId);
         }
         if (startGroupId + positionCount > MAX_COMPACT_GROUP_ID) {
@@ -653,17 +657,22 @@ class AdaptiveLongGroupingTable
 
     private void promote(long groupCount)
     {
+        promote(groupCount, false);
+    }
+
+    private void promote(long groupCount, boolean discardResults)
+    {
         if (promoted != null) {
             return;
         }
         if (policy.debugShapes()) {
             System.err.printf("[adaptive-long-grouping] promote arity=%d groups=%d slots=%d%n", arity, groupCount, slots.length);
         }
-        LongGroupingTable target = codeGeneration.multiLongGrouping().create(
-                arity,
-                Math.max(16, toIntExact(groupCount)),
-                arrayPool,
-                policy);
+        LongGroupingTable target = discardResults
+                ? codeGeneration.multiLongGrouping().createDiscardingResults(
+                        arity, Math.max(16, toIntExact(groupCount)), arrayPool, policy)
+                : codeGeneration.multiLongGrouping().create(
+                        arity, Math.max(16, toIntExact(groupCount)), arrayPool, policy);
         if (groupCount != 0) {
             VectorAccess.LongValues[] values = new VectorAccess.LongValues[arity];
             VectorAccess.BooleanValues[] nulls = new VectorAccess.BooleanValues[arity];
@@ -674,13 +683,13 @@ class AdaptiveLongGroupingTable
             }
             int count = toIntExact(groupCount);
             int[] positions = arrayPool.borrowInts(count);
-            long[] ignored = arrayPool.borrowLongs(count);
             for (int position = 0; position < count; position++) {
                 positions[position] = position;
             }
-            long imported = target.assignBatch(values, nulls, positions, count, ignored, 0);
+            long imported = discardResults
+                    ? target.assignBatchDiscardingResults(values, nulls, positions, count, 0)
+                    : importWithResults(target, values, nulls, positions, count);
             arrayPool.release(positions);
-            arrayPool.release(ignored);
             if (imported != groupCount) {
                 target.releaseBuffers();
                 throw new IllegalStateException("Compact grouping promotion changed group cardinality");
@@ -688,6 +697,20 @@ class AdaptiveLongGroupingTable
         }
         releaseCompactState();
         promoted = target;
+        promotedForDiscardedResults = discardResults;
+    }
+
+    private long importWithResults(
+            LongGroupingTable target,
+            VectorAccess.LongValues[] values,
+            VectorAccess.BooleanValues[] nulls,
+            int[] positions,
+            int count)
+    {
+        long[] ignored = arrayPool.borrowLongs(count);
+        long imported = target.assignBatch(values, nulls, positions, count, ignored, 0);
+        arrayPool.release(ignored);
+        return imported;
     }
 
     private void ensureBatchCapacity(int rows)

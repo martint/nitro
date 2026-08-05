@@ -20,7 +20,7 @@ import java.util.Arrays;
 
 /**
  * Cold-path machinery shared by every generated multi-long grouping table. Holds the interleaved
- * {@code entries} array ({@code arity} keys and, for grouping tables, a group id per slot), the parallel
+ * {@code entries} array ({@code arity} keys and, when per-row IDs are consumed, a group id per slot), the parallel
  * {@code nullMasks}, the open-addressing bookkeeping, and the reverse map used to reconstruct group keys
  * at materialization ({@code keysByGroup[column][groupId]} + {@code nullMasksByGroup[groupId]}).
  *
@@ -54,6 +54,7 @@ abstract class AbstractMultiLongGroupingTable
     final int arity;
     final int stride;
     final boolean storesGroupIds;
+    final boolean retainsGroupKeys;
     private final boolean debugTableShapes;
     private final PrimitiveArrayPool arrayPool;
     long[] entries;
@@ -78,12 +79,14 @@ abstract class AbstractMultiLongGroupingTable
             PrimitiveArrayPool arrayPool,
             int arity,
             int expectedSize,
+            boolean storesGroupIds,
             boolean retainGroupKeys,
             AdaptiveLongGroupingPolicy policy)
     {
         this.arrayPool = arrayPool;
         this.arity = arity;
-        this.storesGroupIds = retainGroupKeys;
+        this.storesGroupIds = storesGroupIds;
+        this.retainsGroupKeys = retainGroupKeys;
         this.debugTableShapes = policy.debugGeneratedTableShapes();
         this.stride = arity + (storesGroupIds ? 1 : 0);
         int capacity = 16;
@@ -97,7 +100,7 @@ abstract class AbstractMultiLongGroupingTable
         mask = capacity - 1;
         maxFill = (int) (capacity * LOAD_FACTOR);
 
-        if (retainGroupKeys) {
+        if (retainsGroupKeys) {
             int reverse = Math.max(16, expectedSize);
             keysByGroup = new long[arity][];
             for (int column = 0; column < arity; column++) {
@@ -276,8 +279,14 @@ abstract class AbstractMultiLongGroupingTable
     @Override
     public final void releaseBuffers()
     {
-        if (debugTableShapes && storesGroupIds) {
-            System.err.printf("[multi-long-table] arity=%d groups=%d capacity=%d stride=%d%n", arity, size, control.length, stride);
+        if (debugTableShapes && retainsGroupKeys) {
+            System.err.printf(
+                    "[multi-long-table] arity=%d groups=%d capacity=%d stride=%d storesGroupIds=%s%n",
+                    arity,
+                    size,
+                    control.length,
+                    stride,
+                    storesGroupIds);
         }
         arrayPool.release(entries);
         entries = null;
