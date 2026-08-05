@@ -33,10 +33,17 @@ public final class TrinoOperatorCpuProfile
 {
     private static final ThreadMXBean THREAD_MX_BEAN = ManagementFactory.getThreadMXBean();
     private static final boolean CPU_TIME_SUPPORTED = THREAD_MX_BEAN.isCurrentThreadCpuTimeSupported();
+    private static final com.sun.management.ThreadMXBean ALLOCATION_MX_BEAN =
+            ManagementFactory.getPlatformMXBean(com.sun.management.ThreadMXBean.class);
+    private static final boolean ALLOCATION_SUPPORTED =
+            ALLOCATION_MX_BEAN != null && ALLOCATION_MX_BEAN.isThreadAllocatedMemorySupported();
 
     static {
         if (CPU_TIME_SUPPORTED && !THREAD_MX_BEAN.isThreadCpuTimeEnabled()) {
             THREAD_MX_BEAN.setThreadCpuTimeEnabled(true);
+        }
+        if (ALLOCATION_SUPPORTED && !ALLOCATION_MX_BEAN.isThreadAllocatedMemoryEnabled()) {
+            ALLOCATION_MX_BEAN.setThreadAllocatedMemoryEnabled(true);
         }
     }
 
@@ -56,19 +63,19 @@ public final class TrinoOperatorCpuProfile
             @Override
             public ListenableFuture<Void> isBlocked()
             {
-                return time(metric.isBlockedCount, metric.isBlockedNanos, delegate::isBlocked);
+                return time(metric.isBlockedCount, metric.isBlockedNanos, metric.isBlockedAllocatedBytes, delegate::isBlocked);
             }
 
             @Override
             public boolean needsInput()
             {
-                return time(metric.needsInputCount, metric.needsInputNanos, delegate::needsInput);
+                return time(metric.needsInputCount, metric.needsInputNanos, metric.needsInputAllocatedBytes, delegate::needsInput);
             }
 
             @Override
             public void addInput(Page page)
             {
-                time(metric.addInputCount, metric.addInputNanos, () -> {
+                time(metric.addInputCount, metric.addInputNanos, metric.addInputAllocatedBytes, () -> {
                     delegate.addInput(page);
                     return null;
                 });
@@ -79,7 +86,7 @@ public final class TrinoOperatorCpuProfile
             @Override
             public Page getOutput()
             {
-                Page page = time(metric.getOutputCount, metric.getOutputNanos, delegate::getOutput);
+                Page page = time(metric.getOutputCount, metric.getOutputNanos, metric.getOutputAllocatedBytes, delegate::getOutput);
                 if (page != null) {
                     metric.outputPages++;
                     metric.outputRows += page.getPositionCount();
@@ -90,13 +97,13 @@ public final class TrinoOperatorCpuProfile
             @Override
             public ListenableFuture<Void> startMemoryRevoke()
             {
-                return time(metric.startMemoryRevokeCount, metric.startMemoryRevokeNanos, delegate::startMemoryRevoke);
+                return time(metric.startMemoryRevokeCount, metric.startMemoryRevokeNanos, metric.startMemoryRevokeAllocatedBytes, delegate::startMemoryRevoke);
             }
 
             @Override
             public void finishMemoryRevoke()
             {
-                time(metric.finishMemoryRevokeCount, metric.finishMemoryRevokeNanos, () -> {
+                time(metric.finishMemoryRevokeCount, metric.finishMemoryRevokeNanos, metric.finishMemoryRevokeAllocatedBytes, () -> {
                     delegate.finishMemoryRevoke();
                     return null;
                 });
@@ -105,7 +112,7 @@ public final class TrinoOperatorCpuProfile
             @Override
             public void finish()
             {
-                time(metric.finishCount, metric.finishNanos, () -> {
+                time(metric.finishCount, metric.finishNanos, metric.finishAllocatedBytes, () -> {
                     delegate.finish();
                     return null;
                 });
@@ -114,7 +121,7 @@ public final class TrinoOperatorCpuProfile
             @Override
             public boolean isFinished()
             {
-                return time(metric.isFinishedCount, metric.isFinishedNanos, delegate::isFinished);
+                return time(metric.isFinishedCount, metric.isFinishedNanos, metric.isFinishedAllocatedBytes, delegate::isFinished);
             }
 
             @Override
@@ -122,11 +129,13 @@ public final class TrinoOperatorCpuProfile
                     throws Exception
             {
                 long start = now();
+                long allocatedStart = allocatedBytes();
                 try {
                     delegate.close();
                 }
                 finally {
                     metric.closeNanos[0] += now() - start;
+                    metric.closeAllocatedBytes[0] += allocatedBytes() - allocatedStart;
                     metric.closeCount[0]++;
                 }
             }
@@ -143,16 +152,17 @@ public final class TrinoOperatorCpuProfile
 
         StringBuilder builder = new StringBuilder();
         builder.append("Trino operator CPU profile (thread CPU time)\n");
-        builder.append(format("%-34s %-28s %10s %8s %8s %12s %8s %12s%n", "Operator", "Type", "cpu_ms", "share", "in_pg", "in_rows", "out_pg", "out_rows"));
+        builder.append(format("%-34s %-28s %10s %8s %12s %8s %12s %8s %12s%n", "Operator", "Type", "cpu_ms", "share", "alloc_mb", "in_pg", "in_rows", "out_pg", "out_rows"));
         for (Metric metric : sorted) {
             double cpuMillis = metric.totalNanos() / 1_000_000.0;
             double share = totalNanos == 0 ? 0 : (100.0 * metric.totalNanos() / totalNanos);
             builder.append(format(
-                    "%-34s %-28s %10.3f %7.2f%% %8d %12d %8d %12d%n",
+                    "%-34s %-28s %10.3f %7.2f%% %12.3f %8d %12d %8d %12d%n",
                     metric.name,
                     metric.operatorType,
                     cpuMillis,
                     share,
+                    metric.totalAllocatedBytes() / (1024.0 * 1024.0),
                     metric.inputPages,
                     metric.inputRows,
                     metric.outputPages,
@@ -175,13 +185,20 @@ public final class TrinoOperatorCpuProfile
         return CPU_TIME_SUPPORTED ? THREAD_MX_BEAN.getCurrentThreadCpuTime() : System.nanoTime();
     }
 
-    private static <T> T time(long[] count, long[] nanos, Supplier<T> supplier)
+    private static long allocatedBytes()
+    {
+        return ALLOCATION_SUPPORTED ? ALLOCATION_MX_BEAN.getCurrentThreadAllocatedBytes() : 0;
+    }
+
+    private static <T> T time(long[] count, long[] nanos, long[] allocated, Supplier<T> supplier)
     {
         long start = now();
+        long allocatedStart = allocatedBytes();
         try {
             return supplier.get();
         }
         finally {
+            allocated[0] += allocatedBytes() - allocatedStart;
             nanos[0] += now() - start;
             count[0]++;
         }
@@ -193,22 +210,31 @@ public final class TrinoOperatorCpuProfile
         private final String operatorType;
         private final long[] isBlockedCount = new long[1];
         private final long[] isBlockedNanos = new long[1];
+        private final long[] isBlockedAllocatedBytes = new long[1];
         private final long[] needsInputCount = new long[1];
         private final long[] needsInputNanos = new long[1];
+        private final long[] needsInputAllocatedBytes = new long[1];
         private final long[] addInputCount = new long[1];
         private final long[] addInputNanos = new long[1];
+        private final long[] addInputAllocatedBytes = new long[1];
         private final long[] getOutputCount = new long[1];
         private final long[] getOutputNanos = new long[1];
+        private final long[] getOutputAllocatedBytes = new long[1];
         private final long[] startMemoryRevokeCount = new long[1];
         private final long[] startMemoryRevokeNanos = new long[1];
+        private final long[] startMemoryRevokeAllocatedBytes = new long[1];
         private final long[] finishMemoryRevokeCount = new long[1];
         private final long[] finishMemoryRevokeNanos = new long[1];
+        private final long[] finishMemoryRevokeAllocatedBytes = new long[1];
         private final long[] finishCount = new long[1];
         private final long[] finishNanos = new long[1];
+        private final long[] finishAllocatedBytes = new long[1];
         private final long[] isFinishedCount = new long[1];
         private final long[] isFinishedNanos = new long[1];
+        private final long[] isFinishedAllocatedBytes = new long[1];
         private final long[] closeCount = new long[1];
         private final long[] closeNanos = new long[1];
+        private final long[] closeAllocatedBytes = new long[1];
         private long inputPages;
         private long inputRows;
         private long outputPages;
@@ -231,6 +257,19 @@ public final class TrinoOperatorCpuProfile
                     finishNanos[0] +
                     isFinishedNanos[0] +
                     closeNanos[0];
+        }
+
+        public long totalAllocatedBytes()
+        {
+            return isBlockedAllocatedBytes[0] +
+                    needsInputAllocatedBytes[0] +
+                    addInputAllocatedBytes[0] +
+                    getOutputAllocatedBytes[0] +
+                    startMemoryRevokeAllocatedBytes[0] +
+                    finishMemoryRevokeAllocatedBytes[0] +
+                    finishAllocatedBytes[0] +
+                    isFinishedAllocatedBytes[0] +
+                    closeAllocatedBytes[0];
         }
     }
 }

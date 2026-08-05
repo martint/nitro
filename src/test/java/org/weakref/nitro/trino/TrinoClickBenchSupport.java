@@ -63,6 +63,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.trino.spi.connector.SortOrder.DESC_NULLS_LAST;
@@ -83,6 +84,7 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 public final class TrinoClickBenchSupport
         implements AutoCloseable
 {
+    private static final ThreadLocal<TrinoOperatorCpuProfile> CURRENT_OPERATOR_CPU_PROFILE = new ThreadLocal<>();
     private static final String TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS_PROPERTY = "nitro.clickbench.trino.blockedWaitTimeoutSeconds";
     private static final String TRINO_QUERY_MAX_MEMORY_PROPERTY = "nitro.clickbench.trino.queryMaxMemoryGigabytes";
     private static final int DEFAULT_TRINO_BLOCKED_WAIT_TIMEOUT_SECONDS = 5;
@@ -103,6 +105,23 @@ public final class TrinoClickBenchSupport
     private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
     private final int blockedWaitTimeoutSeconds = blockedWaitTimeoutSeconds();
     private final DataSize queryMaxMemory = queryMaxMemory();
+
+    public static <T> T withOperatorCpuProfile(TrinoOperatorCpuProfile profile, Supplier<T> supplier)
+    {
+        TrinoOperatorCpuProfile previous = CURRENT_OPERATOR_CPU_PROFILE.get();
+        CURRENT_OPERATOR_CPU_PROFILE.set(profile);
+        try {
+            return supplier.get();
+        }
+        finally {
+            if (previous == null) {
+                CURRENT_OPERATOR_CPU_PROFILE.remove();
+            }
+            else {
+                CURRENT_OPERATOR_CPU_PROFILE.set(previous);
+            }
+        }
+    }
 
     public Path requiredActualHitsPath()
     {
@@ -980,6 +999,11 @@ public final class TrinoClickBenchSupport
 
     private PipelineOutput executePipeline(SourceFactory sourceFactory, List<OperatorFactory> factories, boolean collectOutput)
     {
+        return executePipeline("pipeline", sourceFactory, factories, collectOutput);
+    }
+
+    private PipelineOutput executePipeline(String profilePrefix, SourceFactory sourceFactory, List<OperatorFactory> factories, boolean collectOutput)
+    {
         List<Page> outputPages = new ArrayList<>();
         DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
                 .setQueryMaxMemory(queryMaxMemory)
@@ -989,21 +1013,25 @@ public final class TrinoClickBenchSupport
                 .addDriverContext();
 
         List<Operator> operators = new ArrayList<>();
-        operators.add(sourceFactory.create(driverContext));
+        Operator source = sourceFactory.create(driverContext);
+        operators.add(profiled(profilePrefix + ".source", source));
 
+        int operatorIndex = 1;
         for (OperatorFactory factory : factories) {
-            operators.add(factory.createOperator(driverContext));
+            Operator operator = factory.createOperator(driverContext);
+            operators.add(profiled(profilePrefix + ".operator-" + operatorIndex + "." + operator.getClass().getSimpleName(), operator));
             factory.noMoreOperators();
+            operatorIndex++;
         }
 
-        operators.add(new PageConsumerOperator(
+        operators.add(profiled(profilePrefix + ".sink", new PageConsumerOperator(
                 driverContext.addOperatorContext(1000, new PlanNodeId("sink"), PageConsumerOperator.class.getSimpleName()),
                 page -> {
                     if (collectOutput) {
                         outputPages.add(page);
                     }
                 },
-                java.util.function.Function.identity()));
+                java.util.function.Function.identity())));
 
         try (Driver driver = Driver.createDriver(driverContext, operators)) {
             while (!driver.isFinished()) {
@@ -1062,7 +1090,7 @@ public final class TrinoClickBenchSupport
         List<Type> pairTypes = List.of(groupType, distinctType);
         List<Page> partialKeys = new ArrayList<>();
         for (Path split : TrinoClickBenchPageReader.resolveFiles(input)) {
-            partialKeys.addAll(executePipeline(
+            partialKeys.addAll(executePipeline("q09.partial",
                     driverContext -> new ParquetPageSourceOperator(
                             driverContext.addOperatorContext(0, new PlanNodeId("partial-source"), ParquetPageSourceOperator.class.getSimpleName()),
                             split,
@@ -1071,7 +1099,7 @@ public final class TrinoClickBenchSupport
                     true).pages());
         }
 
-        PipelineOutput count = executePipeline(
+        PipelineOutput count = executePipeline("q09.final",
                 driverContext -> new PagesSourceOperator(
                         driverContext.addOperatorContext(0, new PlanNodeId("distinct-exchange"), PagesSourceOperator.class.getSimpleName()),
                         partialKeys),
@@ -1099,6 +1127,12 @@ public final class TrinoClickBenchSupport
     }
 
     private record PipelineOutput(DriverContext driverContext, List<Page> pages) {}
+
+    private static Operator profiled(String name, Operator operator)
+    {
+        TrinoOperatorCpuProfile profile = CURRENT_OPERATOR_CPU_PROFILE.get();
+        return profile == null ? operator : profile.wrap(name, operator);
+    }
 
     private static final class ParquetPageSourceOperator
             implements Operator
