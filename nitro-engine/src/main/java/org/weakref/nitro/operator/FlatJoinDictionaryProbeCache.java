@@ -62,7 +62,7 @@ final class FlatJoinDictionaryProbeCache
             return null;
         }
         Vector base = dictionary.baseValues();
-        if (!(base instanceof BinaryVector)) {
+        if (!(base instanceof BinaryVector binary) || !binary.contentImmutable()) {
             return null;
         }
         int cardinality = base.length();

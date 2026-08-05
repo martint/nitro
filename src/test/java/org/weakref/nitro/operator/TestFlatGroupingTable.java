@@ -906,11 +906,11 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testSingleDictionaryGroupCacheObservesPooledContentGeneration()
+    void testSingleDictionaryGroupCacheObservesImmutablePooledContentGeneration()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("dictionary-group-cache-generation");
-        BinaryVector first = binary(allocator, context, "alpha", "beta");
+        BinaryVector first = binary(allocator, context, "alpha", "beta").freezeContent();
         Vector[] firstValues = {DictionaryVector.wrap(new int[] {0, 1, 0, 1}, 4, first)};
         FlatGroupingTable table = new FlatGroupingTable(FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy), 16, true);
         try {
@@ -932,7 +932,7 @@ class TestFlatGroupingTable
             table.endBatch();
 
             allocator.release(context, first);
-            BinaryVector reused = binary(allocator, context, "gamma", "zeta");
+            BinaryVector reused = binary(allocator, context, "gamma", "zeta").freezeContent();
             assertThat(reused).isSameAs(first);
             Vector[] changed = {DictionaryVector.wrap(new int[] {0, 1}, 2, reused)};
             table.beginBatch(changed, new Vector[] {null});
@@ -1063,6 +1063,40 @@ class TestFlatGroupingTable
         assertThat(thirdGroups.values()).containsExactly(4, 5);
 
         allocator.release(context, refilled);
+        state.releaseBuffers();
+        allocator.release(context);
+    }
+
+    @Test
+    void testDictionaryValueIdsDoNotCacheMutableRawBinaryContent()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("mutable-raw-dictionary-content");
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+
+        BinaryVector dictionary = binary(allocator, context, "alpha", "beta");
+        I64Vector firstGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1}, 2, dictionary)},
+                new Vector[] {null},
+                Mask.all(2),
+                firstGroups);
+        assertThat(firstGroups.values()).containsExactly(0, 1);
+
+        long generation = dictionary.contentGeneration();
+        System.arraycopy("gamma".getBytes(StandardCharsets.UTF_8), 0, dictionary.data(), dictionary.startOffset(0), 5);
+        System.arraycopy("zeta".getBytes(StandardCharsets.UTF_8), 0, dictionary.data(), dictionary.startOffset(1), 4);
+        assertThat(dictionary.contentGeneration()).isEqualTo(generation);
+
+        I64Vector secondGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1}, 2, dictionary)},
+                new Vector[] {null},
+                Mask.all(2),
+                secondGroups);
+        assertThat(secondGroups.values()).containsExactly(2, 3);
+
+        allocator.release(context, dictionary);
         state.releaseBuffers();
         allocator.release(context);
     }

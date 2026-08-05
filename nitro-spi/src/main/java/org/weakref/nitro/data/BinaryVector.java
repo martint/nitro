@@ -92,6 +92,7 @@ public final class BinaryVector
     // batches (for example dictionary-entry caches) pair this generation with the vector identity; it advances
     // whenever the allocator begins a new logical lifetime for the same backing storage.
     private long contentGeneration;
+    private boolean contentImmutable;
 
     public BinaryVector(int positionCount, int byteCapacity)
     {
@@ -121,6 +122,18 @@ public final class BinaryVector
     public long contentGeneration()
     {
         return contentGeneration;
+    }
+
+    /** Marks the current logical contents immutable until this vector begins another allocator lifetime. */
+    public BinaryVector freezeContent()
+    {
+        contentImmutable = true;
+        return this;
+    }
+
+    public boolean contentImmutable()
+    {
+        return contentImmutable;
     }
 
     public static Object poolFamily(int positionCount)
@@ -289,6 +302,7 @@ public final class BinaryVector
 
     public void setBytes(int position, byte[] source, int sourceOffset, int sourceLength)
     {
+        checkArgument(!contentImmutable, "BinaryVector content is immutable");
         int start = offsets[position];
         checkArgument(start + sourceLength <= data.length, "BinaryVector byte capacity exceeded");
         System.arraycopy(source, sourceOffset, data, start, sourceLength);
@@ -298,6 +312,7 @@ public final class BinaryVector
 
     public void setNull(int position)
     {
+        checkArgument(!contentImmutable, "BinaryVector content is immutable");
         offsets[position + 1] = offsets[position];
         contentGeneration++;
     }
@@ -536,6 +551,7 @@ public final class BinaryVector
     public void clearForReuse()
     {
         contentGeneration++;
+        contentImmutable = false;
         clearTraits();
         Arrays.fill(offsets, 0);
     }

@@ -3423,7 +3423,7 @@ public final class ColumnReader
             org.weakref.nitro.data.BinaryVector dictionaryVector = new org.weakref.nitro.data.BinaryVector(
                     numValues,
                     offsets,
-                    bytes);
+                    bytes).freezeContent();
             dictionaryVector.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
             dictionaryVectorCache.put(dictionaryGeneration, dictionaryVector);
             // Keep only the few most recent generations. A batch spans at most one chunk boundary (row groups are far

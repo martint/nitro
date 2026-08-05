@@ -448,6 +448,7 @@ class FlatKeyLayout
                 fieldKinds[0] == FlatTypeHandler.Kind.BINARY &&
                 batchFieldNullFree[0] &&
                 fieldBinaryBase[0] != null &&
+                fieldBinaryBase[0].contentImmutable() &&
                 fieldBinaryIds[0] != null &&
                 fieldBinaryBase[0].contentGeneration() >= 0;
     }
@@ -788,6 +789,8 @@ class FlatKeyLayout
             // second hash-cache cohort here would require its own activation and whole-query controls.
             long contentGeneration = handlers[index].variableWidth() ? dictionaryValues.contentGeneration() : -1;
             boolean sameDictionaryGeneration = policy.reuseDictionaryEntryHashes() &&
+                    dictionaryValues instanceof BinaryVector binary &&
+                    binary.contentImmutable() &&
                     contentGeneration >= 0 &&
                     dictionaryHashedValues[index] == dictionaryValues &&
                     dictionaryHashedGenerations[index] == contentGeneration;
@@ -1543,7 +1546,8 @@ class FlatKeyLayout
         if (!(dictionaryValues instanceof BinaryVector dictionary)) {
             return null;
         }
-        if (batchEntryGlobalIdDict[fieldIndex] == dictionaryValues &&
+        if (dictionary.contentImmutable() &&
+                batchEntryGlobalIdDict[fieldIndex] == dictionaryValues &&
                 batchEntryGlobalIdGeneration[fieldIndex] == dictionary.contentGeneration() &&
                 batchEntryGlobalId[fieldIndex] != null) {
             return batchEntryGlobalId[fieldIndex];
@@ -1694,6 +1698,8 @@ class FlatKeyLayout
             boolean reusable = positioned != null &&
                     positioned.length >= positions &&
                     fieldDictionaryMapping[index] != null &&
+                    fieldDictionaryMapping[index].baseValues() instanceof BinaryVector binary &&
+                    binary.contentImmutable() &&
                     fieldDictionaryMapping[index].hasSameMapping(batchPositionDictionaryMapping[index]);
             if (reusable) {
                 activeFields++;

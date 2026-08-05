@@ -243,7 +243,7 @@ final class ValueIdInterner
         for (int id = 0; id < distinct; id++) {
             vector.setBytes(id, data, valueOffset[id], valueLength[id]);
         }
-        return vector;
+        return vector.freezeContent();
     }
 
     private void store(int id, byte[] value, int offset, int length, long hash)
