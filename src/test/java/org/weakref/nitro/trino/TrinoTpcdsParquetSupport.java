@@ -7156,7 +7156,8 @@ public final class TrinoTpcdsParquetSupport
         List<Type> factTypes = tableColumnTypes(tables, salesTable, factColumns);
         List<Type> customerTypes = tableColumnTypes(tables, "customer", List.of("c_customer_sk", "c_last_name", "c_first_name"));
         List<Type> dateTypes = tableColumnTypes(tables, "date_dim", List.of("d_date_sk", "d_month_seq", "d_date"));
-        List<Type> afterCustomerTypes = List.of(factTypes.get(1), customerTypes.get(1), customerTypes.get(2));
+        List<Type> afterDateTypes = List.of(factTypes.get(0), dateTypes.get(2));
+        List<Type> distinctTypes = query87ChannelPresenceTypes(tables).subList(0, 3);
 
         PipelinePlan customers = relationPlan(
                 tables,
@@ -7180,16 +7181,33 @@ public final class TrinoTpcdsParquetSupport
         return new PipelinePlan(
                 new FilesPipelineSource(tables.tableFiles(salesTable), factColumns, queryName + ".scan.sales"),
                 List.of(
-                        namedHashJoinStep(queryName + ".join.customer", new HashJoinSpec(87_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(0), customers, customerTypes, List.of(0))),
-                        namedFactoryStep(queryName + ".project.customer", filterAndProjectFactory(87_400 + Math.abs(queryName.hashCode() % 100), Optional.empty(), selectedProjections(concatTypes(factTypes, customerTypes), 1, 3, 4), afterCustomerTypes)),
-                        namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(87_200 + Math.abs(queryName.hashCode() % 100), afterCustomerTypes, List.of(0), dates, List.of(dateTypes.get(0), dateTypes.get(2)), List.of(0))),
+                        namedFactoryStep(queryName + ".group.sales_keys", hashAggregationFactory(
+                                87_50 + Math.abs(queryName.hashCode() % 100),
+                                factTypes,
+                                List.of(0, 1))),
+                        namedHashJoinStep(queryName + ".join.date_dim", new HashJoinSpec(87_100 + Math.abs(queryName.hashCode() % 100), factTypes, List.of(1), dates, List.of(dateTypes.get(0), dateTypes.get(2)), List.of(0))),
+                        namedFactoryStep(queryName + ".project.date_dim", filterAndProjectFactory(
+                                87_200 + Math.abs(queryName.hashCode() % 100),
+                                Optional.empty(),
+                                selectedProjections(concatTypes(factTypes, List.of(dateTypes.get(0), dateTypes.get(2))), 0, 3),
+                                afterDateTypes)),
+                        namedHashJoinStep(queryName + ".join.customer", new HashJoinSpec(87_300 + Math.abs(queryName.hashCode() % 100), afterDateTypes, List.of(0), customers, customerTypes, List.of(0))),
+                        namedFactoryStep(queryName + ".project.distinct_keys", filterAndProjectFactory(
+                                87_400 + Math.abs(queryName.hashCode() % 100),
+                                Optional.empty(),
+                                selectedProjections(concatTypes(afterDateTypes, customerTypes), 3, 4, 1),
+                                distinctTypes)),
+                        namedFactoryStep(queryName + ".group.distinct", hashAggregationFactory(
+                                87_500 + Math.abs(queryName.hashCode() % 100),
+                                distinctTypes,
+                                List.of(0, 1, 2))),
                         namedFactoryStep(queryName + ".project.presence", filterAndProjectFactory(
-                                87_300 + Math.abs(queryName.hashCode() % 100),
+                                87_600 + Math.abs(queryName.hashCode() % 100),
                                 Optional.empty(),
                                 List.of(
-                                        field(1, customerTypes.get(1)),
-                                        field(2, customerTypes.get(2)),
-                                        field(4, dateTypes.get(2)),
+                                        field(0, customerTypes.get(1)),
+                                        field(1, customerTypes.get(2)),
+                                        field(2, dateTypes.get(2)),
                                         constant(storeFlag, BIGINT),
                                         constant(catalogFlag, BIGINT),
                                         constant(webFlag, BIGINT)),

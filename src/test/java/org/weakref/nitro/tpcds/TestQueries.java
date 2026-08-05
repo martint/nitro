@@ -1569,6 +1569,24 @@ public class TestQueries
     }
 
     @Test
+    void profileQuery87TrinoOperatorCpu()
+    {
+        TpcdsParquetTables tables = TpcdsParquetTables.actualIfPresent("sf10").orElse(null);
+        assumeTrue(tables != null, "Set -D" + TpcdsParquetTables.TPCDS_PARQUET_PATH_PROPERTY + "=/path/to/tpcds-parquet-sf10");
+
+        TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
+        try (TrinoTpcdsParquetSupport support = new TrinoTpcdsParquetSupport()) {
+            int warmups = Integer.getInteger("nitro.operatorCpuProfile.warmups", 3);
+            for (int iteration = 0; iteration < warmups; iteration++) {
+                support.query87(tables);
+            }
+            TrinoTpcdsParquetSupport.withOperatorCpuProfile(profile, () -> support.query87(tables));
+        }
+
+        System.out.println(profile.formatReport());
+    }
+
+    @Test
     void testQuery83TrinoSql()
     {
         assertTrinoOperatorMatchesSql("83", support -> support.query83(TpcdsParquetTables.requiredActual("sf10")), TestQueries::normalizeDecimalCentsValue);

@@ -9367,16 +9367,15 @@ final class TpcdsParquetSupport
             int activeChannel)
     {
         Operator sales = factScan(allocator, tables, salesTable, customerColumn, soldDateColumn);
-        sales = new HashJoinOperator(
+        sales = profiled("q87." + activeChannel + ".group.sales_keys", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1),
+                List.of(),
+                sales));
+        sales = profiled("q87." + activeChannel + ".join.date_dim", new HashJoinOperator(
                 allocator,
                 sales,
-                0,
-                customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name"),
-                0).withOutputs(1, 3, 4);
-        sales = new HashJoinOperator(
-                allocator,
-                sales,
-                0,
+                1,
                 filteredProjectedTable(
                         allocator,
                         primitiveRegistry,
@@ -9385,11 +9384,18 @@ final class TpcdsParquetSupport
                         and(greaterThan(1, 1199), lessThan(1, 1212)),
                         new String[] {"d_date_sk", "d_month_seq", "d_date"},
                         0, 2),
-                0).withOutputs(1, 2, 4);
-        // Emit per-row channel-presence flags only. The global aggregation in query87 groups by
-        // (last_name, first_name, date) and the downstream filter only checks whether each channel's
-        // summed flag is positive or zero, so a per-channel pre-aggregation would be redundant work
-        // that does not change the result (matching Trino, which aggregates once globally).
+                0).withOutputs(0, 3));
+        sales = profiled("q87." + activeChannel + ".join.customer", new HashJoinOperator(
+                allocator,
+                sales,
+                0,
+                customerScan(allocator, tables, "c_customer_sk", "c_last_name", "c_first_name"),
+                0).withOutputs(3, 4, 1));
+        sales = profiled("q87." + activeChannel + ".group.distinct", new GroupedAggregationOperator(
+                allocator,
+                List.of(0, 1, 2),
+                List.of(),
+                sales));
         return projectQuery87ChannelPresence(allocator, primitiveRegistry, sales, activeChannel);
     }
 
