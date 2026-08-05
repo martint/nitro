@@ -175,6 +175,10 @@ public final class BinaryVector
             allocator.discard(allocationContext, existing);
             return grown;
         }
+        // Returning the same object starts a new producer fill even though no allocator release/re-borrow occurred.
+        // Dictionary-derived caches pair identity with contentGeneration, so they must not mistake the next batch's
+        // bytes for the previous logical contents merely because the existing capacity was sufficient.
+        existing.contentGeneration++;
         return existing;
     }
 
@@ -289,11 +293,13 @@ public final class BinaryVector
         checkArgument(start + sourceLength <= data.length, "BinaryVector byte capacity exceeded");
         System.arraycopy(source, sourceOffset, data, start, sourceLength);
         offsets[position + 1] = start + sourceLength;
+        contentGeneration++;
     }
 
     public void setNull(int position)
     {
         offsets[position + 1] = offsets[position];
+        contentGeneration++;
     }
 
     @Override
@@ -523,6 +529,7 @@ public final class BinaryVector
         int byteLength = offsets[positionCount];
         System.arraycopy(data, 0, copy.data(), 0, byteLength);
         copy.addTraits(traits);
+        copy.contentGeneration++;
     }
 
     @Override

@@ -1020,6 +1020,54 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testDictionaryValueIdsObserveInPlaceBinaryRefillGeneration()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("in-place-dictionary-generation");
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+
+        BinaryVector dictionary = binary(allocator, context, "alpha", "beta");
+        I64Vector firstGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1}, 2, dictionary)},
+                new Vector[] {null},
+                Mask.all(2),
+                firstGroups);
+        assertThat(firstGroups.values()).containsExactly(0, 1);
+
+        long previousGeneration = dictionary.contentGeneration();
+        BinaryVector refilled = BinaryVector.allocateOrGrow(allocator, context, dictionary, 2, dictionary.byteCapacity());
+        assertThat(refilled).isSameAs(dictionary);
+        assertThat(refilled.contentGeneration()).isGreaterThan(previousGeneration);
+        refilled.setBytes(0, "gamma".getBytes(StandardCharsets.UTF_8));
+        refilled.setBytes(1, "zeta".getBytes(StandardCharsets.UTF_8));
+
+        I64Vector secondGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1}, 2, refilled)},
+                new Vector[] {null},
+                Mask.all(2),
+                secondGroups);
+        assertThat(secondGroups.values()).containsExactly(2, 3);
+
+        previousGeneration = refilled.contentGeneration();
+        refilled.setBytes(0, "delta".getBytes(StandardCharsets.UTF_8));
+        refilled.setBytes(1, "iota".getBytes(StandardCharsets.UTF_8));
+        assertThat(refilled.contentGeneration()).isGreaterThan(previousGeneration);
+        I64Vector thirdGroups = new I64Vector(2);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1}, 2, refilled)},
+                new Vector[] {null},
+                Mask.all(2),
+                thirdGroups);
+        assertThat(thirdGroups.values()).containsExactly(4, 5);
+
+        allocator.release(context, refilled);
+        state.releaseBuffers();
+        allocator.release(context);
+    }
+
+    @Test
     void testNormalizedScratchRequiresProportionalAddressSpace()
     {
         FlatKeyTablePolicy.Table policy = flatKeyTablePolicy.table();
