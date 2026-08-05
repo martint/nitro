@@ -321,18 +321,32 @@ public final class ClickBenchHitsSupport
 
     public static Operator query09(Allocator allocator, Path file)
     {
-        Operator distinct = new MarkDistinctMarkerOperator(
-                allocator,
-                new int[] {0, 1},
-                clickBenchScan(allocator, file, "RegionID", "UserID"),
-                true,
-                EngineResources.from(allocator).operatorResources());
-        Operator aggregated = new GroupedAggregationOperator(
-                allocator,
-                List.of(0),
-                List.of(new FilteredAccumulator(new CountAll(), 2)),
-                distinct);
-        return new TopNOperator(allocator, 10, 1, aggregated);
+        try {
+            List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+            List<Operator> partials = new ArrayList<>(splits.size());
+            for (Path split : splits) {
+                partials.add(new GroupedAggregationOperator(
+                        allocator,
+                        List.of(0, 1),
+                        List.of(),
+                        clickBenchScan(allocator, split, "RegionID", "UserID")));
+            }
+            Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(2, partials));
+            Operator finalPairs = new GroupedAggregationOperator(
+                    allocator,
+                    List.of(0, 1),
+                    List.of(),
+                    exchange);
+            Operator counts = new GroupedAggregationOperator(
+                    allocator,
+                    List.of(0),
+                    List.of(new CountAll()),
+                    finalPairs);
+            return new TopNOperator(allocator, 10, 1, counts);
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to list ClickBench splits for " + file, exception);
+        }
     }
 
     public static Operator query10(Allocator allocator, Path file)

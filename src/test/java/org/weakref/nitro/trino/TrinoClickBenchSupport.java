@@ -280,19 +280,7 @@ public final class TrinoClickBenchSupport
 
     public MaterializedResult query09(Path input)
     {
-        List<Type> outputTypes = List.of(INTEGER, BIGINT);
-        return materialize(
-                input,
-                List.of("RegionID", "UserID"),
-                List.of(
-                        markDistinctFactory(1, List.of(INTEGER, BIGINT), List.of(0, 1)),
-                        hashAggregationFactory(
-                                2,
-                                List.of(INTEGER),
-                                List.of(0),
-                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.of(2))),
-                        topNFactory(3, outputTypes, 10, List.of(1), List.of(DESC_NULLS_LAST))),
-                outputTypes);
+        return sqlShapedGroupedCountDistinct(input, "RegionID", INTEGER, "UserID", BIGINT);
     }
 
     public MaterializedResult query10(Path input)
@@ -1059,6 +1047,47 @@ public final class TrinoClickBenchSupport
                 true);
 
         MaterializedResult.Builder result = MaterializedResult.resultBuilder(count.driverContext().getSession(), List.of(BIGINT));
+        count.pages().forEach(result::page);
+        return result.build();
+    }
+
+    /** Executes the split-local/final pair grouping and grouped count selected for distributed grouped DISTINCT. */
+    private MaterializedResult sqlShapedGroupedCountDistinct(
+            Path input,
+            String groupColumn,
+            Type groupType,
+            String distinctColumn,
+            Type distinctType)
+    {
+        List<Type> pairTypes = List.of(groupType, distinctType);
+        List<Page> partialKeys = new ArrayList<>();
+        for (Path split : TrinoClickBenchPageReader.resolveFiles(input)) {
+            partialKeys.addAll(executePipeline(
+                    driverContext -> new ParquetPageSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("partial-source"), ParquetPageSourceOperator.class.getSimpleName()),
+                            split,
+                            List.of(groupColumn, distinctColumn)),
+                    List.of(hashAggregationFactory(1, pairTypes, List.of(0, 1))),
+                    true).pages());
+        }
+
+        PipelineOutput count = executePipeline(
+                driverContext -> new PagesSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("distinct-exchange"), PagesSourceOperator.class.getSimpleName()),
+                        partialKeys),
+                List.of(
+                        hashAggregationFactory(1, pairTypes, List.of(0, 1)),
+                        hashAggregationFactory(
+                                2,
+                                List.of(groupType),
+                                List.of(0),
+                                COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
+                        topNFactory(3, List.of(groupType, BIGINT), 10, List.of(1), List.of(DESC_NULLS_LAST))),
+                true);
+        partialKeys.clear();
+
+        List<Type> outputTypes = List.of(groupType, BIGINT);
+        MaterializedResult.Builder result = MaterializedResult.resultBuilder(count.driverContext().getSession(), outputTypes);
         count.pages().forEach(result::page);
         return result.build();
     }
