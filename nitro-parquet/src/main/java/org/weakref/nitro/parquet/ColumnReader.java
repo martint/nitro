@@ -1894,7 +1894,7 @@ public final class ColumnReader
                 allocator.release(allocationContext, result);
             }
             if (stagedOwnedIds != null) {
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, dictionaryVectorCache.get(batchGeneration));
+                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, escapedDictionary(batchGeneration));
             }
             if (materializationPolicy.ownedDictionaryIds()) {
                 org.weakref.nitro.data.I32Vector ids = allocator.allocate(
@@ -1903,9 +1903,9 @@ public final class ColumnReader
                         count,
                         org.weakref.nitro.data.I32Vector::new);
                 System.arraycopy(batchIds, 0, ids.values(), 0, count);
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, dictionaryVectorCache.get(batchGeneration));
+                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }
-            return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(batchIds, count, dictionaryVectorCache.get(batchGeneration));
+            return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(batchIds, count, escapedDictionary(batchGeneration));
         }
         if (stagedOwnedIds != null) {
             allocator.release(allocationContext, stagedOwnedIds);
@@ -1969,9 +1969,9 @@ public final class ColumnReader
                         count,
                         org.weakref.nitro.data.I32Vector::new);
                 System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
-                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, dictionaryVectorCache.get(batchGeneration));
+                return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }
-            return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, dictionaryVectorCache.get(batchGeneration));
+            return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, escapedDictionary(batchGeneration));
         }
         org.weakref.nitro.data.BinaryVector result;
         if (allocator == null) {
@@ -1984,6 +1984,17 @@ public final class ColumnReader
         }
         result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
         return result;
+    }
+
+    private BinaryVector escapedDictionary(int generation)
+    {
+        BinaryVector dictionary = dictionaryVectorCache.get(generation);
+        // Once a dictionary is returned from the reader, an operator may retain its values after the source batch
+        // closes (hash build and grouped output do this deliberately). Batch-boundary observation is therefore too
+        // late to prove that the backing offsets and bytes are reader-owned scratch. Evict the cache entry normally,
+        // but leave escaped storage to its downstream owner/GC instead of lending the arrays to a later row group.
+        escapedBinaryDictionaries.put(dictionary, Boolean.TRUE);
+        return dictionary;
     }
 
     private void readStreamingBinaryDictionaryIds(int[] batchIds, int outputOffset, int count, boolean[] nullsOut)

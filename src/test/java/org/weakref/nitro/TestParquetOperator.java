@@ -2087,6 +2087,40 @@ public class TestParquetOperator
     }
 
     @Test
+    void testDerivedBinaryDictionarySurvivesLaterChunkScratchReuse()
+            throws IOException
+    {
+        List<BinaryParquetRow> firstRows = new ArrayList<>();
+        List<BinaryParquetRow> secondRows = new ArrayList<>();
+        for (int position = 0; position < 12_000; position++) {
+            firstRows.add(new BinaryParquetRow((position & 1) == 0 ? "alpha" : "beta", bytes(position & 0xFF)));
+            secondRows.add(new BinaryParquetRow((position & 1) == 0 ? "gamma" : "delta", bytes(position & 0xFF)));
+        }
+        java.nio.file.Path first = writeBinaryParquetFile("derived-dictionary-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeBinaryParquetFile("derived-dictionary-second.parquet", true, secondRows);
+        assertDictionaryEncoding(first, "name");
+        assertDictionaryEncoding(second, "name");
+
+        DictionaryVector retained;
+        try (NitroParquetScanOperator scan = new NitroParquetScanOperator(NitroParquetScanResources.createDefault(), new Allocator(EngineResources.createDefault()), List.of(first, second), List.of("name"))) {
+            try (Batch firstBatch = scan.next()) {
+                // Join output can own a new mapping over a borrowed source dictionary. Closing the source batch must
+                // not make that immutable value domain available as scratch for a later row group.
+                retained = DictionaryVector.wrap(new int[] {0, 1}, firstBatch.output(0).borrow(Stream.VALUES));
+            }
+            while (scan.hasNext()) {
+                try (Batch batch = scan.next()) {
+                    batch.output(0).borrow(Stream.VALUES);
+                }
+            }
+
+            BinaryVector values = (BinaryVector) retained.values();
+            assertThat(utf8(values, retained.ids()[0])).isEqualTo("alpha");
+            assertThat(utf8(values, retained.ids()[1])).isEqualTo("beta");
+        }
+    }
+
+    @Test
     void testEqualUtf8SupportsDictionaryAgainstSingleLiteral()
     {
         BinaryVector dictionaryValues = new BinaryVector(3, 32);
