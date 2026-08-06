@@ -433,6 +433,8 @@ class TestAllocator
         assertThat(differentLength).isNotSameAs(first);
         assertThat(first.length()).isEqualTo(5);
         assertThat(differentLength.length()).isEqualTo(3);
+        assertThat(allocator.isSharedAllFalseBoolean(first)).isTrue();
+        assertThat(allocator.isSharedAllFalseBoolean(new BooleanVector(5))).isFalse();
         for (int position = 0; position < first.length(); position++) {
             assertThat(VectorAccess.booleanValues(first).value(position)).isFalse();
         }
@@ -441,6 +443,19 @@ class TestAllocator
         allocator.release(context, sameLength);
         assertThat(allocator.borrowAllFalseBoolean(context, 5)).isSameAs(first);
         assertThat(allocator.totalBytes(context)).isZero();
+    }
+
+    @Test
+    void testSharedAllFalseBooleanIsCopiedBeforeWrite()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("test");
+        BooleanVector constant = (BooleanVector) allocator.borrowAllFalseBoolean(context, 5);
+
+        BooleanVector writable = allocator.allocateOrGrow(context, constant, BooleanVector.class, 5, BooleanVector::new);
+        assertThat(writable).isNotSameAs(constant);
+        writable.values()[0] = true;
+        assertThat(VectorAccess.booleanValues(constant).value(0)).isFalse();
     }
 
     @Test

@@ -223,6 +223,16 @@ public class Allocator
         });
     }
 
+    /**
+     * Returns whether {@code vector} is this allocator's immutable, shared all-false boolean constant.
+     */
+    public boolean isSharedAllFalseBoolean(Vector vector)
+    {
+        return policy.sharedAllFalseBoolean() &&
+                vector instanceof BooleanVector booleanVector &&
+                allFalseBooleanVectors.get(booleanVector.length()) == vector;
+    }
+
     public ArrayVector allocateArray(Context context, int positionCount)
     {
         return allocate(context, ArrayVector.class, positionCount, ArrayVector::new);
@@ -237,6 +247,11 @@ public class Allocator
     {
         if (vector == null) {
             return allocate(context, vectorType, size, vectorAllocator);
+        }
+        if (isSharedAllFalseBoolean(vector)) {
+            T writable = allocate(context, vectorType, size, vectorAllocator);
+            vector.copyInto(writable);
+            return writable;
         }
         if (vector.length() < size) {
             T grown = allocate(context, vectorType, size, vectorAllocator);
