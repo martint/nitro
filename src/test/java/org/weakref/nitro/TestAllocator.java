@@ -164,6 +164,51 @@ class TestAllocator
     }
 
     @Test
+    void testReleasesRetainedSparseStorageAfterMaskBecomesAll()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("test");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            Mask sparse = allocator.copyMask(context, Mask.sparse(new int[] {1, 3}, 8));
+            long retainedBytes = allocator.residentBytes();
+            allocator.release(context, sparse);
+
+            Mask all = allocator.allocateAllMask(context, 8);
+            assertThat(all).isSameAs(sparse);
+            assertThat(allocator.residentBytes()).isEqualTo(retainedBytes);
+            allocator.release(context, all);
+            allocator.releasePooledMemory();
+
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testReleasesOnlySelectedContextPool()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context firstContext = new Allocator.Context("first");
+        Allocator.Context secondContext = new Allocator.Context("second");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            I64Vector first = allocator.allocate(firstContext, I64Vector.class, 8, I64Vector::new);
+            I64Vector second = allocator.allocate(secondContext, I64Vector.class, 16, I64Vector::new);
+            allocator.release(firstContext, first);
+            allocator.release(secondContext, second);
+            long retainedBytes = allocator.residentBytes();
+
+            allocator.releasePooledMemory(firstContext);
+            assertThat(allocator.residentBytes()).isEqualTo(second.retainedBytes());
+            assertThat(allocator.residentBytes()).isLessThan(retainedBytes);
+            assertThat(memory.reservedBytes()).isEqualTo(second.retainedBytes());
+
+            allocator.releasePooledMemory(secondContext);
+            assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
     void testTracksNonVectorRetainedStateByOwner()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();

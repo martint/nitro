@@ -963,20 +963,40 @@ public class Allocator
     {
         long releasedBytes = 0;
         for (PoolState pool : pools.values()) {
-            releasedBytes = Math.addExact(releasedBytes, pool.vectorPoolBytes);
-            for (ArrayDeque<Mask> masks : pool.maskPool.values()) {
-                for (Mask mask : masks) {
-                    releasedBytes = Math.addExact(releasedBytes, maskBytes(mask));
-                    mask.clearResidentTracked();
-                }
-            }
-            pool.vectorPool.clear();
-            pool.vectorPoolOrder.clear();
-            pool.vectorPoolGlobalOrder.clear();
-            pool.vectorPoolBytes = 0;
-            pool.maskPool.clear();
+            releasedBytes = Math.addExact(releasedBytes, releasePooledMemory(pool));
         }
         releaseResident(releasedBytes);
+    }
+
+    /**
+     * Releases idle vectors and masks retained by the pool group associated with {@code context}.
+     *
+     * <p>Contexts that deliberately share a pool group are released together. Other allocator users are unaffected.
+     */
+    public void releasePooledMemory(Context context)
+    {
+        requireNonNull(context, "context is null");
+        PoolState pool = pools.get(context.poolGroup());
+        if (pool != null) {
+            releaseResident(releasePooledMemory(pool));
+        }
+    }
+
+    private static long releasePooledMemory(PoolState pool)
+    {
+        long releasedBytes = pool.vectorPoolBytes;
+        for (ArrayDeque<Mask> masks : pool.maskPool.values()) {
+            for (Mask mask : masks) {
+                releasedBytes = Math.addExact(releasedBytes, maskBytes(mask));
+                mask.clearResidentTracked();
+            }
+        }
+        pool.vectorPool.clear();
+        pool.vectorPoolOrder.clear();
+        pool.vectorPoolGlobalOrder.clear();
+        pool.vectorPoolBytes = 0;
+        pool.maskPool.clear();
+        return releasedBytes;
     }
 
     /**
@@ -1652,9 +1672,6 @@ public class Allocator
 
     private static long maskBytes(Mask mask)
     {
-        if (mask.all()) {
-            return 0;
-        }
         return (long) mask.capacity() * Integer.BYTES;
     }
 
