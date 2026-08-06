@@ -1487,6 +1487,40 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testCopiedNullBinaryGroupCarriesForwardVariableWidthOffset()
+    {
+        Vector[] values = {utf8("alpha", "ignored")};
+        org.weakref.nitro.data.BooleanVector fieldNulls = new org.weakref.nitro.data.BooleanVector(2);
+        fieldNulls.values()[1] = true;
+        Vector[] nulls = {fieldNulls};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                4,
+                true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("testCopiedNullBinaryOffset");
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isEqualTo(0);
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            table.endBatch();
+
+            Streams output = table.copyGroupedValuePosition(0, null, 0, 0, 2, allocator, allocationContext);
+            output = table.copyGroupedValuePosition(0, output, 1, 1, 2, allocator, allocationContext);
+            BinaryVector binary = (BinaryVector) output.values();
+            assertThat(binary.endOffset(1)).isEqualTo("alpha".length());
+
+            BinaryVector copied = (BinaryVector) allocator.copyVector(allocationContext, binary);
+            assertThat(new String(copied.data(), copied.startOffset(0), copied.length(0), StandardCharsets.UTF_8))
+                    .isEqualTo("alpha");
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void testNormalizedIntKeyPreservesCompleteEqualityAcrossBinaryEncodings()
     {
         Vector[] firstValues = {

@@ -871,6 +871,12 @@ final class FlatGroupingTable
                     allocator,
                     allocationContext);
         }
+        else if (nullValue && outputValues instanceof BinaryVector binary) {
+            // Variable-width offsets are cumulative. A null copied after a non-null value must carry the prior end
+            // offset forward; leaving the pooled slot untouched makes the vector's final byte length smaller than
+            // an earlier entry and a later compact copy drops live bytes.
+            binary.setNull(outputPosition);
+        }
 
         BooleanVector outputNulls = VectorAccess.writableBooleanVector(
                 allocator,
@@ -978,7 +984,7 @@ final class FlatGroupingTable
                 case DOUBLE -> ((F64Vector) values).values()[outputPosition] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset));
                 case BINARY -> {
                     if (idBackedBinary) {
-                        layout.tryCopyIdBackedBinaryValue(
+                        values = layout.tryCopyIdBackedBinaryValue(
                                 this,
                                 groupedColumnIndex,
                                 recordIndex,
