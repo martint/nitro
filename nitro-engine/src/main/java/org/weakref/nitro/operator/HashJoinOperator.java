@@ -1855,7 +1855,7 @@ public class HashJoinOperator
                     joinValues,
                     genericJoinIndexes.shouldCapInitialHash(batch, joinValues, expectedRows, keyOnlyBuild),
                     genericJoinIndexes.shouldUseGroupedLongHash(batch, joinValues, expectedRows),
-                    genericJoinIndexes.shouldUseKeyOnlyDirectRangeBuild(batch, joinValues, expectedRows, keyOnlyBuild));
+                    genericJoinIndexes.shouldUseDirectRangeBuild(batch, joinValues, expectedRows));
         }
 
         boolean collectKeys = buildKeysViable && !buildKeysAbandoned;
@@ -1960,7 +1960,7 @@ public class HashJoinOperator
             Vector[] joinValues,
             boolean capInitialHash,
             boolean groupedLongHashTable,
-            boolean keyOnlyDirectRangeBuild)
+            boolean directRangeBuild)
     {
         int expectedSize = expectedInnerRowCount();
         if (joinIndexPolicy.debugJoinIndex()) {
@@ -1987,7 +1987,7 @@ public class HashJoinOperator
                     groupedLongHashTable,
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
-                    keyOnlyDirectRangeBuild,
+                    directRangeBuild,
                     false,
                     buildPolicy.batchSingleLongBuild());
         }
@@ -4101,7 +4101,7 @@ public class HashJoinOperator
                 boolean groupedHashTable,
                 boolean lazyDuplicateSlotState,
                 boolean implicitSequentialRowReferences,
-                boolean keyOnlyDirectRangeBuild,
+                boolean directRangeBuild,
                 boolean buildRowReferencesUnused,
                 boolean batchBuild)
         {
@@ -4165,12 +4165,12 @@ public class HashJoinOperator
             this.buildRowReferencesUnused = buildRowReferencesUnused;
             this.batchBuild = batchBuild;
             this.ownsStorage = true;
-            if (policy.debugJoinIndex() && keyOnlyDirectRangeBuild) {
-                System.err.printf("[key-only-direct-range-build] expected=%d%n", expectedSize);
+            if (policy.debugJoinIndex() && directRangeBuild) {
+                System.err.printf("[direct-range-build] expected=%d%n", expectedSize);
             }
-            if (capInitialHash || keyOnlyDirectRangeBuild) {
+            if (capInitialHash || directRangeBuild) {
                 int directCapacity = policy.directRangeBuildInitialCapacity();
-                if (keyOnlyDirectRangeBuild) {
+                if (directRangeBuild) {
                     long required = Math.min((long) policy.maxDirectBuildKey(), (long) expectedSize + 1);
                     while (directCapacity < required) {
                         directCapacity <<= 1;

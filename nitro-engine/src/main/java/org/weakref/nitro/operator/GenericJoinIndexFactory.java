@@ -197,19 +197,17 @@ final class GenericJoinIndexFactory
                 range < expectedRows * joinIndexPolicy.sparseLongRangeMinRatio();
     }
 
-    boolean shouldUseKeyOnlyDirectRangeBuild(
+    boolean shouldUseDirectRangeBuild(
             BufferedJoinInput.InnerBatch batch,
             Vector[] values,
-            int expectedRows,
-            boolean keyOnlyBuild)
+            int expectedRows)
     {
-        if (!joinIndexPolicy.keyOnlyDirectRangeBuild() ||
+        if (!joinIndexPolicy.directRangeBuild() ||
                 values.length != 1 ||
-                !keyOnlyBuild ||
                 !isLong(values[0])) {
             return false;
         }
-        if (expectedRows < joinIndexPolicy.keyOnlyDirectRangeMinRows()) {
+        if (expectedRows < joinIndexPolicy.directRangeBuildMinRows()) {
             return false;
         }
         int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
@@ -223,14 +221,12 @@ final class GenericJoinIndexFactory
             sampleMin = Math.min(sampleMin, key);
             sampleMax = Math.max(sampleMax, key);
         }
-        long sampleRange = sampleMax - sampleMin + 1;
-        // The range builder remains exact and can fall back, but a clearly sparse first batch would reserve and
-        // randomly probe a much larger map than the ordinary hash table. Compare the observed domain with the known
-        // full build cardinality so shuffled dense dimensions admit while wide sparse fact-key domains reject.
+        // The streaming builder addresses non-negative keys directly until the build shape is complete. Bound the
+        // absolute observed domain, rather than only its width, so a high-offset narrow range cannot reserve a large
+        // mostly-empty array. The builder remains exact and falls back if a later key escapes the admitted ceiling.
         return sampleMin >= 0 &&
                 sampleMax < joinIndexPolicy.maxDirectBuildKey() &&
-                sampleRange > 0 &&
-                sampleRange <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows;
+                sampleMax + 1 <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows;
     }
 
     private static boolean isLong(Vector values)

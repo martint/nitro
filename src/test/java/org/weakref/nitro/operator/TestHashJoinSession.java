@@ -86,6 +86,38 @@ class TestHashJoinSession
     }
 
     @Test
+    void testDirectRangeBuildPreservesPayload()
+    {
+        long[] keys = new long[300];
+        long[] payload = new long[300];
+        for (int position = 0; position < keys.length; position++) {
+            keys[position] = position * 2L;
+            payload[position] = 10_000L + position;
+        }
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        pairTable(keys, payload),
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            session.addInput(batch(598));
+
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().selectedCount()).isOne();
+                assertThat(VectorAccess.longValues(output.output(2).borrow(Stream.VALUES)).value(0))
+                        .isEqualTo(10_299);
+            }
+        }
+    }
+
+    @Test
     void testPreservesExternalSchedulingAcrossProbePipeline()
     {
         try (EngineResources resources = EngineResources.createDefault();
