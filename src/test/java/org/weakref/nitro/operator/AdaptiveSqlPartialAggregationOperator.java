@@ -17,11 +17,14 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
+import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -38,6 +41,10 @@ public final class AdaptiveSqlPartialAggregationOperator
     private final GroupedAggregationSession[] sessions;
     private final AdaptiveControl control;
     private final long maxRetainedBytes;
+    private final Allocator allocator;
+    private final int[] hashChannels;
+    private final SqlStageAggregationOperator.PartitionTransform partitionTransform;
+    private final ArrayDeque<PartitionInput> partitionInputs = new ArrayDeque<>();
     private final Schema outputSchema;
 
     private Batch pendingOutput;
@@ -45,6 +52,7 @@ public final class AdaptiveSqlPartialAggregationOperator
     private int finishingPartition;
     private boolean sourceFinished;
     private boolean closed;
+    private long exchangeBatchId;
 
     public AdaptiveSqlPartialAggregationOperator(
             Allocator allocator,
@@ -55,7 +63,32 @@ public final class AdaptiveSqlPartialAggregationOperator
             long maxRetainedBytes,
             double uniqueRowsRatioThreshold)
     {
-        requireNonNull(allocator, "allocator is null");
+        this(
+                allocator,
+                source,
+                partitionCount,
+                new int[0],
+                null,
+                groupByColumns,
+                accumulators,
+                maxRetainedBytes,
+                uniqueRowsRatioThreshold,
+                false);
+    }
+
+    public AdaptiveSqlPartialAggregationOperator(
+            Allocator allocator,
+            Operator source,
+            int partitionCount,
+            int[] hashChannels,
+            SqlStageAggregationOperator.PartitionTransform partitionTransform,
+            List<Integer> groupByColumns,
+            Supplier<List<Accumulator>> accumulators,
+            long maxRetainedBytes,
+            double uniqueRowsRatioThreshold,
+            boolean aggregationRequired)
+    {
+        this.allocator = requireNonNull(allocator, "allocator is null");
         this.source = requireNonNull(source, "source is null");
         if (partitionCount <= 0) {
             throw new IllegalArgumentException("partitionCount must be positive");
@@ -64,14 +97,17 @@ public final class AdaptiveSqlPartialAggregationOperator
             throw new IllegalArgumentException("maxRetainedBytes must be positive");
         }
         this.maxRetainedBytes = maxRetainedBytes;
-        control = new AdaptiveControl(maxRetainedBytes, uniqueRowsRatioThreshold);
+        this.hashChannels = requireNonNull(hashChannels, "hashChannels is null").clone();
+        this.partitionTransform = partitionTransform;
+        control = new AdaptiveControl(maxRetainedBytes, uniqueRowsRatioThreshold, aggregationRequired);
         OperatorResources resources = EngineResources.from(allocator).operatorResources();
         requireNonNull(accumulators, "accumulators is null");
+        Schema inputSchema = partitionTransform == null ? source.outputSchema() : partitionTransform.outputSchema();
         sessions = new GroupedAggregationSession[partitionCount];
         for (int partition = 0; partition < partitionCount; partition++) {
             sessions[partition] = new GroupedAggregationSession(
                     allocator,
-                    source.outputSchema(),
+                    inputSchema,
                     groupByColumns,
                     groupByColumns,
                     PhysicalAggregationProgram.independent(accumulators.get()),
@@ -100,23 +136,15 @@ public final class AdaptiveSqlPartialAggregationOperator
             return true;
         }
         while (!sourceFinished && source.hasNext()) {
-            try (Batch batch = source.next()) {
-                if (batch.borrowMask().none()) {
-                    continue;
-                }
-                GroupedAggregationSession session = sessions[nextInputPartition];
-                nextInputPartition = (nextInputPartition + 1) % sessions.length;
-                session.addInput(batch, estimatedInputBytes(batch));
-                if (session.hasOutput()) {
-                    pendingOutput = session.getOutput();
-                    return true;
-                }
-                if (session.retainedBytes() >= maxRetainedBytes) {
-                    session.flush();
-                    pendingOutput = session.getOutput();
-                    return true;
-                }
+            if (processPartitionInput()) {
+                return true;
             }
+            try (Batch batch = source.next()) {
+                preparePartitionInputs(batch);
+            }
+        }
+        while (processPartitionInput()) {
+            return true;
         }
         if (!sourceFinished) {
             sourceFinished = true;
@@ -160,17 +188,20 @@ public final class AdaptiveSqlPartialAggregationOperator
             pendingOutput = null;
         }
         source.close();
+        while (!partitionInputs.isEmpty()) {
+            partitionInputs.removeFirst().operator().close();
+        }
         for (GroupedAggregationSession session : sessions) {
             session.close();
         }
     }
 
-    private long estimatedInputBytes(Batch batch)
+    private long estimatedInputBytes(Batch batch, int outputCount)
     {
         Mask mask = batch.borrowMask();
         Set<Vector> vectors = Collections.newSetFromMap(new IdentityHashMap<>());
         long bytes = 0;
-        for (int channel = 0; channel < source.outputCount(); channel++) {
+        for (int channel = 0; channel < outputCount; channel++) {
             Output output = batch.output(channel);
             for (Stream stream : output.streams()) {
                 Vector vector = output.borrow(stream, mask);
@@ -182,6 +213,119 @@ public final class AdaptiveSqlPartialAggregationOperator
         return bytes;
     }
 
+    private boolean processPartitionInput()
+    {
+        while (!partitionInputs.isEmpty()) {
+            PartitionInput input = partitionInputs.getFirst();
+            if (!input.operator().hasNext()) {
+                input.operator().close();
+                partitionInputs.removeFirst();
+                continue;
+            }
+            try (Batch batch = input.operator().next()) {
+                GroupedAggregationSession session = sessions[input.partition()];
+                session.addInput(batch, estimatedInputBytes(batch, input.operator().outputCount()));
+                if (session.hasOutput()) {
+                    pendingOutput = session.getOutput();
+                    return true;
+                }
+                if (session.retainedBytes() >= maxRetainedBytes) {
+                    session.flush();
+                    pendingOutput = session.getOutput();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void preparePartitionInputs(Batch batch)
+    {
+        Mask inputMask = batch.borrowMask();
+        if (inputMask.none()) {
+            return;
+        }
+        if (hashChannels.length == 0) {
+            int partition = nextInputPartition;
+            nextInputPartition = (nextInputPartition + 1) % sessions.length;
+            partitionInputs.addLast(new PartitionInput(partition, partitionTransform == null
+                    ? new BatchOperator(source.outputSchema(), copyBatch(batch, positions(inputMask)))
+                    : partitionTransform.apply(source.outputSchema(), copyBatch(batch, positions(inputMask)))));
+            return;
+        }
+
+        Streams[] streams = resolveStreams(batch, inputMask);
+        int[][] partitionPositions = new int[sessions.length][Math.max(1, inputMask.count())];
+        int[] counts = new int[sessions.length];
+        Vector[] values = new Vector[hashChannels.length];
+        Vector[] nulls = new Vector[hashChannels.length];
+        for (int index = 0; index < hashChannels.length; index++) {
+            Streams key = streams[hashChannels[index]];
+            values[index] = key.get(Stream.VALUES);
+            nulls[index] = key.getOrNull(Stream.NULLS);
+        }
+        for (int position : inputMask) {
+            long hash = 1;
+            for (int key = 0; key < values.length; key++) {
+                hash = 31 * hash + OperatorVectorSupport.hash(values[key], nulls[key], position);
+            }
+            int partition = Math.floorMod(hash, sessions.length);
+            partitionPositions[partition][counts[partition]++] = position;
+        }
+        for (int partition = 0; partition < sessions.length; partition++) {
+            if (counts[partition] == 0) {
+                continue;
+            }
+            Batch partitionBatch = copyBatch(batch, Arrays.copyOf(partitionPositions[partition], counts[partition]));
+            Operator operator = partitionTransform == null
+                    ? new BatchOperator(source.outputSchema(), partitionBatch)
+                    : partitionTransform.apply(source.outputSchema(), partitionBatch);
+            partitionInputs.addLast(new PartitionInput(partition, operator));
+        }
+    }
+
+    private Batch copyBatch(Batch batch, int[] selectedPositions)
+    {
+        Allocator.Context context = new Allocator.Context("adaptive-sql-exchange-" + exchangeBatchId++);
+        Streams[] streams = resolveStreams(batch, batch.borrowMask());
+        Output[] outputs = new Output[source.outputCount()];
+        for (int channel = 0; channel < outputs.length; channel++) {
+            Streams copied = allocator.copyStreams(context, streams[channel], selectedPositions);
+            outputs[channel] = Output.of(copied);
+        }
+        return new Batch(
+                Mask.all(selectedPositions.length),
+                _ -> {},
+                java.util.function.Function.identity(),
+                _ -> {},
+                () -> allocator.releaseIfPresent(context),
+                outputs);
+    }
+
+    private Streams[] resolveStreams(Batch batch, Mask mask)
+    {
+        Streams[] streams = new Streams[source.outputCount()];
+        for (int channel = 0; channel < streams.length; channel++) {
+            Output output = batch.output(channel);
+            Streams.Builder builder = Streams.builder();
+            for (Stream stream : output.streams()) {
+                builder.put(stream, output.borrow(stream, mask));
+            }
+            streams[channel] = builder.build();
+        }
+        return streams;
+    }
+
+    private static int[] positions(Mask mask)
+    {
+        int[] positions = new int[mask.count()];
+        int index = 0;
+        for (int position : mask) {
+            positions[index++] = position;
+        }
+        return positions;
+    }
+
     private static final class AdaptiveControl
             implements PartialAggregationControl
     {
@@ -190,21 +334,23 @@ public final class AdaptiveSqlPartialAggregationOperator
 
         private final long maxRetainedBytes;
         private final double uniqueRowsRatioThreshold;
+        private final boolean aggregationRequired;
         private volatile boolean disabled;
         private long inputBytes;
         private long inputRows;
         private long outputRows;
 
-        private AdaptiveControl(long maxRetainedBytes, double uniqueRowsRatioThreshold)
+        private AdaptiveControl(long maxRetainedBytes, double uniqueRowsRatioThreshold, boolean aggregationRequired)
         {
             this.maxRetainedBytes = maxRetainedBytes;
             this.uniqueRowsRatioThreshold = uniqueRowsRatioThreshold;
+            this.aggregationRequired = aggregationRequired;
         }
 
         @Override
         public boolean aggregationEnabled()
         {
-            return !disabled;
+            return aggregationRequired || !disabled;
         }
 
         @Override
@@ -229,6 +375,64 @@ public final class AdaptiveSqlPartialAggregationOperator
                 this.inputRows = 0;
                 outputRows = 0;
                 disabled = false;
+            }
+        }
+    }
+
+    private record PartitionInput(int partition, Operator operator) {}
+
+    private static final class BatchOperator
+            implements Operator
+    {
+        private final Schema outputSchema;
+        private Batch batch;
+
+        private BatchOperator(Schema outputSchema, Batch batch)
+        {
+            this.outputSchema = outputSchema;
+            this.batch = batch;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return outputSchema.size();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return outputSchema;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return batch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            Batch result = requireNonNull(batch, "No more batches");
+            batch = null;
+            return result;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (batch != null) {
+                batch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (batch != null) {
+                batch.close();
+                batch = null;
             }
         }
     }

@@ -25,6 +25,7 @@ import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -47,8 +48,11 @@ public final class SqlStageAggregationOperator
     private final Allocator.Context exchangeMaterializationContext = new Allocator.Context("sql-stage-exchange-materialization");
     private final int partitionCount;
     private final int[] hashChannels;
+    private final PartitionTransform partitionTransform;
+    private final PartitionTransform outputTransform;
     private final GroupedAggregationSession[][] sessions;
     private final Batch[] firstOutputs;
+    private final Operator[] outputOperators;
     private final Schema outputSchema;
     private final boolean materializeExchange;
 
@@ -65,7 +69,7 @@ public final class SqlStageAggregationOperator
             int[] hashChannels,
             List<Stage> stages)
     {
-        this(allocator, source, partitionCount, hashChannels, stages, true);
+        this(allocator, source, partitionCount, hashChannels, stages, true, null, null);
     }
 
     public SqlStageAggregationOperator(
@@ -76,18 +80,46 @@ public final class SqlStageAggregationOperator
             List<Stage> stages,
             boolean materializeExchange)
     {
+        this(allocator, source, partitionCount, hashChannels, stages, materializeExchange, null, null);
+    }
+
+    public SqlStageAggregationOperator(
+            Allocator allocator,
+            Operator source,
+            int partitionCount,
+            int[] hashChannels,
+            List<Stage> stages,
+            boolean materializeExchange,
+            PartitionTransform partitionTransform)
+    {
+        this(allocator, source, partitionCount, hashChannels, stages, materializeExchange, partitionTransform, null);
+    }
+
+    public SqlStageAggregationOperator(
+            Allocator allocator,
+            Operator source,
+            int partitionCount,
+            int[] hashChannels,
+            List<Stage> stages,
+            boolean materializeExchange,
+            PartitionTransform partitionTransform,
+            PartitionTransform outputTransform)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.source = requireNonNull(source, "source is null");
         checkArgument(partitionCount > 0, "partitionCount must be positive");
         this.partitionCount = partitionCount;
         this.hashChannels = requireNonNull(hashChannels, "hashChannels is null").clone();
         this.materializeExchange = materializeExchange;
+        this.partitionTransform = partitionTransform;
+        this.outputTransform = outputTransform;
         checkArgument(!stages.isEmpty(), "stages is empty");
 
         OperatorResources resources = EngineResources.from(allocator).operatorResources();
         sessions = new GroupedAggregationSession[stages.size()][partitionCount];
         firstOutputs = new Batch[partitionCount];
-        Schema inputSchema = source.outputSchema();
+        outputOperators = outputTransform == null ? null : new Operator[partitionCount];
+        Schema inputSchema = partitionTransform == null ? source.outputSchema() : partitionTransform.outputSchema();
         for (int stageIndex = 0; stageIndex < stages.size(); stageIndex++) {
             Stage stage = stages.get(stageIndex);
             for (int partition = 0; partition < partitionCount; partition++) {
@@ -101,7 +133,7 @@ public final class SqlStageAggregationOperator
             }
             inputSchema = sessions[stageIndex][0].outputSchema();
         }
-        outputSchema = inputSchema;
+        outputSchema = outputTransform == null ? inputSchema : outputTransform.outputSchema();
     }
 
     public static Stage distinct(List<Integer> groupByColumns)
@@ -115,6 +147,24 @@ public final class SqlStageAggregationOperator
                 groupByColumns,
                 groupByColumns,
                 () -> PhysicalAggregationProgram.independent(accumulators.get()));
+    }
+
+    public static PartitionTransform groupIdTransform(
+            Allocator allocator,
+            Schema inputSchema,
+            int[][] groupingSetInputs,
+            GroupIdOperatorPolicy policy)
+    {
+        GroupIdOperator schemaOperator = new GroupIdOperator(
+                allocator,
+                new EmptyOperator(inputSchema),
+                groupingSetInputs,
+                policy);
+        Schema outputSchema = schemaOperator.outputSchema();
+        schemaOperator.close();
+        return new PartitionTransform(
+                outputSchema,
+                source -> new GroupIdOperator(allocator, source, groupingSetInputs, policy));
     }
 
     @Override
@@ -165,6 +215,10 @@ public final class SqlStageAggregationOperator
             pendingOutput = null;
         }
         for (int partition = 0; partition < firstOutputs.length; partition++) {
+            if (outputOperators != null && outputOperators[partition] != null) {
+                outputOperators[partition].close();
+                outputOperators[partition] = null;
+            }
             if (firstOutputs[partition] != null) {
                 firstOutputs[partition].close();
                 firstOutputs[partition] = null;
@@ -204,7 +258,13 @@ public final class SqlStageAggregationOperator
                 }
             }
             for (int partition = 0; partition < partitionCount; partition++) {
-                firstOutputs[partition] = sessions[sessions.length - 1][partition].finish();
+                GroupedAggregationSession finalSession = sessions[sessions.length - 1][partition];
+                if (outputTransform == null) {
+                    firstOutputs[partition] = finalSession.finish();
+                }
+                else {
+                    outputOperators[partition] = outputTransform.factory().apply(new SessionOutputOperator(finalSession));
+                }
             }
         }
         catch (RuntimeException | Error failure) {
@@ -253,8 +313,28 @@ public final class SqlStageAggregationOperator
                     _ -> {},
                     materializeExchange ? () -> allocator.releaseIfPresent(exchangeMaterializationContext) : () -> {},
                     outputs)) {
-                sessions[0][partition].addInput(partitionBatch);
+                addPartitionInput(partition, partitionBatch);
             }
+        }
+    }
+
+    private void addPartitionInput(int partition, Batch partitionBatch)
+    {
+        if (partitionTransform == null) {
+            sessions[0][partition].addInput(partitionBatch);
+            return;
+        }
+
+        Operator transformed = partitionTransform.factory().apply(new SingleBatchOperator(source.outputSchema(), partitionBatch));
+        try {
+            while (transformed.hasNext()) {
+                try (Batch transformedBatch = transformed.next()) {
+                    sessions[0][partition].addInput(transformedBatch);
+                }
+            }
+        }
+        finally {
+            transformed.close();
         }
     }
 
@@ -312,6 +392,17 @@ public final class SqlStageAggregationOperator
         }
         GroupedAggregationSession[] finalStage = sessions[sessions.length - 1];
         while (outputPartition < partitionCount) {
+            if (outputOperators != null) {
+                Operator output = outputOperators[outputPartition];
+                if (output.hasNext()) {
+                    pendingOutput = output.next();
+                    return;
+                }
+                output.close();
+                outputOperators[outputPartition] = null;
+                outputPartition++;
+                continue;
+            }
             GroupedAggregationSession session = finalStage[outputPartition];
             if (firstOutputs[outputPartition] != null) {
                 pendingOutput = firstOutputs[outputPartition];
@@ -337,6 +428,191 @@ public final class SqlStageAggregationOperator
             groupByColumns = List.copyOf(groupByColumns);
             groupedColumns = List.copyOf(groupedColumns);
             requireNonNull(programFactory, "programFactory is null");
+        }
+    }
+
+    public record PartitionTransform(Schema outputSchema, Function<Operator, Operator> factory)
+    {
+        public PartitionTransform
+        {
+            requireNonNull(outputSchema, "outputSchema is null");
+            requireNonNull(factory, "factory is null");
+        }
+
+        Operator apply(Schema inputSchema, Batch batch)
+        {
+            return factory.apply(new SingleBatchOperator(inputSchema, batch));
+        }
+    }
+
+    private static final class EmptyOperator
+            implements Operator
+    {
+        private final Schema outputSchema;
+
+        private EmptyOperator(Schema outputSchema)
+        {
+            this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return outputSchema.size();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return outputSchema;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return false;
+        }
+
+        @Override
+        public Batch next()
+        {
+            throw new IllegalStateException("No batches");
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+        }
+
+        @Override
+        public void close()
+        {
+        }
+    }
+
+    private static final class SingleBatchOperator
+            implements Operator
+    {
+        private final Schema outputSchema;
+        private Batch batch;
+
+        private SingleBatchOperator(Schema outputSchema, Batch batch)
+        {
+            this.outputSchema = requireNonNull(outputSchema, "outputSchema is null");
+            this.batch = requireNonNull(batch, "batch is null");
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return outputSchema.size();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return outputSchema;
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return batch != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (batch == null) {
+                throw new IllegalStateException("No more batches");
+            }
+            Batch result = batch;
+            batch = null;
+            return result;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (batch != null) {
+                batch.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (batch != null) {
+                batch.close();
+                batch = null;
+            }
+        }
+    }
+
+    private static final class SessionOutputOperator
+            implements Operator
+    {
+        private final GroupedAggregationSession session;
+        private Batch first;
+        private boolean started;
+
+        private SessionOutputOperator(GroupedAggregationSession session)
+        {
+            this.session = requireNonNull(session, "session is null");
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return session.outputSchema().size();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return session.outputSchema();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            if (!started) {
+                started = true;
+                first = session.finish();
+            }
+            return first != null || session.hasOutput();
+        }
+
+        @Override
+        public Batch next()
+        {
+            if (!hasNext()) {
+                throw new IllegalStateException("No more batches");
+            }
+            if (first != null) {
+                Batch result = first;
+                first = null;
+                return result;
+            }
+            return session.getOutput();
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            if (first != null) {
+                first.constrain(mask);
+            }
+        }
+
+        @Override
+        public void close()
+        {
+            if (first != null) {
+                first.close();
+                first = null;
+            }
+            session.close();
         }
     }
 }

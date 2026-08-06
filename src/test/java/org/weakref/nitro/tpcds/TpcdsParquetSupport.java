@@ -14,6 +14,7 @@
 package org.weakref.nitro.tpcds;
 
 import it.unimi.dsi.fastutil.ints.IntSet;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Row;
 import org.weakref.nitro.data.Stream;
@@ -2958,28 +2959,32 @@ final class TpcdsParquetSupport
 
     public static Operator query67(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator grouped = profiled("q67.group_id", new GroupIdOperator(
-                allocator,
-                profiled("q67.project.rollup_key", query67SalesByRollupKey(allocator, primitiveRegistry, tables)),
-                new int[][] {
-                        {-1, -1, -1, -1, -1, -1, -1, -1, 8},
-                        {0, -1, -1, -1, -1, -1, -1, -1, 8},
-                        {0, 1, -1, -1, -1, -1, -1, -1, 8},
-                        {0, 1, 2, -1, -1, -1, -1, -1, 8},
-                        {0, 1, 2, 3, -1, -1, -1, -1, 8},
-                        {0, 1, 2, 3, 4, -1, -1, -1, 8},
-                        {0, 1, 2, 3, 4, 5, -1, -1, 8},
-                        {0, 1, 2, 3, 4, 5, 6, -1, 8},
-                        {0, 1, 2, 3, 4, 5, 6, 7, 8}},
-                EngineResources.from(allocator).operatorResources().groupIdPolicy()));
-        grouped = profiled("q67.group.partial", new SqlStageAggregationOperator(
+        int[][] groupingSets = {
+                {-1, -1, -1, -1, -1, -1, -1, -1, 8},
+                {0, -1, -1, -1, -1, -1, -1, -1, 8},
+                {0, 1, -1, -1, -1, -1, -1, -1, 8},
+                {0, 1, 2, -1, -1, -1, -1, -1, 8},
+                {0, 1, 2, 3, -1, -1, -1, -1, 8},
+                {0, 1, 2, 3, 4, -1, -1, -1, 8},
+                {0, 1, 2, 3, 4, 5, -1, -1, 8},
+                {0, 1, 2, 3, 4, 5, 6, -1, 8},
+                {0, 1, 2, 3, 4, 5, 6, 7, 8}};
+        Operator grouped = profiled("q67.project.rollup_key", query67SalesByRollupKey(allocator, primitiveRegistry, tables));
+        grouped = profiled("q67.group.partial", new AdaptiveSqlPartialAggregationOperator(
                 allocator,
                 grouped,
                 2,
-                new int[0],
-                List.of(SqlStageAggregationOperator.aggregate(
-                        List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
-                        () -> List.of(new Sum(8))))));
+                new int[] {9},
+                SqlStageAggregationOperator.groupIdTransform(
+                        allocator,
+                        grouped.outputSchema(),
+                        groupingSets,
+                        EngineResources.from(allocator).operatorResources().groupIdPolicy()),
+                List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
+                () -> List.of(new Sum(8)),
+                32L * 1024 * 1024,
+                0.8,
+                true));
         grouped = profiled("q67.group.final", new SqlStageAggregationOperator(
                 allocator,
                 grouped,
@@ -2987,8 +2992,20 @@ final class TpcdsParquetSupport
                 new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8},
                 List.of(SqlStageAggregationOperator.aggregate(
                         List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
-                        () -> List.of(new Sum(9))))));
-        grouped = profiled("q67.project.grouped", projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9));
+                        () -> List.of(new Sum(9)))),
+                true,
+                null,
+                new SqlStageAggregationOperator.PartitionTransform(
+                        Schema.unspecified(10),
+                        source -> new TopNRankingOperator(
+                                allocator,
+                                100,
+                                new int[] {0},
+                                new int[] {8},
+                                new boolean[] {true},
+                                projectInputs(allocator, primitiveRegistry, source, 0, 1, 2, 3, 4, 5, 6, 7, 9),
+                                EngineResources.from(allocator).operatorResources().topNRankingPolicy()))));
+        grouped = profiled("q67.project.grouped", projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 8));
         grouped = profiled("q67.topn_ranking", new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy()));
         return profiled("q67.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped));
     }
@@ -10904,7 +10921,8 @@ final class TpcdsParquetSupport
                         new Reference(new Input(7), Stream.VALUES),
                         new Reference(new Input(8), Stream.VALUES),
                         new Reference(new Input(10), Stream.VALUES),
-                        new Reference(sales, Stream.VALUES))),
+                        new Reference(sales, Stream.VALUES),
+                        new Reference(new Input(1), Stream.VALUES))),
                 primitiveRegistry,
                 source);
     }
