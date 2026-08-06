@@ -2958,9 +2958,9 @@ final class TpcdsParquetSupport
 
     public static Operator query67(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator grouped = new GroupIdOperator(
+        Operator grouped = profiled("q67.group_id", new GroupIdOperator(
                 allocator,
-                query67SalesByRollupKey(allocator, primitiveRegistry, tables),
+                profiled("q67.project.rollup_key", query67SalesByRollupKey(allocator, primitiveRegistry, tables)),
                 new int[][] {
                         {-1, -1, -1, -1, -1, -1, -1, -1, 8},
                         {0, -1, -1, -1, -1, -1, -1, -1, 8},
@@ -2971,7 +2971,7 @@ final class TpcdsParquetSupport
                         {0, 1, 2, 3, 4, 5, -1, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, -1, 8},
                         {0, 1, 2, 3, 4, 5, 6, 7, 8}},
-                EngineResources.from(allocator).operatorResources().groupIdPolicy());
+                EngineResources.from(allocator).operatorResources().groupIdPolicy()));
         grouped = profiled("q67.group.partial", new SqlStageAggregationOperator(
                 allocator,
                 grouped,
@@ -2988,9 +2988,9 @@ final class TpcdsParquetSupport
                 List.of(SqlStageAggregationOperator.aggregate(
                         List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
                         () -> List.of(new Sum(9))))));
-        grouped = projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9);
-        grouped = new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy());
-        return new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped);
+        grouped = profiled("q67.project.grouped", projectInputs(allocator, primitiveRegistry, grouped, 0, 1, 2, 3, 4, 5, 6, 7, 9));
+        grouped = profiled("q67.topn_ranking", new TopNRankingOperator(allocator, 100, new int[] {0}, new int[] {8}, new boolean[] {true}, grouped, EngineResources.from(allocator).operatorResources().topNRankingPolicy()));
+        return profiled("q67.topn", new TopNOperator(allocator, 100, new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, new boolean[] {false, false, false, false, false, false, false, false, false, false}, grouped));
     }
 
     public static Operator query70(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
@@ -9050,8 +9050,8 @@ final class TpcdsParquetSupport
 
     private static Operator query67SalesByRollupKey(Allocator allocator, PrimitiveRegistry primitiveRegistry, TpcdsParquetTables tables)
     {
-        Operator facts = factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price");
-        facts = new HashJoinOperator(
+        Operator facts = profiled("q67.scan.store_sales", factScan(allocator, tables, "store_sales", "ss_sold_date_sk", "ss_item_sk", "ss_store_sk", "ss_quantity", "ss_sales_price"));
+        facts = profiled("q67.join.date_dim", new HashJoinOperator(
                 allocator,
                 facts,
                 0,
@@ -9063,19 +9063,19 @@ final class TpcdsParquetSupport
                         and(greaterThan(4, 1199), lessThan(4, 1212)),
                         new String[] {"d_date_sk", "d_year", "d_qoy", "d_moy", "d_month_seq"},
                         0, 1, 2, 3),
-                0);
-        facts = new HashJoinOperator(
+                0));
+        facts = profiled("q67.join.store", new HashJoinOperator(
                 allocator,
                 facts,
                 2,
                 scannedTable(allocator, tables, "store", "s_store_sk", "s_store_id"),
-                0);
-        facts = new HashJoinOperator(
+                0));
+        facts = profiled("q67.join.item", new HashJoinOperator(
                 allocator,
                 facts,
                 1,
                 scannedTable(allocator, tables, "item", "i_item_sk", "i_brand", "i_class", "i_category", "i_product_name"),
-                0);
+                0));
         return projectQuery67RollupKey(allocator, primitiveRegistry, facts);
     }
 
