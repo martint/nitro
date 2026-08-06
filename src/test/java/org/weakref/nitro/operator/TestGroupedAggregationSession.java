@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.execution.MemoryReservation;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -39,6 +40,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.LongStream;
 
@@ -306,6 +309,44 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testAdaptiveFlushBoundsAllocatorResidencyAcrossGenerations()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources, new TestingMemoryReservation());
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            long[] keys = LongStream.range(0, 20_000).toArray();
+            long steadyStateResidentBytes = 0;
+            for (int generation = 0; generation < 4; generation++) {
+                try (Batch input = batch(keys)) {
+                    session.addInput(input);
+                }
+                session.flush();
+                try (Batch ignored = session.getOutput()) {
+                    selectedLongValues(ignored, 0);
+                    selectedLongValues(ignored, 1);
+                }
+                if (generation == 1) {
+                    steadyStateResidentBytes = allocator.residentBytes();
+                }
+                else if (generation > 1) {
+                    assertThat(allocator.residentBytes())
+                            .as(allocator.toString())
+                            .isLessThanOrEqualTo(steadyStateResidentBytes);
+                }
+            }
+        }
+    }
+
+    @Test
     void testAdaptivePartialAggregationFlushAndPassthrough()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();
@@ -524,6 +565,31 @@ class TestGroupedAggregationSession
             passthroughFlushes++;
             this.inputBytes += inputBytes;
             this.inputRows += inputRows;
+        }
+    }
+
+    private static final class TestingMemoryReservation
+            implements MemoryReservation
+    {
+        private long reservedBytes;
+
+        @Override
+        public CompletionStage<Void> reserve(long bytes)
+        {
+            reservedBytes += bytes;
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public void release(long bytes)
+        {
+            reservedBytes -= bytes;
+        }
+
+        @Override
+        public long reservedBytes()
+        {
+            return reservedBytes;
         }
     }
 

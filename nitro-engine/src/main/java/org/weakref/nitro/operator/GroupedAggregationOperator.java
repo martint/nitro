@@ -47,7 +47,7 @@ import static java.util.Objects.requireNonNull;
 public class GroupedAggregationOperator
         implements Operator
 {
-    private final Allocator.Context allocationContext = new Allocator.Context("GroupedAggregationOperator");
+    private final Allocator.Context allocationContext;
     private final Allocator allocator;
     private final OperatorResources operatorResources;
     private final AggregationExecutionContext aggregationExecutionContext;
@@ -220,6 +220,27 @@ public class GroupedAggregationOperator
     {
         this(
                 allocator,
+                groupByColumns,
+                groupedColumns,
+                program,
+                source,
+                operatorResources,
+                groupingResources,
+                new Allocator.Context("GroupedAggregationOperator"));
+    }
+
+    GroupedAggregationOperator(
+            Allocator allocator,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            Allocator.Context allocationContext)
+    {
+        this(
+                allocator,
                 -1,
                 groupedColumns,
                 program,
@@ -228,7 +249,8 @@ public class GroupedAggregationOperator
                 mapGroupedKeyIndexes(groupByColumns, groupedColumns),
                 groupingTypes(source.outputSchema(), groupByColumns),
                 requireNonNull(operatorResources, "operatorResources is null"),
-                requireNonNull(groupingResources, "groupingResources is null"));
+                requireNonNull(groupingResources, "groupingResources is null"),
+                requireNonNull(allocationContext, "allocationContext is null"));
     }
 
     private static List<TypeBinding> groupingTypes(Schema sourceSchema, List<Integer> groupByColumns)
@@ -262,7 +284,8 @@ public class GroupedAggregationOperator
                 groupedKeyIndexes,
                 inlineGroupingTypes,
                 operatorResources,
-                operatorResources.grouping());
+                operatorResources.grouping(),
+                new Allocator.Context("GroupedAggregationOperator"));
     }
 
     private GroupedAggregationOperator(
@@ -275,12 +298,14 @@ public class GroupedAggregationOperator
             int[] groupedKeyIndexes,
             List<TypeBinding> inlineGroupingTypes,
             OperatorResources operatorResources,
-            GroupingStateResources groupingResources)
+            GroupingStateResources groupingResources,
+            Allocator.Context allocationContext)
     {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
         }
         this.allocator = allocator;
+        this.allocationContext = requireNonNull(allocationContext, "allocationContext is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
         AggregationOperatorPolicy policy = operatorResources.aggregation().policy();
         this.fuseGroupLimit = policy.fuseGroupLimit();

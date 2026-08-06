@@ -38,6 +38,7 @@ public final class GroupedAggregationSession
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
     private final GroupingStateResources groupingResources;
+    private final Allocator.Context aggregationAllocationContext = new Allocator.Context("GroupedAggregationSession");
     private final PartialAggregationControl partialAggregationControl;
     private final int maxFinalOutputBatchRows;
     private final InitialAggregationBatchBuilder initialAggregationBatchBuilder;
@@ -276,6 +277,7 @@ public final class GroupedAggregationSession
             currentAggregation = null;
         }
         releaseFlushedAggregation();
+        allocator.releasePooledMemory(aggregationAllocationContext);
     }
 
     private GroupedAggregationOperator createAggregation()
@@ -287,7 +289,8 @@ public final class GroupedAggregationSession
                 program,
                 new SchemaSource(inputSchema),
                 operatorResources,
-                groupingResources);
+                groupingResources,
+                aggregationAllocationContext);
     }
 
     private void ensureAggregation()
@@ -302,6 +305,7 @@ public final class GroupedAggregationSession
         if (flushedAggregation != null) {
             flushedAggregation.close();
             flushedAggregation = null;
+            allocator.releasePooledMemory(aggregationAllocationContext);
         }
     }
 
