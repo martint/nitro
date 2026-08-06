@@ -513,7 +513,25 @@ public final class PlanEvaluator
             }
         }
         Streams result = function.apply(inputs, mask, requestedStreams, prepareOutput(output), executionContext);
-        return completeRequestedStreams(requestedStreams, propagateInputErrors(requestedStreams, inputs, result, mask), mask);
+        if (output != null || !hasOnlyKnownEmptyErrors(inputs, result)) {
+            result = propagateInputErrors(requestedStreams, inputs, result, mask);
+        }
+        return completeRequestedStreams(requestedStreams, result, mask);
+    }
+
+    private boolean hasOnlyKnownEmptyErrors(List<Streams> inputs, Streams result)
+    {
+        Vector resultErrors = result.getOrNull(Stream.ERRORS);
+        if (resultErrors != null && !allocator.isSharedAllFalseBoolean(resultErrors)) {
+            return false;
+        }
+        for (Streams input : inputs) {
+            Vector inputErrors = input.getOrNull(Stream.ERRORS);
+            if (inputErrors != null && !allocator.isSharedAllFalseBoolean(inputErrors)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static Set<Stream> requiredInputStreams(Set<Stream> functionRequiredStreams, Set<Stream> requestedOutputStreams)

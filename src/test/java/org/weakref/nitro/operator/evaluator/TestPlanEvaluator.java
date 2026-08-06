@@ -2132,6 +2132,45 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testForwardsKnownEmptyErrorsWithoutMerging()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("no_local_errors", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                return Streams.empty();
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+        });
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        var noErrors = allocator.borrowAllFalseBoolean(new Allocator.Context("test"), 3);
+        Variable result = new Variable(0);
+        Reference leftValues = new Reference(new Input(0), Stream.VALUES);
+        Reference rightValues = new Reference(new Input(1), Stream.VALUES);
+        Reference resultErrors = new Reference(result, Stream.ERRORS);
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("no_local_errors", List.of(leftValues, rightValues)), AllMask.ALL)),
+                        List.of(resultErrors)),
+                primitiveRegistry,
+                inputResolver(Map.of(
+                        leftValues, new I64Vector(new long[] {1, 2, 3}),
+                        rightValues, new I64Vector(new long[] {4, 5, 6}),
+                        new Reference(new Input(0), Stream.ERRORS), noErrors,
+                        new Reference(new Input(1), Stream.ERRORS), noErrors)),
+                allocator);
+
+        assertThat(evaluator.evaluate(resultErrors, Mask.all(3)).get(Stream.ERRORS)).isSameAs(noErrors);
+    }
+
+    @Test
     void testCopyOfErrorsRequestsOnlyErrors()
     {
         AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());
