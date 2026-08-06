@@ -41,6 +41,40 @@ class SqlShapeOperatorBoardTest(unittest.TestCase):
         self.assertEqual(rows[0]["get_output_cpu_ms"], 3)
         self.assertEqual(rows[0]["physical_input_positions"], 0)
 
+    def test_parses_interleaved_engine_summaries(self):
+        text = "\n".join([
+            "operator_cpu,trino,HashAggregationOperator,2,4.000,0.000,0.000",
+            "operator_cpu,nitro,TrinoNitroAggregationOperator,2,2.000,0.000,0.000",
+            "trino,tpch-parquet-sf10,q01,2,1,1,1,1,4.000,4.000,1,1,1",
+            "nitro,tpch-parquet-sf10,q01,2,1,1,1,1,2.000,2.000,1,1,1",
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.log"
+            path.write_text(text)
+            rows = BOARD.parse_log(path, "tpch-parquet-sf10")
+        self.assertEqual([(row["engine"], row["add_input_cpu_ms"]) for row in rows], [
+            ("trino", 2),
+            ("nitro", 1),
+        ])
+
+    def test_loads_combined_suite_logs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            for suite_name, benchmark_name in BOARD.SUITES.items():
+                (directory / f"{suite_name}.log").write_text("\n".join([
+                    "operator_cpu,trino,HashAggregationOperator,1,2.000,0.000,0.000",
+                    "operator_cpu,nitro,TrinoNitroAggregationOperator,1,1.000,0.000,0.000",
+                    f"trino,{benchmark_name},q01,1,1,1,1,1,2.000,2.000,1,1,1",
+                    f"nitro,{benchmark_name},q01,1,1,1,1,1,1.000,1.000,1,1,1",
+                ]))
+            rows = BOARD.load(directory)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({(row["suite"], row["engine"]) for row in rows}, {
+            (suite, engine)
+            for suite in BOARD.SUITES
+            for engine in BOARD.ENGINES
+        })
+
     def test_markdown_reconciles_operator_and_query_cpu(self):
         rows = []
         for suite in BOARD.SUITES:
@@ -61,6 +95,7 @@ class SqlShapeOperatorBoardTest(unittest.TestCase):
             BOARD.write_markdown(path, rows)
             text = path.read_text()
         self.assertIn("| tpch | 6.0 | 10.0 | 0.600 | 100.000% | 100.000% |", text)
+        self.assertIn("| tpch | aggregation | 6.0 | 10.0 | 0.600 | -4.0 |", text)
         self.assertNotIn("| tpch | q01 |", text)
 
 

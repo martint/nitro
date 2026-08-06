@@ -45,7 +45,7 @@ def split_operator_key(key):
 
 
 def parse_log(path, suite_name):
-    pending = []
+    pending = defaultdict(list)
     rows = []
     query_pattern = re.compile(
         rf"(nitro|trino),{re.escape(suite_name)},(q[0-9]+[ab]?),"
@@ -53,16 +53,15 @@ def parse_log(path, suite_name):
     for line in path.read_text().splitlines():
         operator = OPERATOR_PATTERN.search(line)
         if operator:
-            pending.append(operator.groups())
+            values = operator.groups()
+            pending[values[0]].append(values)
             continue
         query = query_pattern.search(line)
         if not query:
             continue
         engine, query_id, measurements, cpu_p50, cpu_mean = query.groups()
         measurements = int(measurements)
-        for values in pending:
-            if values[0] != engine:
-                raise ValueError(f"{path}:{query_id}: operator engine {values[0]} precedes {engine} result")
+        for values in pending.pop(engine, []):
             stage, operator_name, plan_node = split_operator_key(values[1])
             numeric = [float(value) if value is not None else 0.0 for value in values[2:]]
             rows.append({
@@ -84,15 +83,22 @@ def parse_log(path, suite_name):
                 "output_positions": numeric[6] / measurements,
                 "blocked_wall_ms": numeric[7] / measurements,
             })
-        pending = []
     if pending:
-        raise ValueError(f"{path}: operator metrics are not followed by a query result")
+        engines = ", ".join(sorted(pending))
+        raise ValueError(f"{path}: operator metrics for {engines} are not followed by query results")
     return rows
 
 
 def load(directory):
     rows = []
     for suite, suite_name in SUITES.items():
+        combined_path = directory / f"{suite}.log"
+        if combined_path.is_file():
+            parsed = parse_log(combined_path, suite_name)
+            for row in parsed:
+                row["suite"] = suite
+            rows.extend(parsed)
+            continue
         for engine in ENGINES:
             path = directory / f"{suite}-{engine}-queryphase-instrumented.log"
             if not path.is_file():
@@ -152,6 +158,19 @@ def write_markdown(path, rows):
             values = [f"{totals[key, family]:.1f}" for family in families]
             stages = len(stage_counts[key]) if stage_counts[key] else "unavailable"
             lines.append(f"| {suite} | {engine} | {len(query_counts[key])} | {stages} | " + " | ".join(values) + " |")
+    lines.extend([
+        "",
+        "## Operator-family CPU comparison",
+        "",
+        "| suite | family | Nitro CPU (ms) | Trino CPU (ms) | Nitro / Trino | CPU difference (ms) |",
+        "|---|---|---:|---:|---:|---:|",
+    ])
+    for suite in SUITES:
+        for family in families:
+            nitro = totals[(suite, "nitro"), family]
+            trino = totals[(suite, "trino"), family]
+            ratio = f"{nitro / trino:.3f}" if trino else "n/a"
+            lines.append(f"| {suite} | {family} | {nitro:.1f} | {trino:.1f} | {ratio} | {nitro - trino:.1f} |")
     lines.extend([
         "",
         "## End-to-end operator CPU reconciliation",
