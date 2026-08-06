@@ -597,21 +597,26 @@ public final class TrinoTpcdsParquetSupport
     public MaterializedResult query67(TpcdsParquetTables tables)
     {
         List<Type> rollupTypes = query67SalesByRollupKeyTypes(tables);
+        List<Type> partitionedRollupTypes = concatTypes(rollupTypes, List.of(BIGINT));
         List<Type> groupIdTypes = concatTypes(rollupTypes, List.of(BIGINT));
         List<Type> partialTypes = concatTypes(rollupTypes.subList(0, 8), List.of(BIGINT, BIGINT));
+        List<Type> groupedTypes = concatTypes(partialTypes.subList(0, 8), List.of(BIGINT));
+        List<Type> rankedTypes = concatTypes(groupedTypes, List.of(BIGINT));
         List<Page> rollup = executePipelinePlan(query67SalesByRollupKeyPlan(tables));
         List<Page> partial = executeSqlAggregationStage(
                 rollup,
-                rollupTypes,
+                partitionedRollupTypes,
                 2,
-                new int[0],
+                new int[] {9},
                 () -> List.of(
                         namedGroupIdStep("q67.group_id", query67GroupIdSpec(groupIdTypes)),
                         namedFactoryStep("q67.group.partial", hashAggregationFactory(
                                 67_11,
                                 groupIdTypes,
                                 List.of(0, 1, 2, 3, 4, 5, 6, 7, 9),
-                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(8), OptionalInt.empty())))),
+                                Step.PARTIAL,
+                                Optional.of(new PartialAggregationController(DataSize.of(16, MEGABYTE), 0.8)),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.PARTIAL, List.of(8), OptionalInt.empty())))),
                 partialTypes,
                 "q67.exchange.partial");
         List<Page> grouped = executeSqlAggregationStage(
@@ -619,14 +624,39 @@ public final class TrinoTpcdsParquetSupport
                 partialTypes,
                 2,
                 new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8},
-                () -> List.of(namedFactoryStep("q67.group.final", hashAggregationFactory(
-                        67_12,
-                        partialTypes,
-                        List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
-                        FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.SINGLE, List.of(9), OptionalInt.empty())))),
-                partialTypes,
+                () -> List.of(
+                        namedFactoryStep("q67.group.final", hashAggregationFactory(
+                                67_12,
+                                partialTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                                Step.FINAL,
+                                Optional.empty(),
+                                FUNCTION_RESOLUTION.getAggregateFunction("sum", fromTypes(BIGINT)).createAggregatorFactory(Step.FINAL, List.of(9), OptionalInt.empty()))),
+                        namedFactoryStep("q67.project.task_grouped", filterAndProjectFactory(
+                                67_13,
+                                Optional.empty(),
+                                List.of(
+                                        field(0, partialTypes.get(0)),
+                                        field(1, partialTypes.get(1)),
+                                        field(2, partialTypes.get(2)),
+                                        field(3, partialTypes.get(3)),
+                                        field(4, partialTypes.get(4)),
+                                        field(5, partialTypes.get(5)),
+                                        field(6, partialTypes.get(6)),
+                                        field(7, partialTypes.get(7)),
+                                        field(9, BIGINT)),
+                                groupedTypes)),
+                        namedFactoryStep("q67.rank.task", topNRankingFactory(
+                                67_14,
+                                groupedTypes,
+                                List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+                                List.of(0),
+                                List.of(8),
+                                List.of(DESC_NULLS_LAST),
+                                100))),
+                rankedTypes,
                 "q67.exchange.final");
-        return executePipelinePlan(query67FinalPlan(grouped, partialTypes), query67OutputTypes(tables));
+        return executePipelinePlan(query67FinalPlan(grouped, groupedTypes), query67OutputTypes(tables));
     }
 
     public MaterializedResult query68(TpcdsParquetTables tables)
@@ -3333,9 +3363,8 @@ public final class TrinoTpcdsParquetSupport
         return List.of(channelTypes.get(0), channelTypes.get(1), channelTypes.get(2), BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
     }
 
-    private PipelinePlan query67FinalPlan(List<Page> groupedPages, List<Type> partialTypes)
+    private PipelinePlan query67FinalPlan(List<Page> groupedPages, List<Type> groupedTypes)
     {
-        List<Type> groupedTypes = concatTypes(partialTypes.subList(0, 8), List.of(BIGINT));
         List<Type> rankedTypes = concatTypes(groupedTypes, List.of(BIGINT));
         return new PipelinePlan(
                 new PagesPipelineSource(groupedPages, "q67.merge.grouped"),
@@ -3344,15 +3373,15 @@ public final class TrinoTpcdsParquetSupport
                                 67_13,
                                 Optional.empty(),
                                 List.of(
-                                        field(0, partialTypes.get(0)),
-                                        field(1, partialTypes.get(1)),
-                                        field(2, partialTypes.get(2)),
-                                        field(3, partialTypes.get(3)),
-                                        field(4, partialTypes.get(4)),
-                                        field(5, partialTypes.get(5)),
-                                        field(6, partialTypes.get(6)),
-                                        field(7, partialTypes.get(7)),
-                                        field(9, BIGINT)),
+                                        field(0, groupedTypes.get(0)),
+                                        field(1, groupedTypes.get(1)),
+                                        field(2, groupedTypes.get(2)),
+                                        field(3, groupedTypes.get(3)),
+                                        field(4, groupedTypes.get(4)),
+                                        field(5, groupedTypes.get(5)),
+                                        field(6, groupedTypes.get(6)),
+                                        field(7, groupedTypes.get(7)),
+                                        field(8, BIGINT)),
                                 groupedTypes)),
                         namedFactoryStep("q67.rank.final", topNRankingFactory(
                                 67_14,
@@ -3461,8 +3490,9 @@ public final class TrinoTpcdsParquetSupport
                                                 or(isNull(field(4, factTypes.get(4))), isNull(field(3, factTypes.get(3)))),
                                                 constant(0L, BIGINT),
                                                 multiply(cast(field(3, factTypes.get(3)), factTypes.get(3), BIGINT), scaledCents(field(4, factTypes.get(4)), factTypes.get(4)), BIGINT),
-                                                BIGINT)),
-                                query67SalesByRollupKeyTypes(tables)))),
+                                                BIGINT),
+                                        field(1, factTypes.get(1))),
+                                concatTypes(query67SalesByRollupKeyTypes(tables), List.of(factTypes.get(1)))))),
                 "q67.sink.rollup_key");
     }
 
