@@ -21,6 +21,7 @@ import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -40,6 +41,46 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestNativeBatchPartitioner
 {
     @Test
+    void preservesReusedDictionaryEncodingInPartitionCopies()
+            throws ReflectiveOperationException
+    {
+        int size = 64;
+        long[] keys = new long[size];
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            keys[position] = position;
+            ids[position] = position & 1;
+        }
+        TypeBinding type = longType();
+        Schema schema = new Schema(List.of(new Field("key", type, false), new Field("value", type, false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(size),
+                        Output.of(Streams.ofValues(new I64Vector(keys))),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 22})))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    schema,
+                    new int[] {0},
+                    4,
+                    NativeBatchPartitionPolicy.defaults());
+            List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source);
+            try {
+                assertThat(partitions).hasSize(4);
+                for (NativeBatchPartitioner.Partition partition : partitions) {
+                    DictionaryVector values = (DictionaryVector) partition.batch().output(1).borrow(Stream.VALUES);
+                    assertThat(values.values()).isInstanceOf(I64Vector.class);
+                    assertThat(values.values().length()).isEqualTo(2);
+                }
+            }
+            finally {
+                partitions.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
+    @Test
     void partitionsSelectedRowsIntoCompactIndependentBatches()
             throws ReflectiveOperationException
     {
@@ -54,7 +95,12 @@ class TestNativeBatchPartitioner
                                 new BooleanVector(new boolean[] {false, false, false, true, false, false}),
                                 null)),
                         Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40, 50, 60}))))) {
-            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(allocator, schema, new int[] {0}, 4);
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    schema,
+                    new int[] {0},
+                    4,
+                    NativeBatchPartitionPolicy.defaults());
             List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source);
             try {
                 List<Long> values = new ArrayList<>();

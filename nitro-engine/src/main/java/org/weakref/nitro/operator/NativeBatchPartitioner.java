@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
@@ -43,10 +44,17 @@ public final class NativeBatchPartitioner
     private final int outputCount;
     private final int partitionCount;
     private final int partitionMask;
+    private final NativeBatchPartitionPolicy policy;
 
-    public NativeBatchPartitioner(Allocator allocator, Schema schema, int[] partitionChannels, int partitionCount)
+    public NativeBatchPartitioner(
+            Allocator allocator,
+            Schema schema,
+            int[] partitionChannels,
+            int partitionCount,
+            NativeBatchPartitionPolicy policy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
+        this.policy = requireNonNull(policy, "policy is null");
         requireNonNull(schema, "schema is null");
         outputCount = schema.size();
         this.partitionChannels = requireNonNull(partitionChannels, "partitionChannels is null").clone();
@@ -119,14 +127,7 @@ public final class NativeBatchPartitioner
                 Streams source = columns[channel];
                 Streams.Builder copied = Streams.builder();
                 for (Stream stream : source.streams()) {
-                    copied.put(stream, source.get(stream).copyPositionsInto(
-                            allocator,
-                            context,
-                            null,
-                            positions,
-                            count,
-                            0,
-                            count));
+                    copied.put(stream, copyVector(source.get(stream), context, positions, count));
                 }
                 Streams streams = copied.build();
                 outputs[channel] = new Output(
@@ -141,6 +142,31 @@ public final class NativeBatchPartitioner
             allocator.release(context);
             throw failure;
         }
+    }
+
+    private Vector copyVector(Vector source, Allocator.Context context, int[] positions, int count)
+    {
+        if (source instanceof DictionaryVector dictionary && policy.preserveDictionary(dictionary.values().length(), count)) {
+            int dictionarySize = dictionary.values().length();
+            int[] dictionaryPositions = new int[dictionarySize];
+            for (int position = 0; position < dictionarySize; position++) {
+                dictionaryPositions[position] = position;
+            }
+            Vector dictionaryValues = dictionary.values().copyPositionsInto(
+                    allocator,
+                    context,
+                    null,
+                    dictionaryPositions,
+                    dictionarySize,
+                    0,
+                    dictionarySize);
+            int[] ids = new int[count];
+            for (int position = 0; position < count; position++) {
+                ids[position] = dictionary.ids()[positions[position]];
+            }
+            return allocator.allocateDictionary(context, ids, count, dictionaryValues);
+        }
+        return source.copyPositionsInto(allocator, context, null, positions, count, 0, count);
     }
 
     private static int mix(long hash)
