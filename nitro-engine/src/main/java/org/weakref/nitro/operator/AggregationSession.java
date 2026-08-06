@@ -94,7 +94,7 @@ public final class AggregationSession
     @Override
     public long retainedBytes()
     {
-        return allocator.currentBytes(allocationContext);
+        return allocator.scopeCurrentBytes(allocationContext);
     }
 
     public void addInput(Batch batch)

@@ -897,6 +897,12 @@ public class Allocator
         return current;
     }
 
+    /** Returns live bytes owned by this exact allocation scope, without aggregating same-named diagnostic scopes. */
+    public long scopeCurrentBytes(Context context)
+    {
+        return state(requireNonNull(context, "context is null")).stats().current();
+    }
+
     /** Registers a context's pool groups before execution so compatibility admission is independent of pull order. */
     public void register(Context context)
     {

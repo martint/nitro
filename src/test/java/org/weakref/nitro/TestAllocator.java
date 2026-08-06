@@ -191,6 +191,21 @@ class TestAllocator
     }
 
     @Test
+    void testExactScopeBytesDoNotIncludeSameNamedContexts()
+    {
+        Allocator.Context first = new Allocator.Context("shared-name");
+        Allocator.Context second = new Allocator.Context("shared-name");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            allocator.setRetainedBytes(first, new Object(), 100);
+            allocator.setRetainedBytes(second, new Object(), 25);
+
+            assertThat(allocator.currentBytes(first)).isEqualTo(125);
+            assertThat(allocator.scopeCurrentBytes(first)).isEqualTo(100);
+            assertThat(allocator.scopeCurrentBytes(second)).isEqualTo(25);
+        }
+    }
+
+    @Test
     void testRejectedRetainedStateReservationDoesNotCorruptTeardownAccounting()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();

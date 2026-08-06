@@ -119,7 +119,7 @@ public class GroupedAggregationOperator
 
     long retainedBytes()
     {
-        return allocator.currentBytes(allocationContext);
+        return allocator.scopeCurrentBytes(allocationContext);
     }
 
     public GroupedAggregationOperator(Allocator allocator, int groupColumn, List<Accumulator> aggregations, Operator source)
