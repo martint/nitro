@@ -2136,7 +2136,13 @@ public final class NitroParquetBatchSource
         adaptiveDecided = true;
         double selectedFraction = (double) adaptiveSelectedRows / adaptiveObservedRows;
         if (selectedFraction <= batchPolicy.adaptiveMaximumSelectedFraction()) {
-            currentBatchRows = batchPolicy.maxRows();
+            int outputVectors = readers.length;
+            for (boolean columnNullable : nullable) {
+                if (columnNullable) {
+                    outputVectors++;
+                }
+            }
+            currentBatchRows = batchPolicy.adaptiveRows(outputVectors);
         }
         if (diagnostics.rowCounts()) {
             System.err.printf("[adaptive-batch] columns=%s observed=%s selected=%s fraction=%.4f rows=%s%n",

@@ -15,12 +15,16 @@ package org.weakref.nitro.parquet;
 
 /**
  * Immutable output-batch sizing for a native Parquet scan.
+ *
+ * @param adaptiveMaximumVectorCells maximum rows multiplied by materializable value/null vectors after adaptive
+ * growth; the initial row count remains the lower bound
  */
 public record ParquetScanBatchPolicy(
         int initialRows,
         int maxRows,
         long adaptiveObservationRows,
-        double adaptiveMaximumSelectedFraction)
+        double adaptiveMaximumSelectedFraction,
+        long adaptiveMaximumVectorCells)
 {
     public ParquetScanBatchPolicy
     {
@@ -36,11 +40,23 @@ public record ParquetScanBatchPolicy(
         if (adaptiveMaximumSelectedFraction < 0 || adaptiveMaximumSelectedFraction > 1) {
             throw new IllegalArgumentException("adaptiveMaximumSelectedFraction is outside [0, 1]");
         }
+        if (adaptiveMaximumVectorCells <= 0) {
+            throw new IllegalArgumentException("adaptiveMaximumVectorCells must be positive");
+        }
     }
 
     public ParquetScanBatchPolicy(int maxRows)
     {
-        this(maxRows, maxRows, 0, 0);
+        this(maxRows, maxRows, 0, 0, Long.MAX_VALUE);
+    }
+
+    public ParquetScanBatchPolicy(
+            int initialRows,
+            int maxRows,
+            long adaptiveObservationRows,
+            double adaptiveMaximumSelectedFraction)
+    {
+        this(initialRows, maxRows, adaptiveObservationRows, adaptiveMaximumSelectedFraction, Long.MAX_VALUE);
     }
 
     public static ParquetScanBatchPolicy defaults()
@@ -50,11 +66,13 @@ public record ParquetScanBatchPolicy(
 
     /**
      * Starts with the cache-qualified native batch size and grows only after a downstream pipeline has
-     * demonstrated that the host boundary would otherwise receive very sparse batches.
+     * demonstrated that the host boundary would otherwise receive very sparse batches. Growth is additionally
+     * bounded by projected vector width so a wide sparse scan cannot trade fewer boundary batches for an aggregate
+     * multi-gigabyte live vector set.
      */
     public static ParquetScanBatchPolicy adaptiveHostBoundaryDefaults()
     {
-        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, 0.25);
+        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, 0.25, 1_000_000);
     }
 
     public static ParquetScanBatchPolicy fromSystemProperties()
@@ -66,5 +84,14 @@ public record ParquetScanBatchPolicy(
     boolean adaptive()
     {
         return initialRows < maxRows && adaptiveObservationRows > 0;
+    }
+
+    int adaptiveRows(int vectorColumns)
+    {
+        if (vectorColumns <= 0) {
+            return maxRows;
+        }
+        long cellBoundedRows = adaptiveMaximumVectorCells / vectorColumns;
+        return (int) Math.max(initialRows, Math.min(maxRows, cellBoundedRows));
     }
 }
