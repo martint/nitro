@@ -85,6 +85,29 @@ class TestValueIdInterner
     }
 
     @Test
+    void acceptsPrecomputedGroupingHashWithoutWeakeningEquality()
+    {
+        ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);
+        byte[] alpha = bytes("collision-value-5664");
+        byte[] beta = bytes("collision-value-42684");
+        int sharedHash = OperatorVectorSupport.binaryHash(alpha);
+        assertThat(OperatorVectorSupport.binaryHash(beta)).isEqualTo(sharedHash);
+
+        int alphaId = interner.intern(alpha, 0, alpha.length, sharedHash);
+        int betaId = interner.intern(beta, 0, beta.length, sharedHash);
+
+        assertThat(betaId).isNotEqualTo(alphaId);
+        assertThat(interner.intern(alpha, 0, alpha.length, sharedHash)).isEqualTo(alphaId);
+        assertThat(interner.groupingHash(alphaId)).isEqualTo(sharedHash);
+        assertThat(interner.groupingHash(betaId)).isEqualTo(sharedHash);
+
+        byte[] gamma = bytes("gamma");
+        int gammaHash = OperatorVectorSupport.binaryHash(gamma);
+        int gammaId = interner.intern(gamma, 0, gamma.length);
+        assertThat(interner.intern(gamma, 0, gamma.length, gammaHash)).isEqualTo(gammaId);
+    }
+
+    @Test
     void distinguishesPrefixesAndDifferentLengths()
     {
         ValueIdInterner interner = new ValueIdInterner(1000, DEFAULT_POLICY);

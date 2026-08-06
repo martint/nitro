@@ -1625,7 +1625,10 @@ class FlatKeyLayout
                 globalIds[entry] = -1;
                 continue;
             }
-            globalIds[entry] = interner.intern(data, so, len);
+            long[] entryHashes = dictionaryEntryHashes[fieldIndex];
+            globalIds[entry] = entryHashes == null
+                    ? interner.intern(data, so, len)
+                    : interner.intern(data, so, len, (int) entryHashes[entry]);
         }
         batchEntryGlobalId[fieldIndex] = globalIds;
         batchEntryGlobalIdDict[fieldIndex] = dictionaryValues;
@@ -1707,7 +1710,10 @@ class FlatKeyLayout
             globalId = -1;
         }
         else {
-            globalId = fieldInterners[fieldIndex].intern(dictionary.data(), so, len);
+            long[] entryHashes = dictionaryEntryHashes[fieldIndex];
+            globalId = entryHashes == null
+                    ? fieldInterners[fieldIndex].intern(dictionary.data(), so, len)
+                    : fieldInterners[fieldIndex].intern(dictionary.data(), so, len, (int) entryHashes[dictId]);
         }
         ids[dictId] = globalId;
         return globalId;

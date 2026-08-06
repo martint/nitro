@@ -17,9 +17,6 @@ import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 import java.util.Arrays;
 
 import static java.util.Objects.requireNonNull;
@@ -122,10 +119,24 @@ final class ValueIdInterner
      */
     int intern(byte[] value, int offset, int length)
     {
+        return intern(value, offset, length, OperatorVectorSupport.binaryHash(value, offset, length));
+    }
+
+    /**
+     * Interns a value whose operator-compatible hash has already been computed by the batch layout. The supplied
+     * hash is used both to place the interner slot and by the surrounding grouping table, avoiding a second scan of
+     * the same bytes. Equality remains authoritative, so ordinary 32-bit hash collisions cannot merge values.
+     */
+    int intern(byte[] value, int offset, int length, int groupingHash)
+    {
+        return intern(value, offset, length, slotHash(groupingHash), groupingHash);
+    }
+
+    private int intern(byte[] value, int offset, int length, long hash, int groupingHash)
+    {
         if (overflowed) {
             return policy.recognizeEmptyAfterOverflow() && length == 0 ? emptyId : TOO_MANY;
         }
-        long hash = hash(value, offset, length);
         byte tag = (byte) ((hash >>> 56) | 0x80L);
         int group = ((int) hash) & mask & ~(GROUP - 1);
         while (true) {
@@ -147,7 +158,7 @@ final class ValueIdInterner
                 }
                 int slot = group + Long.numberOfTrailingZeros(emptyBits);
                 int id = distinct;
-                store(id, value, offset, length, hash);
+                store(id, value, offset, length, hash, groupingHash);
                 slotTags[slot] = tag;
                 slots[slot] = id + 1;
                 distinct++;
@@ -194,7 +205,7 @@ final class ValueIdInterner
         if (policy.recognizeEmptyAfterOverflow() && length == 0 && emptyId >= 0) {
             return emptyId;
         }
-        long hash = hash(value, offset, length);
+        long hash = slotHash(OperatorVectorSupport.binaryHash(value, offset, length));
         byte tag = (byte) ((hash >>> 56) | 0x80L);
         int group = ((int) hash) & mask & ~(GROUP - 1);
         while (true) {
@@ -246,7 +257,7 @@ final class ValueIdInterner
         return vector.freezeContent();
     }
 
-    private void store(int id, byte[] value, int offset, int length, long hash)
+    private void store(int id, byte[] value, int offset, int length, long hash, int groupingHash)
     {
         if (id >= valueOffset.length) {
             int newLength = valueOffset.length * 2;
@@ -266,7 +277,7 @@ final class ValueIdInterner
         valueOffset[id] = dataSize;
         valueLength[id] = length;
         valueHash[id] = hash;
-        valueGroupingHash[id] = OperatorVectorSupport.binaryHash(value, offset, length);
+        valueGroupingHash[id] = groupingHash;
         if (length == 0) {
             emptyId = id;
         }
@@ -306,26 +317,10 @@ final class ValueIdInterner
         mask = newMask;
     }
 
-    private static long hash(byte[] value, int offset, int length)
+    private static long slotHash(int groupingHash)
     {
-        // FNV-1a-style multiply-xor, but consuming a machine word at a time instead of a byte at a time:
-        // 8× fewer multiply steps and a shorter dependency chain on the long string values seen here. The
-        // hash values differ from the byte-wise version, but ids are assigned by first-occurrence order (not
-        // by hash), so the mapping is unchanged; the hash only places probe slots and is settled by
-        // regionEquals. Any consistent function within a run is correct.
-        long hash = 0xcbf29ce484222325L;
-        int index = 0;
-        int wordLimit = length - 7;
-        for (; index < wordLimit; index += 8) {
-            hash ^= (long) LONG_HANDLE.get(value, offset + index);
-            hash *= 0x100000001b3L;
-        }
-        for (; index < length; index++) {
-            hash ^= value[offset + index] & 0xff;
-            hash *= 0x100000001b3L;
-        }
-        return hash;
+        // binaryHash has already avalanched the value into 32 bits. Multiplication spreads those bits across the
+        // 64-bit slot hash so both the low-bit group index and high-bit control tag remain well distributed.
+        return Integer.toUnsignedLong(groupingHash) * 0x9E3779B97F4A7C15L;
     }
-
-    private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 }
