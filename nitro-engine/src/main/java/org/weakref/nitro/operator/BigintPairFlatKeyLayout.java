@@ -13,16 +13,14 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
+import java.util.List;
 import java.util.Set;
-
-import static java.nio.ByteOrder.LITTLE_ENDIAN;
 
 /**
  * Hand-coded {@link FlatKeyLayout} specialization for the {@code (BIGINT, BIGINT)} shape.
@@ -38,8 +36,8 @@ import static java.nio.ByteOrder.LITTLE_ENDIAN;
 final class BigintPairFlatKeyLayout
         extends FlatKeyLayout
 {
-    private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
-
+    private final FlatTypeHandler firstHandler;
+    private final FlatTypeHandler secondHandler;
     private final int firstKeyOffset;
     private final int secondKeyOffset;
     private final boolean nullable;
@@ -64,6 +62,8 @@ final class BigintPairFlatKeyLayout
             int fixedRecordSize)
     {
         super(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
+        this.firstHandler = handlers[0];
+        this.secondHandler = handlers[1];
         this.firstKeyOffset = fixedOffsets[0];
         this.secondKeyOffset = fixedOffsets[1];
         this.nullable = nullByteCount > 0;
@@ -74,32 +74,31 @@ final class BigintPairFlatKeyLayout
             boolean nullable,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
-            FlatKeyTablePolicy policy)
+            FlatKeyTablePolicy policy,
+            List<TypeBinding> types)
     {
         if (values.length != 2) {
             throw new IllegalArgumentException("BigintPairFlatKeyLayout requires exactly two columns");
         }
-        FlatTypeHandler handler0 = FlatTypeHandlers.forVector(values[0]);
-        FlatTypeHandler handler1 = FlatTypeHandlers.forVector(values[1]);
+        FlatTypeHandler handler0 = FlatTypeHandlers.forVector(values[0], types.isEmpty() ? null : types.get(0));
+        FlatTypeHandler handler1 = FlatTypeHandlers.forVector(values[1], types.size() < 2 ? null : types.get(1));
         if (handler0 == null || handler1 == null
                 || handler0.kind() != FlatTypeHandler.Kind.LONG
                 || handler1.kind() != FlatTypeHandler.Kind.LONG) {
             throw new IllegalArgumentException("BigintPairFlatKeyLayout requires two LONG-kind columns");
         }
-        FlatTypeHandler handler = handler0;
         int nullByteCount = nullable ? 1 : 0;
-        int keySize = handler.fixedSize();
         int firstOffset = nullByteCount;
-        int secondOffset = firstOffset + keySize;
+        int secondOffset = firstOffset + handler0.fixedSize();
         Field[] fields = new Field[] {
-                new Field(0, handler, firstOffset, Set.<BinaryVector.Trait>of()),
-                new Field(1, handler, secondOffset, Set.<BinaryVector.Trait>of()),
+                new Field(0, handler0, firstOffset, Set.<BinaryVector.Trait>of()),
+                new Field(1, handler1, secondOffset, Set.<BinaryVector.Trait>of()),
         };
         int[] inputChannels = new int[] {0, 1};
-        FlatTypeHandler[] handlers = new FlatTypeHandler[] {handler, handler};
+        FlatTypeHandler[] handlers = new FlatTypeHandler[] {handler0, handler1};
         int[] fixedOffsets = new int[] {firstOffset, secondOffset};
         int[] comparisonOrder = new int[] {0, 1};
-        return new BigintPairFlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + keySize);
+        return new BigintPairFlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, secondOffset + handler1.fixedSize());
     }
 
     @Override
@@ -171,8 +170,8 @@ final class BigintPairFlatKeyLayout
                 second = 0;
             }
         }
-        LONG_HANDLE.set(fixedChunk, fixedOffset + firstKeyOffset, first);
-        LONG_HANDLE.set(fixedChunk, fixedOffset + secondKeyOffset, second);
+        firstHandler.writeLong(fixedChunk, fixedOffset + firstKeyOffset, first);
+        secondHandler.writeLong(fixedChunk, fixedOffset + secondKeyOffset, second);
     }
 
     @Override
@@ -189,15 +188,15 @@ final class BigintPairFlatKeyLayout
             if (storedFirstNull != inputFirstNull || storedSecondNull != inputSecondNull) {
                 return false;
             }
-            if (!storedFirstNull && (long) LONG_HANDLE.get(fixedChunk, fixedOffset + firstKeyOffset) != first) {
+            if (!storedFirstNull && firstHandler.readLong(fixedChunk, fixedOffset + firstKeyOffset) != first) {
                 return false;
             }
-            if (!storedSecondNull && (long) LONG_HANDLE.get(fixedChunk, fixedOffset + secondKeyOffset) != second) {
+            if (!storedSecondNull && secondHandler.readLong(fixedChunk, fixedOffset + secondKeyOffset) != second) {
                 return false;
             }
             return true;
         }
-        return (long) LONG_HANDLE.get(fixedChunk, fixedOffset + firstKeyOffset) == first
-                && (long) LONG_HANDLE.get(fixedChunk, fixedOffset + secondKeyOffset) == second;
+        return firstHandler.readLong(fixedChunk, fixedOffset + firstKeyOffset) == first
+                && secondHandler.readLong(fixedChunk, fixedOffset + secondKeyOffset) == second;
     }
 }

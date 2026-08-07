@@ -60,6 +60,17 @@ public interface TypeBinding
         return Optional.empty();
     }
 
+    /**
+     * Canonical fixed-width flat-key storage for a logical type carried as a {@code long}.
+     *
+     * <p>This is a logical-domain guarantee, not a description of the current batch's vector width. Empty retains
+     * the engine's ordinary full-width representation.
+     */
+    default Optional<LongFlatKeyStorage> longFlatKeyStorage()
+    {
+        return Optional.empty();
+    }
+
     /// Vector representations this type provider permits at an SPI boundary.
     ///
     /// The set is descriptive metadata for connectors and integration adapters. A provider can

@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -27,6 +28,7 @@ import org.weakref.nitro.data.VectorAccess;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
@@ -283,6 +285,17 @@ class FlatKeyLayout
             OperatorCodeGenerationResources codeGeneration,
             FlatKeyTablePolicy policy)
     {
+        return tryCreate(values, nullable, arrayPool, codeGeneration, policy, List.of());
+    }
+
+    public static FlatKeyLayout tryCreate(
+            Vector[] values,
+            boolean nullable,
+            PrimitiveArrayPool arrayPool,
+            OperatorCodeGenerationResources codeGeneration,
+            FlatKeyTablePolicy policy,
+            List<TypeBinding> types)
+    {
         FlatKeyTablePolicy.Layout layoutPolicy = policy.layout();
         Field[] fields = new Field[values.length];
         int[] inputChannels = new int[values.length];
@@ -293,7 +306,8 @@ class FlatKeyLayout
         int binaryFields = 0;
         int idBackedBinaryFields = 0;
         for (int index = 0; index < values.length; index++) {
-            FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index]);
+            TypeBinding type = index < types.size() ? types.get(index) : null;
+            FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index], type);
             if (handler == null) {
                 return null;
             }
@@ -590,7 +604,7 @@ class FlatKeyLayout
             }
             int fieldOffset = fixedOffset + fixedOffsets[field];
             switch (fieldKinds[field]) {
-                case LONG -> GROUP_LONG_HANDLE.set(fixedChunk, fieldOffset, (long) encoded - 1);
+                case LONG -> handlers[field].writeLong(fixedChunk, fieldOffset, (long) encoded - 1);
                 case BINARY -> {
                     GROUP_INT_HANDLE.set(fixedChunk, fieldOffset, encoded - 1);
                     if (!compactBinaryRecord(field)) {
@@ -1011,7 +1025,9 @@ class FlatKeyLayout
                 }
                 binaryFields |= 1 << field;
             }
-            else if (fieldKinds[field] != FlatTypeHandler.Kind.LONG || fieldLong[field] == null) {
+            else if (fieldKinds[field] != FlatTypeHandler.Kind.LONG ||
+                    handlers[field].fixedSize() != Long.BYTES ||
+                    fieldLong[field] == null) {
                 return;
             }
         }
@@ -2347,11 +2363,11 @@ class FlatKeyLayout
     private void writeFieldFlat(int fieldIndex, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, int recordIndex)
     {
         if (!batchAccessorsReady) {
-            writeFlatByKind(fieldKinds[fieldIndex], value, position, fixedChunk, fixedOffset, arena);
+            handlers[fieldIndex].writeFlat(value, position, fixedChunk, fixedOffset, arena);
             return;
         }
         switch (fieldKinds[fieldIndex]) {
-            case LONG -> GROUP_LONG_HANDLE.set(fixedChunk, fixedOffset, fieldLong[fieldIndex].value(position));
+            case LONG -> handlers[fieldIndex].writeLong(fixedChunk, fixedOffset, fieldLong[fieldIndex].value(position));
             case BINARY -> writeBinaryField(fieldIndex, value, position, fixedChunk, fixedOffset, arena, recordIndex);
             case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
@@ -2411,10 +2427,10 @@ class FlatKeyLayout
     private boolean identicalField(int fieldIndex, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position, int recordIndex)
     {
         if (!batchAccessorsReady) {
-            return identicalByKind(fieldKinds[fieldIndex], fixedChunk, fixedOffset, arena, value, position);
+            return handlers[fieldIndex].identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
         }
         return switch (fieldKinds[fieldIndex]) {
-            case LONG -> (long) GROUP_LONG_HANDLE.get(fixedChunk, fixedOffset) == fieldLong[fieldIndex].value(position);
+            case LONG -> handlers[fieldIndex].readLong(fixedChunk, fixedOffset) == fieldLong[fieldIndex].value(position);
             case BINARY -> identicalBinaryField(fieldIndex, fixedChunk, fixedOffset, arena, value, position, recordIndex);
             case BOOLEAN -> FlatTypeHandlers.BOOLEAN.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
             case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
@@ -2582,26 +2598,6 @@ class FlatKeyLayout
         };
     }
 
-    private static void writeFlatByKind(FlatTypeHandler.Kind kind, Vector value, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena)
-    {
-        switch (kind) {
-            case LONG -> FlatTypeHandlers.LONG.writeFlat(value, position, fixedChunk, fixedOffset, arena);
-            case BINARY -> FlatTypeHandlers.BINARY.writeFlat(value, position, fixedChunk, fixedOffset, arena);
-            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.writeFlat(value, position, fixedChunk, fixedOffset, arena);
-            case DOUBLE -> FlatTypeHandlers.DOUBLE.writeFlat(value, position, fixedChunk, fixedOffset, arena);
-        }
-    }
-
-    private static boolean identicalByKind(FlatTypeHandler.Kind kind, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena arena, Vector value, int position)
-    {
-        return switch (kind) {
-            case LONG -> FlatTypeHandlers.LONG.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
-            case BINARY -> FlatTypeHandlers.BINARY.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
-            case BOOLEAN -> FlatTypeHandlers.BOOLEAN.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
-            case DOUBLE -> FlatTypeHandlers.DOUBLE.identicalFlatToInput(fixedChunk, fixedOffset, arena, value, position);
-        };
-    }
-
     public void writeRecord(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
         if (batchNullFreeSingleBinary) {
@@ -2620,7 +2616,7 @@ class FlatKeyLayout
             if (nullByteCount > 0) {
                 fixedChunk[fixedOffset] = 0;
             }
-            GROUP_LONG_HANDLE.set(fixedChunk, fixedOffset + fixedOffsets[0], fieldLong[0].value(position));
+            handlers[0].writeLong(fixedChunk, fixedOffset + fixedOffsets[0], fieldLong[0].value(position));
             writeBinaryField(1, values[inputChannels[1]], position, fixedChunk, fixedOffset + fixedOffsets[1], variableWidthArena, recordIndex);
             storeRecordDictionaryIds(recordIndex, position);
             return;
@@ -2666,7 +2662,7 @@ class FlatKeyLayout
             return identicalBinaryField(0, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position, recordIndex);
         }
         if (batchNullFreeLongBinary) {
-            if ((long) GROUP_LONG_HANDLE.get(fixedChunk, fixedOffset + fixedOffsets[0]) != fieldLong[0].value(position)) {
+            if (handlers[0].readLong(fixedChunk, fixedOffset + fixedOffsets[0]) != fieldLong[0].value(position)) {
                 return false;
             }
             int fieldOffset = fixedOffset + fixedOffsets[1];

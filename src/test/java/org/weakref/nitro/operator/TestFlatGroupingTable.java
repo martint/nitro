@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.LongFlatKeyStorage;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -21,6 +22,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
@@ -30,20 +32,221 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Random;
 import java.util.Set;
 
+import static java.lang.Math.toIntExact;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestFlatGroupingTable
 {
+    private static final LongFlatKeyStorage INTEGER_FLAT_KEY_STORAGE = new LongFlatKeyStorage()
+    {
+        @Override
+        public int fixedSize()
+        {
+            return Integer.BYTES;
+        }
+
+        @Override
+        public void write(byte[] target, int offset, long value)
+        {
+            int integer = toIntExact(value);
+            target[offset] = (byte) integer;
+            target[offset + 1] = (byte) (integer >>> 8);
+            target[offset + 2] = (byte) (integer >>> 16);
+            target[offset + 3] = (byte) (integer >>> 24);
+        }
+
+        @Override
+        public long read(byte[] source, int offset)
+        {
+            return (source[offset] & 0xFF)
+                    | (source[offset + 1] & 0xFF) << 8
+                    | (source[offset + 2] & 0xFF) << 16
+                    | source[offset + 3] << 24;
+        }
+    };
+
     private final EngineResources engineResources = EngineResources.createDefault();
     private final PrimitiveArrayPool arrayPool = engineResources.primitiveArrays();
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testProviderOwnedIntegerStorageIsStableAcrossPhysicalVectorWidths()
+    {
+        TypeBinding bigint = longBinding("testing:bigint", Optional.empty());
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        Vector[] first = {
+                new I64Vector(new long[] {10, 20, 10}),
+                new I32Vector(new int[] {1, 2, 1})};
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(
+                first,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(bigint, integer));
+        assertThat(layout.fixedRecordSize()).isEqualTo(Long.BYTES + Integer.BYTES);
+
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("provider-owned-integer-storage");
+        try {
+            table.beginBatch(first, null);
+            assertThat(table.assignGroup(first, null, 0, 0)).isZero();
+            assertThat(table.assignGroup(first, null, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(first, null, 2, 2)).isZero();
+            table.endBatch();
+
+            Vector[] later = {
+                    new I64Vector(new long[] {20, 30}),
+                    new I64Vector(new long[] {2, 3})};
+            table.beginBatch(later, null);
+            assertThat(table.assignGroup(later, null, 0, 2)).isEqualTo(1);
+            assertThat(table.assignGroup(later, null, 1, 2)).isEqualTo(2);
+            table.endBatch();
+
+            I64Vector grouped = (I64Vector) table.groupedValues(1, Mask.all(3), null, allocator, allocationContext).values();
+            assertThat(grouped.values()).containsExactly(1, 2, 3);
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
+    void testProviderOwnedIntegerStorageRejectsOutOfDomainValue()
+    {
+        TypeBinding bigint = longBinding("testing:bigint", Optional.empty());
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        Vector[] values = {
+                new I64Vector(new long[] {10}),
+                new I64Vector(new long[] {(long) Integer.MAX_VALUE + 1})};
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(
+                values,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(bigint, integer));
+        FlatGroupingTable table = new FlatGroupingTable(layout, 1, true);
+        try {
+            table.beginBatch(values, null);
+            assertThatThrownBy(() -> table.assignGroup(values, null, 0, 0))
+                    .isInstanceOf(ArithmeticException.class);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testNormalizedRecordWriteUsesProviderOwnedFieldWidth()
+    {
+        TypeBinding bigint = longBinding("testing:bigint", Optional.empty());
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        Vector[] values = {
+                new I64Vector(new long[] {1}),
+                new I64Vector(new long[] {2}),
+                new I32Vector(new int[] {3})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                values,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(bigint, bigint, integer));
+        try {
+            assertThat(layout.fixedRecordSize()).isEqualTo(1 + 2 * Long.BYTES + Integer.BYTES);
+            assertThat(layout.supportsNormalizedRecordWrite()).isTrue();
+            byte[] record = new byte[layout.fixedRecordSize()];
+            layout.writeNormalizedRecord(record, 0, 2L | 3L << Integer.SIZE, 4L);
+            layout.beginBatch(values, null);
+            assertThat(layout.identicalRecordToInput(record, 0, null, values, null, 0, 0)).isTrue();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testProviderOwnedIntegerStoragePreservesHighCardinalitySignedPairs()
+    {
+        TypeBinding bigint = longBinding("testing:bigint", Optional.empty());
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        int batchSize = 4096;
+        Vector[] initial = {new I64Vector(batchSize), new I32Vector(batchSize)};
+        FlatKeyLayout layout = BigintPairFlatKeyLayout.create(
+                initial,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(bigint, integer));
+        FlatGroupingTable table = new FlatGroupingTable(layout, 16, true, true);
+        Map<LongPair, Integer> expectedGroups = new HashMap<>();
+        long[] expectedFirst = new long[20 * batchSize];
+        long[] expectedSecond = new long[20 * batchSize];
+        Random random = new Random(814735);
+        int nextGroup = 0;
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("compact-high-cardinality-output");
+        try {
+            for (int batch = 0; batch < 20; batch++) {
+                long[] first = new long[batchSize];
+                int[] second = new int[batchSize];
+                for (int position = 0; position < batchSize; position++) {
+                    first[position] = random.nextLong();
+                    second[position] = random.nextInt();
+                    if (position >= 2 && position % 7 == 0) {
+                        first[position] = first[position - 2];
+                        second[position] = second[position - 2];
+                    }
+                }
+                Vector[] values = {new I64Vector(first), new I32Vector(second)};
+                Vector[] nulls = {new BooleanVector(batchSize), new BooleanVector(batchSize)};
+                table.beginBatch(values, nulls);
+                table.prepareBatchHashes(values, nulls, Mask.all(batchSize));
+                for (int position = 0; position < batchSize; position++) {
+                    LongPair key = new LongPair(first[position], second[position]);
+                    Integer expected = expectedGroups.get(key);
+                    long actual = table.assignGroup(values, nulls, position, nextGroup);
+                    if (expected == null) {
+                        expectedGroups.put(key, nextGroup);
+                        expectedFirst[nextGroup] = key.first();
+                        expectedSecond[nextGroup] = key.second();
+                        assertThat(actual).isEqualTo(nextGroup);
+                        nextGroup++;
+                    }
+                    else {
+                        assertThat(actual).isEqualTo(expected.longValue());
+                    }
+                }
+                table.endBatch();
+            }
+            I64Vector firstOutput = (I64Vector) table.groupedValues(0, Mask.all(nextGroup), null, allocator, allocationContext).values();
+            I64Vector secondOutput = (I64Vector) table.groupedValues(1, Mask.all(nextGroup), null, allocator, allocationContext).values();
+            assertThat(firstOutput.values()).startsWith(Arrays.copyOf(expectedFirst, nextGroup));
+            assertThat(secondOutput.values()).startsWith(Arrays.copyOf(expectedSecond, nextGroup));
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
 
     @Test
     void testSingleLongGroupingInitialCapacityUsesSampledCardinality()
@@ -1728,4 +1931,42 @@ class TestFlatGroupingTable
         }
         return vector;
     }
+
+    private static TypeBinding longBinding(String identity, Optional<LongFlatKeyStorage> flatKeyStorage)
+    {
+        return new TypeBinding()
+        {
+            @Override
+            public TypeIdentity identity()
+            {
+                return new TypeIdentity(identity);
+            }
+
+            @Override
+            public Class<?> carrierType()
+            {
+                return long.class;
+            }
+
+            @Override
+            public TypeOperators operators()
+            {
+                return TypeOperators.UNSPECIFIED;
+            }
+
+            @Override
+            public Optional<LongFlatKeyStorage> longFlatKeyStorage()
+            {
+                return flatKeyStorage;
+            }
+
+            @Override
+            public Set<Class<? extends Vector>> supportedVectorTypes()
+            {
+                return Set.of(I32Vector.class, I64Vector.class);
+            }
+        };
+    }
+
+    private record LongPair(long first, int second) {}
 }

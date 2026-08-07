@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.type.LongFlatKeyStorage;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -68,6 +70,12 @@ final class FlatTypeHandlers
         public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
         {
             LONG_HANDLE.set(fixedChunk, fixedOffset, OperatorVectorSupport.longValue(vector, position));
+        }
+
+        @Override
+        public void writeLong(byte[] fixedChunk, int fixedOffset, long value)
+        {
+            LONG_HANDLE.set(fixedChunk, fixedOffset, value);
         }
 
         @Override
@@ -638,6 +646,92 @@ final class FlatTypeHandlers
             case BinaryVector _ -> BINARY;
             default -> null;
         };
+    }
+
+    public static FlatTypeHandler forVector(Vector vector, TypeBinding type)
+    {
+        FlatTypeHandler handler = forVector(vector);
+        if (handler != LONG || type == null || type.longFlatKeyStorage().isEmpty()) {
+            return handler;
+        }
+        return new CompactLongHandler(type.longFlatKeyStorage().orElseThrow());
+    }
+
+    private record CompactLongHandler(LongFlatKeyStorage storage)
+            implements FlatTypeHandler
+    {
+        @Override
+        public Kind kind()
+        {
+            return Kind.LONG;
+        }
+
+        @Override
+        public int fixedSize()
+        {
+            return storage.fixedSize();
+        }
+
+        @Override
+        public boolean variableWidth()
+        {
+            return false;
+        }
+
+        @Override
+        public long hashInput(Vector vector, int position)
+        {
+            return LONG.hashInput(vector, position);
+        }
+
+        @Override
+        public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            writeLong(fixedChunk, fixedOffset, OperatorVectorSupport.longValue(vector, position));
+        }
+
+        @Override
+        public void writeLong(byte[] fixedChunk, int fixedOffset, long value)
+        {
+            storage.write(fixedChunk, fixedOffset, value);
+        }
+
+        @Override
+        public boolean identicalFlatToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector vector, int position)
+        {
+            return readLong(fixedChunk, fixedOffset) == OperatorVectorSupport.longValue(vector, position);
+        }
+
+        @Override
+        public long readLong(byte[] fixedChunk, int fixedOffset)
+        {
+            return storage.read(fixedChunk, fixedOffset);
+        }
+
+        @Override
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            Arrays.fill(result.values(), 0);
+            for (int index : mask) {
+                if (index == nullGroup) {
+                    continue;
+                }
+                int recordIndex = table.recordIndex(index);
+                if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
+                    result.values()[index] = readLong(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            result.values()[outputPosition] = readLong(fixedChunk, fixedOffset);
+            return result;
+        }
     }
 
     public static FlatTypeHandler forProbeKey(OperatorKeySemantics.Key key)

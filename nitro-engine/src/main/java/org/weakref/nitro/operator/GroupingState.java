@@ -711,7 +711,8 @@ final class GroupingState
                     hasNullableKeys(nulls),
                     arrayPool,
                     codeGeneration,
-                    flatKeyTablePolicy);
+                    flatKeyTablePolicy,
+                    keyTypes);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -1053,7 +1054,9 @@ final class GroupingState
         keyHandlers = new FlatTypeHandler[values.length];
         binaryTraits = (Set<BinaryVector.Trait>[]) new Set<?>[values.length];
         for (int index = 0; index < values.length; index++) {
-            keyHandlers[index] = FlatTypeHandlers.forVector(values[index]);
+            keyHandlers[index] = FlatTypeHandlers.forVector(
+                    values[index],
+                    index < keyTypes.size() ? keyTypes.get(index) : null);
             binaryTraits[index] = OperatorVectorSupport.binaryTraits(values[index]);
         }
 
@@ -1070,7 +1073,8 @@ final class GroupingState
                     nullableCompositeKeys,
                     arrayPool,
                     codeGeneration,
-                    flatKeyTablePolicy);
+                    flatKeyTablePolicy,
+                    keyTypes);
             flatGroupingTable = new FlatGroupingTable(
                     flatGroupingLayout,
                     Math.max(16, values[0].length()),
@@ -1127,7 +1131,8 @@ final class GroupingState
                 nullableCompositeKeys,
                 arrayPool,
                 codeGeneration,
-                flatKeyTablePolicy);
+                flatKeyTablePolicy,
+                keyTypes);
         if (compositePolicy.sharedDictionaryComposite() &&
                 values.length > 1 &&
                 values.length <= compositePolicy.sharedDictionaryMaxFields() &&
@@ -1247,7 +1252,8 @@ final class GroupingState
                 hasNullableKeys(nulls),
                 arrayPool,
                 codeGeneration,
-                flatKeyTablePolicy);
+                flatKeyTablePolicy,
+                keyTypes);
         int distinct = sampledDistinctFlatKeys(layout, values, nulls, mask);
         return (long) distinct * 100 >= (long) sampled * compositePolicy.packedFlatIdentityMinDistinctPercent();
     }
@@ -1438,7 +1444,7 @@ final class GroupingState
         // branch.
         boolean largeBatch = mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
         FlatKeyLayout identityLayout = largeBatch
-                ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy)
+                ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy, keyTypes)
                 : null;
         int sampledDistinct = largeBatch
                 ? sampledDistinctFlatKeys(identityLayout, values, nulls, mask)
