@@ -127,6 +127,32 @@ public class RegisteredAggregationUnit
     }
 
     @Override
+    public boolean supportsInitialInput()
+    {
+        return inputMode == InputMode.RAW &&
+                outputMode == OutputMode.INTERMEDIATE &&
+                filterInputColumn < 0 &&
+                implementation.supportsInitialRawIntermediate();
+    }
+
+    @Override
+    public Streams initialInput(
+            int output,
+            Mask mask,
+            StreamAccessor streams,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        if (!supportsInitialInput()) {
+            throw new UnsupportedOperationException("direct initial input is not supported");
+        }
+        return requireNonNull(
+                implementation.initialRawIntermediate(mask, input(streams), allocator, allocationContext),
+                "initial raw intermediate result is null");
+    }
+
+    @Override
     public Streams result(
             int output,
             int maxGroup,

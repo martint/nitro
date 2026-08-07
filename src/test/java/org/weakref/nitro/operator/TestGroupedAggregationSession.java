@@ -35,6 +35,7 @@ import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
+import org.weakref.nitro.operator.aggregation.StreamAccessor;
 
 import java.util.Arrays;
 import java.util.List;
@@ -431,6 +432,53 @@ class TestGroupedAggregationSession
                         .containsExactly(1, 1, 1);
                 assertThat(((I64Vector) result.output(2).borrow(Stream.VALUES)).values())
                         .containsExactly(1, 0, 1);
+            }
+        }
+    }
+
+    @Test
+    void testUsesFunctionOwnedDirectInitialAggregationRows()
+    {
+        AtomicInteger directCalls = new AtomicInteger();
+        CountAll directCount = new CountAll()
+        {
+            @Override
+            public boolean supportsInitialInput()
+            {
+                return true;
+            }
+
+            @Override
+            public Streams initialInput(
+                    int output,
+                    Mask mask,
+                    StreamAccessor streams,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                directCalls.incrementAndGet();
+                long[] values = new long[mask.count()];
+                Arrays.fill(values, 1);
+                return Streams.ofValues(allocator.adopt(allocationContext, new I64Vector(values)));
+            }
+        };
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
+                    allocator,
+                    Schema.unspecified(1),
+                    List.of(0),
+                    PhysicalAggregationProgram.independent(List.of(directCount)),
+                    resources.operatorResources());
+
+            try (Batch input = new Batch(
+                    Mask.sparse(new int[] {3, 1}, 4),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))));
+                    Batch result = builder.build(input)) {
+                assertThat(selectedLongValues(result, 0)).containsExactly(40, 20);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 1);
+                assertThat(directCalls).hasValue(1);
             }
         }
     }

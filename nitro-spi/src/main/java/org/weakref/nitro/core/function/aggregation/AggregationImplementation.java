@@ -64,6 +64,30 @@ public interface AggregationImplementation
 
     void addIntermediate(Object state, Vector groups, Mask mask, AggregationInput input);
 
+    /**
+     * Whether this implementation can lower selected raw rows directly to independent intermediate states.
+     */
+    default boolean supportsInitialRawIntermediate()
+    {
+        return false;
+    }
+
+    /**
+     * Lowers selected raw rows directly to independent intermediate states.
+     *
+     * <p>Adaptive partial aggregation uses this when every input row is deliberately passed as its own group. The
+     * function implementation owns the physical state representation; the execution engine does not recognize
+     * individual aggregate functions or types.
+     */
+    default Streams initialRawIntermediate(
+            Mask mask,
+            AggregationInput input,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException("direct initial intermediate state is not supported");
+    }
+
     Streams intermediate(
             int maxGroup,
             Object state,

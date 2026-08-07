@@ -78,6 +78,10 @@ final class InitialAggregationBatchBuilder
                 operatorResources.aggregation().bufferPoolGroup());
         try {
             Mask inputMask = input.borrowMask();
+            Batch direct = buildDirect(input, inputMask, context);
+            if (direct != null) {
+                return direct;
+            }
             int groupCount = inputMask.count();
             int maxGroup = groupCount - 1;
             Mask outputMask = allocator.allocateAllMask(context, groupCount);
@@ -153,6 +157,42 @@ final class InitialAggregationBatchBuilder
             allocator.release(context);
             throw throwable;
         }
+    }
+
+    private Batch buildDirect(Batch input, Mask inputMask, Allocator.Context context)
+    {
+        for (PhysicalAggregationUnit unit : program.units()) {
+            if (!unit.supportsInitialInput()) {
+                return null;
+            }
+        }
+
+        int groupCount = inputMask.count();
+        Mask outputMask = allocator.allocateAllMask(context, groupCount);
+        Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
+        for (int output = 0; output < groupedColumns.length; output++) {
+            Streams copied = allocator.copyStreams(context, borrowedStreams(input.output(groupedColumns[output])), inputMask);
+            outputs[output] = ownedOutput(copied, context);
+        }
+        for (int output = 0; output < program.outputs().size(); output++) {
+            PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+            Streams result = requireNonNull(
+                    program.units().get(binding.unit()).initialInput(
+                            binding.result(),
+                            inputMask,
+                            StreamAccessors.forBatch(input),
+                            allocator,
+                            context),
+                    "direct initial aggregation result is null");
+            outputs[groupedColumns.length + output] = ownedOutput(result, context);
+        }
+        return new Batch(
+                outputMask,
+                _ -> {},
+                mask -> allocator.transfer(context, mask),
+                _ -> {},
+                () -> allocator.release(context),
+                outputs);
     }
 
     private Mask filterMask(Batch batch, int filterColumn, Mask mask, Allocator.Context context)

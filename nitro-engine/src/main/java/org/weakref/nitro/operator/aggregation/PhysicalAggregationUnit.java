@@ -65,6 +65,21 @@ public interface PhysicalAggregationUnit
         accumulate(state, groups, mask, streams);
     }
 
+    default boolean supportsInitialInput()
+    {
+        return false;
+    }
+
+    default Streams initialInput(
+            int output,
+            Mask mask,
+            StreamAccessor streams,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException("direct initial input is not supported");
+    }
+
     default Streams result(int output, int maxGroup, Object state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
     {
         return result(output, maxGroup, state, existing, allocator, allocationContext);
