@@ -81,6 +81,50 @@ class TestNativeBatchPartitioner
     }
 
     @Test
+    void compactsDestinationDictionariesAndReusesTheirIdMapping()
+            throws ReflectiveOperationException
+    {
+        int size = 8;
+        int[] ids = {7, 7, 9, 7, 9, 9, 7, 9};
+        long[] dictionaryValues = new long[16];
+        dictionaryValues[7] = 70;
+        dictionaryValues[9] = 90;
+        TypeBinding type = longType();
+        Schema schema = new Schema(List.of(
+                new Field("key", type, false),
+                new Field("first", type, false),
+                new Field("second", type, false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(size),
+                        Output.of(Streams.ofValues(new I64Vector(new long[size]))),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(dictionaryValues)))),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(ids, new I64Vector(dictionaryValues)))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    schema,
+                    new int[] {0},
+                    1,
+                    new NativeBatchPartitionPolicy(true, 2, 4));
+
+            List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source);
+            try {
+                assertThat(partitions).hasSize(1);
+                DictionaryVector first = (DictionaryVector) partitions.getFirst().batch().output(1).borrow(Stream.VALUES);
+                DictionaryVector second = (DictionaryVector) partitions.getFirst().batch().output(2).borrow(Stream.VALUES);
+                assertThat(first.values()).isInstanceOfSatisfying(I64Vector.class, values ->
+                        assertThat(values.values()).containsExactly(70, 90));
+                assertThat(first.ids()).containsExactly(0, 0, 1, 0, 1, 1, 0, 1);
+                assertThat(second.ids()).isSameAs(first.ids());
+            }
+            finally {
+                partitions.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
+    @Test
     void partitionsSelectedRowsIntoCompactIndependentBatches()
             throws ReflectiveOperationException
     {

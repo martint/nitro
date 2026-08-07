@@ -156,6 +156,18 @@ public class Allocator
         return vector;
     }
 
+    /**
+     * Allocates a dictionary wrapper that shares a caller-owned, immutable id mapping. This is intended for sibling
+     * vectors produced by one operation, where copying the same mapping for every value/null/error stream would add
+     * allocation and bandwidth without adding isolation.
+     */
+    public DictionaryVector allocateDictionarySharedIds(Context context, int[] ids, int length, Vector values)
+    {
+        DictionaryVector vector = DictionaryVector.wrap(ids, length, values);
+        state(context).trackVector(vector, false);
+        return vector;
+    }
+
     public RleVector allocateRle(Context context, int[] counts, Vector values)
     {
         RleVector vector = new RleVector(Arrays.copyOf(counts, counts.length), values);
