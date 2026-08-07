@@ -36,8 +36,21 @@ public record HashJoinOutputPolicy(
         boolean directDenseSingleMatchRangeOutput,
         boolean rleRunIndexHint,
         boolean poolBuildDictionaryIds,
-        boolean gatherMultiRunRetainedFixedWidthValues)
+        boolean gatherMultiRunRetainedFixedWidthValues,
+        boolean unifyMultiRunNonRetainedBinaryValues,
+        int unifyMultiRunBinaryMinOutputRowsPerBuildRow,
+        long unifyMultiRunBinaryMaxRetainedBytes)
 {
+    public HashJoinOutputPolicy
+    {
+        if (unifyMultiRunBinaryMinOutputRowsPerBuildRow < 1) {
+            throw new IllegalArgumentException("unifyMultiRunBinaryMinOutputRowsPerBuildRow must be positive");
+        }
+        if (unifyMultiRunBinaryMaxRetainedBytes < 0) {
+            throw new IllegalArgumentException("unifyMultiRunBinaryMaxRetainedBytes is negative");
+        }
+    }
+
     public static HashJoinOutputPolicy defaults()
     {
         return new HashJoinOutputPolicy(
@@ -59,7 +72,10 @@ public record HashJoinOutputPolicy(
                 false,
                 true,
                 true,
-                true);
+                true,
+                true,
+                1,
+                64L * 1024 * 1024);
     }
 
     public static HashJoinOutputPolicy fromSystemProperties()
@@ -88,7 +104,10 @@ public record HashJoinOutputPolicy(
                 booleanProperty("nitro.join.directDenseSingleMatchRangeOutput", defaults.directDenseSingleMatchRangeOutput()),
                 booleanProperty("nitro.join.rleRunIndexHint", defaults.rleRunIndexHint()),
                 booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()),
-                booleanProperty("nitro.hash.join.gatherMultiRunRetainedFixedWidthValues", defaults.gatherMultiRunRetainedFixedWidthValues()));
+                booleanProperty("nitro.hash.join.gatherMultiRunRetainedFixedWidthValues", defaults.gatherMultiRunRetainedFixedWidthValues()),
+                booleanProperty("nitro.hash.join.unifyMultiRunNonRetainedBinaryValues", defaults.unifyMultiRunNonRetainedBinaryValues()),
+                Integer.getInteger("nitro.hash.join.unifyMultiRunBinaryMinOutputRowsPerBuildRow", defaults.unifyMultiRunBinaryMinOutputRowsPerBuildRow()),
+                Long.getLong("nitro.hash.join.unifyMultiRunBinaryMaxRetainedBytes", defaults.unifyMultiRunBinaryMaxRetainedBytes()));
     }
 
     private static boolean booleanProperty(String name, boolean defaultValue)

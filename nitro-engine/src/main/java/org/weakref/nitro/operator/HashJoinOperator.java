@@ -253,6 +253,10 @@ public class HashJoinOperator
     // bytes per output row. Keyed by batchIndex * innerOutputCount + innerOutputIndex.
     private final Map<Integer, BuildDictionary> buildDictionaries = new HashMap<>();
     private final BuildDictionary notDictionary = new BuildDictionary(new int[0], null);
+    private final long[] multiRunBinaryOutputRows;
+    private final Map<Integer, UnifiedBuildBinaryColumn> unifiedBuildBinaryColumns = new HashMap<>();
+    private final UnifiedBuildBinaryColumn unsupportedUnifiedBuildBinaryColumn = new UnifiedBuildBinaryColumn(null, new int[0]);
+    private long unifiedBuildBinaryRetainedBytes;
     private JoinIndex joinIndex;
 
     private Mask currentOuterMask;
@@ -515,6 +519,7 @@ public class HashJoinOperator
         this.preparedBuild = preparedBuild;
         this.outerSchema = new Streams[outerOutputCount];
         this.innerSchema = new Streams[innerOutputCount];
+        this.multiRunBinaryOutputRows = new long[innerOutputCount];
         int effectiveJoinKeyCount = outerJoinColumns.length + (promotedBinaryEqualityFilter ? 1 : 0);
         this.currentOuterJoinValues = new Vector[effectiveJoinKeyCount];
         this.currentOuterJoinNulls = new Vector[effectiveJoinKeyCount];
@@ -2681,8 +2686,9 @@ public class HashJoinOperator
             return allNullInnerOutput(innerOutputIndex, schema, currentOutputCount);
         }
 
+        Streams preMaterialized = null;
         if (!hasNoMatchRows()) {
-            // The dictionary-wrap shortcuts produce a full-length, position-indexed vector, so they are
+            // The existing dictionary-wrap shortcuts produce a full-length, position-indexed vector, so they are
             // correct whether or not the output mask is sparse (a downstream constraint). They also drop
             // the per-position byte copy that otherwise dominates high-fan-out joins. Deferred build
             // batches still fall through (the wrap methods bail on them) so their lazy payloads keep
@@ -2711,6 +2717,13 @@ public class HashJoinOperator
                 }
                 return result.build();
             }
+            // Unifying non-retained variable-width values pays for a build-owned copy. Restrict that representation
+            // to sparse consumers, where it also avoids the per-position materialization forced by the constraint;
+            // the full-mask bulk copier is already cheaper for consumers that immediately flatten the result.
+            Vector multiRunDictionaryValues = currentOutputMask.all() ? null : tryWrapMultiRunNonRetainedBinaryValues(innerOutputIndex);
+            if (multiRunDictionaryValues != null) {
+                preMaterialized = Streams.ofValues(multiRunDictionaryValues);
+            }
             // No zero-copy wrap applies. The remaining per-run bulk copy materializes the full output
             // range, so only take it when the mask is full; a sparse mask falls through to the
             // per-position copy below, which honors the constraint (and any deferred-batch laziness).
@@ -2737,7 +2750,8 @@ public class HashJoinOperator
             }
         }
 
-        Streams result = null;
+        Streams result = preMaterialized;
+        boolean valuesMaterialized = preMaterialized != null;
         boolean exposeNulls = probeOuterJoin || innerOutputStreams(innerOutputIndex).contains(Stream.NULLS);
         Streams nullInnerSchema = null;
         // The constraint mask can select no rows while a downstream consumer still borrows this column
@@ -2763,7 +2777,18 @@ public class HashJoinOperator
             }
             int innerBatchIndex = JoinRowReference.batchIndex(rowReference);
             BufferedJoinInput.InnerBatch innerBatch = bufferedInner.batches().get(innerBatchIndex);
-            result = copyInnerSinglePosition(result, innerBatch, innerBatchIndex, innerOutputIndex, currentOutputCount, outputPosition, JoinRowReference.position(rowReference), exposeNulls);
+            result = copyInnerSinglePosition(
+                    result,
+                    innerBatch,
+                    innerBatchIndex,
+                    innerOutputIndex,
+                    currentOutputCount,
+                    outputPosition,
+                    JoinRowReference.position(rowReference),
+                    !valuesMaterialized,
+                    true,
+                    true,
+                    exposeNulls);
         }
         return result == null ? buffers.emptyLike(outputSchema(innerOutputIndex + outerOutputCount)) : result;
     }
@@ -2982,6 +3007,96 @@ public class HashJoinOperator
             case BooleanVector _ -> 4;
             default -> 0;
         };
+    }
+
+    private Vector tryWrapMultiRunNonRetainedBinaryValues(int innerOutputIndex)
+    {
+        if (!outputPolicy.unifyMultiRunNonRetainedBinaryValues() || preparedInnerRunCount <= 1 || currentOutputCount == 0) {
+            return null;
+        }
+
+        UnifiedBuildBinaryColumn unified = unifiedBuildBinaryColumns.get(innerOutputIndex);
+        if (unified == unsupportedUnifiedBuildBinaryColumn) {
+            return null;
+        }
+        if (unified == null) {
+            long previousRows = multiRunBinaryOutputRows[innerOutputIndex];
+            long outputRows = previousRows > Long.MAX_VALUE - currentOutputCount ? Long.MAX_VALUE : previousRows + currentOutputCount;
+            multiRunBinaryOutputRows[innerOutputIndex] = outputRows;
+            long buildRows = bufferedInner.rowCount();
+            long admissionRows = buildRows > Long.MAX_VALUE / outputPolicy.unifyMultiRunBinaryMinOutputRowsPerBuildRow()
+                    ? Long.MAX_VALUE
+                    : buildRows * outputPolicy.unifyMultiRunBinaryMinOutputRowsPerBuildRow();
+            if (outputRows < admissionRows) {
+                return null;
+            }
+            unified = buildUnifiedBinaryColumn(innerOutputIndex);
+            unifiedBuildBinaryColumns.put(innerOutputIndex, unified);
+            if (unified == unsupportedUnifiedBuildBinaryColumn) {
+                return null;
+            }
+        }
+
+        int[] ids = new int[currentOutputCount];
+        int[] batchOffsets = unified.batchOffsets();
+        for (int runIndex = 0; runIndex < preparedInnerRunCount; runIndex++) {
+            int batchIndex = outputInnerRunBatchIndexes[runIndex];
+            int outputStart = outputInnerRunStarts[runIndex];
+            int outputEnd = outputStart + outputInnerRunLengths[runIndex];
+            int batchOffset = batchOffsets[batchIndex];
+            for (int position = outputStart; position < outputEnd; position++) {
+                ids[position] = batchOffset + outputInnerLogicalPositions[position];
+            }
+        }
+        return allocator.adopt(allocationContext, DictionaryVector.wrap(ids, unified.values()));
+    }
+
+    private UnifiedBuildBinaryColumn buildUnifiedBinaryColumn(int innerOutputIndex)
+    {
+        List<BufferedJoinInput.InnerBatch> batches = bufferedInner.batches();
+        int[] batchOffsets = new int[batches.size() + 1];
+        long rowCount = 0;
+        long byteCount = 0;
+        Set<BinaryVector.Trait> commonTraits = null;
+        for (int batchIndex = 0; batchIndex < batches.size(); batchIndex++) {
+            BufferedJoinInput.InnerBatch batch = batches.get(batchIndex);
+            if (batch.retained() || batch.deferred()) {
+                return unsupportedUnifiedBuildBinaryColumn;
+            }
+            Streams column = batch.columns()[innerOutputIndex];
+            if (column == null || !column.hasValues() || !(column.values() instanceof BinaryVector values)) {
+                return unsupportedUnifiedBuildBinaryColumn;
+            }
+            rowCount += batch.length();
+            byteCount += (long) values.offsets()[batch.length()] - values.offsets()[0];
+            if (rowCount > Integer.MAX_VALUE || byteCount > Integer.MAX_VALUE ||
+                    byteCount > outputPolicy.unifyMultiRunBinaryMaxRetainedBytes() - unifiedBuildBinaryRetainedBytes) {
+                return unsupportedUnifiedBuildBinaryColumn;
+            }
+            batchOffsets[batchIndex + 1] = (int) rowCount;
+            commonTraits = commonTraits == null ? values.traits() : (commonTraits.equals(values.traits()) ? commonTraits : Set.of());
+        }
+
+        BinaryVector result = BinaryVector.allocate(allocator, buildAllocationContext, (int) rowCount, (int) byteCount);
+        int outputPosition = 0;
+        int outputOffset = 0;
+        result.offsets()[0] = 0;
+        for (BufferedJoinInput.InnerBatch batch : batches) {
+            BinaryVector source = (BinaryVector) batch.columns()[innerOutputIndex].values();
+            for (int position = 0; position < batch.length(); position++) {
+                int sourceStart = source.startOffset(position);
+                int length = source.length(position);
+                System.arraycopy(source.data(), sourceStart, result.data(), outputOffset, length);
+                outputOffset += length;
+                result.offsets()[++outputPosition] = outputOffset;
+            }
+        }
+        if (commonTraits != null) {
+            result.addTraits(commonTraits);
+        }
+        result.freezeContent();
+        unifiedBuildBinaryRetainedBytes += byteCount;
+        return new UnifiedBuildBinaryColumn(result, batchOffsets);
     }
 
     private Vector tryWrapMultiRunInnerBooleanStream(int innerOutputIndex, Stream stream)
@@ -3287,6 +3402,8 @@ public class HashJoinOperator
 
     private record BuildDictionary(int[] idByPosition, Vector values) {}
 
+    private record UnifiedBuildBinaryColumn(BinaryVector values, int[] batchOffsets) {}
+
     private Streams tryWrapRetainedInnerOutput(int innerOutputIndex, BufferedJoinInput.InnerBatch innerBatch)
     {
         if (!innerBatch.retained()) {
@@ -3482,13 +3599,35 @@ public class HashJoinOperator
 
     private Streams copyInnerSinglePosition(Streams existing, BufferedJoinInput.InnerBatch innerBatch, int innerBatchIndex, int innerOutputIndex, int size, int outputPosition, int logicalPosition, boolean exposeNulls)
     {
+        return copyInnerSinglePosition(existing, innerBatch, innerBatchIndex, innerOutputIndex, size, outputPosition, logicalPosition, true, true, true, exposeNulls);
+    }
+
+    private Streams copyInnerSinglePosition(
+            Streams existing,
+            BufferedJoinInput.InnerBatch innerBatch,
+            int innerBatchIndex,
+            int innerOutputIndex,
+            int size,
+            int outputPosition,
+            int logicalPosition,
+            boolean includeValues,
+            boolean includeNulls,
+            boolean includeErrors,
+            boolean exposeNulls)
+    {
         if (!innerBatch.retained()) {
-            return withSyntheticNulls(existing, buffers.copySinglePositionFresh(existing, innerBatch.columns()[innerOutputIndex], size, outputPosition, logicalPosition), size, outputPosition, exposeNulls);
+            Streams selected = selectedStreams(innerBatch.columns()[innerOutputIndex], includeValues, includeNulls, includeErrors);
+            Streams result = selected.streams().isEmpty()
+                    ? existing
+                    : buffers.copySinglePositionFresh(existing, selected, size, outputPosition, logicalPosition);
+            return withSyntheticNulls(existing, result, size, outputPosition, exposeNulls);
         }
 
         int sourcePosition = innerBatch.sourcePosition(logicalPosition);
         constrainRetainedInnerBatch(innerBatchIndex, innerBatch, logicalPosition);
-        return withSyntheticNulls(existing, buffers.copySinglePositionFresh(innerBatch.retainedBatch().output(innerOutputIndex), existing, size, outputPosition, sourcePosition), size, outputPosition, exposeNulls);
+        Output selected = selectedStreams(innerBatch.retainedBatch().output(innerOutputIndex), includeValues, includeNulls, includeErrors);
+        Streams result = selected == null ? existing : buffers.copySinglePositionFresh(selected, existing, size, outputPosition, sourcePosition);
+        return withSyntheticNulls(existing, result, size, outputPosition, exposeNulls);
     }
 
     private Streams copyNullInnerPosition(int innerOutputIndex, Streams existing, Streams schema, int size, int outputPosition)

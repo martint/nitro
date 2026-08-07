@@ -14,6 +14,7 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -106,6 +107,7 @@ import java.util.function.Function;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.parallel.Resources.SYSTEM_PROPERTIES;
 import static org.weakref.nitro.OperatorAssertions.operator;
 import static org.weakref.nitro.data.Row.row;
 
@@ -2579,6 +2581,66 @@ public class TestOperatorBatches
     }
 
     @Test
+    @ResourceLock(SYSTEM_PROPERTIES)
+    void testHashJoinOperatorPreservesUnifiedBinaryPayloadUnderSparseConstraint()
+    {
+        String maxCoalescedRows = System.getProperty("nitro.hash.join.maxCoalescedInnerRows");
+        String maxPostLoadCoalescedRows = System.getProperty("nitro.hash.join.maxPostLoadCoalescedInnerRows");
+        System.setProperty("nitro.hash.join.maxCoalescedInnerRows", "0");
+        System.setProperty("nitro.hash.join.maxPostLoadCoalescedInnerRows", "0");
+        try {
+            Allocator allocator = new Allocator(EngineResources.createDefault());
+            try (Operator join = multiRunBinaryHashJoin(allocator)) {
+                Batch batch = join.next();
+                batch.constrain(Mask.sparse(new int[] {0, 2, 4, 6}, 8));
+                Vector payload = batch.output(2).borrow(Stream.VALUES);
+                assertThat(payload).isInstanceOf(DictionaryVector.class);
+                DictionaryVector dictionary = (DictionaryVector) payload;
+                assertThat(dictionary.values()).isInstanceOf(BinaryVector.class);
+                assertThat(dictionary.values().length()).isEqualTo(4);
+                assertThat(java.util.stream.IntStream.of(0, 2, 4, 6)
+                        .mapToObj(position -> utf8(payload, position)))
+                        .containsExactly("a", "c", "a", "c");
+                Vector nulls = batch.output(2).borrow(Stream.NULLS);
+                assertThat(java.util.stream.IntStream.of(0, 2, 4, 6)
+                        .mapToObj(position -> VectorAccess.booleanValues(nulls).value(position)))
+                        .containsExactly(false, true, false, true);
+                batch.close();
+            }
+        }
+        finally {
+            restoreProperty("nitro.hash.join.maxCoalescedInnerRows", maxCoalescedRows);
+            restoreProperty("nitro.hash.join.maxPostLoadCoalescedInnerRows", maxPostLoadCoalescedRows);
+        }
+    }
+
+    private static Operator multiRunBinaryHashJoin(Allocator allocator)
+    {
+        BinaryVector firstPayloads = new BinaryVector(2, 2);
+        firstPayloads.setBytes(0, "a".getBytes(UTF_8));
+        firstPayloads.setBytes(1, "b".getBytes(UTF_8));
+        BinaryVector secondPayloads = new BinaryVector(2, 2);
+        secondPayloads.setBytes(0, "c".getBytes(UTF_8));
+        secondPayloads.setBytes(1, "d".getBytes(UTF_8));
+        Operator inner = new TableOperator(2, List.of(
+                new TableOperator.Page(
+                        2,
+                        new Streams[] {
+                                Streams.ofValues(new I64Vector(new long[] {1, 1})),
+                                Streams.ofValuesAndNulls(firstPayloads, new BooleanVector(new boolean[] {false, false}))},
+                        Mask.all(2)),
+                new TableOperator.Page(
+                        2,
+                        new Streams[] {
+                                Streams.ofValues(new I64Vector(new long[] {1, 1})),
+                                Streams.ofValuesAndNulls(secondPayloads, new BooleanVector(new boolean[] {true, false}))},
+                        Mask.all(2))));
+        Operator outer = new TableOperator(1, List.of(
+                TableOperator.Page.values(2, new Vector[] {new I64Vector(new long[] {1, 1})}, Mask.all(2))));
+        return new HashJoinOperator(allocator, outer, 0, inner, 0);
+    }
+
+    @Test
     void testHashJoinOperatorSupportsI64EquiJoinWithDuplicateMatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
@@ -4526,6 +4588,16 @@ public class TestOperatorBatches
             case org.weakref.nitro.data.RleVector rle -> utf8(rle.values(), 0);
             default -> throw new IllegalArgumentException("Unsupported utf8 vector: " + vector.getClass().getSimpleName());
         };
+    }
+
+    private static void restoreProperty(String name, String value)
+    {
+        if (value == null) {
+            System.clearProperty(name);
+        }
+        else {
+            System.setProperty(name, value);
+        }
     }
 
     private static long[] longValues(Vector vector, int count)
