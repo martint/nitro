@@ -125,6 +125,33 @@ class TestNativeBatchPartitioner
     }
 
     @Test
+    void copiesExternallyAssignedSparsePositionsToArbitraryPartitionCounts()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.sparse(new int[] {0, 2, 5, 7}, 8),
+                        Output.of(Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13, 14, 15, 16, 17}))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    1,
+                    3,
+                    NativeBatchPartitionPolicy.defaults());
+
+            List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source, new int[] {2, 0, 2, 1});
+            try {
+                assertThat(partitions).extracting(NativeBatchPartitioner.Partition::index).containsExactly(0, 1, 2);
+                assertThat(values(partitions.get(0).batch())).containsExactly(12);
+                assertThat(values(partitions.get(1).batch())).containsExactly(17);
+                assertThat(values(partitions.get(2).batch())).containsExactly(10, 15);
+            }
+            finally {
+                partitions.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
+    @Test
     void partitionsSelectedRowsIntoCompactIndependentBatches()
             throws ReflectiveOperationException
     {
@@ -213,6 +240,11 @@ class TestNativeBatchPartitioner
                 return Set.of(I64Vector.class);
             }
         };
+    }
+
+    private static long[] values(Batch batch)
+    {
+        return ((I64Vector) batch.output(0).borrow(Stream.VALUES)).values();
     }
 
     private static long read(Vector vector, int position)

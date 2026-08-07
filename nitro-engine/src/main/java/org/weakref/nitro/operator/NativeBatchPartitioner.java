@@ -50,6 +50,26 @@ public final class NativeBatchPartitioner
     private final int partitionMask;
     private final NativeBatchPartitionPolicy policy;
 
+    /**
+     * Creates a representation-preserving partition copier whose destination assignments are supplied by the caller.
+     */
+    public NativeBatchPartitioner(
+            Allocator allocator,
+            int outputCount,
+            int partitionCount,
+            NativeBatchPartitionPolicy policy)
+    {
+        this.allocator = requireNonNull(allocator, "allocator is null");
+        this.policy = requireNonNull(policy, "policy is null");
+        checkArgument(outputCount >= 0, "outputCount is negative");
+        checkArgument(partitionCount > 0, "partitionCount must be positive");
+        this.outputCount = outputCount;
+        this.partitionCount = partitionCount;
+        partitionChannels = null;
+        keyKernels = null;
+        partitionMask = 0;
+    }
+
     public NativeBatchPartitioner(
             Allocator allocator,
             Schema schema,
@@ -79,14 +99,8 @@ public final class NativeBatchPartitioner
     public List<Partition> partition(Batch source)
     {
         requireNonNull(source, "source is null");
-        Streams[] columns = new Streams[outputCount];
-        for (int channel = 0; channel < outputCount; channel++) {
-            Output output = source.output(channel);
-            columns[channel] = Streams.of(
-                    output.borrow(Stream.VALUES),
-                    output.borrowOrNull(Stream.NULLS),
-                    output.borrowOrNull(Stream.ERRORS));
-        }
+        checkArgument(keyKernels != null, "partition keys were not configured");
+        Streams[] columns = columns(source);
 
         IntArrayList[] assignments = new IntArrayList[partitionCount];
         for (int partition = 0; partition < partitionCount; partition++) {
@@ -105,6 +119,49 @@ public final class NativeBatchPartitioner
             assignments[mix(hash) & partitionMask].add(position);
         }
 
+        return copyPartitions(columns, assignments);
+    }
+
+    /**
+     * Copies a batch according to one destination per selected source position. Assignments are ordered like the
+     * batch selection rather than indexed by physical position, so sparse masks do not require a dense side array.
+     */
+    public List<Partition> partition(Batch source, int[] partitionBySelectedPosition)
+    {
+        requireNonNull(source, "source is null");
+        requireNonNull(partitionBySelectedPosition, "partitionBySelectedPosition is null");
+        Mask mask = source.borrowMask();
+        checkArgument(
+                partitionBySelectedPosition.length == mask.selectedCount(),
+                "assignment count does not match selected position count");
+
+        IntArrayList[] assignments = new IntArrayList[partitionCount];
+        for (int partition = 0; partition < partitionCount; partition++) {
+            assignments[partition] = new IntArrayList();
+        }
+        for (int selectedPosition = 0; selectedPosition < partitionBySelectedPosition.length; selectedPosition++) {
+            int partition = partitionBySelectedPosition[selectedPosition];
+            checkArgument(partition >= 0 && partition < partitionCount, "partition is out of bounds: %s", partition);
+            assignments[partition].add(mask.position(selectedPosition));
+        }
+        return copyPartitions(columns(source), assignments);
+    }
+
+    private Streams[] columns(Batch source)
+    {
+        Streams[] columns = new Streams[outputCount];
+        for (int channel = 0; channel < outputCount; channel++) {
+            Output output = source.output(channel);
+            columns[channel] = Streams.of(
+                    output.borrow(Stream.VALUES),
+                    output.borrowOrNull(Stream.NULLS),
+                    output.borrowOrNull(Stream.ERRORS));
+        }
+        return columns;
+    }
+
+    private List<Partition> copyPartitions(Streams[] columns, IntArrayList[] assignments)
+    {
         List<Partition> result = new ArrayList<>(partitionCount);
         try {
             for (int partition = 0; partition < partitionCount; partition++) {
