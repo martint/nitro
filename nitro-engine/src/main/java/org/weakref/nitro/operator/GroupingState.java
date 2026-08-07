@@ -84,10 +84,12 @@ final class GroupingState
     private Set<BinaryVector.Trait>[] binaryTraits;
     long[] longKeysByGroup = new long[0];
     private Vector cachedDictionaryValues;
+    private long cachedDictionaryContentGeneration = -1;
     private long[] dictionaryGroupsById = new long[0];
     private int[] dictionaryGenerations = new int[0];
     private int dictionaryGeneration;
     private Vector[] cachedSharedDictionaryValues = new Vector[0];
+    private long[] cachedSharedDictionaryGenerations = new long[0];
     // Packed (generation, group id) entries avoid two independent random cache-array probes by dictionary id.
     private long[] sharedDictionaryEntriesById = new long[0];
     private int sharedDictionaryGeneration;
@@ -782,6 +784,7 @@ final class GroupingState
         bytes += longArrayBytes(dictionaryGroupsById);
         bytes += intArrayBytes(dictionaryGenerations);
         bytes += referenceArrayBytes(cachedSharedDictionaryValues);
+        bytes += longArrayBytes(cachedSharedDictionaryGenerations);
         bytes += longArrayBytes(sharedDictionaryEntriesById);
         bytes += packedIntPairControl == null ? 0 : packedIntPairControl.length;
         bytes += intArrayBytes(packedIntTripleThirdByGroup);
@@ -951,8 +954,12 @@ final class GroupingState
 
     private int currentSharedDictionaryGeneration(Vector[] dictionaryValues)
     {
-        if (!binaryContentsReusable(dictionaryValues) || !sameVectorIdentities(cachedSharedDictionaryValues, dictionaryValues)) {
+        if (!sameVectorContents(cachedSharedDictionaryValues, cachedSharedDictionaryGenerations, dictionaryValues)) {
             cachedSharedDictionaryValues = dictionaryValues.clone();
+            cachedSharedDictionaryGenerations = new long[dictionaryValues.length];
+            for (int index = 0; index < dictionaryValues.length; index++) {
+                cachedSharedDictionaryGenerations[index] = dictionaryValues[index].contentGeneration();
+            }
             if (sharedDictionaryGeneration == Integer.MAX_VALUE) {
                 Arrays.fill(sharedDictionaryEntriesById, 0);
                 sharedDictionaryGeneration = 0;
@@ -962,28 +969,14 @@ final class GroupingState
         return sharedDictionaryGeneration;
     }
 
-    private static boolean binaryContentsReusable(Vector[] values)
+    private static boolean sameVectorContents(Vector[] cachedValues, long[] cachedGenerations, Vector[] values)
     {
-        for (Vector value : values) {
-            if (!binaryContentReusable(value)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean binaryContentReusable(Vector value)
-    {
-        return !value.isVariableWidth() || value instanceof BinaryVector binary && binary.contentImmutable();
-    }
-
-    private static boolean sameVectorIdentities(Vector[] left, Vector[] right)
-    {
-        if (left.length != right.length) {
+        if (cachedValues.length != values.length || cachedGenerations.length != values.length) {
             return false;
         }
-        for (int index = 0; index < left.length; index++) {
-            if (left[index] != right[index]) {
+        for (int index = 0; index < values.length; index++) {
+            long generation = values[index].contentGeneration();
+            if (generation < 0 || cachedValues[index] != values[index] || cachedGenerations[index] != generation) {
                 return false;
             }
         }
@@ -2466,8 +2459,12 @@ final class GroupingState
 
     private int currentDictionaryGeneration(Vector dictionaryValues)
     {
-        if (!binaryContentReusable(dictionaryValues) || cachedDictionaryValues != dictionaryValues) {
+        long contentGeneration = dictionaryValues.contentGeneration();
+        if (contentGeneration < 0 ||
+                cachedDictionaryValues != dictionaryValues ||
+                cachedDictionaryContentGeneration != contentGeneration) {
             cachedDictionaryValues = dictionaryValues;
+            cachedDictionaryContentGeneration = contentGeneration;
             if (dictionaryGeneration == Integer.MAX_VALUE) {
                 Arrays.fill(dictionaryGenerations, 0);
                 dictionaryGeneration = 0;

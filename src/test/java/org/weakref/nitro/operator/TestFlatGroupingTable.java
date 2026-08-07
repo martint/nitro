@@ -249,6 +249,134 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testProviderOwnedIntegerStoragePreservesDictionaryBackedFourFieldGroups()
+    {
+        int dictionarySize = 28_853;
+        int stringCount = 358;
+        String[] strings = new String[stringCount];
+        int[] integers = new int[dictionarySize];
+        for (int index = 0; index < stringCount; index++) {
+            strings[index] = "brand-" + index;
+        }
+        for (int index = 0; index < dictionarySize; index++) {
+            integers[index] = index * 401 - 5_000_000;
+        }
+
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        TypeBinding unspecified = org.weakref.nitro.core.type.Schema.unspecified(1).field(0).type();
+        int batchSize = 4_096;
+        Vector[] samples = {
+                DictionaryVector.wrap(new int[batchSize], batchSize, utf8(strings)),
+                DictionaryVector.wrap(new int[batchSize], batchSize, new I32Vector(integers)),
+                new I32Vector(batchSize),
+                new I32Vector(batchSize)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                samples,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(unspecified, integer, integer, integer));
+        assertThat(layout.fixedRecordSize()).isEqualTo(1 + 12 + 3 * Integer.BYTES);
+
+        FlatGroupingTable table = new FlatGroupingTable(layout, 16, true);
+        Map<FourFieldKey, Integer> expectedGroups = new HashMap<>();
+        Random random = new Random(719913);
+        int nextGroup = 0;
+        try {
+            for (int batch = 0; batch < 12; batch++) {
+                int[] stringIds = new int[batchSize];
+                int[] integerIds = new int[batchSize];
+                int[] hours = new int[batchSize];
+                int[] minutes = new int[batchSize];
+                for (int position = 0; position < batchSize; position++) {
+                    stringIds[position] = random.nextInt(stringCount);
+                    integerIds[position] = random.nextInt(dictionarySize);
+                    hours[position] = random.nextInt(24);
+                    minutes[position] = random.nextInt(60);
+                    if (position >= 3 && position % 11 == 0) {
+                        stringIds[position] = stringIds[position - 3];
+                        integerIds[position] = integerIds[position - 3];
+                        hours[position] = hours[position - 3];
+                        minutes[position] = minutes[position - 3];
+                    }
+                }
+                Vector[] values = {
+                        DictionaryVector.wrap(stringIds, batchSize, utf8(strings)),
+                        DictionaryVector.wrap(integerIds, batchSize, new I32Vector(integers)),
+                        new I32Vector(hours),
+                        new I32Vector(minutes)};
+                Vector[] nulls = {null, null, null, null};
+                table.beginBatch(values, nulls);
+                table.prepareBatchHashes(values, nulls, Mask.all(batchSize));
+                for (int position = 0; position < batchSize; position++) {
+                    FourFieldKey key = new FourFieldKey(
+                            stringIds[position],
+                            integers[integerIds[position]],
+                            hours[position],
+                            minutes[position]);
+                    Integer expected = expectedGroups.get(key);
+                    long actual = table.assignGroup(values, nulls, position, nextGroup);
+                    if (expected == null) {
+                        expectedGroups.put(key, nextGroup);
+                        assertThat(actual).isEqualTo(nextGroup);
+                        nextGroup++;
+                    }
+                    else {
+                        assertThat(actual).isEqualTo(expected.longValue());
+                    }
+                }
+                table.endBatch();
+            }
+            assertThat(table.recordCount()).isEqualTo(expectedGroups.size());
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testSharedDictionaryCacheTracksFixedWidthContentGeneration()
+    {
+        int size = 2_048;
+        int[] ids = new int[size];
+        I32Vector integerBase = new I32Vector(new int[] {1});
+        BinaryVector binaryBase = utf8("brand");
+        TypeBinding integer = longBinding("testing:integer", Optional.of(INTEGER_FLAT_KEY_STORAGE));
+        TypeBinding unspecified = org.weakref.nitro.core.type.Schema.unspecified(1).field(0).type();
+        GroupingState grouping = new GroupingState(
+                arrayPool,
+                codeGeneration,
+                groupingResources,
+                adaptiveLongGroupingPolicy,
+                flatKeyTablePolicy,
+                List.of(unspecified, integer),
+                null,
+                null);
+        Vector[] nulls = {null, null};
+        try {
+            Vector[] first = {
+                    DictionaryVector.wrap(ids, size, binaryBase),
+                    DictionaryVector.wrap(ids, size, integerBase)};
+            I64Vector firstGroups = new I64Vector(size);
+            grouping.assignGroups(first, nulls, Mask.all(size), firstGroups);
+            assertThat(firstGroups.values()).containsOnly(0);
+
+            integerBase.clearForReuse();
+            integerBase.values()[0] = 2;
+            Vector[] second = {
+                    DictionaryVector.wrap(ids, size, binaryBase),
+                    DictionaryVector.wrap(ids, size, integerBase)};
+            I64Vector secondGroups = new I64Vector(size);
+            grouping.assignGroups(second, nulls, Mask.all(size), secondGroups);
+            assertThat(secondGroups.values()).containsOnly(1);
+        }
+        finally {
+            grouping.releaseBuffers();
+        }
+    }
+
+    @Test
     void testSingleLongGroupingInitialCapacityUsesSampledCardinality()
     {
         int size = 100_000;
@@ -1963,10 +2091,12 @@ class TestFlatGroupingTable
             @Override
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
-                return Set.of(I32Vector.class, I64Vector.class);
+                return Set.of(I32Vector.class, I64Vector.class, DictionaryVector.class);
             }
         };
     }
 
     private record LongPair(long first, int second) {}
+
+    private record FourFieldKey(int string, int integer, int hour, int minute) {}
 }
