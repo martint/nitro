@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
@@ -73,11 +74,17 @@ final class InitialAggregationBatchBuilder
     Batch build(Batch input)
     {
         requireNonNull(input, "input is null");
+        return build(input, input.borrowMask());
+    }
+
+    Batch build(Batch input, Mask inputMask)
+    {
+        requireNonNull(input, "input is null");
+        requireNonNull(inputMask, "inputMask is null");
         Allocator.Context context = new Allocator.Context(
                 "InitialAggregationBatch",
                 operatorResources.aggregation().bufferPoolGroup());
         try {
-            Mask inputMask = input.borrowMask();
             Batch direct = buildDirect(input, inputMask, context);
             if (direct != null) {
                 return direct;
@@ -145,6 +152,38 @@ final class InitialAggregationBatchBuilder
                         context);
                 outputs[groupedColumns.length + output] = ownedOutput(result, context);
             }
+            return new Batch(
+                    outputMask,
+                    _ -> {},
+                    mask -> allocator.transfer(context, mask),
+                    _ -> {},
+                    () -> allocator.release(context),
+                    outputs);
+        }
+        catch (Throwable throwable) {
+            allocator.release(context);
+            throw throwable;
+        }
+    }
+
+    Batch empty()
+    {
+        Allocator.Context context = new Allocator.Context(
+                "InitialAggregationBatch",
+                operatorResources.aggregation().bufferPoolGroup());
+        try {
+            Output[] outputs = new Output[outputSchema.size()];
+            for (int output = 0; output < outputs.length; output++) {
+                var type = outputSchema.field(output).type();
+                org.weakref.nitro.data.Vector values = !type.isSpecified()
+                        ? allocator.allocate(context, I64Vector.class, 0, I64Vector::new)
+                        : type.vectorFactory()
+                                .orElseThrow(() -> new IllegalStateException("Output type does not provide a vector factory"))
+                                .nullValues(allocator.vectorAllocator(context), 0);
+                BooleanVector nulls = allocator.allocate(context, BooleanVector.class, 0, BooleanVector::new);
+                outputs[output] = ownedOutput(Streams.ofValuesAndNulls(values, nulls), context);
+            }
+            Mask outputMask = allocator.allocateAllMask(context, 0);
             return new Batch(
                     outputMask,
                     _ -> {},

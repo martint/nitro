@@ -450,6 +450,11 @@ final class DistinctKeySet
         accountRetainedBytes();
     }
 
+    long retainedBytes()
+    {
+        return index.retainedBytes();
+    }
+
     private void accountRetainedBytes()
     {
         if (allocator != null) {
