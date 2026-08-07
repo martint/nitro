@@ -14,15 +14,52 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Schema;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestGenericJoinIndexFactory
 {
+    @Test
+    void testFlatJoinUsesProviderCanonicalLongStorage()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            GenericJoinIndexFactory indexes = resources.operatorResources().genericJoinIndexes();
+            BinaryVector labels = binary("a", "b");
+            Vector[] values = {new I64Vector(new long[] {1, 2}), labels};
+            JoinIndex index = indexes.create(
+                    values,
+                    List.of(CanonicalFlatKeyTestType.signedInteger(), Schema.unspecified(2).field(1).type()),
+                    resources.primitiveArrays(),
+                    2,
+                    false,
+                    false);
+            try {
+                index.addNoNulls(values, 0, 11);
+                index.addNoNulls(values, 1, 22);
+                assertThat(index.matchesNoNulls(values, 0).toLongArray()).containsExactly(11);
+                assertThat(index.matchesNoNulls(values, 1).toLongArray()).containsExactly(22);
+
+                assertThatThrownBy(() -> index.addNoNulls(
+                        new Vector[] {new I64Vector(new long[] {1L << 40}), binary("c")},
+                        0,
+                        33))
+                        .isInstanceOf(ArithmeticException.class);
+            }
+            finally {
+                index.releaseBuffers();
+            }
+        }
+    }
+
     @Test
     void testDirectRangeBuildAdmissionUsesBoundedAbsoluteDomain()
     {
@@ -55,5 +92,15 @@ class TestGenericJoinIndexFactory
             values[index] = start + stride * index;
         }
         return values;
+    }
+
+    private static BinaryVector binary(String... values)
+    {
+        int bytes = java.util.Arrays.stream(values).mapToInt(String::length).sum();
+        BinaryVector vector = new BinaryVector(values.length, bytes);
+        for (int index = 0; index < values.length; index++) {
+            vector.setBytes(index, values[index].getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return vector;
     }
 }

@@ -259,6 +259,8 @@ final class DistinctKeySet
         }
         DistinctIndex index = createIndex(
                 samples,
+                keyTypes,
+                unboundKeyPrefix,
                 arrayPool,
                 codeGeneration,
                 policy,
@@ -299,6 +301,8 @@ final class DistinctKeySet
 
     private static DistinctIndex createIndex(
             Vector[] samples,
+            List<TypeBinding> keyTypes,
+            int unboundKeyPrefix,
             PrimitiveArrayPool arrayPool,
             OperatorCodeGenerationResources codeGeneration,
             DistinctKeySetPolicy policy,
@@ -343,11 +347,33 @@ final class DistinctKeySet
                     codeGeneration,
                     adaptiveLongGroupingPolicy);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(samples, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                samples,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                flatKeyTypes(samples.length, keyTypes, unboundKeyPrefix));
         if (layout != null) {
             return new FlatDistinctIndex(layout, Math.max(16, samples[0].length()), arrayPool, policy);
         }
         return new ObjectDistinctIndex(samples.length);
+    }
+
+    private static List<TypeBinding> flatKeyTypes(int keyCount, List<TypeBinding> keyTypes, int unboundKeyPrefix)
+    {
+        if (keyTypes.isEmpty()) {
+            return List.of();
+        }
+        TypeBinding[] types = new TypeBinding[keyCount];
+        Schema unspecified = Schema.unspecified(keyCount);
+        for (int index = 0; index < unboundKeyPrefix; index++) {
+            types[index] = unspecified.field(index).type();
+        }
+        for (int index = unboundKeyPrefix; index < keyCount; index++) {
+            types[index] = keyTypes.get(index - unboundKeyPrefix);
+        }
+        return List.of(types);
     }
 
     /**

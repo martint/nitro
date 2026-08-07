@@ -164,6 +164,7 @@ public class HashJoinOperator
     private final int[] outerJoinColumns;
     private final int[] innerJoinColumns;
     private final List<Optional<TypeBinding>> joinKeyTypes;
+    private final List<TypeBinding> flatJoinKeyTypes;
     private final StructuralKeyKernel[] structuralKeyKernels;
     private final boolean allowsLegacyKeyShortcuts;
     private final JoinFilter[] joinFilters;
@@ -490,15 +491,18 @@ public class HashJoinOperator
             this.joinKeyTypes = equiJoinKeyTypes;
         }
         this.structuralKeyKernels = new StructuralKeyKernel[joinKeyTypes.size()];
+        java.util.ArrayList<TypeBinding> flatJoinKeyTypes = new java.util.ArrayList<>(joinKeyTypes.size());
         boolean allowsLegacyKeyShortcuts = true;
         StructuralTypeKernelFactory structuralTypes = operatorResources.codeGeneration().structuralTypes();
         for (int keyIndex = 0; keyIndex < joinKeyTypes.size(); keyIndex++) {
             int index = keyIndex;
             TypeBinding keyType = joinKeyTypes.get(keyIndex)
                     .orElseGet(() -> Schema.unspecified(index + 1).field(index).type());
+            flatJoinKeyTypes.add(keyType);
             structuralKeyKernels[keyIndex] = structuralTypes.key(keyType);
             allowsLegacyKeyShortcuts &= structuralKeyKernels[keyIndex].allowsLegacyPhysicalShortcuts();
         }
+        this.flatJoinKeyTypes = List.copyOf(flatJoinKeyTypes);
         this.allowsLegacyKeyShortcuts = allowsLegacyKeyShortcuts;
         this.singleLongNotEqualJoinFilter = joinFilters.length == 1 && joinFilters[0].longNotEqual();
         this.singleLongBitwiseOverlapJoinFilter = joinFilters.length == 1 && joinFilters[0].longBitwiseOverlap();
@@ -1993,6 +1997,7 @@ public class HashJoinOperator
         }
         return genericJoinIndexes.create(
                 joinValues,
+                flatJoinKeyTypes,
                 arrayPool,
                 expectedSize,
                 canStreamUnusedBuildPayload(),

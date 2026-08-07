@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
@@ -28,6 +29,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TestDistinctKeySet
 {
@@ -36,6 +38,47 @@ class TestDistinctKeySet
     private final OperatorCodeGenerationResources codeGeneration = engineResources.operatorCodeGeneration();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testFlatDistinctUsesProviderCanonicalLongStorage()
+    {
+        BinaryVector labels = new BinaryVector(3, 3);
+        labels.setBytes(0, new byte[] {'a'});
+        labels.setBytes(1, new byte[] {'b'});
+        labels.setBytes(2, new byte[] {'a'});
+        Vector[] values = {new I64Vector(new long[] {1, 2, 1}), labels};
+        List<org.weakref.nitro.core.type.TypeBinding> types = List.of(
+                CanonicalFlatKeyTestType.signedInteger(),
+                Schema.unspecified(2).field(1).type());
+        try (Allocator allocator = new Allocator(engineResources)) {
+            DistinctKeySet keys = DistinctKeySet.create(
+                    values,
+                    types,
+                    allocator,
+                    new Allocator.Context("canonical-flat-distinct"),
+                    arrayPool,
+                    codeGeneration,
+                    DistinctKeySetPolicy.defaults(),
+                    adaptiveLongGroupingPolicy,
+                    flatKeyTablePolicy);
+            try {
+                int[] positions = new int[3];
+                assertThat(keys.addBatch(values, new Vector[] {null, null}, Mask.all(3), positions)).isEqualTo(2);
+
+                BinaryVector wideLabel = new BinaryVector(1, 1);
+                wideLabel.setBytes(0, new byte[] {'c'});
+                assertThatThrownBy(() -> keys.addBatch(
+                        new Vector[] {new I64Vector(new long[] {1L << 40}), wideLabel},
+                        new Vector[] {null, null},
+                        Mask.all(1),
+                        new int[1]))
+                        .isInstanceOf(ArithmeticException.class);
+            }
+            finally {
+                keys.releaseBuffers();
+            }
+        }
+    }
 
     @Test
     void testPrimitiveRepresentationsReportAndReleaseRetainedMemory()

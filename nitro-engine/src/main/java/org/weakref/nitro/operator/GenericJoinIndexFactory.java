@@ -14,8 +14,11 @@
 package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -54,6 +57,7 @@ final class GenericJoinIndexFactory
 
     JoinIndex create(
             Vector[] values,
+            List<TypeBinding> keyTypes,
             PrimitiveArrayPool arrayPool,
             int expectedSize,
             boolean pairKeyOnlyBuild,
@@ -78,7 +82,13 @@ final class GenericJoinIndexFactory
                 isLong(values[2])) {
             return new LongTripleJoinIndex(executionPolicy, arrayPool, expectedSize);
         }
-        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                values,
+                false,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                keyTypes);
         if (layout != null) {
             return new FlatJoinIndex(joinIndexPolicy, layout, expectedSize);
         }
