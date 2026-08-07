@@ -293,11 +293,6 @@ public class HashJoinOperator
     private boolean waitingForProbeInput;
     private boolean outerConstrained;
     private boolean outerConstraintApplied;
-    // Proven once per result batch by constrainOuterIfNecessary(). Materializing every retained stream must not
-    // rescan the complete row mapping merely to rediscover the same identity fact; wide joins otherwise turn a
-    // zero-copy capability into O(output columns x rows) validation work even when no copy is avoided.
-    private boolean forwardOuterIdentity;
-    private boolean identityReborrowReported;
     private int[] matchedOuterPositions = new int[0];
     private boolean outerSupportsReborrow;
     private int preparedInnerRunCount = -1;
@@ -664,7 +659,6 @@ public class HashJoinOperator
         currentOutputMask = batchMask;
         outerConstrained = false;
         outerConstraintApplied = false;
-        forwardOuterIdentity = false;
         currentOuterDictionaryIds = null;
         clearComposedOuterMappings();
         currentInnerLogicalDictionaryIds = null;
@@ -2411,9 +2405,6 @@ public class HashJoinOperator
         // positions into a dense vector indexable directly by output position. Materialization stays
         // lazy: it only runs when an outer stream is borrowed.
         constrainOuterIfNecessary();
-        if (forwardOuterIdentity) {
-            return borrowOuterOutput(sourceOutput);
-        }
         if (currentOutputMask.all()) {
             return buffers.copyPositions(sourceOutput, null, outputOuterPositions, currentOutputCount, 0, currentOutputCount);
         }
@@ -2424,43 +2415,6 @@ public class HashJoinOperator
             result = buffers.copySinglePosition(sourceOutput, result, currentOutputCount, outputPosition, outputOuterPositions[outputPosition]);
         }
         return result == null ? buffers.emptyLike(outputSchema(outputIndex)) : result;
-    }
-
-    /**
-     * Forward an identity-mapped, fully-consumed probe column without changing its ownership. The outer batch stays
-     * open until this join advances, so a normal borrow remains valid for the complete lifetime of the result batch;
-     * if a consumer takes the result, Allocator.transfer finds and detaches the vector from its original context.
-     */
-    private static Streams borrowOuterOutput(Output sourceOutput)
-    {
-        Streams.Builder streams = Streams.builder();
-        if (sourceOutput.hasValues()) {
-            streams.put(Stream.VALUES, sourceOutput.borrow(Stream.VALUES));
-        }
-        if (sourceOutput.hasNulls() && !sourceOutput.isKnownAllFalse(Stream.NULLS)) {
-            streams.put(Stream.NULLS, sourceOutput.borrow(Stream.NULLS));
-        }
-        if (sourceOutput.hasErrors() && !sourceOutput.isKnownAllFalse(Stream.ERRORS)) {
-            streams.put(Stream.ERRORS, sourceOutput.borrow(Stream.ERRORS));
-        }
-        return streams.build();
-    }
-
-    private boolean outerOutputIsIdentity()
-    {
-        // The result batch is dense [0, currentOutputCount). A mapping that merely preserves the order of a sparse
-        // source mask is not an identity mapping: its values still live at the sparse source positions and must be
-        // compacted. Zero-copy forwarding is valid only when both masks cover the complete dense source batch.
-        if (!currentOuterBatchFullyConsumed() || !currentOuterMask.all() || !currentOutputMask.all() ||
-                currentOutputCount != currentOuterMask.size()) {
-            return false;
-        }
-        for (int index = 0; index < currentOutputCount; index++) {
-            if (outputOuterPositions[index] != index) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private Streams wrapOuterOutput(Output sourceOutput)
@@ -2659,15 +2613,6 @@ public class HashJoinOperator
             return;
         }
         outerConstrained = true;
-        if (outputPolicy.forwardIdentityReborrowOuter() && outerOutputIsIdentity()) {
-            forwardOuterIdentity = true;
-            if (outputPolicy.debugIdentityReborrowOuter() && !identityReborrowReported) {
-                identityReborrowReported = true;
-                System.err.printf("[identity-reborrow] join=%s rows=%d outputs=%d%n",
-                        profileName != null ? profileName : "hash_join", currentOutputCount, outputChannels.length);
-            }
-            return;
-        }
         outerConstraintApplied = true;
         probeSource.constrain(matchedOuterMask());
     }

@@ -6309,7 +6309,7 @@ public class TestOperators
     }
 
     @Test
-    void testHashJoinForwardsFullyConsumedIdentityOuterPayload()
+    void testHashJoinMaterializesFullyConsumedIdentityOuterPayload()
     {
         AtomicReference<Mask> constrainedMask = new AtomicReference<>();
         I64Vector keys = new I64Vector(new long[] {1L, 2L, 3L});
@@ -6368,8 +6368,10 @@ public class TestOperators
                 0)) {
             try (Batch batch = join.next()) {
                 assertThat(batch.borrowMask()).containsExactly(0, 1, 2);
-                assertThat(batch.output(1).borrow(Stream.VALUES)).isSameAs(payload);
-                assertThat(constrainedMask.get()).isNull();
+                I64Vector output = (I64Vector) batch.output(1).borrow(Stream.VALUES);
+                assertThat(output).isNotSameAs(payload);
+                assertThat(output.values()).containsExactly(10L, 20L, 30L);
+                assertThat(constrainedMask.get()).containsExactly(0, 1, 2);
             }
         }
     }

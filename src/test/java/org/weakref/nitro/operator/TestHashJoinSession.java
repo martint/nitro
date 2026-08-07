@@ -20,17 +20,63 @@ import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
+import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class TestHashJoinSession
 {
+    @Test
+    void testIdentityProbeOutputDoesNotTransferBorrowedInputVector()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        table(1, 2),
+                        new int[] {0},
+                        false)) {
+            allocator.beginExecution();
+            Allocator.Context probeContext = new Allocator.Context("identity-probe");
+            I64Vector probeValues = allocator.allocate(probeContext, I64Vector.class, 2, I64Vector::new);
+            probeValues.values()[0] = 1;
+            probeValues.values()[1] = 2;
+            long probeBytes = allocator.currentBytes(probeContext);
+            int[] constraints = new int[1];
+            Batch probe = new Batch(
+                    Mask.all(2),
+                    _ -> constraints[0]++,
+                    mask -> mask,
+                    new Output(
+                            Set.of(Stream.VALUES),
+                            _ -> probeValues,
+                            (_, vector) -> allocator.transfer(probeContext, vector),
+                            (_, vector) -> allocator.release(probeContext, vector)));
+            session.addInput(probe);
+
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                Vector taken = output.output(0).take(Stream.VALUES);
+                assertThat(taken).isNotSameAs(probeValues);
+                assertThat(allocator.currentBytes(probeContext)).isEqualTo(probeBytes);
+                assertThat(constraints[0]).isOne();
+                Output.of(Streams.ofValues(taken)).close();
+            }
+            allocator.release(probeContext, probeValues);
+        }
+    }
+
     @Test
     void testReleasesSupersededRetainedBuildConstraints()
     {

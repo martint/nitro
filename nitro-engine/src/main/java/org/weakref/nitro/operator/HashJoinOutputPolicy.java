@@ -34,8 +34,6 @@ public record HashJoinOutputPolicy(
         int adaptiveComposeDepth,
         boolean cacheComposedOuterDictionaryIds,
         boolean directDenseSingleMatchRangeOutput,
-        boolean forwardIdentityReborrowOuter,
-        boolean debugIdentityReborrowOuter,
         boolean rleRunIndexHint,
         boolean poolBuildDictionaryIds,
         boolean gatherMultiRunRetainedFixedWidthValues)
@@ -57,8 +55,6 @@ public record HashJoinOutputPolicy(
                 true,
                 1024,
                 4,
-                true,
-                false,
                 true,
                 false,
                 true,
@@ -90,8 +86,6 @@ public record HashJoinOutputPolicy(
                 Integer.getInteger("nitro.hash.join.adaptiveComposeDepth", defaults.adaptiveComposeDepth()),
                 booleanProperty("nitro.hash.join.cacheComposedOuterDictionaryIds", defaults.cacheComposedOuterDictionaryIds()),
                 booleanProperty("nitro.join.directDenseSingleMatchRangeOutput", defaults.directDenseSingleMatchRangeOutput()),
-                booleanProperty("nitro.join.forwardIdentityReborrowOuter", defaults.forwardIdentityReborrowOuter()),
-                Boolean.getBoolean("nitro.debug.identityReborrowOuter"),
                 booleanProperty("nitro.join.rleRunIndexHint", defaults.rleRunIndexHint()),
                 booleanProperty("nitro.hash.join.poolBuildDictionaryIds", defaults.poolBuildDictionaryIds()),
                 booleanProperty("nitro.hash.join.gatherMultiRunRetainedFixedWidthValues", defaults.gatherMultiRunRetainedFixedWidthValues()));
