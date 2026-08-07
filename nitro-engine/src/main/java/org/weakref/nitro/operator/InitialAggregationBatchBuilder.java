@@ -47,6 +47,7 @@ final class InitialAggregationBatchBuilder
     private final int[] groupedColumns;
     private final PhysicalAggregationProgram program;
     private final OperatorResources operatorResources;
+    private final MutableAggregationPhaseMetrics phaseMetrics;
     private final Schema outputSchema;
 
     InitialAggregationBatchBuilder(
@@ -56,6 +57,17 @@ final class InitialAggregationBatchBuilder
             PhysicalAggregationProgram program,
             OperatorResources operatorResources)
     {
+        this(allocator, inputSchema, groupedColumns, program, operatorResources, new MutableAggregationPhaseMetrics());
+    }
+
+    InitialAggregationBatchBuilder(
+            Allocator allocator,
+            Schema inputSchema,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            OperatorResources operatorResources,
+            MutableAggregationPhaseMetrics phaseMetrics)
+    {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.inputSchema = requireNonNull(inputSchema, "inputSchema is null");
         this.groupedColumns = requireNonNull(groupedColumns, "groupedColumns is null").stream()
@@ -63,6 +75,7 @@ final class InitialAggregationBatchBuilder
                 .toArray();
         this.program = requireNonNull(program, "program is null");
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.phaseMetrics = requireNonNull(phaseMetrics, "phaseMetrics is null");
         this.outputSchema = outputSchema(inputSchema, this.groupedColumns, program.outputSchema());
     }
 
@@ -137,20 +150,25 @@ final class InitialAggregationBatchBuilder
 
             Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
             for (int output = 0; output < groupedColumns.length; output++) {
-                Streams copied = allocator.copyStreams(context, borrowedStreams(input.output(groupedColumns[output])), inputMask);
-                outputs[output] = ownedOutput(copied, context);
+                outputs[output] = ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
             }
-            for (int output = 0; output < program.outputs().size(); output++) {
-                PhysicalAggregationProgram.Output binding = program.outputs().get(output);
-                Streams result = program.units().get(binding.unit()).result(
-                        binding.result(),
-                        maxGroup,
-                        states[binding.unit()],
-                        outputMask,
-                        null,
-                        allocator,
-                        context);
-                outputs[groupedColumns.length + output] = ownedOutput(result, context);
+            long start = System.nanoTime();
+            try {
+                for (int output = 0; output < program.outputs().size(); output++) {
+                    PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+                    Streams result = program.units().get(binding.unit()).result(
+                            binding.result(),
+                            maxGroup,
+                            states[binding.unit()],
+                            outputMask,
+                            null,
+                            allocator,
+                            context);
+                    outputs[groupedColumns.length + output] = ownedOutput(result, context);
+                }
+            }
+            finally {
+                phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
             }
             return new Batch(
                     outputMask,
@@ -210,20 +228,25 @@ final class InitialAggregationBatchBuilder
         Mask outputMask = allocator.allocateAllMask(context, groupCount);
         Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
         for (int output = 0; output < groupedColumns.length; output++) {
-            Streams copied = allocator.copyStreams(context, borrowedStreams(input.output(groupedColumns[output])), inputMask);
-            outputs[output] = ownedOutput(copied, context);
+            outputs[output] = ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
         }
-        for (int output = 0; output < program.outputs().size(); output++) {
-            PhysicalAggregationProgram.Output binding = program.outputs().get(output);
-            Streams result = requireNonNull(
-                    program.units().get(binding.unit()).initialInput(
-                            binding.result(),
-                            inputMask,
-                            StreamAccessors.forBatch(input),
-                            allocator,
-                            context),
-                    "direct initial aggregation result is null");
-            outputs[groupedColumns.length + output] = ownedOutput(result, context);
+        long start = System.nanoTime();
+        try {
+            for (int output = 0; output < program.outputs().size(); output++) {
+                PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+                Streams result = requireNonNull(
+                        program.units().get(binding.unit()).initialInput(
+                                binding.result(),
+                                inputMask,
+                                StreamAccessors.forBatch(input),
+                                allocator,
+                                context),
+                        "direct initial aggregation result is null");
+                outputs[groupedColumns.length + output] = ownedOutput(result, context);
+            }
+        }
+        finally {
+            phaseMetrics.recordInitialAggregation(System.nanoTime() - start);
         }
         return new Batch(
                 outputMask,
@@ -253,6 +276,26 @@ final class InitialAggregationBatchBuilder
                 streams.streams(),
                 streams::get,
                 (_, vector) -> allocator.transfer(context, vector));
+    }
+
+    private Streams copyGroupedStreams(Batch input, int outputIndex, Mask inputMask, Allocator.Context context)
+    {
+        long start = System.nanoTime();
+        Streams borrowed = borrowedStreams(input.output(groupedColumns[outputIndex]));
+        boolean encoded = borrowed.values().childVectorCount() != 0;
+        try {
+            return allocator.copyStreams(context, borrowed, inputMask);
+        }
+        finally {
+            long nanos = System.nanoTime() - start;
+            phaseMetrics.recordInitialKey(nanos);
+            if (encoded) {
+                phaseMetrics.recordInitialEncodedKey(nanos);
+            }
+            else {
+                phaseMetrics.recordInitialFlatKey(nanos);
+            }
+        }
     }
 
     private static Streams borrowedStreams(Output output)

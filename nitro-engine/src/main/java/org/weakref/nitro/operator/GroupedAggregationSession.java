@@ -42,6 +42,7 @@ public final class GroupedAggregationSession
     private final PartialAggregationControl partialAggregationControl;
     private final int maxFinalOutputBatchRows;
     private final InitialAggregationBatchBuilder initialAggregationBatchBuilder;
+    private final MutableAggregationPhaseMetrics phaseMetrics = new MutableAggregationPhaseMetrics();
     private GroupedAggregationOperator currentAggregation;
     private GroupedAggregationOperator flushedAggregation;
     private Batch pendingOutput;
@@ -140,7 +141,8 @@ public final class GroupedAggregationSession
                 inputSchema,
                 groupedColumns,
                 program,
-                operatorResources);
+                operatorResources,
+                phaseMetrics);
         currentAggregation = createAggregation();
     }
 
@@ -159,6 +161,12 @@ public final class GroupedAggregationSession
             return flushedAggregation.retainedBytes();
         }
         return 0;
+    }
+
+    @Override
+    public AggregationPhaseMetrics phaseMetrics()
+    {
+        return phaseMetrics.snapshot();
     }
 
     public void addInput(Batch batch)
@@ -290,7 +298,8 @@ public final class GroupedAggregationSession
                 new SchemaSource(inputSchema),
                 operatorResources,
                 groupingResources,
-                aggregationAllocationContext);
+                aggregationAllocationContext,
+                phaseMetrics);
     }
 
     private void ensureAggregation()

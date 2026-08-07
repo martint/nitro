@@ -50,6 +50,11 @@ public interface BatchAggregationSession
      */
     long retainedBytes();
 
+    default AggregationPhaseMetrics phaseMetrics()
+    {
+        return AggregationPhaseMetrics.EMPTY;
+    }
+
     Batch finish();
 
     @Override

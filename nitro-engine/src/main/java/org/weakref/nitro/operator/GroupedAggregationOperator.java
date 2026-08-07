@@ -71,6 +71,7 @@ public class GroupedAggregationOperator
     private final boolean fusedLongDirectGrouping;
     private final boolean fusedMappedContinuationPowerOfTwoStateCapacity;
     private final boolean debugFusedGrouping;
+    private final MutableAggregationPhaseMetrics phaseMetrics;
 
     private final int groupColumn;
     private final int[] groupedColumns;
@@ -241,6 +242,29 @@ public class GroupedAggregationOperator
     {
         this(
                 allocator,
+                groupByColumns,
+                groupedColumns,
+                program,
+                source,
+                operatorResources,
+                groupingResources,
+                allocationContext,
+                new MutableAggregationPhaseMetrics());
+    }
+
+    GroupedAggregationOperator(
+            Allocator allocator,
+            List<Integer> groupByColumns,
+            List<Integer> groupedColumns,
+            PhysicalAggregationProgram program,
+            Operator source,
+            OperatorResources operatorResources,
+            GroupingStateResources groupingResources,
+            Allocator.Context allocationContext,
+            MutableAggregationPhaseMetrics phaseMetrics)
+    {
+        this(
+                allocator,
                 -1,
                 groupedColumns,
                 program,
@@ -250,7 +274,8 @@ public class GroupedAggregationOperator
                 groupingTypes(source.outputSchema(), groupByColumns),
                 requireNonNull(operatorResources, "operatorResources is null"),
                 requireNonNull(groupingResources, "groupingResources is null"),
-                requireNonNull(allocationContext, "allocationContext is null"));
+                requireNonNull(allocationContext, "allocationContext is null"),
+                requireNonNull(phaseMetrics, "phaseMetrics is null"));
     }
 
     private static List<TypeBinding> groupingTypes(Schema sourceSchema, List<Integer> groupByColumns)
@@ -285,7 +310,8 @@ public class GroupedAggregationOperator
                 inlineGroupingTypes,
                 operatorResources,
                 operatorResources.grouping(),
-                new Allocator.Context("GroupedAggregationOperator"));
+                new Allocator.Context("GroupedAggregationOperator"),
+                new MutableAggregationPhaseMetrics());
     }
 
     private GroupedAggregationOperator(
@@ -299,7 +325,8 @@ public class GroupedAggregationOperator
             List<TypeBinding> inlineGroupingTypes,
             OperatorResources operatorResources,
             GroupingStateResources groupingResources,
-            Allocator.Context allocationContext)
+            Allocator.Context allocationContext,
+            MutableAggregationPhaseMetrics phaseMetrics)
     {
         if (!groupedColumns.isEmpty() && groupByColumns == null && !(source instanceof GroupedKeySource)) {
             throw new IllegalArgumentException("Source must implement GroupedKeySource when grouped outputs are requested");
@@ -322,6 +349,7 @@ public class GroupedAggregationOperator
         this.fusedLongDirectGrouping = policy.fusedLongDirectGrouping();
         this.fusedMappedContinuationPowerOfTwoStateCapacity = policy.fusedMappedContinuationPowerOfTwoStateCapacity();
         this.debugFusedGrouping = policy.debugFusedGrouping();
+        this.phaseMetrics = requireNonNull(phaseMetrics, "phaseMetrics is null");
         this.aggregationExecutionContext = new AggregationExecutionContext(
                 allocator,
                 allocationContext,
@@ -673,24 +701,54 @@ public class GroupedAggregationOperator
         // wins on memory-level parallelism (each pass streams one random-access array the OOO window
         // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
         if (fusedEligible && inlineGroupingState.groupCount() < fuseLocalGroupLimit) {
-            if (tryFusedSingleLongAggregation(batch, mask)) {
+            long start = System.nanoTime();
+            boolean fused;
+            try {
+                fused = tryFusedSingleLongAggregation(batch, mask);
+            }
+            finally {
+                phaseMetrics.recordFused(System.nanoTime() - start);
+            }
+            if (fused) {
                 maxObservedGroup = inlineGroupingState.groupCount() - 1;
                 if (filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
-                    accumulateFilteredGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch));
-                    accumulateDistinctGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
+                    start = System.nanoTime();
+                    try {
+                        accumulateFilteredGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch));
+                        accumulateDistinctGroupedRows(batch, reusableGroups, mask, StreamAccessors.forBatch(batch), toIntExact(inlineGroupingState.groupCount()));
+                    }
+                    finally {
+                        phaseMetrics.recordAccumulation(System.nanoTime() - start);
+                    }
                 }
                 return;
             }
         }
 
         long previousMaxGroup = maxObservedGroup;
-        if (aggregations.length == 0 && assignInlineGroupsDiscardingResults(batch, mask)) {
-            groupIdsDiscarded = true;
-            maxObservedGroup = inlineGroupingState.groupCount() - 1;
-            return;
+        if (aggregations.length == 0) {
+            long start = System.nanoTime();
+            boolean discarded;
+            try {
+                discarded = assignInlineGroupsDiscardingResults(batch, mask);
+            }
+            finally {
+                phaseMetrics.recordGrouping(System.nanoTime() - start);
+            }
+            if (discarded) {
+                groupIdsDiscarded = true;
+                maxObservedGroup = inlineGroupingState.groupCount() - 1;
+                return;
+            }
         }
         reusableGroups = allocator.reallocateIfNecessary(allocationContext, reusableGroups, I64Vector.class, mask.maxPosition() + 1, I64Vector::new);
-        assignInlineGroups(batch, mask, reusableGroups);
+        long start = System.nanoTime();
+        try {
+            assignInlineGroups(batch, mask, reusableGroups);
+        }
+        finally {
+            phaseMetrics.recordGrouping(System.nanoTime() - start);
+        }
         // The grouping state knows the max assigned group id (group ids are dense 0..count-1),
         // so use it directly instead of a separate O(rows) scan of the just-assigned group vector.
         maxObservedGroup = inlineGroupingState.groupCount() - 1;
@@ -706,8 +764,20 @@ public class GroupedAggregationOperator
             newCapacity = Math.max(newCapacity, preferredCapacity);
         }
         var streamAccessor = StreamAccessors.forBatch(batch);
-        prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
-        accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
+        start = System.nanoTime();
+        try {
+            prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+        }
+        finally {
+            phaseMetrics.recordStatePreparation(System.nanoTime() - start);
+        }
+        start = System.nanoTime();
+        try {
+            accumulateGroupedRows(batch, reusableGroups, mask, streamAccessor, toIntExact(inlineGroupingState.groupCount()));
+        }
+        finally {
+            phaseMetrics.recordAccumulation(System.nanoTime() - start);
+        }
     }
 
     private Mask finishInlineGrouping()

@@ -465,20 +465,29 @@ class TestGroupedAggregationSession
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources)) {
             allocator.beginExecution();
+            MutableAggregationPhaseMetrics phaseMetrics = new MutableAggregationPhaseMetrics();
             InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
                     allocator,
                     Schema.unspecified(1),
                     List.of(0),
                     PhysicalAggregationProgram.independent(List.of(directCount)),
-                    resources.operatorResources());
+                    resources.operatorResources(),
+                    phaseMetrics);
 
             try (Batch input = new Batch(
                     Mask.sparse(new int[] {3, 1}, 4),
-                    Output.of(Streams.ofValues(new I64Vector(new long[] {10, 20, 30, 40}))));
+                    Output.of(Streams.ofValues(new DictionaryVector(
+                            new int[] {0, 1, 2, 3},
+                            new I64Vector(new long[] {10, 20, 30, 40})))));
                     Batch result = builder.build(input)) {
                 assertThat(selectedLongValues(result, 0)).containsExactly(40, 20);
                 assertThat(selectedLongValues(result, 1)).containsExactly(1, 1);
                 assertThat(directCalls).hasValue(1);
+                AggregationPhaseMetrics metrics = phaseMetrics.snapshot();
+                assertThat(metrics.initialKeyNanos()).isPositive();
+                assertThat(metrics.initialEncodedKeyNanos()).isPositive();
+                assertThat(metrics.initialFlatKeyNanos()).isZero();
+                assertThat(metrics.initialAggregationNanos()).isPositive();
             }
         }
     }
