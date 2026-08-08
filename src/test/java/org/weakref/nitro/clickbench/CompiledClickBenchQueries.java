@@ -558,7 +558,12 @@ public final class CompiledClickBenchQueries
                 new Plan.Col(102),
                 new Plan.Col(103),
                 new Plan.Col(104));
-        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(4, false)), 10));
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(4, false),
+                new Plan.SortKey(0, false),
+                new Plan.SortKey(7, false),
+                new Plan.SortKey(13, false),
+                new Plan.SortKey(39, false)), 10));
         return new Ported(query, List.of(
                 new CompiledTpcdsQueries.DictRef(2, 0, 2),
                 new CompiledTpcdsQueries.DictRef(13, 0, 13),

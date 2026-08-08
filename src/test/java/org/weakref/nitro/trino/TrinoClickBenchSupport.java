@@ -557,14 +557,39 @@ public final class TrinoClickBenchSupport
         List<String> columns = TrinoClickBenchPageReader.allColumns(input);
         List<Type> types = TrinoClickBenchPageReader.columnTypes(input, columns);
         int eventTimeIndex = columns.indexOf("EventTime");
+        int watchIdIndex = columns.indexOf("WatchID");
+        int clientIpIndex = columns.indexOf("ClientIP");
         int urlIndex = columns.indexOf("URL");
-        return materialize(
-                input,
-                columns,
-                List.of(
-                        filterAndProjectFactory(1, types, Optional.of(like(urlIndex, "%google%")), identityProjections(types), types),
-                        topNFactory(2, types, 10, List.of(eventTimeIndex), List.of(ascending()))),
-                types);
+        int searchPhraseIndex = columns.indexOf("SearchPhrase");
+        List<Integer> sortChannels = List.of(eventTimeIndex, watchIdIndex, clientIpIndex, urlIndex, searchPhraseIndex);
+        List<SortOrder> sortOrders = List.of(ascending(), ascending(), ascending(), ascending(), ascending());
+
+        List<Page> partialRows = new ArrayList<>();
+        for (Path split : TrinoClickBenchPageReader.resolveFiles(input)) {
+            partialRows.addAll(executePipeline(
+                    "q24.partial",
+                    driverContext -> new ParquetPageSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("partial-source"), ParquetPageSourceOperator.class.getSimpleName()),
+                            split,
+                            columns),
+                    List.of(
+                            filterAndProjectFactory(1, types, Optional.of(like(urlIndex, "%google%")), identityProjections(types), types),
+                            topNFactory(2, types, 10, sortChannels, sortOrders)),
+                    true).pages());
+        }
+
+        PipelineOutput result = executePipeline(
+                "q24.final",
+                driverContext -> new PagesSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("topn-exchange"), PagesSourceOperator.class.getSimpleName()),
+                        partialRows),
+                List.of(topNFactory(1, types, 10, sortChannels, sortOrders)),
+                true);
+        partialRows.clear();
+
+        MaterializedResult.Builder materialized = MaterializedResult.resultBuilder(result.driverContext().getSession(), types);
+        result.pages().forEach(materialized::page);
+        return materialized.build();
     }
 
     public MaterializedResult query25(Path input)

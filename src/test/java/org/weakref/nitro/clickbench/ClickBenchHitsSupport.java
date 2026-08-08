@@ -72,6 +72,8 @@ import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngre
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
+import org.weakref.nitro.parquet.ParquetArenaPolicy;
+import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
 import org.weakref.nitro.tpcds.OperatorCpuProfile;
 
 import java.io.IOException;
@@ -247,11 +249,36 @@ public final class ClickBenchHitsSupport
 
     public static Operator query24(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        List<String> columns = allHitsColumns(file);
-        int eventTimeIndex = columns.indexOf("EventTime");
-        int urlIndex = columns.indexOf("URL");
-        Operator filtered = filter(allocator, primitiveRegistry, clickBenchScan(allocator, file, columns.toArray(String[]::new)), containsUtf8(urlIndex, "google"));
-        return new TopNOperator(allocator, 10, eventTimeIndex, false, filtered);
+        try {
+            List<String> columns = allHitsColumns(file);
+            int eventTimeIndex = columns.indexOf("EventTime");
+            int watchIdIndex = columns.indexOf("WatchID");
+            int clientIpIndex = columns.indexOf("ClientIP");
+            int urlIndex = columns.indexOf("URL");
+            int searchPhraseIndex = columns.indexOf("SearchPhrase");
+            int[] sortChannels = {eventTimeIndex, watchIdIndex, clientIpIndex, urlIndex, searchPhraseIndex};
+            boolean[] descending = {false, false, false, false, false};
+            NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault(
+                    ParquetArenaPolicy.shared(),
+                    ParquetScanBatchPolicy.adaptiveHostBoundaryDefaults());
+
+            List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+            List<Operator> partials = new ArrayList<>(splits.size());
+            for (Path split : splits) {
+                Operator filtered = filter(
+                        allocator,
+                        primitiveRegistry,
+                        clickBenchScan(scanResources, allocator, split, columns.toArray(String[]::new)),
+                        containsUtf8(urlIndex, "google"));
+                partials.add(new TopNOperator(allocator, 10, sortChannels, descending, filtered));
+            }
+
+            Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(columns.size(), partials));
+            return new TopNOperator(allocator, 10, sortChannels, descending, exchange);
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to list ClickBench splits for " + file, exception);
+        }
     }
 
     public static Operator query02(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -873,12 +900,21 @@ public final class ClickBenchHitsSupport
 
     private static Operator clickBenchScan(Allocator allocator, Path file, String... columns)
     {
+        return clickBenchScan(NitroParquetScanResources.createDefault(), allocator, file, columns);
+    }
+
+    private static Operator clickBenchScan(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            Path file,
+            String... columns)
+    {
         try {
             // The Nitro reader is multi-file aware, so it takes the whole directory's files directly.
             List<Path> paths = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<String> columnNames = List.of(columns);
             Operator decoder = new NitroParquetScanOperator(
-                    NitroParquetScanResources.createDefault(),
+                    resources,
                     allocator,
                     paths,
                     columnNames);
