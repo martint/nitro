@@ -675,12 +675,10 @@ public final class ClickBenchHitsSupport
             List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<Operator> partials = new ArrayList<>(splits.size());
             for (Path split : splits) {
-                Operator projected = projectResolutionWidthOffsets(
+                partials.add(new AggregationOperator(
                         allocator,
-                        primitiveRegistry,
-                        clickBenchScan(scanResources, allocator, split, "ResolutionWidth"),
-                        sumCount);
-                partials.add(new AggregationOperator(allocator, exactOffsetSums(sumCount), projected));
+                        PhysicalAggregationProgram.singleUnit(ExactAffineBigintSums.partial(sumCount)),
+                        clickBenchScan(scanResources, allocator, split, "ResolutionWidth")));
             }
             Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(sumCount, partials));
             return new AggregationOperator(allocator, exactOffsetSums(sumCount), exchange);
