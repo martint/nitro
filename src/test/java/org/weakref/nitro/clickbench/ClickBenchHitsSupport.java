@@ -667,9 +667,27 @@ public final class ClickBenchHitsSupport
 
     public static Operator query30(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        int sumCount = 90;
-        Operator projected = projectResolutionWidthOffsets(allocator, primitiveRegistry, clickBenchScan(allocator, file, "ResolutionWidth"), sumCount);
-        return new AggregationOperator(allocator, offsetSums(sumCount), projected);
+        try {
+            int sumCount = 90;
+            NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault(
+                    ParquetArenaPolicy.shared(),
+                    ParquetScanBatchPolicy.adaptiveHostBoundaryDefaults());
+            List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+            List<Operator> partials = new ArrayList<>(splits.size());
+            for (Path split : splits) {
+                Operator projected = projectResolutionWidthOffsets(
+                        allocator,
+                        primitiveRegistry,
+                        clickBenchScan(scanResources, allocator, split, "ResolutionWidth"),
+                        sumCount);
+                partials.add(new AggregationOperator(allocator, exactOffsetSums(sumCount), projected));
+            }
+            Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(sumCount, partials));
+            return new AggregationOperator(allocator, exactOffsetSums(sumCount), exchange);
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to list ClickBench splits for " + file, exception);
+        }
     }
 
     public static Operator query31(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
@@ -1116,6 +1134,15 @@ public final class ClickBenchHitsSupport
         java.util.ArrayList<Accumulator> sums = new java.util.ArrayList<>(count);
         for (int index = 0; index < count; index++) {
             sums.add(new Sum(index));
+        }
+        return sums;
+    }
+
+    private static List<Accumulator> exactOffsetSums(int count)
+    {
+        java.util.ArrayList<Accumulator> sums = new java.util.ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            sums.add(new ExactBigintSum(index));
         }
         return sums;
     }

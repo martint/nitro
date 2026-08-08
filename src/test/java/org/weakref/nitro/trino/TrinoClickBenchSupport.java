@@ -691,19 +691,44 @@ public final class TrinoClickBenchSupport
     {
         List<RowExpression> projections = new ArrayList<>();
         List<Type> projectedTypes = new ArrayList<>();
-        List<io.trino.operator.aggregation.AggregatorFactory> aggregators = new ArrayList<>();
+        List<io.trino.operator.aggregation.AggregatorFactory> partialAggregators = new ArrayList<>();
+        List<io.trino.operator.aggregation.AggregatorFactory> finalAggregators = new ArrayList<>();
         for (int offset = 0; offset < 90; offset++) {
             projections.add(add(castField(0, INTEGER, BIGINT), constant((long) offset, BIGINT), BIGINT));
             projectedTypes.add(BIGINT);
-            aggregators.add(BIGINT_SUM.createAggregatorFactory(Step.SINGLE, List.of(offset), OptionalInt.empty()));
+            partialAggregators.add(BIGINT_SUM.createAggregatorFactory(Step.PARTIAL, List.of(offset), OptionalInt.empty()));
+            finalAggregators.add(BIGINT_SUM.createAggregatorFactory(Step.FINAL, List.of(offset), OptionalInt.empty()));
         }
-        return materialize(
-                input,
-                List.of("ResolutionWidth"),
-                List.of(
-                        filterAndProjectFactory(1, List.of(INTEGER), Optional.empty(), projections, projectedTypes),
-                        new AggregationOperatorFactory(2, new PlanNodeId("aggregation"), aggregators)),
-                projectedTypes);
+
+        List<Page> partialRows = new ArrayList<>();
+        List<OperatorFactory> partialFactories = List.of(
+                filterAndProjectFactory(1, List.of(INTEGER), Optional.empty(), projections, projectedTypes),
+                new AggregationOperatorFactory(2, new PlanNodeId("partial-aggregation"), partialAggregators));
+        for (Path split : TrinoClickBenchPageReader.resolveFiles(input)) {
+            partialRows.addAll(executePipeline(
+                    "q30.partial",
+                    driverContext -> new ParquetPageSourceOperator(
+                            driverContext.addOperatorContext(0, new PlanNodeId("partial-source"), ParquetPageSourceOperator.class.getSimpleName()),
+                            split,
+                            List.of("ResolutionWidth")),
+                    partialFactories,
+                    true,
+                    false).pages());
+        }
+        partialFactories.forEach(OperatorFactory::noMoreOperators);
+
+        PipelineOutput result = executePipeline(
+                "q30.final",
+                driverContext -> new PagesSourceOperator(
+                        driverContext.addOperatorContext(0, new PlanNodeId("aggregation-exchange"), PagesSourceOperator.class.getSimpleName()),
+                        partialRows),
+                List.of(new AggregationOperatorFactory(1, new PlanNodeId("final-aggregation"), finalAggregators)),
+                true);
+        partialRows.clear();
+
+        MaterializedResult.Builder materialized = MaterializedResult.resultBuilder(result.driverContext().getSession(), projectedTypes);
+        result.pages().forEach(materialized::page);
+        return materialized.build();
     }
 
     public MaterializedResult query31(Path input)
@@ -1029,6 +1054,16 @@ public final class TrinoClickBenchSupport
 
     private PipelineOutput executePipeline(String profilePrefix, SourceFactory sourceFactory, List<OperatorFactory> factories, boolean collectOutput)
     {
+        return executePipeline(profilePrefix, sourceFactory, factories, collectOutput, true);
+    }
+
+    private PipelineOutput executePipeline(
+            String profilePrefix,
+            SourceFactory sourceFactory,
+            List<OperatorFactory> factories,
+            boolean collectOutput,
+            boolean closeFactories)
+    {
         List<Page> outputPages = new ArrayList<>();
         DriverContext driverContext = TestingTaskContext.builder(executor, scheduledExecutor, TestingSession.testSessionBuilder().build())
                 .setQueryMaxMemory(queryMaxMemory)
@@ -1045,7 +1080,9 @@ public final class TrinoClickBenchSupport
         for (OperatorFactory factory : factories) {
             Operator operator = factory.createOperator(driverContext);
             operators.add(profiled(profilePrefix + ".operator-" + operatorIndex + "." + operator.getClass().getSimpleName(), operator));
-            factory.noMoreOperators();
+            if (closeFactories) {
+                factory.noMoreOperators();
+            }
             operatorIndex++;
         }
 

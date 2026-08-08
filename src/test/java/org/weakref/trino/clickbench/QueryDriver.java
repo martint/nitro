@@ -17,6 +17,7 @@ import org.weakref.nitro.trino.TrinoClickBenchSupport;
 import org.weakref.nitro.trino.TrinoOperatorCpuProfile;
 
 import java.nio.file.Path;
+import java.util.function.ToLongFunction;
 
 /** Runs the Trino operator-based ClickBench harness in a warmed loop for focused profiling. */
 public final class QueryDriver
@@ -26,22 +27,24 @@ public final class QueryDriver
     public static void main(String[] args)
     {
         String query = args[0].matches("\\d+") ? String.format("query%02d", Integer.parseInt(args[0])) : args[0];
-        if (!query.equals("query09")) {
-            throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
-        }
         int warmup = args.length > 1 ? Integer.parseInt(args[1]) : 2;
         int measured = args.length > 2 ? Integer.parseInt(args[2]) : 1;
         try (TrinoClickBenchSupport support = new TrinoClickBenchSupport()) {
+            ToLongFunction<Path> runner = switch (query) {
+                case "query09" -> path -> support.query09(path).getRowCount();
+                case "query30" -> path -> support.query30(path).getRowCount();
+                default -> throw new IllegalArgumentException("Operator profiling is not yet wired for " + query);
+            };
             Path hits = support.requiredActualHitsPath();
             long sink = 0;
             for (int iteration = 0; iteration < warmup; iteration++) {
-                sink += support.query09(hits).getRowCount();
+                sink += runner.applyAsLong(hits);
             }
 
             TrinoOperatorCpuProfile profile = new TrinoOperatorCpuProfile();
             long start = System.nanoTime();
             for (int iteration = 0; iteration < measured; iteration++) {
-                sink += TrinoClickBenchSupport.withOperatorCpuProfile(profile, () -> support.query09(hits)).getRowCount();
+                sink += TrinoClickBenchSupport.withOperatorCpuProfile(profile, () -> runner.applyAsLong(hits));
             }
             long nanos = System.nanoTime() - start;
             System.out.printf("%s: %d iters, %.1f ms/iter, sink=%d%n", query, measured, nanos / 1e6 / measured, sink);
