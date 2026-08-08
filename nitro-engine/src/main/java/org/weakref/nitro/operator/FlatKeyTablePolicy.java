@@ -75,6 +75,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean idOnlyBinaryRecords,
             boolean embedIdOnlyBinaryIds,
             boolean compactEmbeddedBinaryRecords,
+            boolean adaptiveCompactLongRecords,
+            int adaptiveCompactLongRecordsMinRows,
             int compactBinaryMinFields,
             int compactBinaryMinRows,
             int compactBinaryMinReusableFields,
@@ -99,6 +101,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
         public Layout
         {
             if (generatedDictionaryHashProbeTileRows <= 0 ||
+                    adaptiveCompactLongRecordsMinRows < 0 ||
                     normalizedIntKeyMaxBits < 0 ||
                     normalizedIntKeyMaxBits > Long.SIZE * 2) {
                 throw new IllegalArgumentException("Invalid flat layout admission policy");
@@ -141,6 +144,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     true,
                     true,
                     true,
+                    true,
+                    1 << 12,
                     5,
                     1024,
                     3,
@@ -226,6 +231,12 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     booleanProperty(
                             "nitro.group.compactEmbeddedBinaryRecords",
                             defaults.compactEmbeddedBinaryRecords()),
+                    booleanProperty(
+                            "nitro.group.adaptiveCompactLongRecords",
+                            defaults.adaptiveCompactLongRecords()),
+                    Integer.getInteger(
+                            "nitro.group.adaptiveCompactLongRecordsMinRows",
+                            defaults.adaptiveCompactLongRecordsMinRows()),
                     Integer.getInteger("nitro.group.compactBinaryMinFields", defaults.compactBinaryMinFields()),
                     Integer.getInteger("nitro.group.compactBinaryMinRows", defaults.compactBinaryMinRows()),
                     Integer.getInteger(

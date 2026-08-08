@@ -44,6 +44,11 @@ interface FlatTypeHandler
 
     boolean identicalFlatToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector vector, int position);
 
+    default long retainedBytes()
+    {
+        return 0;
+    }
+
     default void writeLong(byte[] fixedChunk, int fixedOffset, long value)
     {
         throw new UnsupportedOperationException();

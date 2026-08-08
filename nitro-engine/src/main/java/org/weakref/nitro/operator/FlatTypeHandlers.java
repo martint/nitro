@@ -657,6 +657,36 @@ final class FlatTypeHandlers
         return new CompactLongHandler(type.longFlatKeyStorage().orElseThrow());
     }
 
+    public static FlatTypeHandler forVector(
+            Vector vector,
+            TypeBinding type,
+            FlatKeyTablePolicy.Layout policy,
+            boolean allowAdaptiveCompactLong)
+    {
+        FlatTypeHandler handler = forVector(vector, type);
+        if (handler != LONG ||
+                !allowAdaptiveCompactLong ||
+                !policy.adaptiveCompactLongRecords() ||
+                vector.length() < policy.adaptiveCompactLongRecordsMinRows() ||
+                !sampleFitsCompactLongRecord(vector)) {
+            return handler;
+        }
+        return new AdaptiveCompactLongHandler();
+    }
+
+    private static boolean sampleFitsCompactLongRecord(Vector vector)
+    {
+        int sampleSize = Math.min(vector.length(), 256);
+        for (int sample = 0; sample < sampleSize; sample++) {
+            int position = (int) ((long) sample * vector.length() / sampleSize);
+            long value = OperatorVectorSupport.longValue(vector, position);
+            if (value < AdaptiveCompactLongHandler.MIN_DIRECT || value > AdaptiveCompactLongHandler.MAX_DIRECT) {
+                return false;
+            }
+        }
+        return sampleSize > 0;
+    }
+
     private record CompactLongHandler(LongFlatKeyStorage storage)
             implements FlatTypeHandler
     {
@@ -731,6 +761,175 @@ final class FlatTypeHandlers
             I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
             result.values()[outputPosition] = readLong(fixedChunk, fixedOffset);
             return result;
+        }
+    }
+
+    /**
+     * Four-byte exact storage for a physically narrow logical long stream. Values in the common signed-31 domain
+     * are stored directly. A later full-width value receives a stable sidecar id, so first-batch admission never
+     * narrows the logical domain and does not require rebuilding the surrounding hash table.
+     */
+    private static final class AdaptiveCompactLongHandler
+            implements FlatTypeHandler
+    {
+        private static final long MIN_DIRECT = -(1L << 30);
+        private static final long MAX_DIRECT = (1L << 30) - 1;
+
+        private final LongSidecar sidecar = new LongSidecar();
+
+        @Override
+        public Kind kind()
+        {
+            return Kind.LONG;
+        }
+
+        @Override
+        public int fixedSize()
+        {
+            return Integer.BYTES;
+        }
+
+        @Override
+        public boolean variableWidth()
+        {
+            return false;
+        }
+
+        @Override
+        public long hashInput(Vector vector, int position)
+        {
+            return LONG.hashInput(vector, position);
+        }
+
+        @Override
+        public void writeFlat(Vector vector, int position, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena)
+        {
+            writeLong(fixedChunk, fixedOffset, OperatorVectorSupport.longValue(vector, position));
+        }
+
+        @Override
+        public void writeLong(byte[] fixedChunk, int fixedOffset, long value)
+        {
+            int token;
+            if (value >= MIN_DIRECT && value <= MAX_DIRECT) {
+                token = (int) (value - MIN_DIRECT);
+            }
+            else {
+                token = Integer.MIN_VALUE | sidecar.intern(value);
+            }
+            INT_HANDLE.set(fixedChunk, fixedOffset, token);
+        }
+
+        @Override
+        public boolean identicalFlatToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector vector, int position)
+        {
+            return readLong(fixedChunk, fixedOffset) == OperatorVectorSupport.longValue(vector, position);
+        }
+
+        @Override
+        public long readLong(byte[] fixedChunk, int fixedOffset)
+        {
+            int token = (int) INT_HANDLE.get(fixedChunk, fixedOffset);
+            return token >= 0 ? MIN_DIRECT + token : sidecar.value(token & Integer.MAX_VALUE);
+        }
+
+        @Override
+        public long retainedBytes()
+        {
+            return sidecar.retainedBytes();
+        }
+
+        @Override
+        public Vector materializeValues(FlatGroupingTable table, FlatKeyLayout.Field field, int fieldIndex, int size, Mask mask, long nullGroup, Vector output, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            Arrays.fill(result.values(), 0);
+            for (int index : mask) {
+                if (index == nullGroup) {
+                    continue;
+                }
+                int recordIndex = table.recordIndex(index);
+                if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
+                    result.values()[index] = readLong(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public Vector copyFlatValue(FlatKeyLayout.Field field, byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector output, int outputPosition, int size, Allocator allocator, Allocator.Context allocationContext)
+        {
+            I64Vector result = allocator.allocateOrGrow(allocationContext, (I64Vector) output, I64Vector.class, size, I64Vector::new);
+            result.values()[outputPosition] = readLong(fixedChunk, fixedOffset);
+            return result;
+        }
+    }
+
+    private static final class LongSidecar
+    {
+        private long[] values = new long[16];
+        private int[] slots = new int[32];
+        private int size;
+
+        int intern(long value)
+        {
+            int mask = slots.length - 1;
+            int slot = mix(value) & mask;
+            while (slots[slot] != 0) {
+                int id = slots[slot] - 1;
+                if (values[id] == value) {
+                    return id;
+                }
+                slot = (slot + 1) & mask;
+            }
+            if (size == Integer.MAX_VALUE) {
+                throw new IllegalStateException("Too many full-width flat long values");
+            }
+            if (size == values.length) {
+                values = Arrays.copyOf(values, values.length * 2);
+            }
+            int id = size++;
+            values[id] = value;
+            slots[slot] = id + 1;
+            if (size * 2 >= slots.length) {
+                growSlots();
+            }
+            return id;
+        }
+
+        long value(int id)
+        {
+            if (id < 0 || id >= size) {
+                throw new IllegalStateException("Invalid full-width flat long id: " + id);
+            }
+            return values[id];
+        }
+
+        long retainedBytes()
+        {
+            return (long) values.length * Long.BYTES + (long) slots.length * Integer.BYTES;
+        }
+
+        private void growSlots()
+        {
+            int[] grown = new int[slots.length * 2];
+            int mask = grown.length - 1;
+            for (int id = 0; id < size; id++) {
+                int slot = mix(values[id]) & mask;
+                while (grown[slot] != 0) {
+                    slot = (slot + 1) & mask;
+                }
+                grown[slot] = id + 1;
+            }
+            slots = grown;
+        }
+
+        private static int mix(long value)
+        {
+            value ^= value >>> 33;
+            value *= 0xff51afd7ed558ccdL;
+            value ^= value >>> 33;
+            return (int) value;
         }
     }
 

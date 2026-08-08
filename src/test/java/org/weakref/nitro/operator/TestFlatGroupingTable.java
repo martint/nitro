@@ -82,6 +82,84 @@ class TestFlatGroupingTable
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
 
     @Test
+    void testAdaptiveCompactLongRecordPreservesLaterFullWidthValues()
+    {
+        TypeBinding bigint = longBinding("testing:bigint", Optional.empty());
+        long[] firstValues = new long[4096];
+        int[] secondValues = new int[4096];
+        firstValues[0] = 17;
+        firstValues[1] = -23;
+        firstValues[2] = 17;
+        secondValues[0] = 1;
+        secondValues[1] = 2;
+        secondValues[2] = 1;
+        int[] firstDictionaryIds = new int[4096];
+        firstDictionaryIds[1] = 1;
+        Vector[] first = {
+                new I64Vector(firstValues),
+                new I32Vector(secondValues),
+                DictionaryVector.wrap(firstDictionaryIds, firstDictionaryIds.length, utf8("alpha", "beta"))};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                first,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy,
+                List.of(bigint, bigint));
+        assertThat(layout.fixedRecordSize()).isEqualTo(1 + 2 * Integer.BYTES + 3 * Integer.BYTES);
+
+        FlatGroupingTable table = new FlatGroupingTable(layout, 4, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("adaptive-compact-long-record");
+        try {
+            table.beginBatch(first, null);
+            assertThat(table.assignGroup(first, null, 0, 0)).isZero();
+            assertThat(table.assignGroup(first, null, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(first, null, 2, 2)).isZero();
+            table.endBatch();
+
+            long widePositive = (1L << 50) + 31;
+            long wideNegative = -(1L << 52) + 7;
+            Vector[] later = {
+                    new I64Vector(new long[] {widePositive, wideNegative, widePositive, 17}),
+                    new I64Vector(new long[] {3, 4, 3, 1}),
+                    DictionaryVector.wrap(new int[] {0, 1, 0, 0}, 4, utf8("alpha", "beta"))};
+            table.beginBatch(later, null);
+            assertThat(table.assignGroup(later, null, 0, 2)).isEqualTo(2);
+            assertThat(table.assignGroup(later, null, 1, 3)).isEqualTo(3);
+            assertThat(table.assignGroup(later, null, 2, 4)).isEqualTo(2);
+            assertThat(table.assignGroup(later, null, 3, 4)).isZero();
+            table.endBatch();
+
+            I64Vector grouped = (I64Vector) table.groupedValues(0, Mask.all(4), null, allocator, allocationContext).values();
+            assertThat(grouped.values()).containsExactly(17, -23, widePositive, wideNegative);
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
+    void testAdaptiveCompactLongRecordRejectsWideMultiDictionaryCube()
+    {
+        int[] ids = new int[4096];
+        Vector[] values = {
+                DictionaryVector.wrap(ids, ids.length, utf8("a")),
+                DictionaryVector.wrap(ids, ids.length, utf8("b")),
+                DictionaryVector.wrap(ids, ids.length, utf8("c")),
+                DictionaryVector.wrap(ids, ids.length, utf8("d")),
+                new I64Vector(4096)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(
+                values,
+                true,
+                arrayPool,
+                codeGeneration,
+                flatKeyTablePolicy);
+        assertThat(layout.fixedRecordSize()).isEqualTo(1 + 4 * 3 * Integer.BYTES + Long.BYTES);
+    }
+
+    @Test
     void testProviderOwnedIntegerStorageIsStableAcrossPhysicalVectorWidths()
     {
         TypeBinding bigint = longBinding("testing:bigint", Optional.empty());

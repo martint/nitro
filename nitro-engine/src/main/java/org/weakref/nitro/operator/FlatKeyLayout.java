@@ -305,9 +305,17 @@ class FlatKeyLayout
         boolean anyVariableWidth = false;
         int binaryFields = 0;
         int idBackedBinaryFields = 0;
+        int dictionaryBackedBinaryFields = dictionaryBackedBinaryFields(values);
+        boolean adaptiveCompactLongRecords = values.length >= 3 &&
+                dictionaryBackedBinaryFields > 0 &&
+                Arrays.stream(values).anyMatch(I32Vector.class::isInstance);
         for (int index = 0; index < values.length; index++) {
             TypeBinding type = index < types.size() ? types.get(index) : null;
-            FlatTypeHandler handler = FlatTypeHandlers.forVector(values[index], type);
+            FlatTypeHandler handler = FlatTypeHandlers.forVector(
+                    values[index],
+                    type,
+                    layoutPolicy,
+                    adaptiveCompactLongRecords);
             if (handler == null) {
                 return null;
             }
@@ -356,6 +364,17 @@ class FlatKeyLayout
                     anyVariableWidth);
         }
         return new FlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
+    }
+
+    private static int dictionaryBackedBinaryFields(Vector[] values)
+    {
+        int fields = 0;
+        for (Vector value : values) {
+            if (value instanceof DictionaryVector && OperatorVectorSupport.flatten(value) instanceof BinaryVector) {
+                fields++;
+            }
+        }
+        return fields;
     }
 
     private static boolean admitsCompactBinaryRecords(
@@ -2878,6 +2897,9 @@ class FlatKeyLayout
         bytes += intArrayBytes(comparisonOrder);
         bytes += nestedIntArrayBytes(dictionaryHashedIds);
         bytes += nestedLongArrayBytes(dictionaryEntryHashes);
+        for (FlatTypeHandler handler : handlers) {
+            bytes += handler.retainedBytes();
+        }
         bytes += referenceArrayBytes(dictionaryHashedValues);
         bytes += longArrayBytes(dictionaryHashedGenerations);
         bytes += referenceArrayBytes(boundDictionary);
