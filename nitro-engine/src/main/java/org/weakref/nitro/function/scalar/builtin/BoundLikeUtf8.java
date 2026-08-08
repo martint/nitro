@@ -33,6 +33,7 @@ import org.weakref.nitro.function.scalar.ScalarFunction;
 import java.util.List;
 import java.util.Set;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -46,6 +47,7 @@ public final class BoundLikeUtf8
 {
     private final Allocator.Context allocationContext = new Allocator.Context("BoundLikeUtf8");
     private final LikeUtf8.Pattern pattern;
+    private final Utf8BinaryDispatch.ContainsNeedle containsNeedle;
 
     public BoundLikeUtf8(String pattern)
     {
@@ -54,7 +56,9 @@ public final class BoundLikeUtf8
 
     public BoundLikeUtf8(String pattern, LikeUtf8Policy policy)
     {
-        this.pattern = LikeUtf8.compilePattern(requireNonNull(pattern, "pattern is null"), requireNonNull(policy, "policy is null"));
+        String patternText = requireNonNull(pattern, "pattern is null");
+        this.pattern = LikeUtf8.compilePattern(patternText, requireNonNull(policy, "policy is null"));
+        this.containsNeedle = compileContainsNeedle(patternText);
     }
 
     @Override
@@ -84,7 +88,8 @@ public final class BoundLikeUtf8
 
         Streams input = inputs.getFirst();
         Vector inputValues = input.values();
-        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(input.getOrNull(Stream.NULLS));
+        Vector inputNullVector = input.getOrNull(Stream.NULLS);
+        VectorAccess.BooleanValues inputNulls = VectorAccess.booleanValues(inputNullVector);
         Vector inputErrorVector = input.getOrNull(Stream.ERRORS);
         VectorAccess.BooleanValues inputErrors = VectorAccess.booleanValues(inputErrorVector);
         int length = inputValues.length();
@@ -105,7 +110,13 @@ public final class BoundLikeUtf8
                 : null;
 
         if (values != null) {
-            writeMatches(inputValues, mask, inputNulls, inputErrors, values.values());
+            writeMatches(
+                    inputValues,
+                    mask,
+                    inputNulls,
+                    inputErrors,
+                    VectorAccess.isAllFalseNulls(inputNullVector) && VectorAccess.isAllFalseNulls(inputErrorVector),
+                    values.values());
         }
         for (int position : mask) {
             boolean failed = inputErrors.value(position);
@@ -143,20 +154,25 @@ public final class BoundLikeUtf8
             Mask mask,
             VectorAccess.BooleanValues nulls,
             VectorAccess.BooleanValues errors,
+            boolean clean,
             boolean[] output)
     {
         switch (input) {
             case BinaryVector binary -> {
+                if (containsNeedle != null && clean && mask.all() && containsNeedle.length() > 1) {
+                    Utf8BinaryDispatch.containsSweep(binary.data(), binary.offsets(), mask.size(), containsNeedle, output);
+                    return;
+                }
                 for (int position : mask) {
                     if (!nulls.value(position) && !errors.value(position)) {
-                        output[position] = pattern.matches(binary.data(), binary.startOffset(position), binary.length(position));
+                        output[position] = matches(binary, position);
                     }
                 }
             }
             case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector entries -> {
                 boolean[] entryMatches = new boolean[entries.length()];
                 for (int entry = 0; entry < entries.length(); entry++) {
-                    entryMatches[entry] = pattern.matches(entries.data(), entries.startOffset(entry), entries.length(entry));
+                    entryMatches[entry] = matches(entries, entry);
                 }
                 for (int position : mask) {
                     if (!nulls.value(position) && !errors.value(position)) {
@@ -168,11 +184,31 @@ public final class BoundLikeUtf8
                 for (int position : mask) {
                     if (!nulls.value(position) && !errors.value(position)) {
                         int entry = rle.runIndex(position);
-                        output[position] = pattern.matches(entries.data(), entries.startOffset(entry), entries.length(entry));
+                        output[position] = matches(entries, entry);
                     }
                 }
             }
             default -> throw new IllegalArgumentException("Unsupported bound_like_utf8 input vector: " + input.getClass().getSimpleName());
         }
+    }
+
+    private boolean matches(BinaryVector input, int position)
+    {
+        if (containsNeedle != null) {
+            return Utf8BinaryDispatch.contains(input.data(), input.startOffset(position), input.length(position), containsNeedle);
+        }
+        return pattern.matches(input.data(), input.startOffset(position), input.length(position));
+    }
+
+    private static Utf8BinaryDispatch.ContainsNeedle compileContainsNeedle(String pattern)
+    {
+        if (pattern.length() < 2 || pattern.charAt(0) != '%' || pattern.charAt(pattern.length() - 1) != '%') {
+            return null;
+        }
+        String literal = pattern.substring(1, pattern.length() - 1);
+        if (literal.indexOf('%') >= 0) {
+            return null;
+        }
+        return Utf8BinaryDispatch.containsNeedle(literal.getBytes(UTF_8));
     }
 }
