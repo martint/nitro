@@ -20,6 +20,7 @@ import org.weakref.nitro.data.AllocatorPolicy;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
+import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
@@ -159,6 +160,29 @@ class TestAllocator
 
             allocator.discard(context, state);
             assertThat(allocator.residentBytes()).isZero();
+            assertThat(memory.reservedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testTracksAdaptiveCountChunkPromotion()
+    {
+        TestingMemoryReservation memory = new TestingMemoryReservation();
+        Allocator.Context context = new Allocator.Context("adaptive-count-state");
+        try (Allocator allocator = new Allocator(EngineResources.createDefault(), memory)) {
+            CountStateVector state = allocator.allocate(
+                    context,
+                    CountStateVector.class,
+                    4_096,
+                    CountStateVector::new);
+            long compactBytes = state.retainedBytes();
+
+            state.increment(0, 256);
+
+            assertThat(state.retainedBytes()).isEqualTo(compactBytes + 4_096L * 7);
+            assertThat(allocator.residentBytes()).isEqualTo(state.retainedBytes());
+            assertThat(memory.reservedBytes()).isEqualTo(state.retainedBytes());
+            allocator.discard(context, state);
             assertThat(memory.reservedBytes()).isZero();
         }
     }

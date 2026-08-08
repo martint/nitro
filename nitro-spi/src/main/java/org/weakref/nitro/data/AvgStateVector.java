@@ -15,56 +15,82 @@ package org.weakref.nitro.data;
 
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 
+import static java.util.Objects.requireNonNull;
+
 public final class AvgStateVector
-        implements FlatVector, LongStateUpdate
+        implements FlatVector, LongStateUpdate, DynamicRetainedBytesVector
 {
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
     private static final int CHUNK_MASK = CHUNK_SIZE - 1;
+    private static final int COMPACT_COUNT_MAX = 0xFF;
 
     private final int length;
     private final long[][] sumChunks;
-    private final long[][] countChunks;
-    private final long retainedBytes;
+    private final byte[][] compactCountChunks;
+    private final long[][] wideCountChunks;
+    private long retainedBytes;
+    private Allocator retainedBytesAllocator;
+    private Allocator.Context retainedBytesContext;
 
     public AvgStateVector(int length)
     {
         this.length = length;
         this.sumChunks = new long[chunkCount(length)][];
-        this.countChunks = new long[chunkCount(length)][];
+        this.compactCountChunks = new byte[sumChunks.length][];
+        this.wideCountChunks = new long[sumChunks.length][];
         long retainedBytes = 0;
         for (int index = 0; index < sumChunks.length; index++) {
             sumChunks[index] = new long[CHUNK_SIZE];
-            countChunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+            compactCountChunks[index] = new byte[CHUNK_SIZE];
+            retainedBytes += (long) CHUNK_SIZE * (Long.BYTES + Byte.BYTES);
         }
         this.retainedBytes = retainedBytes;
     }
 
-    private AvgStateVector(int length, long[][] sumChunks, long[][] countChunks, long retainedBytes)
+    private AvgStateVector(
+            int length,
+            long[][] sumChunks,
+            byte[][] compactCountChunks,
+            long[][] wideCountChunks,
+            long retainedBytes)
     {
         this.length = length;
         this.sumChunks = sumChunks;
-        this.countChunks = countChunks;
+        this.compactCountChunks = compactCountChunks;
+        this.wideCountChunks = wideCountChunks;
         this.retainedBytes = retainedBytes;
+    }
+
+    @Override
+    public void bindRetainedBytesAccounting(Allocator allocator, Allocator.Context context)
+    {
+        retainedBytesAllocator = requireNonNull(allocator, "allocator is null");
+        retainedBytesContext = requireNonNull(context, "context is null");
     }
 
     public static AvgStateVector grow(AvgStateVector previous, int length)
     {
         int requiredChunkCount = chunkCount(length);
         if (requiredChunkCount <= previous.sumChunks.length) {
-            return new AvgStateVector(length, previous.sumChunks, previous.countChunks, previous.retainedBytes);
+            return new AvgStateVector(
+                    length,
+                    previous.sumChunks,
+                    previous.compactCountChunks,
+                    previous.wideCountChunks,
+                    previous.retainedBytes);
         }
 
         long[][] sumChunks = java.util.Arrays.copyOf(previous.sumChunks, requiredChunkCount);
-        long[][] countChunks = java.util.Arrays.copyOf(previous.countChunks, requiredChunkCount);
+        byte[][] compactCountChunks = java.util.Arrays.copyOf(previous.compactCountChunks, requiredChunkCount);
+        long[][] wideCountChunks = java.util.Arrays.copyOf(previous.wideCountChunks, requiredChunkCount);
         long retainedBytes = previous.retainedBytes;
         for (int index = previous.sumChunks.length; index < requiredChunkCount; index++) {
             sumChunks[index] = new long[CHUNK_SIZE];
-            countChunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) CHUNK_SIZE * Long.BYTES * 2;
+            compactCountChunks[index] = new byte[CHUNK_SIZE];
+            retainedBytes += (long) CHUNK_SIZE * (Long.BYTES + Byte.BYTES);
         }
-        return new AvgStateVector(length, sumChunks, countChunks, retainedBytes);
+        return new AvgStateVector(length, sumChunks, compactCountChunks, wideCountChunks, retainedBytes);
     }
 
     @Override
@@ -83,14 +109,21 @@ public final class AvgStateVector
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         long[][] sumChunks = new long[this.sumChunks.length][];
-        long[][] countChunks = new long[this.countChunks.length][];
-        long retainedBytes = 0;
+        byte[][] compactCountChunks = new byte[this.compactCountChunks.length][];
+        long[][] wideCountChunks = new long[this.wideCountChunks.length][];
         for (int index = 0; index < sumChunks.length; index++) {
             sumChunks[index] = java.util.Arrays.copyOf(this.sumChunks[index], this.sumChunks[index].length);
-            countChunks[index] = java.util.Arrays.copyOf(this.countChunks[index], this.countChunks[index].length);
-            retainedBytes += (long) this.sumChunks[index].length * Long.BYTES * 2;
+            if (this.compactCountChunks[index] != null) {
+                compactCountChunks[index] = java.util.Arrays.copyOf(this.compactCountChunks[index], this.compactCountChunks[index].length);
+            }
+            if (this.wideCountChunks[index] != null) {
+                wideCountChunks[index] = java.util.Arrays.copyOf(this.wideCountChunks[index], this.wideCountChunks[index].length);
+            }
         }
-        return allocator.adopt(allocationContext, new AvgStateVector(length, sumChunks, countChunks, retainedBytes));
+        AvgStateVector copy = allocator.adopt(
+                allocationContext,
+                new AvgStateVector(length, sumChunks, compactCountChunks, wideCountChunks, retainedBytes));
+        return copy;
     }
 
     @Override
@@ -101,7 +134,8 @@ public final class AvgStateVector
             int position = positions[index];
             copy.increment(index, sum(position), count(position));
         }
-        return allocator.adopt(allocationContext, copy);
+        copy = allocator.adopt(allocationContext, copy);
+        return copy;
     }
 
     @Override
@@ -110,8 +144,13 @@ public final class AvgStateVector
         for (long[] chunk : sumChunks) {
             java.util.Arrays.fill(chunk, 0);
         }
-        for (long[] chunk : countChunks) {
-            java.util.Arrays.fill(chunk, 0);
+        for (int index = 0; index < compactCountChunks.length; index++) {
+            if (compactCountChunks[index] != null) {
+                java.util.Arrays.fill(compactCountChunks[index], (byte) 0);
+            }
+            else {
+                java.util.Arrays.fill(wideCountChunks[index], 0);
+            }
         }
     }
 
@@ -135,8 +174,10 @@ public final class AvgStateVector
 
     public void increment(int index, long sum, long count)
     {
-        sumChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += sum;
-        countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+        int chunkIndex = index >> CHUNK_SHIFT;
+        int chunkOffset = index & CHUNK_MASK;
+        sumChunks[chunkIndex][chunkOffset] += sum;
+        incrementCount(chunkIndex, chunkOffset, count);
     }
 
     public void increment(int index, long value)
@@ -157,10 +198,11 @@ public final class AvgStateVector
      */
     public void incrementDouble(int index, double sum)
     {
-        long[] chunk = sumChunks[index >> CHUNK_SHIFT];
-        int offset = index & CHUNK_MASK;
-        chunk[offset] = Double.doubleToRawLongBits(Double.longBitsToDouble(chunk[offset]) + sum);
-        countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK]++;
+        int chunkIndex = index >> CHUNK_SHIFT;
+        int chunkOffset = index & CHUNK_MASK;
+        long[] chunk = sumChunks[chunkIndex];
+        chunk[chunkOffset] = Double.doubleToRawLongBits(Double.longBitsToDouble(chunk[chunkOffset]) + sum);
+        incrementCount(chunkIndex, chunkOffset, 1);
     }
 
     public double doubleSum(int index)
@@ -175,7 +217,12 @@ public final class AvgStateVector
 
     public long count(int index)
     {
-        return countChunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
+        int chunkIndex = index >> CHUNK_SHIFT;
+        int chunkOffset = index & CHUNK_MASK;
+        long[] wide = wideCountChunks[chunkIndex];
+        return wide == null
+                ? Byte.toUnsignedInt(compactCountChunks[chunkIndex][chunkOffset])
+                : wide[chunkOffset];
     }
 
     public void initialize(int offset, int length)
@@ -187,8 +234,47 @@ public final class AvgStateVector
             int chunkOffset = position & CHUNK_MASK;
             int copyLength = Math.min(end - position, CHUNK_SIZE - chunkOffset);
             java.util.Arrays.fill(sumChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
-            java.util.Arrays.fill(countChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
+            if (compactCountChunks[chunkIndex] != null) {
+                java.util.Arrays.fill(compactCountChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, (byte) 0);
+            }
+            else {
+                java.util.Arrays.fill(wideCountChunks[chunkIndex], chunkOffset, chunkOffset + copyLength, 0);
+            }
             position += copyLength;
+        }
+    }
+
+    private void incrementCount(int chunkIndex, int chunkOffset, long count)
+    {
+        long[] wide = wideCountChunks[chunkIndex];
+        if (wide != null) {
+            wide[chunkOffset] += count;
+            return;
+        }
+
+        byte[] compact = compactCountChunks[chunkIndex];
+        long updated = Byte.toUnsignedInt(compact[chunkOffset]) + count;
+        if (updated >= 0 && updated <= COMPACT_COUNT_MAX) {
+            compact[chunkOffset] = (byte) updated;
+            return;
+        }
+
+        promoteCountChunk(chunkIndex, compact);
+        wideCountChunks[chunkIndex][chunkOffset] = updated;
+    }
+
+    private void promoteCountChunk(int chunkIndex, byte[] compact)
+    {
+        long previousRetainedBytes = retainedBytes;
+        long[] wide = new long[CHUNK_SIZE];
+        for (int index = 0; index < compact.length; index++) {
+            wide[index] = Byte.toUnsignedInt(compact[index]);
+        }
+        wideCountChunks[chunkIndex] = wide;
+        compactCountChunks[chunkIndex] = null;
+        retainedBytes += (long) CHUNK_SIZE * (Long.BYTES - Byte.BYTES);
+        if (retainedBytesAllocator != null) {
+            retainedBytesAllocator.retainedBytesChanged(retainedBytesContext, this, previousRetainedBytes);
         }
     }
 

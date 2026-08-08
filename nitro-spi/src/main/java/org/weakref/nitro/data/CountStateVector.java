@@ -15,50 +15,66 @@ package org.weakref.nitro.data;
 
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 
+import static java.util.Objects.requireNonNull;
+
 public final class CountStateVector
-        implements FlatVector, LongStateUpdate
+        implements FlatVector, LongStateUpdate, DynamicRetainedBytesVector
 {
     private static final int CHUNK_SHIFT = 12;
     private static final int CHUNK_SIZE = 1 << CHUNK_SHIFT;
     private static final int CHUNK_MASK = CHUNK_SIZE - 1;
+    private static final int COMPACT_MAX = 0xFF;
 
     private final int length;
-    private final long[][] chunks;
-    private final long retainedBytes;
+    private final byte[][] compactChunks;
+    private final long[][] wideChunks;
+    private long retainedBytes;
+    private Allocator retainedBytesAllocator;
+    private Allocator.Context retainedBytesContext;
 
     public CountStateVector(int length)
     {
         this.length = length;
-        this.chunks = new long[chunkCount(length)][];
+        this.compactChunks = new byte[chunkCount(length)][];
+        this.wideChunks = new long[compactChunks.length][];
         long retainedBytes = 0;
-        for (int index = 0; index < chunks.length; index++) {
-            chunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) chunks[index].length * Long.BYTES;
+        for (int index = 0; index < compactChunks.length; index++) {
+            compactChunks[index] = new byte[CHUNK_SIZE];
+            retainedBytes += CHUNK_SIZE;
         }
         this.retainedBytes = retainedBytes;
     }
 
-    private CountStateVector(int length, long[][] chunks, long retainedBytes)
+    private CountStateVector(int length, byte[][] compactChunks, long[][] wideChunks, long retainedBytes)
     {
         this.length = length;
-        this.chunks = chunks;
+        this.compactChunks = compactChunks;
+        this.wideChunks = wideChunks;
         this.retainedBytes = retainedBytes;
+    }
+
+    @Override
+    public void bindRetainedBytesAccounting(Allocator allocator, Allocator.Context context)
+    {
+        retainedBytesAllocator = requireNonNull(allocator, "allocator is null");
+        retainedBytesContext = requireNonNull(context, "context is null");
     }
 
     public static CountStateVector grow(CountStateVector previous, int length)
     {
         int requiredChunkCount = chunkCount(length);
-        if (requiredChunkCount <= previous.chunks.length) {
-            return new CountStateVector(length, previous.chunks, previous.retainedBytes);
+        if (requiredChunkCount <= previous.compactChunks.length) {
+            return new CountStateVector(length, previous.compactChunks, previous.wideChunks, previous.retainedBytes);
         }
 
-        long[][] chunks = java.util.Arrays.copyOf(previous.chunks, requiredChunkCount);
+        byte[][] compactChunks = java.util.Arrays.copyOf(previous.compactChunks, requiredChunkCount);
+        long[][] wideChunks = java.util.Arrays.copyOf(previous.wideChunks, requiredChunkCount);
         long retainedBytes = previous.retainedBytes;
-        for (int index = previous.chunks.length; index < chunks.length; index++) {
-            chunks[index] = new long[CHUNK_SIZE];
-            retainedBytes += (long) CHUNK_SIZE * Long.BYTES;
+        for (int index = previous.compactChunks.length; index < compactChunks.length; index++) {
+            compactChunks[index] = new byte[CHUNK_SIZE];
+            retainedBytes += CHUNK_SIZE;
         }
-        return new CountStateVector(length, chunks, retainedBytes);
+        return new CountStateVector(length, compactChunks, wideChunks, retainedBytes);
     }
 
     @Override
@@ -76,13 +92,20 @@ public final class CountStateVector
     @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
-        long[][] chunks = new long[this.chunks.length][];
-        long retainedBytes = 0;
-        for (int index = 0; index < chunks.length; index++) {
-            chunks[index] = java.util.Arrays.copyOf(this.chunks[index], this.chunks[index].length);
-            retainedBytes += (long) chunks[index].length * Long.BYTES;
+        byte[][] compactChunks = new byte[this.compactChunks.length][];
+        long[][] wideChunks = new long[this.wideChunks.length][];
+        for (int index = 0; index < compactChunks.length; index++) {
+            if (this.compactChunks[index] != null) {
+                compactChunks[index] = java.util.Arrays.copyOf(this.compactChunks[index], this.compactChunks[index].length);
+            }
+            if (this.wideChunks[index] != null) {
+                wideChunks[index] = java.util.Arrays.copyOf(this.wideChunks[index], this.wideChunks[index].length);
+            }
         }
-        return allocator.adopt(allocationContext, new CountStateVector(length, chunks, retainedBytes));
+        CountStateVector copy = allocator.adopt(
+                allocationContext,
+                new CountStateVector(length, compactChunks, wideChunks, retainedBytes));
+        return copy;
     }
 
     @Override
@@ -92,12 +115,29 @@ public final class CountStateVector
         for (int index = 0; index < positions.length; index++) {
             copy.increment(index, value(positions[index]));
         }
-        return allocator.adopt(allocationContext, copy);
+        copy = allocator.adopt(allocationContext, copy);
+        return copy;
     }
 
     public void increment(int index, long count)
     {
-        chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK] += count;
+        int chunkIndex = index >> CHUNK_SHIFT;
+        int chunkOffset = index & CHUNK_MASK;
+        long[] wide = wideChunks[chunkIndex];
+        if (wide != null) {
+            wide[chunkOffset] += count;
+            return;
+        }
+
+        byte[] compact = compactChunks[chunkIndex];
+        long updated = Byte.toUnsignedInt(compact[chunkOffset]) + count;
+        if (updated >= 0 && updated <= COMPACT_MAX) {
+            compact[chunkOffset] = (byte) updated;
+            return;
+        }
+
+        promoteChunk(chunkIndex, compact);
+        wideChunks[chunkIndex][chunkOffset] = updated;
     }
 
     @Override
@@ -108,26 +148,55 @@ public final class CountStateVector
 
     public long value(int index)
     {
-        return chunks[index >> CHUNK_SHIFT][index & CHUNK_MASK];
+        int chunkIndex = index >> CHUNK_SHIFT;
+        int chunkOffset = index & CHUNK_MASK;
+        long[] wide = wideChunks[chunkIndex];
+        return wide == null
+                ? Byte.toUnsignedInt(compactChunks[chunkIndex][chunkOffset])
+                : wide[chunkOffset];
     }
 
     public void copyTo(I64Vector output)
     {
         long[] values = output.values();
-        int offset = 0;
-        for (long[] chunk : chunks) {
-            int copyLength = Math.min(chunk.length, length - offset);
+        int outputOffset = 0;
+        for (int chunkIndex = 0; chunkIndex < compactChunks.length; chunkIndex++) {
+            int copyLength = Math.min(CHUNK_SIZE, length - outputOffset);
             if (copyLength <= 0) {
                 break;
             }
-            System.arraycopy(chunk, 0, values, offset, copyLength);
-            offset += copyLength;
+            long[] wide = wideChunks[chunkIndex];
+            if (wide != null) {
+                System.arraycopy(wide, 0, values, outputOffset, copyLength);
+            }
+            else {
+                byte[] compact = compactChunks[chunkIndex];
+                for (int index = 0; index < copyLength; index++) {
+                    values[outputOffset + index] = Byte.toUnsignedInt(compact[index]);
+                }
+            }
+            outputOffset += copyLength;
         }
     }
 
     public long bytes()
     {
         return retainedBytes;
+    }
+
+    private void promoteChunk(int chunkIndex, byte[] compact)
+    {
+        long previousRetainedBytes = retainedBytes;
+        long[] wide = new long[CHUNK_SIZE];
+        for (int index = 0; index < compact.length; index++) {
+            wide[index] = Byte.toUnsignedInt(compact[index]);
+        }
+        wideChunks[chunkIndex] = wide;
+        compactChunks[chunkIndex] = null;
+        retainedBytes += (long) CHUNK_SIZE * (Long.BYTES - Byte.BYTES);
+        if (retainedBytesAllocator != null) {
+            retainedBytesAllocator.retainedBytesChanged(retainedBytesContext, this, previousRetainedBytes);
+        }
     }
 
     private static int chunkCount(int length)

@@ -19,6 +19,7 @@ import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.AvgStateVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.CountStateVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.DistinctCountStateVector;
 import org.weakref.nitro.data.DoubleStateVector;
@@ -698,6 +699,44 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testCountStateVectorPromotesOnlyOverflowingChunk()
+    {
+        CountStateVector state = new CountStateVector(8_192);
+        long compactBytes = state.retainedBytes();
+
+        state.increment(0, 255);
+        state.increment(4_096, 7);
+        assertThat(state.value(0)).isEqualTo(255);
+        assertThat(state.value(4_096)).isEqualTo(7);
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes);
+
+        state.increment(0, 1);
+        assertThat(state.value(0)).isEqualTo(256);
+        assertThat(state.value(4_096)).isEqualTo(7);
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes + 4_096L * 7);
+    }
+
+    @Test
+    void testAvgStateVectorPromotesOnlyOverflowingCountChunk()
+    {
+        AvgStateVector state = new AvgStateVector(8_192);
+        long compactBytes = state.retainedBytes();
+
+        state.increment(0, 1_000, 255);
+        state.increment(4_096, 20, 2);
+        assertThat(state.sum(0)).isEqualTo(1_000);
+        assertThat(state.count(0)).isEqualTo(255);
+        assertThat(state.count(4_096)).isEqualTo(2);
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes);
+
+        state.increment(0, 5, 1);
+        assertThat(state.sum(0)).isEqualTo(1_005);
+        assertThat(state.count(0)).isEqualTo(256);
+        assertThat(state.count(4_096)).isEqualTo(2);
+        assertThat(state.retainedBytes()).isEqualTo(compactBytes + 4_096L * 7);
+    }
+
+    @Test
     void testSumStateVectorGrowPreservesValuesWithoutFlatCopy()
     {
         SumStateVector state = new SumStateVector(1024);
@@ -885,10 +924,10 @@ public class TestBatchRuntime
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("LargeAvgStatePool");
 
-        AvgStateVector first = allocator.allocate(context, AvgStateVector.class, 600_000, AvgStateVector::new);
+        AvgStateVector first = allocator.allocate(context, AvgStateVector.class, 1_000_000, AvgStateVector::new);
         allocator.release(context);
 
-        AvgStateVector second = allocator.allocate(context, AvgStateVector.class, 600_000, AvgStateVector::new);
+        AvgStateVector second = allocator.allocate(context, AvgStateVector.class, 1_000_000, AvgStateVector::new);
 
         assertThat(second).isNotSameAs(first);
     }

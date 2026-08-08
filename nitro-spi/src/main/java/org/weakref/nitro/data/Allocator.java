@@ -1577,6 +1577,7 @@ public class Allocator
 
         ContextState state = states.computeIfAbsent(context, key -> new ContextState(
                 this,
+                key,
                 pools.computeIfAbsent(key.poolGroup(), _ -> new PoolState()),
                 pools.computeIfAbsent(key.compatibilityGroup(), _ -> new PoolState())));
         lastContext = context;
@@ -1691,6 +1692,7 @@ public class Allocator
             implements BufferLeaseOwner, Mask.CapacityListener
     {
         private final Allocator allocator;
+        private final Context context;
         private final Stats stats = new Stats();
         private final PoolState pool;
         private final PoolState compatibilityCandidate;
@@ -1704,9 +1706,10 @@ public class Allocator
         private long lifecycleEpoch;
         private long lastDiscardEpoch = -1;
 
-        private ContextState(Allocator allocator, PoolState pool, PoolState compatibilityPool)
+        private ContextState(Allocator allocator, Context context, PoolState pool, PoolState compatibilityPool)
         {
             this.allocator = requireNonNull(allocator, "allocator is null");
+            this.context = requireNonNull(context, "context is null");
             this.pool = requireNonNull(pool, "pool is null");
             this.compatibilityCandidate = requireNonNull(compatibilityPool, "compatibilityPool is null");
             this.compatibilityPool = pool;
@@ -1785,6 +1788,9 @@ public class Allocator
                 }
             }
             stats.acquire(vector.retainedBytes(), reused);
+            if (vector instanceof DynamicRetainedBytesVector dynamicRetainedBytesVector) {
+                dynamicRetainedBytesVector.bindRetainedBytesAccounting(allocator, context);
+            }
         }
 
         public void releaseVector(Vector vector)
