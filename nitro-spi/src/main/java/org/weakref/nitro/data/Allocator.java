@@ -914,6 +914,16 @@ public class Allocator
         return Map.copyOf(result);
     }
 
+    /** Returns vector storage allocated by implementation type, excluding successful pool reuse and non-vector storage. */
+    public Map<String, Long> allocatedVectorBytesByType()
+    {
+        Map<String, Long> result = new TreeMap<>();
+        for (ContextState state : states.values()) {
+            state.allocatedVectorBytesByType.forEach((type, bytes) -> result.merge(type, bytes, Math::addExact));
+        }
+        return Map.copyOf(result);
+    }
+
     public long currentBytes(Context context)
     {
         // Each Context carries a unique scopeId, so allocation routing keys on the exact instance.
@@ -1720,6 +1730,7 @@ public class Allocator
         private final Set<Vector> inUseVectors = Collections.newSetFromMap(new IdentityHashMap<>());
         private final Map<Object, Integer> inUseVectorCounts = new HashMap<>();
         private final Map<Object, Integer> vectorHighWater = new HashMap<>();
+        private final Map<String, Long> allocatedVectorBytesByType = new HashMap<>();
         private final Map<Object, Long> retainedBytesByOwner = new IdentityHashMap<>();
         private Mask inUseMasksHead;
         private boolean borrowedVectorResident;
@@ -1808,6 +1819,9 @@ public class Allocator
                 }
             }
             stats.acquire(vector.retainedBytes(), reused);
+            if (!reused && vector.retainedBytes() > 0) {
+                allocatedVectorBytesByType.merge(vector.getClass().getSimpleName(), vector.retainedBytes(), Math::addExact);
+            }
             if (vector instanceof DynamicRetainedBytesVector dynamicRetainedBytesVector) {
                 dynamicRetainedBytesVector.bindRetainedBytesAccounting(allocator, context);
             }
@@ -1840,6 +1854,7 @@ public class Allocator
             if (delta > 0) {
                 allocator.reserveResident(delta);
                 stats.acquire(delta, false);
+                allocatedVectorBytesByType.merge(vector.getClass().getSimpleName(), delta, Math::addExact);
             }
             else if (delta < 0) {
                 allocator.releaseResident(-delta);

@@ -168,6 +168,24 @@ class TestAllocator
     }
 
     @Test
+    void testReportsAllocatedVectorBytesByTypeWithoutCountingPoolReuse()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context first = new Allocator.Context("first");
+            Allocator.Context second = new Allocator.Context("second");
+            I64Vector firstVector = allocator.allocate(first, I64Vector.class, 8, I64Vector::new);
+            I32Vector secondVector = allocator.allocate(second, I32Vector.class, 4, I32Vector::new);
+            allocator.release(first, firstVector);
+            I64Vector reused = allocator.allocate(first, I64Vector.class, 8, I64Vector::new);
+
+            assertThat(reused).isSameAs(firstVector);
+            assertThat(allocator.allocatedVectorBytesByType()).isEqualTo(Map.of(
+                    "I32Vector", secondVector.retainedBytes(),
+                    "I64Vector", firstVector.retainedBytes()));
+        }
+    }
+
+    @Test
     void testTracksInPlaceVectorRetainedSizeChanges()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();
