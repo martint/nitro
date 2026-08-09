@@ -134,6 +134,22 @@ class TestAllocator
     }
 
     @Test
+    void testReportsAllocatedBytesWithoutCountingPoolReuse()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context context = new Allocator.Context("allocated-bytes");
+            I64Vector vector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            long allocatedBytes = vector.retainedBytes();
+            allocator.release(context, vector);
+
+            I64Vector reused = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            assertThat(reused).isSameAs(vector);
+            assertThat(allocator.allocatedBytes()).isEqualTo(allocatedBytes);
+            allocator.release(context, reused);
+        }
+    }
+
+    @Test
     void testTracksInPlaceVectorRetainedSizeChanges()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();

@@ -894,6 +894,16 @@ public class Allocator
         return state(context).stats().total();
     }
 
+    /** Returns storage allocated across this allocator's contexts, excluding successful pool reuse. */
+    public long allocatedBytes()
+    {
+        long total = 0;
+        for (ContextState state : states.values()) {
+            total = Math.addExact(total, state.stats().total());
+        }
+        return total;
+    }
+
     public long currentBytes(Context context)
     {
         // Each Context carries a unique scopeId, so allocation routing keys on the exact instance.
