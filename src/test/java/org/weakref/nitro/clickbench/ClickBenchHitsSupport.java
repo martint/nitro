@@ -24,11 +24,14 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
+import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
 import org.weakref.nitro.operator.AggregationOperator;
+import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
@@ -265,12 +268,24 @@ public final class ClickBenchHitsSupport
             List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
             List<Operator> partials = new ArrayList<>(splits.size());
             for (Path split : splits) {
-                Operator filtered = filter(
-                        allocator,
-                        primitiveRegistry,
-                        clickBenchScan(scanResources, allocator, split, columns.toArray(String[]::new)),
-                        containsUtf8(urlIndex, "google"));
-                partials.add(new TopNOperator(allocator, 10, sortChannels, descending, filtered));
+                Allocator splitAllocator = new Allocator(allocator.resourcesOwner());
+                Operator partial = null;
+                try {
+                    Operator filtered = filter(
+                            splitAllocator,
+                            primitiveRegistry,
+                            clickBenchScan(scanResources, splitAllocator, split, columns.toArray(String[]::new)),
+                            containsUtf8(urlIndex, "google"));
+                    partial = new TopNOperator(splitAllocator, 10, sortChannels, descending, filtered);
+                    partials.add(new AllocatorOwnedOperator(splitAllocator, partial));
+                }
+                catch (RuntimeException | Error failure) {
+                    if (partial != null) {
+                        partial.close();
+                    }
+                    splitAllocator.close();
+                    throw failure;
+                }
             }
 
             Operator exchange = new MaterializeOperator(allocator, new UnionAllOperator(columns.size(), partials));
@@ -1564,6 +1579,95 @@ public final class ClickBenchHitsSupport
                 new HitRow(105, "", 1_375_315_200L, 20130801, 7, 1_004, 9, 4, "", "", 0, 0, 640, 0, "", 0, 0, "", 800, 600, 0, 0, 1, 50, 60),
                 new HitRow(106, "Google Search", 1_373_846_400L, 20130715, 62, 1_005, 9, 5, "https://google.com/search", "https://www.google.com/search?q=news", 0, 20, 600, 3, "pixel", 6, 3, "news", 1920, 1080, 1, 0, 0, QUERY41_REFERER_HASH, QUERY42_URL_HASH),
                 new HitRow(107, "Search results", 1_373_932_800L, 20130716, 62, 1_006, 9, QUERY20_USER_ID, "https://google.com/search", "https://www.google.com/search?q=news2", 0, 0, 500, 3, "pixel", -1, 3, "news", 1920, 1080, 1, 0, 0, QUERY41_REFERER_HASH, QUERY42_URL_HASH));
+    }
+
+    private static final class AllocatorOwnedOperator
+            implements Operator
+    {
+        private final Allocator allocator;
+        private final Operator delegate;
+        private boolean closed;
+
+        private AllocatorOwnedOperator(Allocator allocator, Operator delegate)
+        {
+            this.allocator = allocator;
+            this.delegate = delegate;
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return delegate.outputCount();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return delegate.outputSchema();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            return delegate.hasNext();
+        }
+
+        @Override
+        public Batch next()
+        {
+            return delegate.next();
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            delegate.constrain(mask);
+        }
+
+        @Override
+        public boolean supportsRetainedBatches()
+        {
+            return delegate.supportsRetainedBatches();
+        }
+
+        @Override
+        public boolean supportsStableBatchBorrow()
+        {
+            return delegate.supportsStableBatchBorrow();
+        }
+
+        @Override
+        public boolean supportsOpenBatchHasNext()
+        {
+            return delegate.supportsOpenBatchHasNext();
+        }
+
+        @Override
+        public long exactOutputRows()
+        {
+            return delegate.exactOutputRows();
+        }
+
+        @Override
+        public boolean supportsConstrainedReborrow()
+        {
+            return delegate.supportsConstrainedReborrow();
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            try {
+                delegate.close();
+            }
+            finally {
+                allocator.close();
+            }
+        }
     }
 
     private record HitRow(
