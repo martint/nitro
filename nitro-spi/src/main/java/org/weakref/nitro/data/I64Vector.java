@@ -18,9 +18,11 @@ import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import java.util.Arrays;
 
 public class I64Vector
-        implements FlatVector, LongStateUpdate
+        implements FlatVector, LongStateUpdate, RecyclableVectorStorage
 {
     private final long[] values;
+    private final boolean recyclableStorage;
+    private boolean storageReleased;
     private long contentGeneration;
 
     public I64Vector(int size)
@@ -30,7 +32,22 @@ public class I64Vector
 
     public I64Vector(long[] values)
     {
+        this(values, false);
+    }
+
+    private I64Vector(long[] values, boolean recyclableStorage)
+    {
         this.values = values;
+        this.recyclableStorage = recyclableStorage;
+    }
+
+    public static I64Vector allocate(Allocator allocator, Allocator.Context context, int size)
+    {
+        return allocator.allocatePooled(context, I64Vector.class, size, true, I64Vector.class, () -> {
+            long[] values = allocator.primitiveArrays().borrowLongs(size);
+            Arrays.fill(values, 0);
+            return new I64Vector(values, true);
+        });
     }
 
     public long[] values()
@@ -157,6 +174,15 @@ public class I64Vector
     {
         contentGeneration++;
         // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
+    }
+
+    @Override
+    public void releaseStorage(PrimitiveArrayPool storagePool)
+    {
+        if (recyclableStorage && !storageReleased) {
+            storageReleased = true;
+            storagePool.release(values);
+        }
     }
 
     @Override

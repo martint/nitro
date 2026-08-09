@@ -1778,7 +1778,7 @@ public final class ColumnReader
         // Physical encoding is available after the normal page acquisition above. Plain-leading batches retain the
         // established flat-only path and never speculate an ID vector; dictionary-leading batches stage owned IDs.
         org.weakref.nitro.data.I32Vector stagedOwnedIds = directOwnedCandidate && pageBinaryDeferred
-                ? allocator.allocate(allocationContext, org.weakref.nitro.data.I32Vector.class, count, org.weakref.nitro.data.I32Vector::new)
+                ? org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count)
                 : null;
         if (stagedOwnedIds == null && binaryBatchIds.length < count) {
             binaryBatchIds = replaceInts(binaryBatchIds, count);
@@ -1897,11 +1897,7 @@ public final class ColumnReader
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, escapedDictionary(batchGeneration));
             }
             if (materializationPolicy.ownedDictionaryIds()) {
-                org.weakref.nitro.data.I32Vector ids = allocator.allocate(
-                        allocationContext,
-                        org.weakref.nitro.data.I32Vector.class,
-                        count,
-                        org.weakref.nitro.data.I32Vector::new);
+                org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(batchIds, 0, ids.values(), 0, count);
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }
@@ -1963,11 +1959,7 @@ public final class ColumnReader
         }
         if (!flat) {
             if (materializationPolicy.ownedDictionaryIds() && allocator != null) {
-                org.weakref.nitro.data.I32Vector ids = allocator.allocate(
-                        allocationContext,
-                        org.weakref.nitro.data.I32Vector.class,
-                        count,
-                        org.weakref.nitro.data.I32Vector::new);
+                org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }

@@ -1180,6 +1180,52 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAllocatorCloseRecyclesBinaryStorageWithoutReusingVectorIdentity()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            BinaryVector first;
+            int[] offsets;
+            byte[] data;
+            try (Allocator allocator = new Allocator(resources)) {
+                Allocator.Context context = new Allocator.Context("first");
+                first = BinaryVector.allocate(allocator, context, 65_536, 524_288);
+                offsets = first.offsets();
+                data = first.data();
+                first.setBytes(0, new byte[] {1, 2, 3});
+            }
+
+            try (Allocator allocator = new Allocator(resources)) {
+                BinaryVector second = BinaryVector.allocate(allocator, new Allocator.Context("second"), 65_536, 500_000);
+                assertThat(second).isNotSameAs(first);
+                assertThat(second.offsets()).isSameAs(offsets);
+                assertThat(second.data()).isSameAs(data);
+                assertThat(Arrays.stream(second.offsets()).sum()).isZero();
+            }
+        }
+    }
+
+    @Test
+    void testAllocatorCloseRecyclesNumericStorageWithoutReusingVectorIdentity()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            I64Vector first;
+            long[] values;
+            try (Allocator allocator = new Allocator(resources)) {
+                first = I64Vector.allocate(allocator, new Allocator.Context("first"), 65_536);
+                values = first.values();
+                values[0] = 37;
+            }
+
+            try (Allocator allocator = new Allocator(resources)) {
+                I64Vector second = I64Vector.allocate(allocator, new Allocator.Context("second"), 65_536);
+                assertThat(second).isNotSameAs(first);
+                assertThat(second.values()).isSameAs(values);
+                assertThat(Arrays.stream(second.values()).sum()).isZero();
+            }
+        }
+    }
+
+    @Test
     void testAsyncVectorTreeDetachReferenceCountsSharedChildren()
     {
         try (EngineResources resources = EngineResources.createDefault();

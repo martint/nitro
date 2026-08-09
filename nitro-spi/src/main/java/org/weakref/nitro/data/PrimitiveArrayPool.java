@@ -76,10 +76,33 @@ public final class PrimitiveArrayPool
         return array != null ? array : new byte[length];
     }
 
+    /** Borrows the smallest retained byte array that can satisfy {@code minimumLength}. */
+    public synchronized byte[] borrowBytesAtLeast(int minimumLength)
+    {
+        checkOpen();
+        Key best = null;
+        for (Key key : buckets.keySet()) {
+            if (key.family == byte[].class && key.capacity >= minimumLength &&
+                    (best == null || key.capacity < best.capacity)) {
+                best = key;
+            }
+        }
+        if (best == null) {
+            return new byte[minimumLength];
+        }
+        return borrow(best.family, best.capacity, byte[].class);
+    }
+
     public long[] borrowLongs(int length)
     {
         long[] array = borrow(long[].class, length, long[].class);
         return array != null ? array : new long[length];
+    }
+
+    public double[] borrowDoubles(int length)
+    {
+        double[] array = borrow(double[].class, length, double[].class);
+        return array != null ? array : new double[length];
     }
 
     public boolean[] borrowBooleans(int length)
@@ -109,6 +132,14 @@ public final class PrimitiveArrayPool
         checkOpen();
         if (array != null) {
             retain(long[].class, array.length, (long) array.length * Long.BYTES, array);
+        }
+    }
+
+    public synchronized void release(double[] array)
+    {
+        checkOpen();
+        if (array != null) {
+            retain(double[].class, array.length, (long) array.length * Double.BYTES, array);
         }
     }
 

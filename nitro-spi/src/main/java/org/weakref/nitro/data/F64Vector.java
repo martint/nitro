@@ -16,9 +16,11 @@ package org.weakref.nitro.data;
 import java.util.Arrays;
 
 public class F64Vector
-        implements FlatVector
+        implements FlatVector, RecyclableVectorStorage
 {
     private final double[] values;
+    private final boolean recyclableStorage;
+    private boolean storageReleased;
 
     public F64Vector(int size)
     {
@@ -27,7 +29,22 @@ public class F64Vector
 
     public F64Vector(double[] values)
     {
+        this(values, false);
+    }
+
+    private F64Vector(double[] values, boolean recyclableStorage)
+    {
         this.values = values;
+        this.recyclableStorage = recyclableStorage;
+    }
+
+    public static F64Vector allocate(Allocator allocator, Allocator.Context context, int size)
+    {
+        return allocator.allocatePooled(context, F64Vector.class, size, true, F64Vector.class, () -> {
+            double[] values = allocator.primitiveArrays().borrowDoubles(size);
+            Arrays.fill(values, 0);
+            return new F64Vector(values, true);
+        });
     }
 
     public double[] values()
@@ -135,6 +152,15 @@ public class F64Vector
     public void clearForReuse()
     {
         // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
+    }
+
+    @Override
+    public void releaseStorage(PrimitiveArrayPool storagePool)
+    {
+        if (recyclableStorage && !storageReleased) {
+            storageReleased = true;
+            storagePool.release(values);
+        }
     }
 
     @Override

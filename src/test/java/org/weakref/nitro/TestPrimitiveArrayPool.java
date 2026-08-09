@@ -58,6 +58,20 @@ public class TestPrimitiveArrayPool
     }
 
     @Test
+    public void testByteArrayCeilingCapacityReuse()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+        byte[] smallest = new byte[80];
+        byte[] larger = new byte[96];
+        pool.release(larger);
+        pool.release(smallest);
+
+        assertThat(pool.borrowBytesAtLeast(65)).isSameAs(smallest);
+        assertThat(pool.borrowBytesAtLeast(81)).isSameAs(larger);
+        assertThat(pool.borrowBytesAtLeast(97)).hasSize(97);
+    }
+
+    @Test
     public void testDuplicateReleaseCannotCreateConcurrentLeases()
     {
         PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);

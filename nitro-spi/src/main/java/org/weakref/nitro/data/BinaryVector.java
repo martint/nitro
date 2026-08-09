@@ -24,7 +24,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 public final class BinaryVector
-        implements FlatVector
+        implements FlatVector, RecyclableVectorStorage
 {
     private static final String FIXED_WIDTH_TRAIT = "fixed_width";
 
@@ -87,6 +87,8 @@ public final class BinaryVector
     private final int positionCount;
     private final int[] offsets;
     private final byte[] data;
+    private final boolean recyclableStorage;
+    private boolean storageReleased;
     private Set<Trait> traits = Set.of();
     // Object identity is not a content identity for pooled vectors. Consumers that retain derived state across
     // batches (for example dictionary-entry caches) pair this generation with the vector identity; it advances
@@ -101,11 +103,17 @@ public final class BinaryVector
 
     public BinaryVector(int positionCount, int[] offsets, byte[] data)
     {
+        this(positionCount, offsets, data, false);
+    }
+
+    private BinaryVector(int positionCount, int[] offsets, byte[] data, boolean recyclableStorage)
+    {
         checkArgument(positionCount >= 0, "positionCount is negative");
         checkArgument(offsets.length == positionCount + 1, "offsets length (%s) does not match positionCount + 1 (%s)", offsets.length, positionCount + 1);
         this.positionCount = positionCount;
         this.offsets = offsets;
         this.data = data;
+        this.recyclableStorage = recyclableStorage;
     }
 
     public int[] offsets()
@@ -149,7 +157,15 @@ public final class BinaryVector
                 byteCapacity,
                 false,
                 BinaryVector.class,
-                () -> new BinaryVector(positionCount, byteCapacity));
+                () -> allocateStorage(allocator.primitiveArrays(), positionCount, byteCapacity));
+    }
+
+    private static BinaryVector allocateStorage(PrimitiveArrayPool storagePool, int positionCount, int byteCapacity)
+    {
+        int[] offsets = storagePool.borrowInts(positionCount + 1);
+        Arrays.fill(offsets, 0);
+        byte[] data = storagePool.borrowBytesAtLeast(byteCapacity);
+        return new BinaryVector(positionCount, offsets, data, true);
     }
 
     public static BinaryVector allocate(VectorAllocator allocator, int positionCount, int byteCapacity)
@@ -554,6 +570,18 @@ public final class BinaryVector
         contentImmutable = false;
         clearTraits();
         Arrays.fill(offsets, 0);
+    }
+
+    @Override
+    public void releaseStorage(PrimitiveArrayPool storagePool)
+    {
+        requireNonNull(storagePool, "storagePool is null");
+        if (!recyclableStorage || storageReleased) {
+            return;
+        }
+        storageReleased = true;
+        storagePool.release(offsets);
+        storagePool.release(data);
     }
 
     @Override

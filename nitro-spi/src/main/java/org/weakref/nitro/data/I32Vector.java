@@ -16,9 +16,11 @@ package org.weakref.nitro.data;
 import java.util.Arrays;
 
 public class I32Vector
-        implements FlatVector
+        implements FlatVector, RecyclableVectorStorage
 {
     private final int[] values;
+    private final boolean recyclableStorage;
+    private boolean storageReleased;
     private long contentGeneration;
 
     public I32Vector(int size)
@@ -28,7 +30,22 @@ public class I32Vector
 
     public I32Vector(int[] values)
     {
+        this(values, false);
+    }
+
+    private I32Vector(int[] values, boolean recyclableStorage)
+    {
         this.values = values;
+        this.recyclableStorage = recyclableStorage;
+    }
+
+    public static I32Vector allocate(Allocator allocator, Allocator.Context context, int size)
+    {
+        return allocator.allocatePooled(context, I32Vector.class, size, true, I32Vector.class, () -> {
+            int[] values = allocator.primitiveArrays().borrowInts(size);
+            Arrays.fill(values, 0);
+            return new I32Vector(values, true);
+        });
     }
 
     public int[] values()
@@ -143,6 +160,15 @@ public class I32Vector
     {
         contentGeneration++;
         // No buffer clearing: consumers must only read positions the producer wrote (see Allocator contract).
+    }
+
+    @Override
+    public void releaseStorage(PrimitiveArrayPool storagePool)
+    {
+        if (recyclableStorage && !storageReleased) {
+            storageReleased = true;
+            storagePool.release(values);
+        }
     }
 
     @Override

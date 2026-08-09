@@ -1082,6 +1082,16 @@ public class Allocator
             return;
         }
         closed = true;
+        Set<Vector> vectors = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (ContextState state : states.values()) {
+            vectors.addAll(state.inUseVectors);
+        }
+        for (PoolState pool : pools.values()) {
+            vectors.addAll(pool.vectorPoolGlobalOrder);
+        }
+        for (Vector vector : vectors) {
+            releaseStorage(vector);
+        }
         if (memoryReservation != null && residentBytes != 0) {
             memoryReservation.release(residentBytes);
         }
@@ -1102,6 +1112,19 @@ public class Allocator
         pendingCompatibilityStates.clear();
         lastContext = null;
         lastContextState = null;
+    }
+
+    private void releaseStorage(Vector vector)
+    {
+        if (vector instanceof RecyclableVectorStorage recyclable) {
+            try {
+                recyclable.releaseStorage(primitiveArrays);
+            }
+            catch (IllegalStateException ignored) {
+                // The embedding may close its resource owner while an allocator is unwinding. The storage is then
+                // simply left for GC rather than re-entering a closed owner pool.
+            }
+        }
     }
 
     public long peakBytes(Context context)

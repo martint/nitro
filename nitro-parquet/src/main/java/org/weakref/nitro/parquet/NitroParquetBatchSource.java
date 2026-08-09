@@ -946,7 +946,7 @@ public final class NitroParquetBatchSource
                 }
                 case LONG -> {
                     if (reader.isDouble()) {
-                        org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+                        org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count);
                         double[] values = vector.values();
                         // Decode raw bits into a reused scratch (the double bit pattern IS the long), then reinterpret
                         // into the value array. A fresh long[count] per batch per double column was ~1.4 GB/op of
@@ -961,7 +961,7 @@ public final class NitroParquetBatchSource
                         }
                         yield vector;
                     }
-                    I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
+                    I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
                     reader.readLongs(vector.values(), nulls, count);
                     yield vector;
                 }
@@ -1212,7 +1212,7 @@ public final class NitroParquetBatchSource
             ensureLazyScratch(survivorCount, true);
             reader.readSelectedLongs(survivors, survivorCount, count, lazyScratchLong, isNullable ? lazyScratchNull : null);
             if (reader.isDouble()) {
-                org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+                org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count);
                 double[] out = vector.values();
                 for (int j = 0; j < survivorCount; j++) {
                     out[survivors[j]] = Double.longBitsToDouble(lazyScratchLong[j]);
@@ -1226,7 +1226,7 @@ public final class NitroParquetBatchSource
                 currentNulls[column] = nullVector;
                 return;
             }
-            I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
+            I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
             long[] out = vector.values();
             for (int j = 0; j < survivorCount; j++) {
                 out[survivors[j]] = lazyScratchLong[j];
@@ -1247,8 +1247,8 @@ public final class NitroParquetBatchSource
         return switch (reader.kind()) {
             case INT -> allocateIntOutput(column, count);
             case LONG -> reader.isDouble()
-                    ? allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new)
-                    : allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
+                    ? org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count)
+                    : I64Vector.allocate(allocator, allocationContext, count);
             case BINARY -> BinaryVector.allocate(allocator, allocationContext, count, 0);
         };
     }
@@ -1256,7 +1256,7 @@ public final class NitroParquetBatchSource
     /** Reinterpret {@code count} raw long bits (read through the long path for a DOUBLE column) into a double vector. */
     private org.weakref.nitro.data.F64Vector longBitsToDoubles(long[] bits, int offset, int count)
     {
-        org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, count, org.weakref.nitro.data.F64Vector::new);
+        org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count);
         double[] values = vector.values();
         for (int i = 0; i < count; i++) {
             values[i] = Double.longBitsToDouble(bits[offset + i]);
@@ -1267,9 +1267,9 @@ public final class NitroParquetBatchSource
     private Vector allocateIntOutput(int column, int capacity)
     {
         if (intOutputAsLong[column]) {
-            return allocator.allocate(allocationContext, I64Vector.class, capacity, I64Vector::new);
+            return I64Vector.allocate(allocator, allocationContext, capacity);
         }
-        return allocator.allocate(allocationContext, I32Vector.class, capacity, I32Vector::new);
+        return I32Vector.allocate(allocator, allocationContext, capacity);
     }
 
     private Vector copyIntOutput(int column, int[] source, int offset, int count, int capacity)
@@ -1321,7 +1321,7 @@ public final class NitroParquetBatchSource
                     reader.readLongs(bits, nulls, count);
                     yield longBitsToDoubles(bits, 0, count);
                 }
-                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, count, I64Vector::new);
+                I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
                 reader.readLongs(vector.values(), nulls, count);
                 yield vector;
             }
@@ -1870,7 +1870,7 @@ public final class NitroParquetBatchSource
                 valueVector = longBitsToDoubles(windowLong[c], start, sliceCount);
             }
             else {
-                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, batchPolicy.maxRows(), I64Vector::new);
+                I64Vector vector = I64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
                 System.arraycopy(windowLong[c], start, vector.values(), 0, sliceCount);
                 valueVector = vector;
             }
@@ -2048,7 +2048,7 @@ public final class NitroParquetBatchSource
             ensureLazyScratch(decodeCount, true);
             reader.readSelectedLongs(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchLong, isNullable ? lazyScratchNull : null);
             if (reader.isDouble()) {
-                org.weakref.nitro.data.F64Vector vector = allocator.allocate(allocationContext, org.weakref.nitro.data.F64Vector.class, batchPolicy.maxRows(), org.weakref.nitro.data.F64Vector::new);
+                org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
                 for (int index = 0; index < decodeCount; index++) {
                     int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
                     vector.values()[outputPosition] = Double.longBitsToDouble(lazyScratchLong[index]);
@@ -2059,7 +2059,7 @@ public final class NitroParquetBatchSource
                 currentValues[column] = vector;
             }
             else {
-                I64Vector vector = allocator.allocate(allocationContext, I64Vector.class, batchPolicy.maxRows(), I64Vector::new);
+                I64Vector vector = I64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
                 for (int index = 0; index < decodeCount; index++) {
                     int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
                     vector.values()[outputPosition] = lazyScratchLong[index];
