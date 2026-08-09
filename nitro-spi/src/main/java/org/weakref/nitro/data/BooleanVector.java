@@ -27,6 +27,7 @@ public class BooleanVector
     // is safe. See {@link VectorAccess#isAllFalseNulls}.
     private Boolean isAllFalseCache;
     private Boolean isAllTrueCache;
+    private Object sharedAllFalseOwner;
 
     public BooleanVector(int size)
     {
@@ -102,6 +103,7 @@ public class BooleanVector
         Arrays.fill(values, false);
         isAllFalseCache = Boolean.TRUE;
         isAllTrueCache = values.length == 0 ? Boolean.TRUE : Boolean.FALSE;
+        sharedAllFalseOwner = null;
     }
 
     public void markAllTrue()
@@ -109,6 +111,18 @@ public class BooleanVector
         Arrays.fill(values, true);
         isAllTrueCache = Boolean.TRUE;
         isAllFalseCache = values.length == 0 ? Boolean.TRUE : Boolean.FALSE;
+        sharedAllFalseOwner = null;
+    }
+
+    void markSharedAllFalse(Object owner)
+    {
+        markAllFalse();
+        sharedAllFalseOwner = owner;
+    }
+
+    boolean isSharedAllFalse(Object owner)
+    {
+        return sharedAllFalseOwner == owner;
     }
 
     @Override
@@ -214,6 +228,7 @@ public class BooleanVector
         Arrays.fill(values, false);
         isAllFalseCache = null;
         isAllTrueCache = null;
+        sharedAllFalseOwner = null;
     }
 
     @Override

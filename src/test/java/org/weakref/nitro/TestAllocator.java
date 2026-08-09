@@ -595,6 +595,20 @@ class TestAllocator
     }
 
     @Test
+    void testSharedAllFalseBooleanIsOwnedByItsAllocator()
+    {
+        EngineResources resources = EngineResources.createDefault();
+        Allocator firstAllocator = new Allocator(resources);
+        Allocator secondAllocator = new Allocator(resources);
+        Allocator.Context context = new Allocator.Context("test");
+
+        BooleanVector constant = (BooleanVector) firstAllocator.borrowAllFalseBoolean(context, 5);
+
+        assertThat(firstAllocator.isSharedAllFalseBoolean(constant)).isTrue();
+        assertThat(secondAllocator.isSharedAllFalseBoolean(constant)).isFalse();
+    }
+
+    @Test
     void testAllocatorUsesOwnerSuppliedPolicy()
     {
         AllocatorPolicy policy = new AllocatorPolicy(

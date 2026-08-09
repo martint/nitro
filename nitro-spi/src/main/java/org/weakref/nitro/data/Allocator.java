@@ -44,6 +44,7 @@ public class Allocator
     private final Map<Vector, AsyncVectorLeaseState> asyncVectorLeases = new IdentityHashMap<>();
     private final Map<Object, SharedResourceState> sharedResources = new HashMap<>();
     private final Map<Integer, BooleanVector> allFalseBooleanVectors = new HashMap<>();
+    private final Object allFalseBooleanOwner = new Object();
     private final Set<ContextState> pendingCompatibilityStates = Collections.newSetFromMap(new IdentityHashMap<>());
     private final AllocationResources allocationResources;
     private final AllocationResourcesOwner resourcesOwner;
@@ -229,7 +230,7 @@ public class Allocator
         }
         return allFalseBooleanVectors.computeIfAbsent(length, size -> {
             BooleanVector value = new BooleanVector(size);
-            value.markAllFalse();
+            value.markSharedAllFalse(allFalseBooleanOwner);
             reserveResident(value.retainedBytes());
             return value;
         });
@@ -242,7 +243,7 @@ public class Allocator
     {
         return policy.sharedAllFalseBoolean() &&
                 vector instanceof BooleanVector booleanVector &&
-                allFalseBooleanVectors.get(booleanVector.length()) == vector;
+                booleanVector.isSharedAllFalse(allFalseBooleanOwner);
     }
 
     public ArrayVector allocateArray(Context context, int positionCount)
