@@ -37,6 +37,7 @@ import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -144,6 +145,48 @@ class TestGroupedAggregationSession
                 long[] values = ((I64Vector) second.output(2).borrow(Stream.VALUES)).values();
                 assertThat(values[0]).isEqualTo(rows / 2);
                 assertThat(values[rows / 2 - 1]).isEqualTo(rows - 1);
+            }
+        }
+    }
+
+    @Test
+    void testStreamsSharedDictionaryGroupsWithoutFlatBackingInBoundedBatches()
+    {
+        Schema schema = new Schema(List.of(
+                new Field(binaryType(), false),
+                new Field(binaryType(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0, 1),
+                        List.of(0, 1),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        2)) {
+            allocator.beginExecution();
+            BinaryVector firstValues = new BinaryVector(2, 2);
+            firstValues.setBytes(0, "a".getBytes(UTF_8));
+            firstValues.setBytes(1, "b".getBytes(UTF_8));
+            BinaryVector secondValues = new BinaryVector(2, 2);
+            secondValues.setBytes(0, "x".getBytes(UTF_8));
+            secondValues.setBytes(1, "y".getBytes(UTF_8));
+            try (Batch input = new Batch(
+                    Mask.all(4),
+                    Output.of(Streams.ofValues(new DictionaryVector(new int[] {0, 0, 1, 1}, firstValues))),
+                    Output.of(Streams.ofValues(new DictionaryVector(new int[] {0, 1, 0, 1}, secondValues))))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(selectedBinaryValues(first, 0)).containsExactly("a", "a");
+                assertThat(selectedBinaryValues(first, 1)).containsExactly("x", "y");
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(selectedBinaryValues(second, 0)).containsExactly("b", "b");
+                assertThat(selectedBinaryValues(second, 1)).containsExactly("x", "y");
             }
         }
     }
@@ -677,6 +720,16 @@ class TestGroupedAggregationSession
         return selected;
     }
 
+    private static List<String> selectedBinaryValues(Batch batch, int output)
+    {
+        Vector values = batch.output(output).borrow(Stream.VALUES);
+        List<String> selected = new ArrayList<>();
+        for (int position : batch.borrowMask()) {
+            selected.add(new String(OperatorKeySemantics.copyBinaryBytes(values, position), UTF_8));
+        }
+        return selected;
+    }
+
     private static final class TestingPartialAggregationControl
             implements PartialAggregationControl
     {
@@ -781,6 +834,13 @@ class TestGroupedAggregationSession
             public Set<Class<? extends Vector>> supportedVectorTypes()
             {
                 return Set.of(BinaryVector.class);
+            }
+
+            @Override
+            public boolean supportsVector(Vector vector)
+            {
+                return vector instanceof BinaryVector ||
+                        (vector instanceof DictionaryVector dictionary && dictionary.values() instanceof BinaryVector);
             }
         };
     }

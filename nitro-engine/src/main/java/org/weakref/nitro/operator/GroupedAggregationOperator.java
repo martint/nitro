@@ -1501,7 +1501,7 @@ public class GroupedAggregationOperator
                 return streams;
             }
             if (output < groupedResults.length && groupByColumns != null) {
-                streams = inlineGroupingState.groupedValueRangeAsDictionary(
+                streams = inlineGroupingState.groupedValueRange(
                         groupedKeyIndexes[output], sourceStart, size, mask, allocator, allocationContext);
             }
             if (streams != null) {

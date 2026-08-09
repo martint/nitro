@@ -2623,6 +2623,44 @@ final class GroupingState
                 groupedColumnIndex, sourceStart, size, outputMask, allocator, allocationContext);
     }
 
+    Streams groupedValueRange(
+            int groupedColumnIndex,
+            int sourceStart,
+            int size,
+            Mask outputMask,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        Streams dictionary = groupedValueRangeAsDictionary(
+                groupedColumnIndex, sourceStart, size, outputMask, allocator, allocationContext);
+        if (dictionary != null) {
+            return dictionary;
+        }
+        if (structuralGrouping != null ||
+                useLongGrouping ||
+                usePackedIntPairGrouping ||
+                useMultiLongGrouping ||
+                useFlatGrouping ||
+                sharedDictionaryFlatBacking) {
+            return null;
+        }
+
+        List<OperatorKeySemantics.Key> keysByGroup = keysByGroupColumns.get(groupedColumnIndex)
+                .subList(sourceStart, sourceStart + size);
+        Streams values = OperatorKeySemantics.materializeGroupedValues(
+                keyHandlers[groupedColumnIndex],
+                size,
+                outputMask,
+                keysByGroup,
+                null,
+                allocator,
+                allocationContext,
+                binaryTraits[groupedColumnIndex]);
+        return Streams.ofValuesAndNulls(
+                values.values(),
+                materializeNulls(size, outputMask, keysByGroup, null, allocator, allocationContext));
+    }
+
     private I64Vector materializeLongGroupedValues(Mask mask, Vector output, Allocator allocator, Allocator.Context allocationContext)
     {
         int size = mask.none() ? 0 : mask.maxPosition() + 1;
