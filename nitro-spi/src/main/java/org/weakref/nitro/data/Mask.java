@@ -19,8 +19,8 @@ import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
 
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.PrimitiveIterator;
 import java.util.function.IntPredicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -1208,9 +1208,9 @@ public class Mask
     }
 
     @Override
-    public Iterator<Integer> iterator()
+    public PrimitiveIterator.OfInt iterator()
     {
-        return new Iterator<>()
+        return new PrimitiveIterator.OfInt()
         {
             private int index;
             private int nextPosition;
@@ -1223,7 +1223,7 @@ public class Mask
             }
 
             @Override
-            public Integer next()
+            public int nextInt()
             {
                 if (!hasNext()) {
                     throw new NoSuchElementException();
@@ -1538,8 +1538,8 @@ public class Mask
     private Mask genericUnion(Mask other)
     {
         int[] result = new int[Math.min(size, selectedCount + other.selectedCount)];
-        Iterator<Integer> left = iterator();
-        Iterator<Integer> right = other.iterator();
+        PrimitiveIterator.OfInt left = iterator();
+        PrimitiveIterator.OfInt right = other.iterator();
         Integer leftPosition = left.hasNext() ? left.next() : null;
         Integer rightPosition = right.hasNext() ? right.next() : null;
         int outputIndex = 0;

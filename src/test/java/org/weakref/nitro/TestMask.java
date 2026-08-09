@@ -23,6 +23,16 @@ class TestMask
     private static final int DENSE_DOUBLE_TEST_SIZE = 131;
 
     @Test
+    void primitiveIteratorPreservesDenseSparseAndExcludedPositions()
+    {
+        assertPrimitivePositions(Mask.all(4), 0, 1, 2, 3);
+        assertPrimitivePositions(Mask.sparse(new int[] {1, 4, 7}, 9), 1, 4, 7);
+
+        Mask excluded = Mask.sparse(new int[] {0, 2, 5, 8}, 9).complement();
+        assertPrimitivePositions(excluded, 1, 3, 4, 6, 7);
+    }
+
+    @Test
     void denseIntegerConstantRangePreservesStrictBounds()
     {
         int[] values = new int[257];
@@ -103,5 +113,15 @@ class TestMask
         Mask sparse = Mask.sparse(new int[] {1, 2, 3, 4}, ids.length);
         sparse.retainDictionaryIdComparison(ids, 2, null, false);
         assertThat(sparse).containsExactly(1, 3);
+    }
+
+    private static void assertPrimitivePositions(Mask mask, int... expected)
+    {
+        int[] actual = new int[mask.selectedCount()];
+        int index = 0;
+        for (var positions = mask.iterator(); positions.hasNext(); ) {
+            actual[index++] = positions.nextInt();
+        }
+        assertThat(actual).containsExactly(expected);
     }
 }
