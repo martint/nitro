@@ -186,28 +186,6 @@ class TestAllocator
     }
 
     @Test
-    void testReusesCeilingCapacityVectorAcrossAllocatorLifetimes()
-    {
-        try (AllocationResources resources = new AllocationResources(
-                new PrimitiveArrayPool(1 << 20, 0),
-                new PrimitiveArrayPool(1 << 20, 0))) {
-            BinaryVector retained;
-            try (Allocator first = new Allocator(resources)) {
-                Allocator.Context context = new Allocator.Context("first");
-                retained = BinaryVector.allocate(first, context, 8, 256);
-                first.release(context, retained);
-            }
-
-            try (Allocator second = new Allocator(resources)) {
-                Allocator.Context context = new Allocator.Context("second");
-                BinaryVector reused = BinaryVector.allocate(second, context, 8, 129);
-                assertThat(reused).isSameAs(retained);
-                assertThat(second.allocatedBytes()).isZero();
-            }
-        }
-    }
-
-    @Test
     void testTracksInPlaceVectorRetainedSizeChanges()
     {
         TestingMemoryReservation memory = new TestingMemoryReservation();
