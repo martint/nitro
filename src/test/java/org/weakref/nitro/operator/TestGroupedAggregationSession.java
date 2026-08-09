@@ -149,6 +149,37 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testMaterializesHighCardinalityBinaryRangesWithoutRetainingGlobalDictionary()
+    {
+        int rows = 1_000;
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        new Schema(List.of(new Field(binaryType(), false))),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        100)) {
+            allocator.beginExecution();
+            BinaryVector keys = new BinaryVector(rows, rows * 8);
+            for (int position = 0; position < rows; position++) {
+                keys.setBytes(position, ("url-" + position).getBytes(UTF_8));
+            }
+            try (Batch input = new Batch(Mask.all(rows), Output.of(Streams.ofValues(keys)))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+            }
+            assertThat(session.hasOutput()).isTrue();
+        }
+    }
+
+    @Test
     void testBulkCopiesDenseBinaryGroupOutput()
     {
         try (EngineResources resources = EngineResources.createDefault();

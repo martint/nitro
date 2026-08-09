@@ -95,6 +95,11 @@ final class ValueIdInterner
         return distinct;
     }
 
+    int valueBytes()
+    {
+        return dataSize;
+    }
+
     boolean overflowed()
     {
         return overflowed;

@@ -1886,7 +1886,9 @@ class FlatKeyLayout
             return null;
         }
         int distinct = interner.distinctCount();
-        if (distinct == 0 || (!fieldUsesIdOnlyRecords[fieldIndex] && distinct * 2 > outputMask.count())) {
+        // A ranged output must not retain the generation-wide dictionary when that base dwarfs the range. ID-only
+        // records can still materialize their values through the interner-backed copy path below this admission.
+        if (distinct == 0 || distinct * 2 > outputMask.count()) {
             return null;
         }
 
@@ -1894,6 +1896,7 @@ class FlatKeyLayout
                 ? allocator.allocate(allocationContext, I32Vector.class, size, I32Vector::new)
                 : null;
         int[] dictionaryIds = ownedDictionaryIds == null ? new int[size] : ownedDictionaryIds.values();
+        long flatValueBytes = 0;
         for (int outputPosition : outputMask) {
             int recordIndex = table.recordIndex(sourceStart + outputPosition);
             if (recordIndex < 0) {
@@ -1908,6 +1911,18 @@ class FlatKeyLayout
                 return null;
             }
             dictionaryIds[outputPosition] = globalId;
+            flatValueBytes += interner.valueLength(globalId);
+        }
+
+        long dictionaryBytes = (long) interner.valueBytes() +
+                ((long) distinct + 1) * Integer.BYTES +
+                (long) size * Integer.BYTES;
+        long flatBytes = flatValueBytes + ((long) size + 1) * Integer.BYTES;
+        if (dictionaryBytes > flatBytes) {
+            if (ownedDictionaryIds != null) {
+                allocator.release(allocationContext, ownedDictionaryIds);
+            }
+            return null;
         }
 
         BinaryVector base = interner.toBinaryVector(allocator, allocationContext);
