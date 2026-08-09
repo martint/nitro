@@ -100,13 +100,8 @@ public final class BoundLikeUtf8
         BooleanVector nulls = requestedStreams.contains(Stream.NULLS)
                 ? VectorAccess.writableBooleanVector(context.allocator(), allocationContext, output == null ? null : output.getOrNull(Stream.NULLS), length)
                 : null;
-        ErrorVector errors = requestedStreams.contains(Stream.ERRORS)
-                ? context.allocator().allocateOrGrow(
-                        allocationContext,
-                        output != null && output.getOrNull(Stream.ERRORS) instanceof ErrorVector existing ? existing : null,
-                        ErrorVector.class,
-                        length,
-                        ErrorVector::new)
+        Vector errors = requestedStreams.contains(Stream.ERRORS)
+                ? prepareErrors(inputErrorVector, output == null ? null : output.getOrNull(Stream.ERRORS), length, context)
                 : null;
 
         if (values != null) {
@@ -124,15 +119,18 @@ public final class BoundLikeUtf8
             if (nulls != null) {
                 nulls.values()[position] = isNull;
             }
-            if (errors != null) {
+            if (errors instanceof ErrorVector diagnosticErrors) {
                 ErrorValue error = failed ? ErrorVectors.errorAt(inputErrorVector, position) : null;
                 if (error != null) {
-                    errors.setError(position, error);
+                    diagnosticErrors.setError(position, error);
                 }
                 else {
-                    errors.clearError(position);
-                    errors.values()[position] = failed;
+                    diagnosticErrors.clearError(position);
+                    diagnosticErrors.values()[position] = failed;
                 }
+            }
+            else if (errors instanceof BooleanVector booleanErrors) {
+                booleanErrors.values()[position] = failed;
             }
         }
 
@@ -147,6 +145,23 @@ public final class BoundLikeUtf8
             result = result.with(Stream.ERRORS, errors);
         }
         return result;
+    }
+
+    private Vector prepareErrors(Vector inputErrors, Vector existing, int length, PrimitiveExecutionContext context)
+    {
+        boolean hasDiagnostics = ErrorVectors.hasDiagnostics(inputErrors);
+        if (!hasDiagnostics && VectorAccess.isAllFalseNulls(inputErrors)) {
+            return context.allocator().borrowAllFalseBoolean(allocationContext, length);
+        }
+        if (hasDiagnostics || existing instanceof ErrorVector) {
+            return context.allocator().allocateOrGrow(
+                    allocationContext,
+                    existing instanceof ErrorVector errors ? errors : null,
+                    ErrorVector.class,
+                    length,
+                    ErrorVector::new);
+        }
+        return VectorAccess.writableBooleanVector(context.allocator(), allocationContext, existing, length);
     }
 
     private void writeMatches(

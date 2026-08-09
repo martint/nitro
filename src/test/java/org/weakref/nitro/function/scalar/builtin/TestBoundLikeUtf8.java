@@ -56,6 +56,34 @@ class TestBoundLikeUtf8
     }
 
     @Test
+    void testCleanInputUsesCompactImmutableErrorCarrier()
+    {
+        Streams result = evaluate(
+                new BoundLikeUtf8("%google%"),
+                Streams.ofValues(utf8("google", "other")),
+                Mask.all(2));
+
+        assertThat(result.get(Stream.ERRORS))
+                .isInstanceOf(BooleanVector.class)
+                .isNotInstanceOf(ErrorVector.class);
+        assertThat(((BooleanVector) result.get(Stream.ERRORS)).isAllFalse()).isTrue();
+    }
+
+    @Test
+    void testBooleanInputErrorsRemainCompact()
+    {
+        Streams result = evaluate(
+                new BoundLikeUtf8("%google%"),
+                Streams.ofValues(utf8("google", "other")).with(Stream.ERRORS, new BooleanVector(new boolean[] {false, true})),
+                Mask.all(2));
+
+        assertThat(result.get(Stream.ERRORS))
+                .isInstanceOf(BooleanVector.class)
+                .isNotInstanceOf(ErrorVector.class);
+        assertThat(((BooleanVector) result.get(Stream.ERRORS)).values()).containsExactly(false, true);
+    }
+
+    @Test
     void testLiteralContainsHonorsMaskNullsAndErrors()
     {
         BinaryVector input = utf8("google", "google", "google", "other", "xgoogley");
