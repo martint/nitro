@@ -34,6 +34,7 @@ import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -146,6 +147,23 @@ class TestAllocator
             assertThat(reused).isSameAs(vector);
             assertThat(allocator.allocatedBytes()).isEqualTo(allocatedBytes);
             allocator.release(context, reused);
+        }
+    }
+
+    @Test
+    void testReportsAllocatedBytesByContextName()
+    {
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            Allocator.Context first = new Allocator.Context("first");
+            Allocator.Context firstSibling = new Allocator.Context("first");
+            Allocator.Context second = new Allocator.Context("second");
+            I64Vector firstVector = allocator.allocate(first, I64Vector.class, 8, I64Vector::new);
+            I32Vector siblingVector = allocator.allocate(firstSibling, I32Vector.class, 4, I32Vector::new);
+            I64Vector secondVector = allocator.allocate(second, I64Vector.class, 2, I64Vector::new);
+
+            assertThat(allocator.allocatedBytesByContext()).isEqualTo(Map.of(
+                    "first", Math.addExact(firstVector.retainedBytes(), siblingVector.retainedBytes()),
+                    "second", secondVector.retainedBytes()));
         }
     }
 

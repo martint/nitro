@@ -904,6 +904,16 @@ public class Allocator
         return total;
     }
 
+    /** Returns storage allocated by stable context name, excluding successful pool reuse. */
+    public Map<String, Long> allocatedBytesByContext()
+    {
+        Map<String, Long> result = new TreeMap<>();
+        for (Map.Entry<Context, ContextState> entry : states.entrySet()) {
+            result.merge(entry.getKey().name(), entry.getValue().stats().total(), Math::addExact);
+        }
+        return Map.copyOf(result);
+    }
+
     public long currentBytes(Context context)
     {
         // Each Context carries a unique scopeId, so allocation routing keys on the exact instance.
