@@ -85,6 +85,21 @@ public class TestPrimitiveArrayPool
     }
 
     @Test
+    public void testCeilingCapacityReuseChoosesSmallestSufficientBuffer()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1024, 0);
+        Object family = new Object();
+        byte[] small = new byte[64];
+        byte[] large = new byte[128];
+        assertThat(pool.retain(family, small.length, small.length, small)).isTrue();
+        assertThat(pool.retain(family, large.length, large.length, large)).isTrue();
+
+        assertThat(pool.borrowAtLeast(family, 65, byte[].class)).isSameAs(large);
+        assertThat(pool.borrowAtLeast(family, 32, byte[].class)).isSameAs(small);
+        assertThat(pool.borrowAtLeast(family, 129, byte[].class)).isNull();
+    }
+
+    @Test
     public void testHardByteCeilingEvictsOldest()
     {
         PrimitiveArrayPool pool = new PrimitiveArrayPool(512, 0);

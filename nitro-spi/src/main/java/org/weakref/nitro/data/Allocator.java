@@ -1082,6 +1082,7 @@ public class Allocator
             return;
         }
         closed = true;
+        retainPooledVectors();
         if (memoryReservation != null && residentBytes != 0) {
             memoryReservation.release(residentBytes);
         }
@@ -1102,6 +1103,22 @@ public class Allocator
         pendingCompatibilityStates.clear();
         lastContext = null;
         lastContextState = null;
+    }
+
+    private void retainPooledVectors()
+    {
+        Set<PoolState> visitedPools = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<Vector> visitedVectors = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (PoolState pool : pools.values()) {
+            if (!visitedPools.add(pool)) {
+                continue;
+            }
+            for (Vector vector : pool.vectorPoolGlobalOrder) {
+                if (visitedVectors.add(vector)) {
+                    primitiveArrays.retain(vector.poolFamily(), vector.poolCapacity(), vector.retainedBytes(), vector);
+                }
+            }
+        }
     }
 
     public long peakBytes(Context context)
@@ -1763,7 +1780,9 @@ public class Allocator
                 return vector;
             }
             borrowedVectorResident = false;
-            return allocator.primitiveArrays.borrow(family, minimumCapacity, vectorType);
+            return exactCapacityMatch
+                    ? allocator.primitiveArrays.borrow(family, minimumCapacity, vectorType)
+                    : allocator.primitiveArrays.borrowAtLeast(family, minimumCapacity, vectorType);
         }
 
         private <T extends Vector> T borrowVector(

@@ -851,7 +851,7 @@ public class TestBatchRuntime
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("VariableWidthCeilingCapacity");
 
-        // This is large enough to qualify for the process-wide pool. It must nevertheless remain in the
+        // This is large enough to qualify for the explicitly owned shared pool. It must nevertheless remain in the
         // active allocator's local working set, whose ceiling lookup can satisfy a smaller next batch.
         BinaryVector larger = BinaryVector.allocate(allocator, context, 12_347, 400_000);
         allocator.release(context);
@@ -862,7 +862,7 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testAllocatorBoundsLocalVariableWidthPoolByBytes()
+    void testAllocatorFallsBackToOwnerPoolAfterLocalVariableWidthBudget()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Allocator.Context context = new Allocator.Context("BoundedVariableWidthPool");
@@ -878,9 +878,9 @@ public class TestBatchRuntime
             borrowed.add(BinaryVector.allocate(allocator, context, 12_349, 29_000_000));
         }
 
-        // The default 64 MiB local budget can retain at most two of these buffers. The evicted exact-capacity
-        // vector may enter the shared pool, but cannot satisfy this smaller ceiling-capacity request there.
-        assertThat(reusedCount(released, borrowed)).isLessThanOrEqualTo(2);
+        // The default 64 MiB local budget can retain at most two of these buffers. The excess vector enters the
+        // explicitly owned shared pool, whose ceiling-capacity lookup preserves reuse after the local budget spills.
+        assertThat(reusedCount(released, borrowed)).isEqualTo(3);
     }
 
     @Test

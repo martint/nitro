@@ -25,7 +25,8 @@ import java.util.Map;
  * longer-lived owner so a fresh query can reuse the previous query's build storage, but that lifetime is selected by
  * the embedding engine and passed through {@link AllocationResources}; it is never process-global. This pool uses exact
  * capacity buckets and a hard FIFO byte ceiling. Arrays smaller than the configured minimum are left to the normal
- * allocator/GC path.
+ * allocator/GC path. Primitive arrays use exact-capacity lookup; allocator-owned variable-width vectors can request
+ * the smallest retained capacity that satisfies their next batch.
  */
 public final class PrimitiveArrayPool
         implements AutoCloseable
@@ -123,7 +124,26 @@ public final class PrimitiveArrayPool
     public synchronized <T> T borrow(Object family, int capacity, Class<T> type)
     {
         checkOpen();
-        Key key = new Key(family, capacity);
+        return borrow(new Key(family, capacity), type);
+    }
+
+    /** Borrows the smallest retained buffer in {@code family} whose capacity satisfies {@code minimumCapacity}. */
+    public synchronized <T> T borrowAtLeast(Object family, int minimumCapacity, Class<T> type)
+    {
+        checkOpen();
+        Key candidate = null;
+        for (Key key : buckets.keySet()) {
+            if (key.family().equals(family) &&
+                    key.capacity() >= minimumCapacity &&
+                    (candidate == null || key.capacity() < candidate.capacity())) {
+                candidate = key;
+            }
+        }
+        return candidate == null ? null : borrow(candidate, type);
+    }
+
+    private <T> T borrow(Key key, Class<T> type)
+    {
         ArrayDeque<Entry> bucket = buckets.get(key);
         if (bucket == null) {
             return null;
