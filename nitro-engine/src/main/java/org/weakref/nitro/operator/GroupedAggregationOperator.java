@@ -567,6 +567,14 @@ public class GroupedAggregationOperator
         return done && nextSessionOutputPosition <= maxGroup;
     }
 
+    int sessionOutputRowCount()
+    {
+        if (!done) {
+            throw new IllegalStateException("grouped aggregation is not finished");
+        }
+        return maxGroup + 1;
+    }
+
     Batch getSessionOutput(int maxOutputRows)
     {
         if (!hasSessionOutput()) {

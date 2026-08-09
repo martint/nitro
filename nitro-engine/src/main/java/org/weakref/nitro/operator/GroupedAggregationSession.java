@@ -199,6 +199,7 @@ public final class GroupedAggregationSession
     public boolean hasOutput()
     {
         return pendingOutput != null ||
+                (flushedAggregation != null && flushedAggregation.hasSessionOutput()) ||
                 (finished && currentAggregation != null && currentAggregation.hasSessionOutput());
     }
 
@@ -210,6 +211,9 @@ public final class GroupedAggregationSession
             Batch output = pendingOutput;
             pendingOutput = null;
             return output;
+        }
+        if (flushedAggregation != null && flushedAggregation.hasSessionOutput()) {
+            return flushedAggregation.getSessionOutput(maxFinalOutputBatchRows);
         }
         if (finished && currentAggregation != null && currentAggregation.hasSessionOutput()) {
             return currentAggregation.getSessionOutput(maxFinalOutputBatchRows);
@@ -227,10 +231,10 @@ public final class GroupedAggregationSession
         if (!aggregatedInput) {
             return;
         }
-        pendingOutput = currentAggregation.finishInput();
+        pendingOutput = currentAggregation.finishInput(maxFinalOutputBatchRows);
         flushedAggregation = currentAggregation;
         currentAggregation = null;
-        partialAggregationControl.onAggregatedFlush(inputBytes, inputRows, pendingOutput.borrowMask().count());
+        partialAggregationControl.onAggregatedFlush(inputBytes, inputRows, flushedAggregation.sessionOutputRowCount());
         aggregatedInput = false;
         inputBytes = 0;
         inputRows = 0;
@@ -243,6 +247,9 @@ public final class GroupedAggregationSession
             throw new IllegalStateException("grouped aggregation session is already finished");
         }
         if (pendingOutput != null) {
+            throw new IllegalStateException("grouped aggregation session has pending output");
+        }
+        if (flushedAggregation != null && flushedAggregation.hasSessionOutput()) {
             throw new IllegalStateException("grouped aggregation session has pending output");
         }
         finished = true;
@@ -258,6 +265,9 @@ public final class GroupedAggregationSession
             throw new IllegalStateException("grouped aggregation session is finished");
         }
         if (pendingOutput != null) {
+            throw new IllegalStateException("grouped aggregation session has pending output");
+        }
+        if (flushedAggregation != null && flushedAggregation.hasSessionOutput()) {
             throw new IllegalStateException("grouped aggregation session has pending output");
         }
     }

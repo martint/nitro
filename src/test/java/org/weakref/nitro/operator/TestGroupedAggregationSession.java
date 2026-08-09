@@ -297,8 +297,10 @@ class TestGroupedAggregationSession
             long firstAggregationBytes = session.retainedBytes();
             assertThat(firstAggregationBytes).isPositive();
             session.flush();
-            try (Batch ignored = session.getOutput()) {
-                // Closing the output permits the flushed aggregation to be released by the next input.
+            while (session.hasOutput()) {
+                try (Batch ignored = session.getOutput()) {
+                    // Closing every output permits the flushed aggregation to be released by the next input.
+                }
             }
 
             try (Batch input = batch(1)) {
@@ -331,9 +333,11 @@ class TestGroupedAggregationSession
                     session.addInput(input);
                 }
                 session.flush();
-                try (Batch ignored = session.getOutput()) {
-                    selectedLongValues(ignored, 0);
-                    selectedLongValues(ignored, 1);
+                while (session.hasOutput()) {
+                    try (Batch ignored = session.getOutput()) {
+                        selectedLongValues(ignored, 0);
+                        selectedLongValues(ignored, 1);
+                    }
                 }
                 if (generation == 1) {
                     steadyStateResidentBytes = allocator.residentBytes();
@@ -399,6 +403,57 @@ class TestGroupedAggregationSession
                         .containsExactly(4);
                 assertThat(selectedLongValues(result, 1))
                         .containsExactly(2);
+            }
+        }
+    }
+
+    @Test
+    void testStreamsAdaptiveFlushInBoundedBatches()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control,
+                        2)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 30, 40, 50)) {
+                session.addInput(input, 50);
+            }
+            session.flush();
+
+            try (Batch first = session.getOutput()) {
+                assertThat(selectedLongValues(first, 0)).containsExactly(10, 20);
+            }
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch input = batch(60)) {
+                assertThatIllegalStateException()
+                        .isThrownBy(() -> session.addInput(input, 10))
+                        .withMessage("grouped aggregation session has pending output");
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(selectedLongValues(second, 0)).containsExactly(30, 40);
+            }
+            try (Batch third = session.getOutput()) {
+                assertThat(selectedLongValues(third, 0)).containsExactly(50);
+            }
+            assertThat(session.hasOutput()).isFalse();
+            assertThat(control.aggregatedFlushes).isEqualTo(1);
+            assertThat(control.inputBytes).isEqualTo(50);
+            assertThat(control.inputRows).isEqualTo(5);
+            assertThat(control.outputRows).isEqualTo(5);
+
+            try (Batch input = batch(60)) {
+                session.addInput(input, 10);
+            }
+            try (Batch result = session.finish()) {
+                assertThat(selectedLongValues(result, 0)).containsExactly(60);
             }
         }
     }
