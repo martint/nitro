@@ -1159,12 +1159,13 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testAsyncVectorTreeDetachDoesNotRecycleAcrossOwners()
+    void testAsyncVectorTreeDetachKeepsStorageLeaseOwnedAcrossOwners()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator producer = new Allocator(resources)) {
             Allocator.Context owner = new Allocator.Context("Owner");
-            I64Vector values = producer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+            I64Vector values = I64Vector.allocate(producer, owner, 32_768);
+            long[] storage = values.values();
 
             Allocator.AsyncVectorTreeLease lease = producer.detachVectorTreeForAsyncRelease(List.of(values));
             assertThat(producer.residentBytes()).isZero();
@@ -1173,35 +1174,9 @@ public class TestBatchRuntime
             CompletableFuture.runAsync(lease::close).join();
 
             try (Allocator consumer = new Allocator(resources)) {
-                I64Vector fresh = consumer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+                I64Vector fresh = I64Vector.allocate(consumer, owner, 32_768);
                 assertThat(fresh).isNotSameAs(values);
-            }
-        }
-    }
-
-    @Test
-    void testAsyncVectorTreeDetachRecyclesExplicitStorageAcrossOwners()
-    {
-        try (EngineResources resources = EngineResources.createDefault()) {
-            I64Vector values;
-            long[] storage;
-            Allocator.AsyncVectorTreeLease lease;
-            try (Allocator producer = new Allocator(resources)) {
-                Allocator.Context owner = new Allocator.Context("Owner");
-                values = I64Vector.allocate(producer, owner, 32_768);
-                storage = values.values();
-                storage[0] = 37;
-                lease = producer.detachVectorTreeForAsyncRelease(List.of(values));
-                assertThat(producer.residentBytes()).isZero();
-            }
-
-            CompletableFuture.runAsync(lease::close).join();
-
-            try (Allocator consumer = new Allocator(resources)) {
-                I64Vector reused = I64Vector.allocate(consumer, new Allocator.Context("Consumer"), 32_768);
-                assertThat(reused).isNotSameAs(values);
-                assertThat(reused.values()).isSameAs(storage);
-                assertThat(Arrays.stream(reused.values()).sum()).isZero();
+                assertThat(fresh.values()).isNotSameAs(storage);
             }
         }
     }

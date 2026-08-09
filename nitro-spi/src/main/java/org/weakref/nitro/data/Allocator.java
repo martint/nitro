@@ -1517,10 +1517,9 @@ public class Allocator
         if (!lease.recyclable) {
             return;
         }
-        // Detached vector objects may encode position/mask ownership that is local to their producer, so never
-        // publish the wrapper itself. Vectors with an explicit storage-reset contract can still return their raw
-        // backing arrays to the instance-owned cross-allocator pool after the final consumer closes.
-        releaseStorage(vector);
+        // Detached vector objects may encode position/mask ownership that is local to their producer. They are left
+        // to GC after the final asynchronous consumer; only storage with its own explicit reset contract belongs in
+        // the longer-lived primitive pool.
     }
 
     private void transferOwnedVector(Context context, Vector vector)
