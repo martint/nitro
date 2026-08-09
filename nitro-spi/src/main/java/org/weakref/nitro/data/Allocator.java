@@ -1152,9 +1152,9 @@ public class Allocator
      *
      * <p>Unlike {@link #leaseVectorTree(List)}, final close never re-enters a producer-local reuse pool. Detachment
      * immediately removes the vectors from the producer context and its memory reservation. The last consumer may
-     * then close on any thread; reusable storage is offered only to the explicitly owned, thread-safe primitive
-     * resource pool. This is intended for host boundaries such as buffered exchanges whose consumer is not confined
-     * to the producer driver's execution thread.
+     * then close on any thread; the detached vector objects are not returned to another allocator because their
+     * position and initialization contracts belong to the producer. This is intended for host boundaries such as
+     * buffered exchanges whose consumer is not confined to the producer driver's execution thread.
      */
     public synchronized AsyncVectorTreeLease detachVectorTreeForAsyncRelease(List<? extends Vector> roots)
     {
@@ -1493,13 +1493,9 @@ public class Allocator
         if (!lease.recyclable) {
             return;
         }
-        try {
-            primitiveArrays.retain(vector.poolFamily(), vector.poolCapacity(), vector.retainedBytes(), vector);
-        }
-        catch (IllegalStateException ignored) {
-            // The embedding may close its resource owner while an asynchronous host boundary is unwinding.
-            // In that case the detached vector is simply left for GC rather than re-entering a closed pool.
-        }
+        // Detached vector objects may encode position/mask ownership that is local to their producer. They are left
+        // to GC after the final asynchronous consumer; only storage with its own explicit reset contract belongs in
+        // the longer-lived primitive pool.
     }
 
     private void transferOwnedVector(Context context, Vector vector)
@@ -2123,10 +2119,6 @@ public class Allocator
 
         private void addVectorToPool(Object family, int capacity, int maxRetained, Vector vector)
         {
-            if (!allocator.policy.localVectorWorkingSet() && maxRetained > 0 && allocator.primitiveArrays.retain(family, capacity, vector.retainedBytes(), vector)) {
-                allocator.releaseResident(vector.retainedBytes());
-                return;
-            }
             if (maxRetained <= 0 || allocator.policy.maxLocalVectorPoolBytes() <= 0) {
                 allocator.releaseResident(vector.retainedBytes());
                 return;
@@ -2184,7 +2176,6 @@ public class Allocator
                 addVectorToCompatibilityPool(family, vector);
             }
             else {
-                allocator.primitiveArrays.retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
                 allocator.releaseResident(vector.retainedBytes());
             }
         }
@@ -2224,7 +2215,6 @@ public class Allocator
             if (removeFromOrder(compatibilityPool.vectorPoolGlobalOrder, vector)) {
                 compatibilityPool.vectorPoolBytes -= vector.retainedBytes();
             }
-            allocator.primitiveArrays.retain(family, vector.poolCapacity(), vector.retainedBytes(), vector);
             allocator.releaseResident(vector.retainedBytes());
         }
 

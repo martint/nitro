@@ -1159,7 +1159,7 @@ public class TestBatchRuntime
     }
 
     @Test
-    void testAsyncVectorTreeDetachRecyclesWithoutProducerThreadAffinity()
+    void testAsyncVectorTreeDetachDoesNotRecycleAcrossOwners()
     {
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator producer = new Allocator(resources)) {
@@ -1173,8 +1173,8 @@ public class TestBatchRuntime
             CompletableFuture.runAsync(lease::close).join();
 
             try (Allocator consumer = new Allocator(resources)) {
-                I64Vector reused = consumer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
-                assertThat(reused).isSameAs(values);
+                I64Vector fresh = consumer.allocate(owner, I64Vector.class, 32_768, I64Vector::new);
+                assertThat(fresh).isNotSameAs(values);
             }
         }
     }
@@ -1199,7 +1199,7 @@ public class TestBatchRuntime
 
             CompletableFuture.runAsync(secondLease::close).join();
 
-            assertThat(allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new)).isSameAs(values);
+            assertThat(allocator.allocate(owner, I64Vector.class, 32_768, I64Vector::new)).isNotSameAs(values);
         }
     }
 
