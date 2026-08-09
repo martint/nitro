@@ -1180,6 +1180,33 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testAsyncVectorTreeDetachRecyclesExplicitStorageAcrossOwners()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            I64Vector values;
+            long[] storage;
+            Allocator.AsyncVectorTreeLease lease;
+            try (Allocator producer = new Allocator(resources)) {
+                Allocator.Context owner = new Allocator.Context("Owner");
+                values = I64Vector.allocate(producer, owner, 32_768);
+                storage = values.values();
+                storage[0] = 37;
+                lease = producer.detachVectorTreeForAsyncRelease(List.of(values));
+                assertThat(producer.residentBytes()).isZero();
+            }
+
+            CompletableFuture.runAsync(lease::close).join();
+
+            try (Allocator consumer = new Allocator(resources)) {
+                I64Vector reused = I64Vector.allocate(consumer, new Allocator.Context("Consumer"), 32_768);
+                assertThat(reused).isNotSameAs(values);
+                assertThat(reused.values()).isSameAs(storage);
+                assertThat(Arrays.stream(reused.values()).sum()).isZero();
+            }
+        }
+    }
+
+    @Test
     void testAllocatorCloseRecyclesBinaryStorageWithoutReusingVectorIdentity()
     {
         try (EngineResources resources = EngineResources.createDefault()) {
