@@ -24,6 +24,8 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Types;
 import org.weakref.nitro.benchmark.BenchmarkSchemaRegistry;
 import org.weakref.nitro.benchmark.BenchmarkTypeRegistry;
+import org.weakref.nitro.core.source.BatchSource;
+import org.weakref.nitro.core.source.SourcePoll;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
@@ -71,11 +73,16 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.AllocatedSelectionOperatorIngress;
 import org.weakref.nitro.operator.source.BatchFeedOperator;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
+import org.weakref.nitro.operator.source.ColumnViewSourceOperatorIngress;
+import org.weakref.nitro.operator.source.LongDomainRuntimeFilterSourceIngress;
+import org.weakref.nitro.operator.source.VectorColumnViewOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
 import org.weakref.nitro.operator.source.compatibility.parquet.NitroParquetScanOperator;
+import org.weakref.nitro.parquet.NitroParquetBatchSource;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.parquet.ParquetArenaPolicy;
 import org.weakref.nitro.parquet.ParquetScanBatchPolicy;
@@ -268,16 +275,27 @@ public final class ClickBenchHitsSupport
                     ParquetArenaPolicy.shared(),
                     ParquetScanBatchPolicy.adaptiveHostBoundaryDefaults());
 
-            List<Path> splits = Files.isDirectory(file) ? parquetFiles(file) : List.of(file);
+            List<NitroParquetBatchSource.Split> splits = parquetSplits(file, 120L * 1024 * 1024);
             List<Operator> partials = new ArrayList<>(splits.size());
-            for (Path split : splits) {
+            for (NitroParquetBatchSource.Split split : splits) {
                 Allocator splitAllocator = new Allocator(allocator.resourcesOwner());
                 Operator partial = null;
                 try {
-                    Operator scan = clickBenchScan(scanResources, splitAllocator, split, columns.toArray(String[]::new));
+                    Schema scanSchema = SCHEMAS.parquet(split.path(), columns);
+                    BatchSource scan = NitroParquetBatchSource.forSplits(
+                            scanResources,
+                            splitAllocator,
+                            List.of(split),
+                            scanSchema);
                     BatchFeedOperator feed = new BatchFeedOperator(
-                            scan.outputSchema(),
-                            new NativeSourceOperatorIngress(),
+                            scan.schema(),
+                            new ColumnViewSourceOperatorIngress(
+                                    scan.schema(),
+                                    new AllocatedSelectionOperatorIngress(
+                                            splitAllocator,
+                                            new Allocator.Context("ClickBenchQ24SourceIngress")),
+                                    new LongDomainRuntimeFilterSourceIngress(),
+                                    VectorColumnViewOperatorIngress::new),
                             Set.of(
                                     org.weakref.nitro.core.source.SourceCapability.STABLE_BATCH_BORROW,
                                     org.weakref.nitro.core.source.SourceCapability.CONSTRAINED_REBORROW));
@@ -1029,6 +1047,20 @@ public final class ClickBenchHitsSupport
         }
     }
 
+    private static List<NitroParquetBatchSource.Split> parquetSplits(Path input, long maxSplitSize)
+            throws IOException
+    {
+        List<Path> files = Files.isDirectory(input) ? parquetFiles(input) : List.of(input);
+        List<NitroParquetBatchSource.Split> splits = new ArrayList<>();
+        for (Path file : files) {
+            long size = Files.size(file);
+            for (long start = 0; start < size; start += maxSplitSize) {
+                splits.add(new NitroParquetBatchSource.Split(file, start, Math.min(maxSplitSize, size - start)));
+            }
+        }
+        return splits;
+    }
+
     /**
      * Models Trino's distributed single-DISTINCT rewrite: each scan split performs local key aggregation, the
      * exchange materializes those partial rows, a final key aggregation removes cross-split duplicates, and only
@@ -1691,7 +1723,7 @@ public final class ClickBenchHitsSupport
     private static final class SessionTopNOperator
             implements Operator
     {
-        private final Operator source;
+        private final BatchSource source;
         private final BatchFeedOperator feed;
         private final Operator pipeline;
         private final TopNSession session;
@@ -1704,7 +1736,7 @@ public final class ClickBenchHitsSupport
                 int limit,
                 int[] orderingColumns,
                 boolean[] descending,
-                Operator source,
+                BatchSource source,
                 BatchFeedOperator feed,
                 Operator pipeline)
         {
@@ -1760,14 +1792,21 @@ public final class ClickBenchHitsSupport
                 return;
             }
             prepared = true;
-            while (source.hasNext()) {
-                feed.addInput(source.next());
-                while (pipeline.hasNext()) {
-                    try (Batch batch = pipeline.next()) {
-                        session.addInput(batch);
+            boolean finished = false;
+            while (!finished) {
+                switch (source.poll()) {
+                    case SourcePoll.Ready(var sourceBatch) -> {
+                        feed.addInput(sourceBatch);
+                        while (pipeline.hasNext()) {
+                            try (Batch batch = pipeline.next()) {
+                                session.addInput(batch);
+                            }
+                        }
+                        feed.finishInput();
                     }
+                    case SourcePoll.Blocked _ -> throw new IllegalStateException("benchmark source unexpectedly blocked");
+                    case SourcePoll.Finished _ -> finished = true;
                 }
-                feed.finishInput();
             }
             output = session.finish().orElse(null);
         }
