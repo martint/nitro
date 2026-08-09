@@ -44,6 +44,7 @@ import org.weakref.nitro.operator.Operator;
 import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.SqlStageAggregationOperator;
 import org.weakref.nitro.operator.TopNOperator;
+import org.weakref.nitro.operator.TopNSession;
 import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
@@ -70,6 +71,7 @@ import org.weakref.nitro.operator.evaluator.ir.Producer;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
+import org.weakref.nitro.operator.source.BatchFeedOperator;
 import org.weakref.nitro.operator.source.BatchSourceOperator;
 import org.weakref.nitro.operator.source.compatibility.NativeSourceOperatorIngress;
 import org.weakref.nitro.operator.source.compatibility.OperatorBatchSource;
@@ -88,6 +90,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -271,12 +274,26 @@ public final class ClickBenchHitsSupport
                 Allocator splitAllocator = new Allocator(allocator.resourcesOwner());
                 Operator partial = null;
                 try {
+                    Operator scan = clickBenchScan(scanResources, splitAllocator, split, columns.toArray(String[]::new));
+                    BatchFeedOperator feed = new BatchFeedOperator(
+                            scan.outputSchema(),
+                            new NativeSourceOperatorIngress(),
+                            Set.of(
+                                    org.weakref.nitro.core.source.SourceCapability.STABLE_BATCH_BORROW,
+                                    org.weakref.nitro.core.source.SourceCapability.CONSTRAINED_REBORROW));
                     Operator filtered = filter(
                             splitAllocator,
                             primitiveRegistry,
-                            clickBenchScan(scanResources, splitAllocator, split, columns.toArray(String[]::new)),
+                            feed,
                             containsUtf8(urlIndex, "google"));
-                    partial = new TopNOperator(splitAllocator, 10, sortChannels, descending, filtered);
+                    partial = new SessionTopNOperator(
+                            splitAllocator,
+                            10,
+                            sortChannels,
+                            descending,
+                            scan,
+                            feed,
+                            filtered);
                     partials.add(new AllocatorOwnedOperator(splitAllocator, partial));
                 }
                 catch (RuntimeException | Error failure) {
@@ -1666,6 +1683,122 @@ public final class ClickBenchHitsSupport
             }
             finally {
                 allocator.close();
+            }
+        }
+    }
+
+    /** Mirrors the host-driven TopN lifecycle used by the Trino source pipeline. */
+    private static final class SessionTopNOperator
+            implements Operator
+    {
+        private final Operator source;
+        private final BatchFeedOperator feed;
+        private final Operator pipeline;
+        private final TopNSession session;
+        private Batch output;
+        private boolean prepared;
+        private boolean closed;
+
+        private SessionTopNOperator(
+                Allocator allocator,
+                int limit,
+                int[] orderingColumns,
+                boolean[] descending,
+                Operator source,
+                BatchFeedOperator feed,
+                Operator pipeline)
+        {
+            this.source = source;
+            this.feed = feed;
+            this.pipeline = pipeline;
+            session = new TopNSession(allocator, limit, orderingColumns, descending, pipeline.outputSchema());
+        }
+
+        @Override
+        public int outputCount()
+        {
+            return pipeline.outputCount();
+        }
+
+        @Override
+        public Schema outputSchema()
+        {
+            return session.outputSchema();
+        }
+
+        @Override
+        public boolean hasNext()
+        {
+            prepare();
+            return output != null;
+        }
+
+        @Override
+        public Batch next()
+        {
+            prepare();
+            if (output == null) {
+                throw new IllegalStateException("TopN session has no output");
+            }
+            Batch result = output;
+            output = null;
+            return result;
+        }
+
+        @Override
+        public void constrain(Mask mask)
+        {
+            prepare();
+            if (output != null) {
+                output.constrain(mask);
+            }
+        }
+
+        private void prepare()
+        {
+            if (prepared) {
+                return;
+            }
+            prepared = true;
+            while (source.hasNext()) {
+                feed.addInput(source.next());
+                while (pipeline.hasNext()) {
+                    try (Batch batch = pipeline.next()) {
+                        session.addInput(batch);
+                    }
+                }
+                feed.finishInput();
+            }
+            output = session.finish().orElse(null);
+        }
+
+        @Override
+        public boolean supportsRetainedBatches()
+        {
+            return true;
+        }
+
+        @Override
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (output != null) {
+                output.close();
+                output = null;
+            }
+            try {
+                session.close();
+            }
+            finally {
+                try {
+                    pipeline.close();
+                }
+                finally {
+                    source.close();
+                }
             }
         }
     }
