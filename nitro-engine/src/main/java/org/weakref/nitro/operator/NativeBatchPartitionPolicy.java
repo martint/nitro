@@ -34,7 +34,7 @@ public record NativeBatchPartitionPolicy(
         return new NativeBatchPartitionPolicy(true, 2, 65_536);
     }
 
-    boolean preserveDictionary(int dictionaryEntries, int outputPositions)
+    public boolean preserveDictionary(int dictionaryEntries, int outputPositions)
     {
         return preserveDictionaryEncoding &&
                 dictionaryEntries <= maximumCopiedDictionaryEntries &&
