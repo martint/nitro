@@ -73,7 +73,8 @@ public final class AdaptiveSqlPartialAggregationOperator
                 accumulators,
                 maxRetainedBytes,
                 uniqueRowsRatioThreshold,
-                false);
+                false,
+                EngineResources.from(allocator).operatorResources().aggregation().maxOutputBatchRows());
     }
 
     public AdaptiveSqlPartialAggregationOperator(
@@ -87,6 +88,33 @@ public final class AdaptiveSqlPartialAggregationOperator
             long maxRetainedBytes,
             double uniqueRowsRatioThreshold,
             boolean aggregationRequired)
+    {
+        this(
+                allocator,
+                source,
+                partitionCount,
+                hashChannels,
+                partitionTransform,
+                groupByColumns,
+                accumulators,
+                maxRetainedBytes,
+                uniqueRowsRatioThreshold,
+                aggregationRequired,
+                EngineResources.from(allocator).operatorResources().aggregation().maxOutputBatchRows());
+    }
+
+    public AdaptiveSqlPartialAggregationOperator(
+            Allocator allocator,
+            Operator source,
+            int partitionCount,
+            int[] hashChannels,
+            SqlStageAggregationOperator.PartitionTransform partitionTransform,
+            List<Integer> groupByColumns,
+            Supplier<List<Accumulator>> accumulators,
+            long maxRetainedBytes,
+            double uniqueRowsRatioThreshold,
+            boolean aggregationRequired,
+            int maxOutputBatchRows)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
         this.source = requireNonNull(source, "source is null");
@@ -112,7 +140,8 @@ public final class AdaptiveSqlPartialAggregationOperator
                     groupByColumns,
                     PhysicalAggregationProgram.independent(accumulators.get()),
                     resources,
-                    control);
+                    control,
+                    maxOutputBatchRows);
         }
         outputSchema = sessions[0].outputSchema();
     }
@@ -140,6 +169,20 @@ public final class AdaptiveSqlPartialAggregationOperator
                 return true;
             }
             try (Batch batch = source.next()) {
+                if (sessions.length == 1 && hashChannels.length == 0 && partitionTransform == null) {
+                    GroupedAggregationSession session = sessions[0];
+                    session.addInput(batch, estimatedInputBytes(batch, source.outputCount()));
+                    if (session.hasOutput()) {
+                        pendingOutput = session.getOutput();
+                        return true;
+                    }
+                    if (session.retainedBytes() >= maxRetainedBytes) {
+                        session.flush();
+                        pendingOutput = session.getOutput();
+                        return true;
+                    }
+                    continue;
+                }
                 preparePartitionInputs(batch);
             }
         }

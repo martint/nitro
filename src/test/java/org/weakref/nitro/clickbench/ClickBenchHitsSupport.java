@@ -32,11 +32,13 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 import org.weakref.nitro.function.scalar.builtin.CastI64ToI64;
+import org.weakref.nitro.operator.AdaptiveSqlPartialAggregationOperator;
 import org.weakref.nitro.operator.AggregationOperator;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.FilterOperator;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
+import org.weakref.nitro.operator.LazyUnionAllOperator;
 import org.weakref.nitro.operator.LimitOperator;
 import org.weakref.nitro.operator.MarkDistinctMarkerOperator;
 import org.weakref.nitro.operator.MarkDistinctOperator;
@@ -51,6 +53,7 @@ import org.weakref.nitro.operator.UnionAllOperator;
 import org.weakref.nitro.operator.aggregation.Accumulator;
 import org.weakref.nitro.operator.aggregation.Avg;
 import org.weakref.nitro.operator.aggregation.CountAll;
+import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.DistinctPhysicalAggregationUnit;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.MinMaxI64AggregationUnit;
@@ -98,6 +101,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import static java.lang.Math.toIntExact;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -108,6 +112,8 @@ import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
 public final class ClickBenchHitsSupport
 {
     private static final BenchmarkSchemaRegistry SCHEMAS = new BenchmarkSchemaRegistry(new BenchmarkTypeRegistry());
+    private static final long SQL_PARTIAL_AGGREGATION_MEMORY_BYTES = 32L * 1024 * 1024;
+    private static final double SQL_PARTIAL_AGGREGATION_UNIQUE_ROWS_RATIO = 0.8;
     static final String CLICKBENCH_HITS_PATH_PROPERTY = "nitro.clickbench.hits.path";
     static final long QUERY20_USER_ID = 435_090_932_899_640_449L;
     static final long QUERY41_REFERER_HASH = 3_594_120_000_172_545_465L;
@@ -740,16 +746,24 @@ public final class ClickBenchHitsSupport
 
     public static Operator query31(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("SearchEngineID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"), notEqualUtf8(4, ""));
-        Operator projected = projectInputs(allocator, new PrimitiveRegistry(), filtered, 0, 1, 2, 3);
-        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3, null);
+        return sqlShapedTopGroupedCountSumAvg(
+                allocator,
+                primitiveRegistry,
+                file,
+                "SearchEngineID",
+                true,
+                null);
     }
 
     public static Operator query32(Allocator allocator, PrimitiveRegistry primitiveRegistry, Path file)
     {
-        Operator filtered = filter(allocator, primitiveRegistry, file, List.of("WatchID", "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase"), notEqualUtf8(4, ""));
-        Operator projected = projectInputs(allocator, new PrimitiveRegistry(), filtered, 0, 1, 2, 3);
-        return topGroupedCountSumAvg(allocator, projected, new int[] {0, 1}, 2, 3, null);
+        return sqlShapedTopGroupedCountSumAvg(
+                allocator,
+                primitiveRegistry,
+                file,
+                "WatchID",
+                true,
+                null);
     }
 
     public static Operator query33(Allocator allocator, Path file)
@@ -759,8 +773,16 @@ public final class ClickBenchHitsSupport
 
     static Operator query33(Allocator allocator, Path file, OperatorCpuProfile profile)
     {
-        Operator source = clickBenchScan(allocator, file, "WatchID", "ClientIP", "IsRefresh", "ResolutionWidth");
-        return topGroupedCountSumAvg(allocator, source, new int[] {0, 1}, 2, 3, profile);
+        return profiled(
+                profile,
+                "q33.sql-shape",
+                sqlShapedTopGroupedCountSumAvg(
+                        allocator,
+                        org.weakref.nitro.TestPrimitiveFunctions.primitiveRegistry(),
+                        file,
+                        "WatchID",
+                        false,
+                        profile));
     }
 
     public static Operator query34(Allocator allocator, Path file)
@@ -1354,6 +1376,120 @@ public final class ClickBenchHitsSupport
                 List.of(new CountAll(), new Sum(sumColumn), new Avg(avgColumn)),
                 source));
         return profiled(profile, "topGrouped.topn", new TopNOperator(allocator, 10, groupColumns.length, aggregated));
+    }
+
+    private static Operator sqlShapedTopGroupedCountSumAvg(
+            Allocator allocator,
+            PrimitiveRegistry primitiveRegistry,
+            Path input,
+            String firstKey,
+            boolean filterSearchPhrase,
+            OperatorCpuProfile profile)
+    {
+        try {
+            NitroParquetScanResources scanResources = NitroParquetScanResources.createDefault(
+                    ParquetArenaPolicy.shared(),
+                    ParquetScanBatchPolicy.adaptiveHostBoundaryDefaults());
+            List<NitroParquetBatchSource.Split> splits = parquetSplits(input, 120L * 1024 * 1024);
+            List<String> columns = filterSearchPhrase
+                    ? List.of(firstKey, "ClientIP", "IsRefresh", "ResolutionWidth", "SearchPhrase")
+                    : List.of(firstKey, "ClientIP", "IsRefresh", "ResolutionWidth");
+            Schema scanSchema = SCHEMAS.parquet(splits.getFirst().path(), columns);
+            List<org.weakref.nitro.core.type.Field> exchangeFields = new ArrayList<>(6);
+            exchangeFields.add(scanSchema.field(0));
+            exchangeFields.add(scanSchema.field(1));
+            exchangeFields.addAll(Schema.unspecified(4).fields());
+            Schema exchangeSchema = new Schema(exchangeFields);
+            int driverCount = Math.min(8, splits.size());
+            List<List<NitroParquetBatchSource.Split>> driverAssignments = new ArrayList<>(driverCount);
+            for (int driver = 0; driver < driverCount; driver++) {
+                driverAssignments.add(new ArrayList<>());
+            }
+            for (int split = 0; split < splits.size(); split++) {
+                driverAssignments.get(split % driverCount).add(splits.get(split));
+            }
+
+            List<Supplier<Operator>> partials = new ArrayList<>(driverCount);
+            for (List<NitroParquetBatchSource.Split> assignment : driverAssignments) {
+                List<NitroParquetBatchSource.Split> driverSplits = List.copyOf(assignment);
+                partials.add(() -> {
+                    Allocator splitAllocator = new Allocator(allocator.resourcesOwner());
+                    Operator partial = null;
+                    try {
+                        Operator source = profiled(profile, "topGrouped.driver.scan", clickBenchSplitsScan(scanResources, splitAllocator, driverSplits, columns));
+                        if (filterSearchPhrase) {
+                            source = filter(splitAllocator, primitiveRegistry, source, notEqualUtf8(4, ""));
+                            source = projectInputs(splitAllocator, new PrimitiveRegistry(), source, 0, 1, 2, 3);
+                        }
+                        partial = profiled(profile, "topGrouped.driver.partial", new AdaptiveSqlPartialAggregationOperator(
+                                splitAllocator,
+                                source,
+                                1,
+                                new int[0],
+                                null,
+                                List.of(0, 1),
+                                () -> List.of(new CountAll(), new Sum(2), new Sum(3), new CountColumn(3)),
+                                SQL_PARTIAL_AGGREGATION_MEMORY_BYTES,
+                                SQL_PARTIAL_AGGREGATION_UNIQUE_ROWS_RATIO,
+                                false,
+                                Integer.MAX_VALUE));
+                        return new AllocatorOwnedOperator(splitAllocator, partial);
+                    }
+                    catch (RuntimeException | Error failure) {
+                        if (partial != null) {
+                            partial.close();
+                        }
+                        splitAllocator.close();
+                        throw failure;
+                    }
+                });
+            }
+
+            Operator merged = profiled(profile, "topGrouped.final", new SqlStageAggregationOperator(
+                    allocator,
+                    new LazyUnionAllOperator(exchangeSchema, partials),
+                    driverCount,
+                    new int[] {0, 1},
+                    List.of(SqlStageAggregationOperator.aggregate(
+                            List.of(0, 1),
+                            () -> List.of(new Sum(2), new Sum(3), new Sum(4), new Sum(5))))));
+
+            Variable average = new Variable(0);
+            EvaluationPlan averages = new EvaluationPlan(
+                    List.of(new Assignment(average, new Call("divide_i64_to_f64", List.of(
+                            new Reference(new Input(4), Stream.VALUES),
+                            new Reference(new Input(5), Stream.VALUES))), AllMask.ALL)),
+                    List.of(
+                            new Reference(new Input(0), Stream.VALUES),
+                            new Reference(new Input(1), Stream.VALUES),
+                            new Reference(new Input(2), Stream.VALUES),
+                            new Reference(new Input(3), Stream.VALUES),
+                            new Reference(average, Stream.VALUES)));
+            Operator projected = profiled(profile, "topGrouped.average", new ProjectOperator(allocator, averages, primitiveRegistry, merged));
+            return profiled(profile, "topGrouped.topn", new TopNOperator(allocator, 10, 2, projected));
+        }
+        catch (IOException exception) {
+            throw new UncheckedIOException("Unable to list ClickBench splits for " + input, exception);
+        }
+    }
+
+    private static Operator clickBenchSplitsScan(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<NitroParquetBatchSource.Split> splits,
+            List<String> columns)
+    {
+        Schema schema = SCHEMAS.parquet(splits.getFirst().path(), columns);
+        BatchSource source = NitroParquetBatchSource.forSplits(resources, allocator, splits, schema);
+        return new BatchSourceOperator(
+                source,
+                new ColumnViewSourceOperatorIngress(
+                        schema,
+                        new AllocatedSelectionOperatorIngress(
+                                allocator,
+                                new Allocator.Context("ClickBenchSplitScanIngress")),
+                        new LongDomainRuntimeFilterSourceIngress(),
+                        VectorColumnViewOperatorIngress::new));
     }
 
     private static FilterSpec notEqualI64(int inputIndex, long constant)

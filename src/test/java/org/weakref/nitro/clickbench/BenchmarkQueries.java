@@ -245,19 +245,25 @@ public class BenchmarkQueries
     @Benchmark
     public void query31()
     {
-        consume(ClickBenchHitsSupport.query31(allocator, primitiveRegistry, clickBenchHitsDirectory));
+        try (Allocator queryAllocator = new Allocator(engineResources)) {
+            consume(queryAllocator, ClickBenchHitsSupport.query31(queryAllocator, primitiveRegistry, clickBenchHitsDirectory));
+        }
     }
 
     @Benchmark
     public void query32()
     {
-        consume(ClickBenchHitsSupport.query32(allocator, primitiveRegistry, clickBenchHitsDirectory));
+        try (Allocator queryAllocator = new Allocator(engineResources)) {
+            consume(queryAllocator, ClickBenchHitsSupport.query32(queryAllocator, primitiveRegistry, clickBenchHitsDirectory));
+        }
     }
 
     @Benchmark
     public void query33()
     {
-        consume(ClickBenchHitsSupport.query33(allocator, clickBenchHitsDirectory));
+        try (Allocator queryAllocator = new Allocator(engineResources)) {
+            consume(queryAllocator, ClickBenchHitsSupport.query33(queryAllocator, clickBenchHitsDirectory));
+        }
     }
 
     @Benchmark
@@ -321,6 +327,11 @@ public class BenchmarkQueries
     }
 
     private void consume(Operator operator)
+    {
+        consume(allocator, operator);
+    }
+
+    private static void consume(Allocator allocator, Operator operator)
     {
         allocator.beginExecution();
         try (operator) {

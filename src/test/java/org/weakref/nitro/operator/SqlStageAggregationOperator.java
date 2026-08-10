@@ -241,6 +241,9 @@ public final class SqlStageAggregationOperator
         try {
             while (source.hasNext()) {
                 try (Batch batch = source.next()) {
+                    if (batch.borrowMask().none()) {
+                        continue;
+                    }
                     if (hashChannels.length == 0) {
                         sessions[0][nextSourcePartition].addInput(batch);
                         nextSourcePartition = (nextSourcePartition + 1) % partitionCount;
@@ -277,7 +280,8 @@ public final class SqlStageAggregationOperator
     {
         Mask inputMask = batch.borrowMask();
         Streams[] streams = resolveStreams(batch, inputMask, source.outputCount());
-        int[][] positions = new int[partitionCount][Math.max(1, inputMask.count())];
+        int selectedCount = inputMask.count();
+        int[] selectedPartitions = new int[selectedCount];
         int[] counts = new int[partitionCount];
         Vector[] values = new Vector[hashChannels.length];
         Vector[] nulls = new Vector[hashChannels.length];
@@ -287,12 +291,25 @@ public final class SqlStageAggregationOperator
             nulls[index] = key.getOrNull(Stream.NULLS);
         }
 
+        int selectedIndex = 0;
         for (int position : inputMask) {
             long hash = 1;
             for (int key = 0; key < values.length; key++) {
                 hash = 31 * hash + OperatorVectorSupport.hash(values[key], nulls[key], position);
             }
             int partition = Math.floorMod(hash, partitionCount);
+            selectedPartitions[selectedIndex++] = partition;
+            counts[partition]++;
+        }
+
+        int[][] positions = new int[partitionCount][];
+        for (int partition = 0; partition < partitionCount; partition++) {
+            positions[partition] = new int[counts[partition]];
+        }
+        Arrays.fill(counts, 0);
+        selectedIndex = 0;
+        for (int position : inputMask) {
+            int partition = selectedPartitions[selectedIndex++];
             positions[partition][counts[partition]++] = position;
         }
 
@@ -300,7 +317,7 @@ public final class SqlStageAggregationOperator
             if (counts[partition] == 0) {
                 continue;
             }
-            int[] selectedPositions = Arrays.copyOf(positions[partition], counts[partition]);
+            int[] selectedPositions = positions[partition];
             Output[] outputs = materializeExchange
                     ? copyOutputs(batch, streams, selectedPositions)
                     : Arrays.stream(streams)
