@@ -24,6 +24,24 @@ public interface PartialAggregationControl
 {
     boolean aggregationEnabled();
 
+    /**
+     * Maximum number of rows Nitro should inspect before constructing grouping state. Zero disables the
+     * observation. The host owns both this bound and the admission decision.
+     */
+    default int inputCardinalitySampleSize()
+    {
+        return 0;
+    }
+
+    /**
+     * Decides whether the current empty aggregation should consume input after a bounded grouping-key sample.
+     * Hash collisions can only undercount distinct keys; the decision changes physical partial aggregation only.
+     */
+    default boolean aggregationEnabled(PartialAggregationInputStatistics inputStatistics)
+    {
+        return aggregationEnabled();
+    }
+
     void onAggregatedFlush(long inputBytes, long inputRows, long outputRows);
 
     void onPassthroughFlush(long inputBytes, long inputRows);

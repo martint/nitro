@@ -482,6 +482,57 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testCardinalityObservationCanBypassBeforeGroupingStateIsBuilt()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        control.sampleSize = 4;
+        control.maximumDistinctKeysToAggregate = 3;
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch input = batch(10, 20, 30, 40);
+                    Batch result = addAndGetOutput(session, input, 40)) {
+                assertThat(selectedLongValues(result, 0)).containsExactly(10, 20, 30, 40);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 1, 1, 1);
+            }
+            assertThat(control.observedInput).isEqualTo(new PartialAggregationInputStatistics(4, 4));
+            assertThat(control.passthroughFlushes).isEqualTo(1);
+            assertThat(session.retainedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testCardinalityObservationHonorsMasksAndEncodedGroupingKeys()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            Batch batch = new Batch(
+                    Mask.sparse(new int[] {4, 1, 3, 0}, 5),
+                    Output.of(Streams.ofValues(new DictionaryVector(
+                            new int[] {0, 1, 2, 1, 0},
+                            new I64Vector(new long[] {11, 22, 33})))),
+                    Output.of(Streams.ofValues(new I64Vector(new long[] {7, 8, 9, 8, 7}))));
+            try (batch) {
+                assertThat(GroupingCardinalitySampler.sample(
+                        batch,
+                        List.of(0, 1),
+                        4,
+                        allocator.primitiveArrays()))
+                        .isEqualTo(new PartialAggregationInputStatistics(4, 2));
+            }
+        }
+    }
+
+    @Test
     void testStreamsAdaptiveFlushInBoundedBatches()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();
@@ -739,11 +790,27 @@ class TestGroupedAggregationSession
         private long inputBytes;
         private long inputRows;
         private long outputRows;
+        private int sampleSize;
+        private int maximumDistinctKeysToAggregate = Integer.MAX_VALUE;
+        private PartialAggregationInputStatistics observedInput;
 
         @Override
         public boolean aggregationEnabled()
         {
             return enabled;
+        }
+
+        @Override
+        public int inputCardinalitySampleSize()
+        {
+            return sampleSize;
+        }
+
+        @Override
+        public boolean aggregationEnabled(PartialAggregationInputStatistics inputStatistics)
+        {
+            observedInput = inputStatistics;
+            return enabled && inputStatistics.distinctKeyHashes() <= maximumDistinctKeysToAggregate;
         }
 
         @Override

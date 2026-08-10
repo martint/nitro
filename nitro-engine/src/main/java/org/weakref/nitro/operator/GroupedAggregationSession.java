@@ -183,10 +183,24 @@ public final class GroupedAggregationSession
             throw new IllegalArgumentException("inputBytes is negative");
         }
         releaseFlushedAggregation();
-        if (partialAggregationControl != null && !partialAggregationControl.aggregationEnabled()) {
-            pendingOutput = initialAggregationBatchBuilder.build(batch);
-            partialAggregationControl.onPassthroughFlush(inputBytes, batch.borrowMask().count());
-            return;
+        if (partialAggregationControl != null) {
+            boolean aggregationEnabled = partialAggregationControl.aggregationEnabled();
+            int sampleSize = partialAggregationControl.inputCardinalitySampleSize();
+            if (aggregationEnabled && !aggregatedInput && sampleSize > 0) {
+                PartialAggregationInputStatistics inputStatistics = GroupingCardinalitySampler.sample(
+                        batch,
+                        groupByColumns,
+                        sampleSize,
+                        allocator.primitiveArrays());
+                if (inputStatistics.sampledRows() > 0) {
+                    aggregationEnabled = partialAggregationControl.aggregationEnabled(inputStatistics);
+                }
+            }
+            if (!aggregationEnabled) {
+                pendingOutput = initialAggregationBatchBuilder.build(batch);
+                partialAggregationControl.onPassthroughFlush(inputBytes, batch.borrowMask().count());
+                return;
+            }
         }
         ensureAggregation();
         currentAggregation.addInput(batch);
