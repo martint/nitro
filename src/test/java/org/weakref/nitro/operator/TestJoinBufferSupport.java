@@ -15,15 +15,18 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.ArrayVector;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.ConcatenatedBooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I64Vector;
+import org.weakref.nitro.data.MapVector;
 import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.SelectedPositions;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.StructVector;
 import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.execution.EngineResources;
@@ -68,6 +71,60 @@ public class TestJoinBufferSupport
                 20);
         assertThat(((I64Vector) copiedLongs.values()).values())
                 .containsExactly(0, 0, 0, 1_017, 1_016, 1_015, 1_014, 1_013, 1_012, 1_011, 1_010, 1_009, 1_008, 1_007, 1_006, 1_005, 0, 0, 0, 0);
+
+        allocator.release(context);
+    }
+
+    @Test
+    void testNestedPositionCopiesHonorInputOffset()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("JoinBufferSupportTest");
+        JoinBufferSupport buffers = new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context);
+        int[] positions = {99, 3, 1};
+
+        StructVector structs = new StructVector(4);
+        structs.setField("value", Streams.ofValues(new I64Vector(new long[] {10, 11, 12, 13})));
+        StructVector copiedStructs = (StructVector) buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(structs),
+                positions,
+                1,
+                2,
+                0,
+                2).values();
+        assertThat(((I64Vector) copiedStructs.fieldValues("value")).values()).containsExactly(13, 11);
+
+        ArrayVector arrays = new ArrayVector(4);
+        System.arraycopy(new int[] {0, 1, 3, 3, 4}, 0, arrays.offsets(), 0, 5);
+        arrays.setElements(Streams.ofValues(new I64Vector(new long[] {20, 30, 31, 40})));
+        ArrayVector copiedArrays = (ArrayVector) buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(arrays),
+                positions,
+                1,
+                2,
+                0,
+                2).values();
+        assertThat(copiedArrays.offsets()).containsExactly(0, 1, 3);
+        assertThat(((I64Vector) copiedArrays.elements().values()).values()).containsExactly(40, 30, 31);
+
+        MapVector maps = new MapVector(4);
+        System.arraycopy(new int[] {0, 1, 3, 3, 4}, 0, maps.offsets(), 0, 5);
+        maps.setEntries(
+                Streams.ofValues(new I64Vector(new long[] {100, 200, 201, 300})),
+                Streams.ofValues(new I64Vector(new long[] {1_000, 2_000, 2_001, 3_000})));
+        MapVector copiedMaps = (MapVector) buffers.copyPositionsFresh(
+                (Streams) null,
+                Streams.ofValues(maps),
+                positions,
+                1,
+                2,
+                0,
+                2).values();
+        assertThat(copiedMaps.offsets()).containsExactly(0, 1, 3);
+        assertThat(((I64Vector) copiedMaps.keys().values()).values()).containsExactly(300, 200, 201);
+        assertThat(((I64Vector) copiedMaps.values().values()).values()).containsExactly(3_000, 2_000, 2_001);
 
         allocator.release(context);
     }
