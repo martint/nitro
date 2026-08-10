@@ -503,9 +503,38 @@ class TestGroupedAggregationSession
                 assertThat(selectedLongValues(result, 0)).containsExactly(10, 20, 30, 40);
                 assertThat(selectedLongValues(result, 1)).containsExactly(1, 1, 1, 1);
             }
-            assertThat(control.observedInput).isEqualTo(new PartialAggregationInputStatistics(4, 4));
+            assertThat(control.observedInput.sampledRows()).isEqualTo(4);
+            assertThat(control.observedInput.distinctKeyHashes()).isEqualTo(4);
             assertThat(control.passthroughFlushes).isEqualTo(1);
             assertThat(session.retainedBytes()).isZero();
+        }
+    }
+
+    @Test
+    void testCardinalityObservationContinuesWhileAdmissionIsUndecided()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        control.sampleSize = 2;
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch first = batch(10, 20);
+                    Batch second = batch(30, 40)) {
+                session.addInput(first, 20);
+                session.addInput(second, 20);
+            }
+            assertThat(control.cardinalityObservations).isEqualTo(2);
+            try (Batch result = session.finish()) {
+                assertThat(selectedLongValues(result, 0)).containsExactly(10, 20, 30, 40);
+            }
         }
     }
 
@@ -527,7 +556,10 @@ class TestGroupedAggregationSession
                         List.of(0, 1),
                         4,
                         allocator.primitiveArrays()))
-                        .isEqualTo(new PartialAggregationInputStatistics(4, 2));
+                        .satisfies(statistics -> {
+                            assertThat(statistics.sampledRows()).isEqualTo(4);
+                            assertThat(statistics.distinctKeyHashes()).isEqualTo(2);
+                        });
             }
         }
     }
@@ -792,6 +824,7 @@ class TestGroupedAggregationSession
         private long outputRows;
         private int sampleSize;
         private int maximumDistinctKeysToAggregate = Integer.MAX_VALUE;
+        private int cardinalityObservations;
         private PartialAggregationInputStatistics observedInput;
 
         @Override
@@ -809,6 +842,7 @@ class TestGroupedAggregationSession
         @Override
         public boolean aggregationEnabled(PartialAggregationInputStatistics inputStatistics)
         {
+            cardinalityObservations++;
             observedInput = inputStatistics;
             return enabled && inputStatistics.distinctKeyHashes() <= maximumDistinctKeysToAggregate;
         }

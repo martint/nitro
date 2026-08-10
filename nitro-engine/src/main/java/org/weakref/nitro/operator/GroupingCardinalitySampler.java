@@ -43,10 +43,10 @@ final class GroupingCardinalitySampler
         Mask mask = batch.borrowMask();
         int sampledRows = Math.min(mask.count(), maximumSampleSize);
         if (sampledRows == 0) {
-            return new PartialAggregationInputStatistics(0, 0);
+            return new PartialAggregationInputStatistics(0, new long[0]);
         }
         if (groupByColumns.isEmpty()) {
-            return new PartialAggregationInputStatistics(sampledRows, 1);
+            return new PartialAggregationInputStatistics(sampledRows, new long[] {0});
         }
 
         Vector[] values = new Vector[groupByColumns.size()];
@@ -61,7 +61,7 @@ final class GroupingCardinalitySampler
         catch (IllegalArgumentException ignored) {
             // Some structural representations require their type-authored grouping kernel. Do not substitute a
             // different equality model merely for admission; zero sampled rows means no observation is available.
-            return new PartialAggregationInputStatistics(0, 0);
+            return new PartialAggregationInputStatistics(0, new long[0]);
         }
 
         long[] hashes = arrays.borrowLongs(sampledRows);
@@ -83,10 +83,18 @@ final class GroupingCardinalitySampler
                     distinct++;
                 }
             }
-            return new PartialAggregationInputStatistics(sampledRows, distinct);
+            long[] distinctHashes = new long[distinct];
+            distinctHashes[0] = hashes[0];
+            int output = 1;
+            for (int sample = 1; sample < sampledRows; sample++) {
+                if (hashes[sample] != hashes[sample - 1]) {
+                    distinctHashes[output++] = hashes[sample];
+                }
+            }
+            return new PartialAggregationInputStatistics(sampledRows, distinctHashes);
         }
         catch (IllegalArgumentException ignored) {
-            return new PartialAggregationInputStatistics(0, 0);
+            return new PartialAggregationInputStatistics(0, new long[0]);
         }
         finally {
             arrays.release(hashes);

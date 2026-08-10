@@ -186,7 +186,7 @@ public final class GroupedAggregationSession
         if (partialAggregationControl != null) {
             boolean aggregationEnabled = partialAggregationControl.aggregationEnabled();
             int sampleSize = partialAggregationControl.inputCardinalitySampleSize();
-            if (aggregationEnabled && !aggregatedInput && sampleSize > 0) {
+            if (aggregationEnabled && sampleSize > 0) {
                 PartialAggregationInputStatistics inputStatistics = GroupingCardinalitySampler.sample(
                         batch,
                         groupByColumns,
