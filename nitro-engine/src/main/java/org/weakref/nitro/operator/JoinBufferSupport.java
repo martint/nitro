@@ -771,7 +771,16 @@ final class JoinBufferSupport
             case F64Vector doubleValues -> {
                 return copyDoublePositions(doubleValues, existing, sourcePositions, outputStart, size);
             }
-            case BinaryVector _ -> {
+            case BinaryVector binaryValues -> {
+                if (sourcePositions instanceof SelectedPositions.RangeSelection) {
+                    return copyBinaryRange(
+                            binaryValues,
+                            existing,
+                            sourcePositions.position(0),
+                            sourcePositions.count(),
+                            outputStart,
+                            size);
+                }
                 return source.copySelectedPositionsInto(allocator, allocationContext, existing, sourcePositions, outputStart, size);
             }
             default -> {}
@@ -890,12 +899,35 @@ final class JoinBufferSupport
         return true;
     }
 
+    boolean canCopyRetainedRangeWithoutMaterializing(Streams input)
+    {
+        if (input.hasValues() && !canCopyRetainedRangeWithoutMaterializing(input.values())) {
+            return false;
+        }
+        if (input.hasNulls() && !canCopyRetainedRangeWithoutMaterializing(input.get(Stream.NULLS))) {
+            return false;
+        }
+        if (input.hasErrors() && !canCopyRetainedRangeWithoutMaterializing(input.get(Stream.ERRORS))) {
+            return false;
+        }
+        return true;
+    }
+
     private static boolean canCopyRangeWithoutMaterializing(Vector source)
     {
         return switch (source) {
-            case I64Vector _, I32Vector _, F64Vector _, BooleanVector _ -> true;
+            case I64Vector _, I32Vector _, F64Vector _, BooleanVector _, BinaryVector _ -> true;
             case DictionaryVector dictionary -> canCopyRangeWithoutMaterializing(dictionary.values());
             case RleVector rle -> canCopyRangeWithoutMaterializing(rle.values());
+            default -> false;
+        };
+    }
+
+    private static boolean canCopyRetainedRangeWithoutMaterializing(Vector source)
+    {
+        return switch (source) {
+            case I64Vector _, I32Vector _, F64Vector _, BooleanVector _, BinaryVector _ -> true;
+            case RleVector rle -> canCopyRetainedRangeWithoutMaterializing(rle.values());
             default -> false;
         };
     }
@@ -1418,6 +1450,43 @@ final class JoinBufferSupport
                 currentOffset += length;
                 outputOffsets[targetPosition + 1] = currentOffset;
             }
+        }
+        return output;
+    }
+
+    private BinaryVector copyBinaryRange(BinaryVector source, Vector existing, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        int usedBytes = binaryWriteOffset(existing, outputStart);
+        int[] sourceOffsets = source.offsets();
+        int sourceByteStart = sourceOffsets[sourceStart];
+        int sourceByteEnd = sourceOffsets[sourceStart + sourceCount];
+        int byteCount = sourceByteEnd - sourceByteStart;
+        int requiredCapacity = usedBytes + byteCount;
+        int requestedCapacity = requiredCapacity;
+        if (existing == null && outputStart == 0 && size > sourceCount) {
+            requestedCapacity = Math.max(requiredCapacity, estimatedBinaryCapacity(source, size));
+        }
+
+        BinaryVector output = BinaryVector.allocateOrGrow(
+                allocator,
+                allocationContext,
+                existing instanceof BinaryVector vector ? vector : null,
+                size,
+                requestedCapacity,
+                usedBytes);
+        if (outputStart == 0) {
+            Arrays.fill(output.offsets(), 0);
+            output.clearTraits();
+        }
+        output.addTraits(source.traits());
+
+        int currentOffset = prepareBinaryWriteOffset(output, outputStart);
+        int[] outputOffsets = output.offsets();
+        for (int index = 0; index <= sourceCount; index++) {
+            outputOffsets[outputStart + index] = currentOffset + sourceOffsets[sourceStart + index] - sourceByteStart;
+        }
+        if (byteCount > 0) {
+            System.arraycopy(source.data(), sourceByteStart, output.data(), currentOffset, byteCount);
         }
         return output;
     }

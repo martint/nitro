@@ -338,10 +338,20 @@ final class BufferedJoinInput
         Streams[] columns = new Streams[columnCount];
         int outputStart = 0;
         for (InnerBatch batch : batches) {
-            SelectedPositions sourceRange = batch.retained() ? null : SelectedPositions.range(0, batch.length());
+            SelectedPositions sourceRange = batch.positions() == null ? SelectedPositions.range(0, batch.length()) : null;
             int[] sourcePositions = null;
             for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
-                if (batch.retained()) {
+                if (batch.retained() && sourceRange != null) {
+                    Streams source = buffers.borrowStreams(batch.retainedBatch().output(columnIndex));
+                    if (policy.coalesceRangeSelection() && buffers.canCopyRetainedRangeWithoutMaterializing(source)) {
+                        columns[columnIndex] = buffers.copyPositions(columns[columnIndex], source, sourceRange, outputStart, size);
+                    }
+                    else {
+                        sourcePositions = sourcePositions != null ? sourcePositions : densePositions(batch.length());
+                        columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], sourcePositions, batch.length(), outputStart, size);
+                    }
+                }
+                else if (batch.retained()) {
                     int[] positions = batch.positions() == null ? densePositions(batch.length()) : batch.positions();
                     columns[columnIndex] = buffers.copyPositions(batch.retainedBatch().output(columnIndex), columns[columnIndex], positions, batch.length(), outputStart, size);
                 }

@@ -16,8 +16,10 @@ package org.weakref.nitro.operator;
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.execution.EngineResources;
 
 import java.util.List;
@@ -26,6 +28,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TestBufferedJoinInputPolicy
 {
+    @Test
+    void testDenseRetainedBinaryBatchesCoalesceByRange()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("retained-binary-range-test");
+            BufferedJoinInput input = new BufferedJoinInput(
+                    BufferedJoinInputPolicy.defaults(),
+                    new JoinBufferSupport(JoinBufferPolicy.defaults(), allocator, context),
+                    1);
+            TableOperator source = TableOperator.retained(
+                    Schema.unspecified(1),
+                    List.of(
+                            TableOperator.Page.values(2, new BinaryVector[] {binary("a", "bb")}, Mask.all(2)),
+                            TableOperator.Page.values(2, new BinaryVector[] {binary("ccc", "d")}, Mask.all(2))));
+
+            input.loadAll(source, 1024, new int[] {0}, true);
+
+            assertThat(input.batches()).hasSize(1);
+            BinaryVector values = (BinaryVector) input.batches().getFirst().columns()[0].get(Stream.VALUES);
+            assertThat(values.offsets()).startsWith(0, 1, 3, 6, 7);
+            assertThat(values.data()).startsWith((byte) 'a', (byte) 'b', (byte) 'b', (byte) 'c', (byte) 'c', (byte) 'c', (byte) 'd');
+
+            input.releaseBuffers();
+            allocator.release(context);
+        }
+    }
+
     @Test
     void testStandaloneDefaultsAreOwnedByOperatorResources()
     {
@@ -68,5 +98,23 @@ class TestBufferedJoinInputPolicy
             input.releaseBuffers();
             allocator.release(context);
         }
+    }
+
+    private static BinaryVector binary(String... values)
+    {
+        int[] offsets = new int[values.length + 1];
+        int byteCount = 0;
+        for (int index = 0; index < values.length; index++) {
+            byteCount += values[index].length();
+            offsets[index + 1] = byteCount;
+        }
+        byte[] data = new byte[byteCount];
+        int offset = 0;
+        for (String value : values) {
+            byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            System.arraycopy(bytes, 0, data, offset, bytes.length);
+            offset += bytes.length;
+        }
+        return new BinaryVector(values.length, offsets, data);
     }
 }
