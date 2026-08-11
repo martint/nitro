@@ -808,6 +808,13 @@ final class FlatGroupingTable
             Allocator allocator,
             Allocator.Context allocationContext)
     {
+        // The dictionary base is indexed by generation-wide value ids. A proper subrange would therefore repeat
+        // that generation-wide domain in every output batch, and independently owned batches cannot promise that
+        // the domain remains shared across exchange or re-grouping. Preserve the encoding only when this batch owns
+        // the complete group-id range; chunked session output uses the ordinary flat materialization path.
+        if (sourceStart != 0 || size != recordCount()) {
+            return null;
+        }
         Vector values = layout.tryGroupedValueRangeAsDictionary(
                 this, groupedColumnIndex, sourceStart, size, outputMask, allocator, allocationContext);
         if (values == null) {

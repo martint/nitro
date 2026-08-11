@@ -1930,6 +1930,39 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGroupedDictionaryRangeRequiresCompleteGroupDomain()
+    {
+        int[] ids = {0, 1, 0, 1, 0, 1, 0, 1};
+        Vector[] values = {
+                DictionaryVector.wrapNested(ids, ids.length, utf8("alpha", "beta")),
+                new I64Vector(new long[] {0, 1, 2, 3, 4, 5, 6, 7})};
+        Vector[] nulls = {null, null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                ids.length,
+                true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("completeGroupedDictionaryDomain");
+        try {
+            table.beginBatch(values, nulls);
+            for (int position = 0; position < ids.length; position++) {
+                assertThat(table.assignGroup(values, nulls, position, position)).isEqualTo(position);
+            }
+            table.endBatch();
+
+            assertThat(table.groupedValueRangeAsDictionary(
+                    0, 2, 4, Mask.all(4), allocator, allocationContext)).isNull();
+            assertThat(table.groupedValueRangeAsDictionary(
+                    0, 0, ids.length, Mask.all(ids.length), allocator, allocationContext).values())
+                    .isInstanceOf(DictionaryVector.class);
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void testNormalizedIntKeyPreservesCompleteEqualityAcrossBinaryEncodings()
     {
         Vector[] firstValues = {

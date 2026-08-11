@@ -88,7 +88,7 @@ class TestGroupedAggregationSession
     }
 
     @Test
-    void testStreamsRepeatedBinaryKeysAsDictionariesInBoundedBatches()
+    void testStreamsRepeatedBinaryKeysWithIndependentDomainsInBoundedBatches()
     {
         int rows = 10_000;
         Schema schema = new Schema(List.of(
@@ -130,16 +130,14 @@ class TestGroupedAggregationSession
             }
 
             try (Batch first = session.finish()) {
-                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
-                assertThat(Arrays.copyOf(((DictionaryVector) first.output(0).borrow(Stream.VALUES)).ids(), 4))
-                        .containsExactly(0, 1, 0, 1);
+                assertThat(first.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+                assertThat(selectedBinaryValues(first, 0).subList(0, 4)).containsExactly("a", "b", "", "b");
                 assertThat(((BooleanVector) first.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
                 assertThat(((BooleanVector) first.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
             }
             try (Batch second = session.getOutput()) {
-                assertThat(second.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
-                assertThat(Arrays.copyOf(((DictionaryVector) second.output(0).borrow(Stream.VALUES)).ids(), 4))
-                        .containsExactly(0, 1, 0, 1);
+                assertThat(second.output(0).borrow(Stream.VALUES)).isInstanceOf(BinaryVector.class);
+                assertThat(selectedBinaryValues(second, 0).subList(0, 4)).containsExactly("a", "b", "", "b");
                 assertThat(((BooleanVector) second.output(0).borrow(Stream.NULLS)).values()[2]).isTrue();
                 assertThat(((BooleanVector) second.output(1).borrow(Stream.NULLS)).values()[3]).isTrue();
                 long[] values = ((I64Vector) second.output(2).borrow(Stream.VALUES)).values();
