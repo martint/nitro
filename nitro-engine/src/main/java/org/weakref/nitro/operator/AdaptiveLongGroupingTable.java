@@ -681,7 +681,7 @@ class AdaptiveLongGroupingTable
                 ? codeGeneration.multiLongGrouping().createDiscardingResults(
                         arity, Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy)
                 : codeGeneration.multiLongGrouping().create(
-                        arity, Math.max(16, toIntExact(groupCount)), arrayPool, policy);
+                        arity, Math.max(16, toIntExact(groupCount)), compactRetainedColumns, arrayPool, policy);
         if (groupCount != 0) {
             VectorAccess.LongValues[] values = new VectorAccess.LongValues[arity];
             VectorAccess.BooleanValues[] nulls = new VectorAccess.BooleanValues[arity];

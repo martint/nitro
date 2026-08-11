@@ -19,10 +19,9 @@ import org.weakref.nitro.data.VectorAccess;
 import java.util.Arrays;
 
 /**
- * Cold-path machinery shared by every generated multi-long grouping table. Holds the interleaved
- * {@code entries} array ({@code arity} keys and, when per-row IDs are consumed, a group id per slot), the parallel
- * {@code nullMasks}, the open-addressing bookkeeping, and the reverse map used to reconstruct group keys
- * at materialization ({@code keysByGroup[column][groupId]} + {@code nullMasksByGroup[groupId]}).
+ * Cold-path machinery shared by every generated multi-long grouping table. Ordinary and distinct tables hold an
+ * interleaved {@code entries} key array. Grouping tables that retain keys for output use that reverse map as the
+ * single canonical key copy; their hash slots contain only compact group ids and compare through the reverse map.
  *
  * <p>The arity-specialized hot work — {@link #assignBatch}, which reads the key columns into locals,
  * probes, and assigns groups for a whole batch, plus {@link #hashEntry} used by rehash — is generated
@@ -55,10 +54,12 @@ abstract class AbstractMultiLongGroupingTable
     final int stride;
     final boolean storesGroupIds;
     final boolean retainsGroupKeys;
+    final boolean identityGroupIdSlots;
     private final boolean debugTableShapes;
     private final PrimitiveArrayPool arrayPool;
     long[] entries;
     byte[] nullMasks;
+    int[] groupIds;
     // Swiss-table control byte per slot: 0 marks an empty slot, otherwise a 7-bit hash fragment with the high bit set
     // (always non-zero). The probe scans this dense array (one byte per slot, ~64 per cache line) and only reads the
     // fat key record on a fragment match, so a high-cardinality probe stays cache-resident where the records do not.
@@ -89,14 +90,16 @@ abstract class AbstractMultiLongGroupingTable
         this.arity = arity;
         this.storesGroupIds = storesGroupIds;
         this.retainsGroupKeys = retainGroupKeys;
+        this.identityGroupIdSlots = retainGroupKeys;
         this.debugTableShapes = policy.debugGeneratedTableShapes();
         this.stride = arity + (storesGroupIds ? 1 : 0);
         int capacity = 16;
         while (capacity < expectedSize / LOAD_FACTOR) {
             capacity <<= 1;
         }
-        entries = allocateEntries(capacity);
-        nullMasks = arrayPool.borrowBytes(capacity);
+        entries = identityGroupIdSlots ? new long[0] : allocateEntries(capacity);
+        nullMasks = identityGroupIdSlots ? new byte[0] : arrayPool.borrowBytes(capacity);
+        groupIds = identityGroupIdSlots ? arrayPool.borrowInts(capacity) : new int[0];
         control = arrayPool.borrowBytes(capacity);
         Arrays.fill(control, (byte) 0);
         mask = capacity - 1;
@@ -198,7 +201,7 @@ abstract class AbstractMultiLongGroupingTable
         if (expectedSize < maxFill) {
             return;
         }
-        int capacity = nullMasks.length;
+        int capacity = control.length;
         while (expectedSize >= (long) (capacity * LOAD_FACTOR)) {
             capacity <<= 1;
         }
@@ -207,18 +210,20 @@ abstract class AbstractMultiLongGroupingTable
 
     final void rehash()
     {
-        rehash(nullMasks.length * 2);
+        rehash(control.length * 2);
     }
 
     private void rehash(int capacity)
     {
         long[] previousEntries = entries;
         byte[] previousNullMasks = nullMasks;
+        int[] previousGroupIds = groupIds;
         byte[] previousControl = control;
         int previousCapacity = previousControl.length;
 
-        entries = allocateEntries(capacity);
-        nullMasks = arrayPool.borrowBytes(capacity);
+        entries = identityGroupIdSlots ? new long[0] : allocateEntries(capacity);
+        nullMasks = identityGroupIdSlots ? new byte[0] : arrayPool.borrowBytes(capacity);
+        groupIds = identityGroupIdSlots ? arrayPool.borrowInts(capacity) : new int[0];
         control = arrayPool.borrowBytes(capacity);
         Arrays.fill(control, (byte) 0);
         mask = capacity - 1;
@@ -229,22 +234,43 @@ abstract class AbstractMultiLongGroupingTable
             if (previousControl[oldSlot] == 0) {
                 continue;
             }
+            int groupId = identityGroupIdSlots ? previousGroupIds[oldSlot] : -1;
             int previousBase = oldSlot * stride;
-            byte nullMask = previousNullMasks[oldSlot];
-            int hash = hashEntry(previousEntries, previousBase, nullMask);
+            byte nullMask = identityGroupIdSlots ? 0 : previousNullMasks[oldSlot];
+            int hash = identityGroupIdSlots ? hashRetainedGroup(groupId) : hashEntry(previousEntries, previousBase, nullMask);
             int slot = hash & mask;
             while (control[slot] != 0) {
                 slot = (slot + 1) & mask;
             }
-            int base = slot * stride;
-            System.arraycopy(previousEntries, previousBase, entries, base, stride);
-            nullMasks[slot] = nullMask;
+            if (identityGroupIdSlots) {
+                groupIds[slot] = groupId;
+            }
+            else {
+                int base = slot * stride;
+                System.arraycopy(previousEntries, previousBase, entries, base, stride);
+                nullMasks[slot] = nullMask;
+            }
             control[slot] = controlFragment(hash);
             size++;
         }
         arrayPool.release(previousEntries);
         arrayPool.release(previousNullMasks);
+        arrayPool.release(previousGroupIds);
         arrayPool.release(previousControl);
+    }
+
+    private int hashRetainedGroup(int groupId)
+    {
+        long hash = nullMasksByGroup[groupId];
+        for (int column = 0; column < arity; column++) {
+            hash += groupedValue(column, groupId) * HASH_PRIMES[column];
+        }
+        hash ^= hash >>> 33;
+        hash *= 0xFF51AFD7ED558CCDL;
+        hash ^= hash >>> 33;
+        hash *= 0xC4CEB9FE1A85EC53L;
+        hash ^= hash >>> 33;
+        return (int) hash;
     }
 
     /** Grows the reverse map to hold {@code groupId}. Called from generated code on each new group. */
@@ -305,6 +331,7 @@ abstract class AbstractMultiLongGroupingTable
     {
         long bytes = entries == null ? 0 : (long) entries.length * Long.BYTES;
         bytes += nullMasks == null ? 0 : nullMasks.length;
+        bytes += groupIds == null ? 0 : (long) groupIds.length * Integer.BYTES;
         bytes += control == null ? 0 : control.length;
         if (keysByGroup != null) {
             bytes += (long) keysByGroup.length * Long.BYTES;
@@ -323,17 +350,20 @@ abstract class AbstractMultiLongGroupingTable
     {
         if (debugTableShapes && retainsGroupKeys) {
             System.err.printf(
-                    "[multi-long-table] arity=%d groups=%d capacity=%d stride=%d storesGroupIds=%s%n",
+                    "[multi-long-table] arity=%d groups=%d capacity=%d stride=%d storesGroupIds=%s identitySlots=%s%n",
                     arity,
                     size,
                     control.length,
                     stride,
-                    storesGroupIds);
+                    storesGroupIds,
+                    identityGroupIdSlots);
         }
         arrayPool.release(entries);
         entries = null;
         arrayPool.release(nullMasks);
         nullMasks = null;
+        arrayPool.release(groupIds);
+        groupIds = null;
         arrayPool.release(control);
         control = null;
         if (keysByGroup != null) {

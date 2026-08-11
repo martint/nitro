@@ -110,7 +110,13 @@ class TestMultiLongGroupingTable
                 AdaptiveLongGroupingPolicy.defaults());
         assertThat(table.storesGroupIds).isFalse();
         assertThat(table.retainsGroupKeys).isTrue();
+        assertThat(table.identityGroupIdSlots).isTrue();
         assertThat(table.stride).isEqualTo(2);
+        assertThat(table.entries).isEmpty();
+        assertThat(table.groupIds).isNotEmpty();
+        assertThat(ordinaryTable.identityGroupIdSlots).isTrue();
+        assertThat(ordinaryTable.entries).isEmpty();
+        assertThat(ordinaryTable.groupIds).isNotEmpty();
         assertThat(table.retainedBytes()).isLessThan(ordinaryTable.retainedBytes());
         long groupCount = table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, positions.length, 0);
 
@@ -127,6 +133,41 @@ class TestMultiLongGroupingTable
         assertThat(table.groupedValue(1, 2)).isEqualTo(5);
         table.releaseBuffers();
         ordinaryTable.releaseBuffers();
+    }
+
+    @Test
+    void testRetainedIdentitySlotsRehashWithoutDuplicatingKeys()
+    {
+        int rows = 5_000;
+        VectorAccess.LongValues[] keyAccessors = {
+                position -> position,
+                position -> (1L << 40) + position,
+                position -> position & 1,
+        };
+        VectorAccess.BooleanValues[] nullAccessors = {_ -> false, _ -> false, _ -> false};
+        int[] positions = new int[rows];
+        for (int position = 0; position < rows; position++) {
+            positions[position] = position;
+        }
+
+        AbstractMultiLongGroupingTable table = codeGeneration.multiLongGrouping().createDiscardingResults(
+                3,
+                16,
+                0b101,
+                arrayPool,
+                AdaptiveLongGroupingPolicy.defaults());
+        assertThat(table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, rows, 0))
+                .isEqualTo(rows);
+        assertThat(table.assignBatchDiscardingResults(keyAccessors, nullAccessors, positions, rows, rows))
+                .isEqualTo(rows);
+
+        assertThat(table.entries).isEmpty();
+        assertThat(table.groupIds).hasSize(1 << 13);
+        assertThat(table.retainedBytes()).isLessThan(256 * 1024);
+        assertThat(table.groupedValue(0, rows - 1)).isEqualTo(rows - 1);
+        assertThat(table.groupedValue(1, rows - 1)).isEqualTo((1L << 40) + rows - 1);
+        assertThat(table.groupedValue(2, rows - 1)).isEqualTo((rows - 1) & 1);
+        table.releaseBuffers();
     }
 
     @Test
