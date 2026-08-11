@@ -168,6 +168,7 @@ public final class NitroParquetBatchSource
     private final boolean adaptiveNarrowFilterWindowCandidate;
     private boolean adaptiveNarrowFilterWindowDecided;
     private final LongDomain[] filtersByColumn;
+    private final boolean[] requiredFiltersByColumn;
     private final LongDomain[] rowGroupFiltersByColumn;
     private final VersionedLongPredicate[] filterVersionsByColumn;
     private boolean hasFilters;
@@ -501,6 +502,7 @@ public final class NitroParquetBatchSource
         this.adaptiveNarrowFilterWindowCandidate =
                 adaptiveNarrowPolicy.enabled() && numeric && columnCount <= adaptiveNarrowPolicy.maxColumns();
         this.filtersByColumn = new LongDomain[columnCount];
+        this.requiredFiltersByColumn = new boolean[columnCount];
         this.rowGroupFiltersByColumn = new LongDomain[columnCount];
         this.filterVersionsByColumn = new VersionedLongPredicate[columnCount];
         this.colLong = new long[columnCount][];
@@ -517,13 +519,13 @@ public final class NitroParquetBatchSource
         this.debugFilterOutputs = new long[columnCount];
     }
 
-    private void pushLongDomain(int column, LongDomain filter)
+    private boolean pushLongDomain(int column, LongDomain filter, boolean enforcementRequired)
     {
         if (column < 0 || column >= readers.length) {
-            return;
+            return false;
         }
         if (readers[column].kind() == ColumnReader.Kind.BINARY || readers[column].isDouble()) {
-            return;
+            return false;
         }
         if (runtimeFilterPolicy.rowGroupFiltering()) {
             LongDomain existingRowGroupFilter = rowGroupFiltersByColumn[column];
@@ -537,7 +539,7 @@ public final class NitroParquetBatchSource
         // initialized from its boundary. Keep late filters at row-group scope until the reader supports an explicit
         // mid-page transition.
         if (nextRow > 0) {
-            return;
+            return false;
         }
         // Only all-numeric scans take the row-level skip-decode path: the survivor payload is then guaranteed
         // INT/LONG, so readSelectedInts/Longs cover it. Mixed scans still retain the domain above for metadata-only
@@ -545,17 +547,23 @@ public final class NitroParquetBatchSource
         if (!runtimeFilterPolicy.rowLevelFiltering() ||
                 (nullable[column] && !runtimeFilterPolicy.nullableRowLevelFiltering()) ||
                 !allNumeric) {
-            return;
+            return false;
         }
         // Several joins can push a filter on the same probe column (e.g. this scan's own dimension join and a
         // downstream join whose key survives through an aggregation). Each is an independent necessary condition, so
         // keeping the more selective one (fewer distinct values) is correct and prunes hardest; a blind overwrite
         // could otherwise replace a tight filter with an all-values one.
         LongDomain existing = filtersByColumn[column];
-        if (existing != null && existing.size() <= filter.size()) {
-            return;
+        if (existing != null) {
+            if (requiredFiltersByColumn[column]) {
+                return false;
+            }
+            if (!enforcementRequired && existing.size() <= filter.size()) {
+                return false;
+            }
         }
         filtersByColumn[column] = filter;
+        requiredFiltersByColumn[column] = enforcementRequired;
         if (existing == null && filterOrder != null) {
             // Multiple filters can be installed before the first poll. Preserve the established order and append
             // the newly active column so it is decoded before the filtered-column gather below.
@@ -566,6 +574,7 @@ public final class NitroParquetBatchSource
                 ? filter
                 : null;
         hasFilters = true;
+        return true;
     }
 
     static int[] appendFilterColumn(int[] filterOrder, int column)
@@ -678,8 +687,11 @@ public final class NitroParquetBatchSource
         if (filter.domain().includesNull()) {
             return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
         }
-        pushLongDomain(column, domain);
-        return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+        boolean enforcementRequested = !filter.residualRequired() && !filter.approximate();
+        boolean enforced = pushLongDomain(column, domain, enforcementRequested);
+        return enforced && enforcementRequested
+                ? RuntimeFilterAcceptance.ENFORCED
+                : RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
     }
 
     @Override
@@ -848,6 +860,9 @@ public final class NitroParquetBatchSource
             LongDomain filter = filtersByColumn[c];
             if (filter == null) {
                 continue;
+            }
+            if (requiredFiltersByColumn[c]) {
+                return false;
             }
             if (filterEvaluationPolicy.nonSelectiveElision().exactDictionaryCoverage()) {
                 if (!readers[c].dictionaryValuesCovered(filter)) {

@@ -16,8 +16,9 @@ package org.weakref.nitro.parquet;
 /**
  * Immutable admission policy for executable runtime filters in a Parquet scan.
  *
- * <p>The source reports accepted filters as residual, so a connector composition root may disable either optimization
- * without changing query results.
+ * <p>The source reports full enforcement only when row-level filtering is enabled and the complete exact domain is
+ * installed before reading. Otherwise the predicate remains residual, so a connector composition root may disable
+ * either optimization without changing query results.
  */
 public record ParquetRuntimeFilterPolicy(
         boolean rowGroupFiltering,

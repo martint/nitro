@@ -15,9 +15,15 @@ package org.weakref.nitro.core.source;
 
 import static java.util.Objects.requireNonNull;
 
-/// Typed runtime-filter semantics at the source boundary.
-public record RuntimeFilter(SourceColumnHandle column, TypedDomain domain, boolean approximate)
+/// Typed runtime-filter semantics at the source boundary. A filter with a required residual may be used only to prune
+/// source work; otherwise, an `ENFORCED` acceptance transfers complete predicate responsibility to the source.
+public record RuntimeFilter(SourceColumnHandle column, TypedDomain domain, boolean approximate, boolean residualRequired)
 {
+    public RuntimeFilter(SourceColumnHandle column, TypedDomain domain, boolean approximate)
+    {
+        this(column, domain, approximate, true);
+    }
+
     public RuntimeFilter
     {
         column = requireNonNull(column, "column is null");
@@ -25,5 +31,10 @@ public record RuntimeFilter(SourceColumnHandle column, TypedDomain domain, boole
         if (!column.type().identity().equals(domain.type().identity())) {
             throw new IllegalArgumentException("column and domain types differ");
         }
+    }
+
+    public RuntimeFilter withoutResidual()
+    {
+        return new RuntimeFilter(column, domain, approximate, false);
     }
 }

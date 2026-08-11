@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.Operator;
+import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,7 +43,7 @@ public final class BatchFeedOperator
     private final Schema schema;
     private final SourceOperatorIngress ingress;
     private final Set<SourceCapability> capabilities;
-    private final List<DynamicFilter> dynamicFilters = new ArrayList<>();
+    private final List<PushedFilter> dynamicFilters = new ArrayList<>();
 
     private SourceBatch sourceBatch;
     private Batch nativeBatch;
@@ -201,7 +202,16 @@ public final class BatchFeedOperator
     public void pushDynamicFilter(DynamicFilter filter)
     {
         checkOpen();
-        dynamicFilters.add(requireNonNull(filter, "filter is null"));
+        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), null));
+    }
+
+    @Override
+    public StaticFilterEnforcement pushStaticFilter(DynamicFilter filter)
+    {
+        checkOpen();
+        StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+        dynamicFilters.add(new PushedFilter(requireNonNull(filter, "filter is null"), enforcement));
+        return enforcement;
     }
 
     @Override
@@ -213,8 +223,8 @@ public final class BatchFeedOperator
     /**
      * Applies the filters retained while the host-fed pipeline was assembled to an actual native source.
      *
-     * <p>The filters remain residual predicates in the operator pipeline. Rejection is therefore exact, while
-     * acceptance can reduce source decode work without transferring semantic responsibility to the source.
+     * <p>Ordinary dynamic filters remain residual predicates. Exact static filters separately request semantic
+     * enforcement; their completion objects are updated only when the source accepts that responsibility.
      */
     public List<RuntimeFilterAcceptance> applyDynamicFilters(BatchSource source)
     {
@@ -224,16 +234,29 @@ public final class BatchFeedOperator
             throw new IllegalArgumentException("source schema does not match feed schema");
         }
         List<RuntimeFilterAcceptance> acceptances = new ArrayList<>(dynamicFilters.size());
-        for (DynamicFilter filter : dynamicFilters) {
+        for (PushedFilter pushedFilter : dynamicFilters) {
+            DynamicFilter filter = pushedFilter.filter();
+            RuntimeFilterAcceptance acceptance;
             var column = source.column(filter.column());
             if (!ingress.supportsRuntimeFilter(source, column) || !source.supportsRuntimeFilter(column)) {
-                acceptances.add(RuntimeFilterAcceptance.REJECTED);
-                continue;
+                acceptance = RuntimeFilterAcceptance.REJECTED;
             }
-            acceptances.add(source.addRuntimeFilter(ingress.runtimeFilter(column, filter)));
+            else {
+                var runtimeFilter = ingress.runtimeFilter(column, filter);
+                if (pushedFilter.enforcement() != null) {
+                    runtimeFilter = runtimeFilter.withoutResidual();
+                }
+                acceptance = source.addRuntimeFilter(runtimeFilter);
+            }
+            acceptances.add(acceptance);
+            if (pushedFilter.enforcement() != null) {
+                pushedFilter.enforcement().complete(acceptance);
+            }
         }
         return List.copyOf(acceptances);
     }
+
+    private record PushedFilter(DynamicFilter filter, StaticFilterEnforcement enforcement) {}
 
     @Override
     public void close()

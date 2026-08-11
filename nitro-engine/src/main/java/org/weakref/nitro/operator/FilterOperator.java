@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.evaluator.ir.Variable;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 public class FilterOperator
         implements Operator
@@ -45,10 +46,14 @@ public class FilterOperator
     private final Operator source;
     private final Allocator allocator;
     private final PlanEvaluator planEvaluator;
-    private final MaskExpression predicateMask;
+    private final EvaluationPlan evaluationPlan;
+    private final PrimitiveRegistry primitiveRegistry;
+    private final MaskExpression originalPredicateMask;
+    private final List<StaticPredicatePushdown> staticPredicatePushdowns;
     private final FilterOperatorPolicy policy;
 
     private BatchState currentBatchState;
+    private MaskExpression effectivePredicateMask;
 
     public FilterOperator(
             Operator source,
@@ -77,6 +82,8 @@ public class FilterOperator
     {
         this.source = source;
         this.allocator = allocator;
+        this.evaluationPlan = evaluationPlan;
+        this.primitiveRegistry = primitiveRegistry;
         this.policy = resources.policy();
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, new PlanEvaluator.InputResolver()
         {
@@ -98,24 +105,57 @@ public class FilterOperator
                 };
             }
         }, allocator, resources.projectionMaskCompiler(), resources.evaluationPolicy());
-        this.predicateMask = RangeConstraintLowerer.lower(
-                evaluationPlan,
-                primitiveRegistry,
-                predicateMask,
-                policy.fuseConstantRanges());
+        this.originalPredicateMask = predicateMask;
+        java.util.ArrayList<StaticPredicatePushdown> pushdowns = new java.util.ArrayList<>();
         if (policy.pushStaticLongRanges()) {
-            staticLongRangeFilters(evaluationPlan, predicateMask, primitiveRegistry).forEach(source::pushDynamicFilter);
+            staticLongRangeCandidates(evaluationPlan, predicateMask, primitiveRegistry).forEach(candidate ->
+                    pushdowns.add(new StaticPredicatePushdown(
+                            candidate.terms(),
+                            source.pushStaticFilter(candidate.filter()))));
         }
         if (policy.pushStaticLongEquality()) {
-            staticLongEqualityFilter(evaluationPlan, predicateMask, primitiveRegistry).ifPresent(source::pushDynamicFilter);
+            staticLongEqualityCandidates(evaluationPlan, predicateMask, primitiveRegistry).forEach(candidate ->
+                    pushdowns.add(new StaticPredicatePushdown(
+                            candidate.terms(),
+                            source.pushStaticFilter(candidate.filter()))));
         }
+        this.staticPredicatePushdowns = List.copyOf(pushdowns);
     }
 
     /**
      * Extracts an exact {@code BIGINT input = integral literal} predicate as a scan filter. The original filter stays
-     * in this operator, so this is a conservative physical pushdown rather than a semantic rewrite.
+     * unless the source explicitly accepts complete semantic enforcement.
      */
     static Optional<DynamicFilter> staticLongEqualityFilter(EvaluationPlan plan, MaskExpression predicateMask, PrimitiveRegistry primitiveRegistry)
+    {
+        return staticLongEqualityCandidate(plan, predicateMask, primitiveRegistry).map(StaticFilterCandidate::filter);
+    }
+
+    private static List<StaticFilterCandidate> staticLongEqualityCandidates(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        return conjunctiveTerms(predicateMask)
+                .map(term -> staticLongEqualityCandidate(plan, term, primitiveRegistry).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    static List<DynamicFilter> staticLongEqualityFilters(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        return staticLongEqualityCandidates(plan, predicateMask, primitiveRegistry).stream()
+                .map(StaticFilterCandidate::filter)
+                .toList();
+    }
+
+    private static Optional<StaticFilterCandidate> staticLongEqualityCandidate(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
     {
         if (!(predicateMask instanceof ReferenceMask(Reference(Variable predicate, Stream stream))) || stream != Stream.VALUES) {
             return Optional.empty();
@@ -132,7 +172,8 @@ public class FilterOperator
         return provider.orElseThrow()
                 .staticLongEquality(new EvaluatorFunctionCallSite(call, plan, primitiveRegistry))
                 .filter(equality -> equality.inputArgument() < call.arguments().size())
-                .flatMap(equality -> dynamicFilter(call.arguments().get(equality.inputArgument()), equality.value()));
+                .flatMap(equality -> dynamicFilter(call.arguments().get(equality.inputArgument()), equality.value()))
+                .map(filter -> new StaticFilterCandidate(filter, List.of(predicateMask)));
     }
 
     private static Optional<DynamicFilter> dynamicFilter(Reference inputReference, long value)
@@ -154,10 +195,20 @@ public class FilterOperator
     }
 
     /**
-     * Extracts inclusive long domains from registry-owned range metadata. The logical predicate remains in this
-     * operator, so a source may conservatively prune decode work without becoming responsible for query semantics.
+     * Extracts inclusive long domains from registry-owned range metadata. The logical predicate remains unless the
+     * source explicitly accepts complete semantic enforcement.
      */
     static List<DynamicFilter> staticLongRangeFilters(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        return staticLongRangeCandidates(plan, predicateMask, primitiveRegistry).stream()
+                .map(StaticFilterCandidate::filter)
+                .toList();
+    }
+
+    private static List<StaticFilterCandidate> staticLongRangeCandidates(
             EvaluationPlan plan,
             MaskExpression predicateMask,
             PrimitiveRegistry primitiveRegistry)
@@ -167,11 +218,21 @@ public class FilterOperator
                 .filter(range -> range.input().stream() == Stream.VALUES)
                 .filter(range -> range.lowerExclusive() != Long.MAX_VALUE)
                 .filter(range -> range.upperExclusive() != Long.MIN_VALUE)
-                .map(range -> DynamicFilter.fromRange(
-                        ((Input) range.input().producer()).index(),
-                        range.lowerExclusive() + 1,
-                        range.upperExclusive() - 1))
+                .map(range -> new StaticFilterCandidate(
+                        DynamicFilter.fromRange(
+                                ((Input) range.input().producer()).index(),
+                                range.lowerExclusive() + 1,
+                                range.upperExclusive() - 1),
+                        range.terms()))
                 .toList();
+    }
+
+    private static java.util.stream.Stream<MaskExpression> conjunctiveTerms(MaskExpression expression)
+    {
+        if (expression instanceof org.weakref.nitro.operator.evaluator.ir.AndMask(List<MaskExpression> terms)) {
+            return terms.stream().flatMap(FilterOperator::conjunctiveTerms);
+        }
+        return java.util.stream.Stream.of(expression);
     }
 
     @Override
@@ -199,7 +260,10 @@ public class FilterOperator
         BatchState batchState = new BatchState(sourceBatch);
         currentBatchState = batchState;
         Mask batchMask = allocator.copyMask(allocationContext, sourceBatch.borrowMask());
-        batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
+        MaskExpression predicateMask = effectivePredicateMask();
+        if (predicateMask != AllMask.ALL) {
+            batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
+        }
         batchState.ownedMask(batchMask);
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
@@ -209,6 +273,49 @@ public class FilterOperator
 
         return Batch.forwarding(batchMask, batchState, sourceBatch);
     }
+
+    private MaskExpression effectivePredicateMask()
+    {
+        if (effectivePredicateMask != null) {
+            return effectivePredicateMask;
+        }
+        Set<MaskExpression> enforcedTerms = staticPredicatePushdowns.stream()
+                .filter(pushdown -> pushdown.enforcement().enforced())
+                .flatMap(pushdown -> pushdown.terms().stream())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        MaskExpression residual = removeEnforcedConjuncts(originalPredicateMask, enforcedTerms);
+        effectivePredicateMask = RangeConstraintLowerer.lower(
+                evaluationPlan,
+                primitiveRegistry,
+                residual,
+                policy.fuseConstantRanges());
+        return effectivePredicateMask;
+    }
+
+    private static MaskExpression removeEnforcedConjuncts(MaskExpression expression, Set<MaskExpression> enforcedTerms)
+    {
+        if (enforcedTerms.contains(expression)) {
+            return AllMask.ALL;
+        }
+        if (!(expression instanceof org.weakref.nitro.operator.evaluator.ir.AndMask(List<MaskExpression> terms))) {
+            return expression;
+        }
+        List<MaskExpression> residual = terms.stream()
+                .map(term -> removeEnforcedConjuncts(term, enforcedTerms))
+                .filter(term -> term != AllMask.ALL)
+                .toList();
+        return switch (residual.size()) {
+            case 0 -> AllMask.ALL;
+            case 1 -> residual.getFirst();
+            default -> new org.weakref.nitro.operator.evaluator.ir.AndMask(residual);
+        };
+    }
+
+    private record StaticFilterCandidate(DynamicFilter filter, List<MaskExpression> terms) {}
+
+    private record StaticPredicatePushdown(
+            List<MaskExpression> terms,
+            StaticFilterEnforcement enforcement) {}
 
     @Override
     public void constrain(Mask mask)

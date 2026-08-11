@@ -141,6 +141,19 @@ public interface Operator
     default void pushDynamicFilter(DynamicFilter filter) {}
 
     /**
+     * Offers an exact static predicate to the source and returns its eventual enforcement result.
+     *
+     * <p>The caller must retain its residual predicate unless the returned negotiation reports full enforcement.
+     * Operators which only support pruning may use the default: it still forwards the domain through the ordinary
+     * dynamic-filter path but never transfers semantic responsibility.
+     */
+    default StaticFilterEnforcement pushStaticFilter(DynamicFilter filter)
+    {
+        pushDynamicFilter(filter);
+        return StaticFilterEnforcement.residual();
+    }
+
+    /**
      * Returns whether this operator can forward or consume a dynamic filter before it is read.
      *
      * <p>This is a physical capability, not a promise that a particular filter will be selective. It lets generic

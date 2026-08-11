@@ -391,6 +391,37 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourceEnforcesExactNonNullLongDomain()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("nitro-enforced-domain.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, false, null),
+                new ParquetRow(30, true, 300L)));
+        Schema schema = new Schema(List.of(new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            assertThat(source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 300, 300)),
+                    false).withoutResidual()))
+                    .isEqualTo(RuntimeFilterAcceptance.ENFORCED);
+
+            try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(batch.selection().count()).isEqualTo(1);
+                assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values()).startsWith(300L);
+            }
+            assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
     void testLateRuntimeFilterDoesNotEnterRowLevelFilteringMidPage()
             throws IOException
     {
@@ -534,7 +565,7 @@ public class TestParquetOperator
             RuntimeFilterAcceptance acceptance = source.addRuntimeFilter(new RuntimeFilter(
                     source.column(0),
                     new TestingTypedLongDomain(source.column(0).type(), DynamicFilter.fromRange(0, 100, 100)),
-                    false));
+                    false).withoutResidual());
 
             assertThat(acceptance).isEqualTo(RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL);
             try (var batch = ((SourcePoll.Ready) source.poll()).batch()) {

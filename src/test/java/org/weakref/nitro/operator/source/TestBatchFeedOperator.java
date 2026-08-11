@@ -33,6 +33,7 @@ import org.weakref.nitro.operator.Batch;
 import org.weakref.nitro.operator.DynamicFilter;
 import org.weakref.nitro.operator.GroupIdOperator;
 import org.weakref.nitro.operator.Output;
+import org.weakref.nitro.operator.StaticFilterEnforcement;
 
 import java.util.List;
 import java.util.Set;
@@ -287,7 +288,9 @@ class TestBatchFeedOperator
             public RuntimeFilterAcceptance addRuntimeFilter(RuntimeFilter filter)
             {
                 applied.set(filter);
-                return RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL;
+                return filter.residualRequired()
+                        ? RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL
+                        : RuntimeFilterAcceptance.ENFORCED;
             }
 
             @Override
@@ -311,6 +314,14 @@ class TestBatchFeedOperator
             assertThat(domain.test(10)).isTrue();
             assertThat(domain.test(12)).isTrue();
             assertThat(domain.test(13)).isFalse();
+
+            StaticFilterEnforcement enforcement = feed.pushStaticFilter(DynamicFilter.fromRange(0, 20, 22));
+            assertThat(enforcement.enforced()).isFalse();
+            assertThat(feed.applyDynamicFilters(source)).containsExactly(
+                    RuntimeFilterAcceptance.ACCEPTED_WITH_RESIDUAL,
+                    RuntimeFilterAcceptance.ENFORCED);
+            assertThat(applied.get().residualRequired()).isFalse();
+            assertThat(enforcement.enforced()).isTrue();
         }
     }
 

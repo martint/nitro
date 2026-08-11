@@ -71,6 +71,7 @@ public final class RangeConstraintLowerer
                 continue;
             }
             LongBounds range = ranges.computeIfAbsent(bound.input(), _ -> new LongBounds());
+            range.terms.add(bound.term());
             switch (bound.position()) {
                 case LOWER_EXCLUSIVE ->
                         range.lowerExclusive = range.lowerExclusive == null ? value : Math.max(range.lowerExclusive, value);
@@ -84,7 +85,8 @@ public final class RangeConstraintLowerer
                 .map(entry -> new LongRange(
                         entry.getKey(),
                         entry.getValue().lowerExclusive,
-                        entry.getValue().upperExclusive))
+                        entry.getValue().upperExclusive,
+                        List.copyOf(entry.getValue().terms)))
                 .toList();
     }
 
@@ -162,6 +164,7 @@ public final class RangeConstraintLowerer
             return null;
         }
         return new BoundRange(
+                expression,
                 call.arguments().get(bound.inputArgument()),
                 bound.bound(),
                 bound.position(),
@@ -169,16 +172,18 @@ public final class RangeConstraintLowerer
     }
 
     private record BoundRange(
+            MaskExpression term,
             Reference input,
             Object bound,
             RangeConstraint.Position position,
             RangeConstraint.Kernel kernel) {}
 
-    public record LongRange(Reference input, long lowerExclusive, long upperExclusive) {}
+    public record LongRange(Reference input, long lowerExclusive, long upperExclusive, List<MaskExpression> terms) {}
 
     private static final class LongBounds
     {
         private Long lowerExclusive;
         private Long upperExclusive;
+        private final java.util.ArrayList<MaskExpression> terms = new java.util.ArrayList<>();
     }
 }

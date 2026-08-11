@@ -164,6 +164,37 @@ class TestDynamicFilter
     }
 
     @Test
+    void extractsEachStaticLongEqualityConjunct()
+    {
+        Variable firstLiteral = new Variable(0);
+        Variable secondLiteral = new Variable(1);
+        Variable firstEquals = new Variable(2);
+        Variable secondEquals = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(firstLiteral, new Literal(42L), AllMask.ALL),
+                new Assignment(secondLiteral, new Literal(7L), AllMask.ALL),
+                new Assignment(firstEquals, new Call("eq", List.of(
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(firstLiteral, Stream.VALUES))), AllMask.ALL),
+                new Assignment(secondEquals, new Call("eq", List.of(
+                        new Reference(new Input(5), Stream.VALUES),
+                        new Reference(secondLiteral, Stream.VALUES))), AllMask.ALL)), List.of());
+        AndMask predicate = new AndMask(List.of(
+                new ReferenceMask(new Reference(firstEquals, Stream.VALUES)),
+                new ReferenceMask(new Reference(secondEquals, Stream.VALUES))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("eq", new EqualI64(), new EqualI64Optimization());
+
+        List<DynamicFilter> filters = FilterOperator.staticLongEqualityFilters(plan, predicate, registry);
+
+        assertThat(filters).hasSize(2);
+        assertThat(filters.get(0).column()).isEqualTo(3);
+        assertThat(filters.get(0).accepts(42)).isTrue();
+        assertThat(filters.get(1).column()).isEqualTo(5);
+        assertThat(filters.get(1).accepts(7)).isTrue();
+    }
+
+    @Test
     void extractsRegistryLoweredStaticLongRange()
     {
         Variable lowerLiteral = new Variable(0);

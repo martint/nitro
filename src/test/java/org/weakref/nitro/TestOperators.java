@@ -24,6 +24,7 @@ import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
 import org.weakref.nitro.core.function.projection.ProjectionCodeProvider;
 import org.weakref.nitro.core.function.projection.ProjectionProgram;
+import org.weakref.nitro.core.source.RuntimeFilterAcceptance;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -80,6 +81,7 @@ import org.weakref.nitro.operator.ProjectOperator;
 import org.weakref.nitro.operator.RankWindowFunction;
 import org.weakref.nitro.operator.SemiJoinOperator;
 import org.weakref.nitro.operator.SortOperator;
+import org.weakref.nitro.operator.StaticFilterEnforcement;
 import org.weakref.nitro.operator.TableOperator;
 import org.weakref.nitro.operator.TopNOperator;
 import org.weakref.nitro.operator.TopNRankingOperator;
@@ -3797,6 +3799,45 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(1L, 10L),
                         row(2L, 20L)));
+    }
+
+    @Test
+    void testFilterOperatorRemovesPredicateExplicitlyEnforcedBySource()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literal = new Variable(0);
+        Variable predicate = new Variable(1);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(List.of(
+                new Assignment(literal, new Literal(2L), AllMask.ALL),
+                new Assignment(predicate, new Call("eq", List.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        new Reference(literal, Stream.VALUES))), AllMask.ALL)), List.of());
+        ConstantTableOperator source = new ConstantTableOperator(
+                allocator,
+                1,
+                List.of(row(1L), row(2L), row(3L)))
+        {
+            @Override
+            public StaticFilterEnforcement pushStaticFilter(org.weakref.nitro.operator.DynamicFilter filter)
+            {
+                assertThat(filter.column()).isZero();
+                assertThat(filter.accepts(2)).isTrue();
+                StaticFilterEnforcement enforcement = StaticFilterEnforcement.pending();
+                enforcement.complete(RuntimeFilterAcceptance.ENFORCED);
+                return enforcement;
+            }
+        };
+
+        // The mock source deliberately leaves its rows unchanged. Seeing all rows proves that FilterOperator removed
+        // exactly the predicate whose source-enforcement negotiation completed successfully.
+        assertThat(operator(new FilterOperator(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                new Reference(predicate, Stream.VALUES),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter())))
+                .matchesExactly(List.of(row(1L), row(2L), row(3L)));
     }
 
     @Test
