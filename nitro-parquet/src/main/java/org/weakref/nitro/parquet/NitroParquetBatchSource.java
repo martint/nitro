@@ -153,6 +153,7 @@ public final class NitroParquetBatchSource
     private final Schema outputSchema;
     private final SourceColumnHandle[] sourceColumns;
     private final ParquetFile[] files;
+    private final ParquetMappedFileCache.Lease[] mappedFileLeases;
     private final ColumnReader[] readers;
     private final ColumnReader[] nullReaders;
     private final boolean[] nullable;
@@ -399,10 +400,15 @@ public final class NitroParquetBatchSource
         }
         checkArgument(!splits.isEmpty(), "splits is empty");
 
-        this.files = splits.stream()
-                .map(Split::path)
-                .map(path -> ParquetFile.open(path, arena, metadataCache))
-                .toArray(ParquetFile[]::new);
+        this.mappedFileLeases = new ParquetMappedFileCache.Lease[splits.size()];
+        this.files = new ParquetFile[splits.size()];
+        for (int file = 0; file < splits.size(); file++) {
+            Path path = splits.get(file).path();
+            mappedFileLeases[file] = resources.acquireMappedFile(path);
+            files[file] = mappedFileLeases[file] == null
+                    ? ParquetFile.open(path, arena, metadataCache)
+                    : mappedFileLeases[file].file();
+        }
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
         this.nullReaders = new ColumnReader[columnCount];
@@ -2428,8 +2434,13 @@ public final class NitroParquetBatchSource
                 reader.close();
             }
         }
-        for (ParquetFile file : files) {
-            file.close();
+        for (int file = 0; file < files.length; file++) {
+            if (mappedFileLeases[file] == null) {
+                files[file].close();
+            }
+            else {
+                mappedFileLeases[file].close();
+            }
         }
         arena.close();
         if (decompressedPageCacheLease != null) {

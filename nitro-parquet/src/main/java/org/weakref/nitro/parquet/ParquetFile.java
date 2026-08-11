@@ -96,6 +96,11 @@ public final class ParquetFile
         return open(path, arenaPolicy.createArena(), true);
     }
 
+    static ParquetFile open(Path path, ParquetArenaPolicy arenaPolicy, ParquetMetadataCache metadataCache)
+    {
+        return open(path, arenaPolicy.createArena(), true, requireNonNull(metadataCache, "metadataCache is null"));
+    }
+
     static ParquetFile open(Path path, Arena arena)
     {
         return open(path, arena, false, null);

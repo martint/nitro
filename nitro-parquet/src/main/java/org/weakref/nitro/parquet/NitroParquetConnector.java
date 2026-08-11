@@ -66,6 +66,7 @@ public final class NitroParquetConnector
     public void close()
     {
         closed = true;
+        resources.close();
     }
 
     private void requireOpen()

@@ -30,10 +30,12 @@ import static java.util.Objects.requireNonNull;
  * connector SPI.
  */
 public final class NitroParquetScanResources
+        implements AutoCloseable
 {
     private final Object batchBufferPool = new Object();
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final ParquetMetadataCache metadataCache;
+    private final ParquetMappedFileCache mappedFileCache;
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final ParquetReaderPolicy readerPolicy;
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
@@ -150,6 +152,39 @@ public final class NitroParquetScanResources
             ParquetMetadataCachePolicy metadataCachePolicy,
             ParquetRuntimeFilterPolicy runtimeFilterPolicy)
     {
+        this(
+                decompressedPageCachePolicy,
+                readerPolicy,
+                numericDecodeAdmissionPolicy,
+                lateMaterializationPolicy,
+                progressiveFilterCompactionPolicy,
+                filteredPayloadPolicy,
+                filterWindowPolicy,
+                filterEvaluationPolicy,
+                diagnostics,
+                batchPolicy,
+                arenaPolicy,
+                metadataCachePolicy,
+                runtimeFilterPolicy,
+                ParquetMappedFileCachePolicy.defaults());
+    }
+
+    public NitroParquetScanResources(
+            DecompressedPageCachePolicy decompressedPageCachePolicy,
+            ParquetReaderPolicy readerPolicy,
+            ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy,
+            ParquetLateMaterializationPolicy lateMaterializationPolicy,
+            ParquetProgressiveFilterCompactionPolicy progressiveFilterCompactionPolicy,
+            ParquetFilteredPayloadPolicy filteredPayloadPolicy,
+            ParquetFilterWindowPolicy filterWindowPolicy,
+            ParquetFilterEvaluationPolicy filterEvaluationPolicy,
+            ParquetScanDiagnostics diagnostics,
+            ParquetScanBatchPolicy batchPolicy,
+            ParquetArenaPolicy arenaPolicy,
+            ParquetMetadataCachePolicy metadataCachePolicy,
+            ParquetRuntimeFilterPolicy runtimeFilterPolicy,
+            ParquetMappedFileCachePolicy mappedFileCachePolicy)
+    {
         this.decompressedPageCachePolicy = requireNonNull(decompressedPageCachePolicy, "decompressedPageCachePolicy is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.numericDecodeAdmissionPolicy = requireNonNull(numericDecodeAdmissionPolicy, "numericDecodeAdmissionPolicy is null");
@@ -163,6 +198,9 @@ public final class NitroParquetScanResources
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
         this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
         this.metadataCache = new ParquetMetadataCache(requireNonNull(metadataCachePolicy, "metadataCachePolicy is null"));
+        this.mappedFileCache = arenaPolicy.crossThread()
+                ? new ParquetMappedFileCache(metadataCache, requireNonNull(mappedFileCachePolicy, "mappedFileCachePolicy is null"))
+                : null;
         this.runtimeFilterPolicy = requireNonNull(runtimeFilterPolicy, "runtimeFilterPolicy is null");
     }
 
@@ -229,6 +267,25 @@ public final class NitroParquetScanResources
     ParquetMetadataCache metadataCache()
     {
         return metadataCache;
+    }
+
+    ParquetMappedFileCache.Lease acquireMappedFile(java.nio.file.Path path)
+    {
+        if (mappedFileCache == null) {
+            return null;
+        }
+        return mappedFileCache.acquire(path);
+    }
+
+    @Override
+    public synchronized void close()
+    {
+        if (!decompressedPageCaches.isEmpty()) {
+            throw new IllegalStateException("Parquet scan resources closed with active page caches");
+        }
+        if (mappedFileCache != null) {
+            mappedFileCache.close();
+        }
     }
 
     DecompressedPageCachePolicy decompressedPageCachePolicy()
