@@ -2055,7 +2055,7 @@ public class Allocator
             for (Vector vector : inUseVectors) {
                 Object family = vector.poolFamily();
                 if (family != null) {
-                    addVectorToPool(family, vector.poolCapacity(), maxRetained(vector), vector);
+                    addVectorToPoolAtContextRelease(family, vector.poolCapacity(), maxRetained(vector), vector);
                 }
                 else {
                     allocator.releaseResident(vector.retainedBytes());
@@ -2073,6 +2073,33 @@ public class Allocator
             inUseVectorCounts.clear();
             releaseRetainedBytes();
             stats.release();
+        }
+
+        private void addVectorToPoolAtContextRelease(Object family, int capacity, int maxRetained, Vector vector)
+        {
+            if (compatibilityActive()) {
+                addVectorToPool(family, capacity, maxRetained, vector);
+                return;
+            }
+            if (maxRetained <= 0 || allocator.policy.maxLocalVectorPoolBytes() <= 0) {
+                allocator.releaseResident(vector.retainedBytes());
+                return;
+            }
+            int retentionLimit = Math.max(maxRetained, vectorHighWater.getOrDefault(family, 0));
+            ArrayDeque<Vector> order = pool.vectorPoolOrder.get(family);
+            long retainedBytes = vector.retainedBytes();
+            if ((order != null && order.size() >= retentionLimit) ||
+                    retainedBytes > allocator.policy.maxLocalVectorPoolBytes() - pool.vectorPoolBytes) {
+                allocator.releaseResident(retainedBytes);
+                return;
+            }
+            pool.vectorPool
+                    .computeIfAbsent(family, _ -> new TreeMap<>())
+                    .computeIfAbsent(capacity, _ -> new ArrayDeque<>())
+                    .addLast(vector);
+            pool.vectorPoolOrder.computeIfAbsent(family, _ -> new ArrayDeque<>()).addLast(vector);
+            pool.vectorPoolGlobalOrder.addLast(vector);
+            pool.vectorPoolBytes += retainedBytes;
         }
 
         public void discardAll()

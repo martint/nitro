@@ -819,6 +819,34 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testContextReleaseDoesNotChurnFullVectorPool()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Object poolGroup = new Object();
+        Allocator.Context pooledContext = new Allocator.Context("pooled", poolGroup);
+        Allocator.Context releasingContext = new Allocator.Context("releasing", poolGroup);
+
+        int maxRetained = new I64Vector(8).poolMaxRetained();
+        I64Vector residual = allocator.allocate(releasingContext, I64Vector.class, 8, I64Vector::new);
+        List<I64Vector> pooled = new ArrayList<>();
+        for (int index = 0; index < maxRetained; index++) {
+            pooled.add(allocator.allocate(pooledContext, I64Vector.class, 8, I64Vector::new));
+        }
+        for (I64Vector vector : pooled) {
+            allocator.release(pooledContext, vector);
+        }
+
+        allocator.release(releasingContext);
+
+        List<I64Vector> borrowed = new ArrayList<>();
+        for (int index = 0; index < maxRetained; index++) {
+            borrowed.add(allocator.allocate(pooledContext, I64Vector.class, 8, I64Vector::new));
+        }
+        assertThat(borrowed).containsExactlyInAnyOrderElementsOf(pooled);
+        assertThat(borrowed).doesNotContain(residual);
+    }
+
+    @Test
     void testAllocatorRetainsBinaryVectorWorkingSetBeyondStaticFamilyDefault()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
