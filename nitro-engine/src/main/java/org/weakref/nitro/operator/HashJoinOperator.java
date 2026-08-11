@@ -1976,9 +1976,8 @@ public class HashJoinOperator
             return genericJoinIndexes.structural(structuralKeyKernels);
         }
         if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-            // For a key-only build, duplicate rows have identical output values. Preserve their exact multiplicity
-            // through the existing chains, but avoid eagerly copying every reference into CSR form before a probe
-            // whose output may be tiny (q84 builds 2.9M rows and emits about 1.2K matches).
+            // When no build output or residual filter can observe a physical row, preserve duplicate multiplicity
+            // without retaining each otherwise-unused reference. Payload-bearing joins retain exact references.
             return new LongJoinIndex(
                     joinIndexPolicy,
                     outputPolicy,
@@ -1991,7 +1990,7 @@ public class HashJoinOperator
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
                     directRangeBuild,
-                    false,
+                    canStreamUnusedBuildPayload(),
                     buildPolicy.batchSingleLongBuild());
         }
         return genericJoinIndexes.create(
@@ -4221,7 +4220,10 @@ public class HashJoinOperator
             this.directLookup = new DirectLongJoinLookup(arrayPool, NO_MATCH_ROW_REFERENCE);
             this.compactedRows = new CompactedJoinRows(arrayPool, EMPTY);
             this.compactChains = policy.compactChains() && !keyOnlyBuild;
-            this.compressDuplicateReferences = keyOnlyBuild && policy.compressKeyOnlyDuplicates();
+            // Collapsing duplicate references is safe only when the physical build row is unobservable. Merely
+            // having no non-key build columns is not enough: a projected build key still needs a valid reference
+            // into its originating batch, particularly when a multi-batch build feeds another join.
+            this.compressDuplicateReferences = buildRowReferencesUnused && policy.compressKeyOnlyDuplicates();
             this.expectedBuildRows = expectedSize;
             int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             int capacity = 16;

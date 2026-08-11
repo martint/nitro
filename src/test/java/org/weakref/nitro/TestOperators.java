@@ -5752,6 +5752,22 @@ public class TestOperators
     }
 
     @Test
+    void testHashJoinRetainsExactReferencesWhenProjectingBuildKeysAcrossBatches()
+    {
+        assertThat(operator(
+                new HashJoinOperator(
+                        allocator,
+                        new ConstantTableOperator(allocator, 1, List.of(row(7L), row(8L), row(9L))),
+                        0,
+                        new GeneratorOperator(allocator, 8, 4, List.of(new SequenceGenerator(7, 9))),
+                        0)
+                        .withOutputs(0, 1)))
+                .matchesExactly(List.of(
+                        row(7L, 7L), row(7L, 7L), row(7L, 7L), row(7L, 7L),
+                        row(8L, 8L), row(8L, 8L), row(8L, 8L), row(8L, 8L)));
+    }
+
+    @Test
     void testHashJoinDirectRangeBuildPreservesMultipleSparseDuplicateGroups()
     {
         assertThat(operator(
