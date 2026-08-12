@@ -299,6 +299,18 @@ final class FlatGroupingTable
                 result.values());
     }
 
+    long assignNormalizedIntBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
+        considerSparseCompositeAdmission(mask);
+        return layout.assignNormalizedIntBatch(this, values, nulls, mask, nextGroupId, result.values());
+    }
+
     /** Position-list counterpart used when a caller has already removed rows that will not probe the table. */
     public void prepareBatchHashes(Vector[] values, Vector[] nulls, int[] positions, int positionCount)
     {
@@ -693,6 +705,35 @@ final class FlatGroupingTable
             rehash();
         }
         return newGroupId;
+    }
+
+    long assignNormalizedGroup(
+            Vector[] values,
+            Vector[] nulls,
+            int position,
+            long newGroupId,
+            long normalizedFirst,
+            long normalizedSecond)
+    {
+        if (policy.debugNormalizedIntKey()) {
+            normalizedInputCount++;
+        }
+        long hash = FlatKeyLayout.normalizedIntKeyHash(normalizedFirst, normalizedSecond);
+        int index = getIndex(values, nulls, position, hash, true, normalizedFirst, normalizedSecond);
+        if (index >= 0) {
+            return identityGroupIds ? recordIndexByHash(index) : groupIdsByHash[index];
+        }
+        addNewGroup(-index - 1, values, nulls, position, hash, newGroupId, true, normalizedFirst, normalizedSecond);
+        if (nextRecordIndex >= maxFill) {
+            rehash();
+        }
+        return newGroupId;
+    }
+
+    long assignGroupWithoutNormalization(Vector[] values, Vector[] nulls, int position, long newGroupId)
+    {
+        long hash = layout.hash(values, nulls, position);
+        return assignGroupWithHash(values, nulls, position, newGroupId, hash);
     }
 
     private void cacheSingleDictionaryGroup(int dictionaryId, long groupId)

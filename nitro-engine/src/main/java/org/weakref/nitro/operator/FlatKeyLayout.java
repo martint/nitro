@@ -532,35 +532,7 @@ class FlatKeyLayout
                 encoded = (int) value + 1;
             }
             else {
-                int[] ids = batchDictionaryIds[index];
-                int valueId;
-                if (fieldIdComparable[index] && ids != null) {
-                    valueId = globalIdFor(index, ids[position]);
-                }
-                else {
-                    BinaryVector binary = fieldBinaryBase[index];
-                    if (binary == null) {
-                        return false;
-                    }
-                    int physicalPosition = binaryEntry(index, position);
-                    ValueIdInterner interner = fieldInterners[index];
-                    if (interner == null) {
-                        interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
-                        fieldInterners[index] = interner;
-                    }
-                    valueId = interner.intern(binary.data(), binary.startOffset(physicalPosition), binary.length(physicalPosition));
-                }
-                if (valueId < 0) {
-                    BinaryVector binary = fieldBinaryBase[index];
-                    if (binary == null) {
-                        return false;
-                    }
-                    int physicalPosition = binaryEntry(index, position);
-                    valueId = fieldInterners[index].find(
-                            binary.data(),
-                            binary.startOffset(physicalPosition),
-                            binary.length(physicalPosition));
-                }
+                int valueId = normalizedBinaryValueId(index, position);
                 if (valueId < 0 || valueId >= Integer.MAX_VALUE) {
                     return false;
                 }
@@ -578,6 +550,85 @@ class FlatKeyLayout
         return true;
     }
 
+    private int normalizedBinaryValueId(int fieldIndex, int position)
+    {
+        int[] ids = batchDictionaryIds[fieldIndex];
+        int valueId;
+        if (fieldIdComparable[fieldIndex] && ids != null) {
+            valueId = globalIdFor(fieldIndex, ids[position]);
+        }
+        else {
+            BinaryVector binary = fieldBinaryBase[fieldIndex];
+            if (binary == null) {
+                return -1;
+            }
+            int physicalPosition = binaryEntry(fieldIndex, position);
+            ValueIdInterner interner = fieldInterners[fieldIndex];
+            if (interner == null) {
+                interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+                fieldInterners[fieldIndex] = interner;
+            }
+            valueId = interner.intern(binary.data(), binary.startOffset(physicalPosition), binary.length(physicalPosition));
+        }
+        if (valueId >= 0) {
+            return valueId;
+        }
+        BinaryVector binary = fieldBinaryBase[fieldIndex];
+        if (binary == null) {
+            return -1;
+        }
+        int physicalPosition = binaryEntry(fieldIndex, position);
+        return fieldInterners[fieldIndex].find(
+                binary.data(),
+                binary.startOffset(physicalPosition),
+                binary.length(physicalPosition));
+    }
+
+    long assignNormalizedIntBatch(
+            FlatGroupingTable table,
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            long nextGroupId,
+            long[] output)
+    {
+        if (!batchNormalizedIntKeyEligible || mask.none()) {
+            return -1;
+        }
+        int requiredSize = mask.maxPosition() + 1;
+        for (int field = 0; field < fieldKinds.length; field++) {
+            if (fieldKinds[field] != FlatTypeHandler.Kind.BINARY || batchFieldAllNull[field]) {
+                continue;
+            }
+            int[] positioned = batchPositionGlobalId[field];
+            if (positioned == null || positioned.length < requiredSize) {
+                int[] previous = positioned;
+                positioned = borrowInts(requiredSize);
+                batchPositionGlobalId[field] = positioned;
+                release(previous);
+            }
+            for (int position : mask) {
+                if (!batchFieldNullFree[field] && fieldNullAccess[field].value(position)) {
+                    continue;
+                }
+                positioned[position] = normalizedBinaryValueId(field, position);
+            }
+        }
+
+        long shape = NormalizedIntGroupingKernelGenerator.shape(fieldKinds, batchFieldNullFree, batchFieldAllNull);
+        return codeGeneration.normalizedIntGrouping().create(shape).assign(
+                mask.selectedPositions(),
+                mask.selectedCount(),
+                fieldLong,
+                batchPositionGlobalId,
+                fieldNullAccess,
+                table,
+                values,
+                nulls,
+                nextGroupId,
+                output);
+    }
+
     long preparedNormalizedFirst()
     {
         return preparedNormalizedFirst;
@@ -590,13 +641,11 @@ class FlatKeyLayout
 
     boolean supportsNormalizedRecordWrite()
     {
-        // A normalized lookup can be declined by a later row or batch (for example after a value-id interner
-        // reaches its ceiling). All-long normalized records are still exact ordinary records, but an id-only
-        // binary record cannot satisfy the ensuing byte-oriented fallback without relying on transient batch
-        // representation state. Retain exact binary records while continuing to use the normalized lanes for
-        // hashing and equality whenever both sides admit them.
+        // Query-stable binary ids are exact record values: idOnlyBinaryEquals compares a later flat/overflowing
+        // probe directly with the interner-owned bytes, and grouped output reconstructs the value from the same
+        // owner. A later row may therefore decline normalization without forcing normalized records to retain a
+        // second variable-width copy. All-long layouts use the same writer for their provider-owned field widths.
         return normalizedIntKeyShape &&
-                !anyVariableWidth &&
                 policy.idOnlyBinaryRecords() &&
                 embedIdOnlyBinaryIds;
     }

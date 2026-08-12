@@ -1372,6 +1372,12 @@ final class GroupingState
                 nextGroupId = generatedNextGroupId;
                 return;
             }
+            long normalizedNextGroupId = flatGroupingTable.assignNormalizedIntBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (normalizedNextGroupId >= 0) {
+                nextGroupId = normalizedNextGroupId;
+                return;
+            }
             flatGroupingTable.prepareBatchHashes(values, nulls, mask);
             long batchNextGroupId = flatGroupingTable.assignMixedComposite3Batch(
                     values, nulls, mask, result, nextGroupId);

@@ -2106,8 +2106,8 @@ public class TestOperatorBatches
 
         Batch batch = operator.next();
         int rowCount = batch.borrowMask().count();
-        BinaryVector stateKeys = (BinaryVector) batch.output(0).borrow(Stream.VALUES);
-        BinaryVector countyKeys = (BinaryVector) batch.output(1).borrow(Stream.VALUES);
+        Vector stateKeys = batch.output(0).borrow(Stream.VALUES);
+        Vector countyKeys = batch.output(1).borrow(Stream.VALUES);
         I64Vector hierarchyKeys = (I64Vector) batch.output(2).borrow(Stream.VALUES);
         I64Vector counts = (I64Vector) batch.output(3).borrow(Stream.VALUES);
 

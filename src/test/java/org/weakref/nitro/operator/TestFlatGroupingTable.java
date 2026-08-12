@@ -1972,7 +1972,7 @@ class TestFlatGroupingTable
         Vector[] nulls = {null, null, null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
-        assertThat(layout.supportsNormalizedRecordWrite()).isFalse();
+        assertThat(layout.supportsNormalizedRecordWrite()).isTrue();
         FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
         Allocator allocator = new Allocator(engineResources);
         Allocator.Context allocationContext = new Allocator.Context("normalizedIntKeyOutput");
@@ -2020,6 +2020,45 @@ class TestFlatGroupingTable
         finally {
             table.releaseBuffers();
             allocator.release(allocationContext);
+        }
+    }
+
+    @Test
+    void testGeneratedNormalizedIntBatchHandlesSparseNullAndFallbackRows()
+    {
+        int size = 64;
+        int[] dictionaryIds = new int[size];
+        long[] first = new long[size];
+        long[] second = new long[size];
+        boolean[] binaryNulls = new boolean[size];
+        Arrays.fill(dictionaryIds, 1);
+        Arrays.fill(first, 7);
+        Arrays.fill(second, 11);
+        first[31] = -1;
+        binaryNulls[33] = true;
+        binaryNulls[35] = true;
+        Vector[] values = {
+                DictionaryVector.wrapNested(dictionaryIds, size, utf8("alpha", "beta")),
+                new I64Vector(first),
+                new I64Vector(second)};
+        Vector[] nulls = {new BooleanVector(binaryNulls), null, null};
+        Mask mask = Mask.sparse(new int[] {1, 3, 31, 33, 35}, size);
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, mask.selectedCount(), true);
+        I64Vector groups = new I64Vector(new long[size]);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(table.assignNormalizedIntBatch(values, nulls, mask, groups, 0)).isEqualTo(3);
+            table.endBatch();
+
+            assertThat(groups.values()[1]).isEqualTo(0);
+            assertThat(groups.values()[3]).isEqualTo(0);
+            assertThat(groups.values()[31]).isEqualTo(1);
+            assertThat(groups.values()[33]).isEqualTo(2);
+            assertThat(groups.values()[35]).isEqualTo(2);
+        }
+        finally {
+            table.releaseBuffers();
         }
     }
 
