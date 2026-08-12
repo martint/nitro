@@ -25,6 +25,9 @@ public final class HashJoinBuild
         implements AutoCloseable
 {
     private final HashJoinOperator owner;
+    private DynamicFilter exactDynamicFilter;
+    private int exactDynamicFilterColumn = -1;
+    private boolean exactDynamicFilterInitialized;
     private boolean closed;
 
     HashJoinBuild(HashJoinOperator owner)
@@ -46,6 +49,26 @@ public final class HashJoinBuild
             throw new IllegalStateException("Hash join build is closed");
         }
         return probeInput.shareLoadedNonRetainedBatches(owner.bufferedInner());
+    }
+
+    /**
+     * Returns an exact single-key build membership filter when the prepared join index can expose one without
+     * copying its keys. The returned immutable view remains valid until this build is closed.
+     */
+    public synchronized DynamicFilter exactDynamicFilter(int probeColumn)
+    {
+        if (closed) {
+            throw new IllegalStateException("Hash join build is closed");
+        }
+        if (!exactDynamicFilterInitialized) {
+            exactDynamicFilter = owner.exactBuildDynamicFilter(probeColumn);
+            exactDynamicFilterColumn = probeColumn;
+            exactDynamicFilterInitialized = true;
+        }
+        else if (exactDynamicFilterColumn != probeColumn) {
+            throw new IllegalArgumentException("Prepared build membership was already targeted to another probe column");
+        }
+        return exactDynamicFilter;
     }
 
     @Override

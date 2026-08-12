@@ -266,6 +266,38 @@ class TestHashJoinSession
     }
 
     @Test
+    void testPreparedBuildExposesExactMembershipWithoutCopyingKeys()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            long[] buildKeys = new long[256];
+            for (int index = 0; index < buildKeys.length; index++) {
+                buildKeys[index] = 100_000_000L + index * 10L;
+            }
+            try (HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(buildKeys),
+                            new int[] {0},
+                            false,
+                            new int[0])
+                    .orElseThrow()) {
+                DynamicFilter filter = build.exactDynamicFilter(3);
+
+                assertThat(filter).isNotNull();
+                assertThat(filter.column()).isEqualTo(3);
+                assertThat(filter.accepts(100_000_000)).isTrue();
+                assertThat(filter.accepts(100_000_010)).isTrue();
+                assertThat(filter.accepts(100_002_550)).isTrue();
+                assertThat(filter.accepts(100_000_011)).isFalse();
+            }
+        }
+    }
+
+    @Test
     void testPreparedProbeReusesCompactedBuildPayload()
     {
         try (EngineResources resources = EngineResources.createDefault();

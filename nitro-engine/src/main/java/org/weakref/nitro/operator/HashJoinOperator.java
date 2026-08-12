@@ -1156,6 +1156,14 @@ public class HashJoinOperator
         }
     }
 
+    DynamicFilter exactBuildDynamicFilter(int probeColumn)
+    {
+        if (joinIndex == null || outerJoinColumns.length != 1) {
+            return null;
+        }
+        return joinIndex.buildDynamicFilter(probeColumn);
+    }
+
     private void prepareProbeFirstBuildFilter()
     {
         if (!allowsLegacyKeyShortcuts ||
