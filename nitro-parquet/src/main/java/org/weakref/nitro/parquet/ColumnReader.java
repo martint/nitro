@@ -3158,6 +3158,74 @@ public final class ColumnReader
         return minimum <= maximum && domain.mayOverlap(minimum, maximum);
     }
 
+    /**
+     * Whether a dictionary-only numeric row group contains at least one value accepted by the domain.
+     *
+     * <p>Min/max metadata cannot reject a row group whose sparse dictionary straddles the requested range. Reading a
+     * bounded dictionary is still much cheaper than decoding its data pages. A row group with any non-dictionary data
+     * page, an unsupported physical carrier, or a dictionary above the construction-owned limit remains admitted.
+     */
+    public boolean dictionaryMayMatch(int index, LongDomain domain, int maxDictionaryValues)
+    {
+        requireNonNull(domain, "domain is null");
+        if (index < 0 || index >= chunks.size()) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        if (maxDictionaryValues == 0 || kind == Kind.BINARY || physicalType == Type.DOUBLE || flbaDecimal) {
+            return true;
+        }
+        Chunk chunk = chunks.get(index);
+        ColumnMetaData metadata = chunk.metadata();
+        if (!isOnlyDictionaryEncoded(metadata)) {
+            return true;
+        }
+        long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+        long limit = start + metadata.total_compressed_size;
+        long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+        if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxDictionaryValues) {
+            return true;
+        }
+        MemorySegment body = decompress(
+                chunk.segment(),
+                bodyPosition,
+                parsedCompressedSize,
+                parsedUncompressedSize,
+                metadata.codec);
+        for (int dictionaryIndex = 0; dictionaryIndex < parsedValueCount; dictionaryIndex++) {
+            long value = kind == Kind.INT
+                    ? body.get(LE_INT, (long) dictionaryIndex * Integer.BYTES)
+                    : body.get(LE_LONG, (long) dictionaryIndex * Long.BYTES);
+            if (domain.test(value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isOnlyDictionaryEncoded(ColumnMetaData metadata)
+    {
+        if (metadata.isSetEncoding_stats()) {
+            boolean dictionaryPage = false;
+            for (var encoding : metadata.getEncoding_stats()) {
+                if (encoding.getPage_type() == PageType.DICTIONARY_PAGE) {
+                    dictionaryPage = true;
+                }
+                else if ((encoding.getPage_type() == PageType.DATA_PAGE ||
+                        encoding.getPage_type() == PageType.DATA_PAGE_V2) &&
+                        encoding.getEncoding() != Encoding.PLAIN_DICTIONARY &&
+                        encoding.getEncoding() != Encoding.RLE_DICTIONARY) {
+                    return false;
+                }
+            }
+            return dictionaryPage;
+        }
+        return metadata.getEncodings().contains(Encoding.PLAIN_DICTIONARY) &&
+                metadata.getEncodings().stream().allMatch(encoding ->
+                        encoding == Encoding.PLAIN_DICTIONARY ||
+                                encoding == Encoding.RLE ||
+                                encoding == Encoding.BIT_PACKED);
+    }
+
     private long numericStatistic(byte[] value)
     {
         ByteBuffer buffer = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN);

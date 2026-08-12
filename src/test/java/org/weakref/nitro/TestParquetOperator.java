@@ -143,7 +143,7 @@ public class TestParquetOperator
     {
         return NitroParquetScanResources.createDefault(
                 org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
-                new ParquetRuntimeFilterPolicy(true, true, true));
+                new ParquetRuntimeFilterPolicy(true, true, true, 8_096));
     }
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
@@ -545,6 +545,52 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourcePrunesDictionaryDisjointRowGroupWithOverlappingStatistics()
+            throws IOException
+    {
+        List<Integer> disjointValues = new ArrayList<>();
+        List<Integer> matchingValues = new ArrayList<>();
+        for (int position = 0; position < 1_000; position++) {
+            disjointValues.add(position % 2 == 0 ? 1 : 100);
+            matchingValues.add(50);
+        }
+        java.nio.file.Path disjoint = writeIntStringParquetFile("dictionary-disjoint-row-group.parquet", disjointValues);
+        java.nio.file.Path matching = writeIntStringParquetFile("dictionary-matching-row-group.parquet", matchingValues);
+        Schema schema = Schema.unspecified(List.of("value"));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        executableRuntimeFilterResources(),
+                        allocator,
+                        List.of(disjoint, matching),
+                        schema)) {
+            DynamicFilter filter = DynamicFilter.fromRange(0, 50, 50);
+            source.addRuntimeFilter(new RuntimeFilter(
+                    source.column(0),
+                    new TestingTypedLongDomain(source.column(0).type(), filter),
+                    false));
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
+
+            List<Integer> values = new ArrayList<>();
+            SourcePoll poll = source.poll();
+            while (poll instanceof SourcePoll.Ready ready) {
+                try (var batch = ready.batch()) {
+                    I32Vector vector = (I32Vector) batch.column(0).borrow(Stream.VALUES);
+                    for (int index = 0; index < batch.selection().count(); index++) {
+                        values.add(vector.values()[batch.selection().position(index)]);
+                    }
+                }
+                poll = source.poll();
+            }
+
+            assertThat(poll).isSameAs(SourcePoll.Finished.FINISHED);
+            assertThat(metrics.completedPositions()).hasValue(1_000);
+            assertThat(values).hasSize(1_000).containsOnly(50);
+        }
+    }
+
+    @Test
     void testNitroParquetSourceKeepsRuntimeFilterAsResidualWhenPushdownDisabled()
             throws IOException
     {
@@ -558,7 +604,7 @@ public class TestParquetOperator
                 NitroParquetBatchSource source = new NitroParquetBatchSource(
                         NitroParquetScanResources.createDefault(
                                 org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
-                                new ParquetRuntimeFilterPolicy(false, false, false)),
+                                new ParquetRuntimeFilterPolicy(false, false, false, 0)),
                         allocator,
                         List.of(file),
                         schema)) {
@@ -826,7 +872,7 @@ public class TestParquetOperator
                 new WideNumericRow(10, 101, 102, 103, 104)));
         NitroParquetScanResources resources = NitroParquetScanResources.createDefault(
                 org.weakref.nitro.parquet.ParquetArenaPolicy.confined(),
-                new ParquetRuntimeFilterPolicy(true, true, true),
+                new ParquetRuntimeFilterPolicy(true, true, true, 8_096),
                 new ParquetScanBatchPolicy(4, 8, 8, 0.25));
 
         try (NitroParquetScanOperator scan = new NitroParquetScanOperator(

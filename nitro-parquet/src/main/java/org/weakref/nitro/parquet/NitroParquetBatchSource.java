@@ -741,8 +741,16 @@ public final class NitroParquetBatchSource
     {
         for (int column = 0; column < rowGroupFiltersByColumn.length; column++) {
             LongDomain filter = rowGroupFiltersByColumn[column];
-            if (filter != null && !readers[column].chunkMayMatch(index, filter)) {
-                return false;
+            if (filter != null) {
+                if (!readers[column].chunkMayMatch(index, filter)) {
+                    return false;
+                }
+                if (!readers[column].dictionaryMayMatch(
+                        index,
+                        filter,
+                        runtimeFilterPolicy.maxDictionaryPruningValues())) {
+                    return false;
+                }
             }
         }
         return true;

@@ -23,10 +23,18 @@ package org.weakref.nitro.parquet;
 public record ParquetRuntimeFilterPolicy(
         boolean rowGroupFiltering,
         boolean rowLevelFiltering,
-        boolean nullableRowLevelFiltering)
+        boolean nullableRowLevelFiltering,
+        int maxDictionaryPruningValues)
 {
+    public ParquetRuntimeFilterPolicy
+    {
+        if (maxDictionaryPruningValues < 0) {
+            throw new IllegalArgumentException("maxDictionaryPruningValues is negative");
+        }
+    }
+
     public static ParquetRuntimeFilterPolicy defaults()
     {
-        return new ParquetRuntimeFilterPolicy(true, true, true);
+        return new ParquetRuntimeFilterPolicy(true, true, true, 8_096);
     }
 }
