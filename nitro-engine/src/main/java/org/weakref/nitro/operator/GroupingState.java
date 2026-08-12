@@ -2642,6 +2642,27 @@ final class GroupingState
         if (dictionary != null) {
             return dictionary;
         }
+        if ((useFlatGrouping || sharedDictionaryFlatBacking) && outputMask.all()) {
+            int[] sourcePositions = arrayPool.borrowInts(size);
+            try {
+                for (int position = 0; position < size; position++) {
+                    sourcePositions[position] = sourceStart + position;
+                }
+                return flatGroupingTable.copyGroupedValuePositions(
+                        groupedColumnIndex,
+                        null,
+                        sourcePositions,
+                        0,
+                        size,
+                        0,
+                        size,
+                        allocator,
+                        allocationContext);
+            }
+            finally {
+                arrayPool.release(sourcePositions);
+            }
+        }
         if (structuralGrouping != null ||
                 useLongGrouping ||
                 usePackedIntPairGrouping ||
