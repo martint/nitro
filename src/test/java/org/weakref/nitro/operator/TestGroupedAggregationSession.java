@@ -480,6 +480,46 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testAdaptivePassthroughCanRetainDenseEncodedInput()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        control.enabled = false;
+        AtomicInteger inputCloses = new AtomicInteger();
+        DictionaryVector keys = new DictionaryVector(
+                new int[] {0, 1, 0, 1},
+                new I64Vector(new long[] {11, 22}));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            Batch input = new Batch(
+                    Mask.all(4),
+                    _ -> {},
+                    mask -> mask,
+                    _ -> {},
+                    inputCloses::incrementAndGet,
+                    Output.of(Streams.ofValues(keys)));
+
+            assertThat(session.addInputWithOwnership(input, 40))
+                    .isEqualTo(BatchAggregationSession.InputOwnership.SESSION);
+            assertThat(inputCloses).hasValue(0);
+            try (Batch result = session.getOutput()) {
+                assertThat(result.output(0).borrow(Stream.VALUES)).isSameAs(keys);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 1, 1, 1);
+            }
+            assertThat(inputCloses).hasValue(1);
+            assertThatIllegalStateException().isThrownBy(input::borrowMask);
+        }
+    }
+
+    @Test
     void testCardinalityObservationCanBypassBeforeGroupingStateIsBuilt()
     {
         TestingPartialAggregationControl control = new TestingPartialAggregationControl();

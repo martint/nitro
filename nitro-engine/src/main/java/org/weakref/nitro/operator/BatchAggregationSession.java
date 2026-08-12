@@ -21,6 +21,12 @@ import org.weakref.nitro.core.type.Schema;
 public interface BatchAggregationSession
         extends AutoCloseable
 {
+    enum InputOwnership
+    {
+        CALLER,
+        SESSION
+    }
+
     Schema outputSchema();
 
     void addInput(Batch batch);
@@ -28,6 +34,17 @@ public interface BatchAggregationSession
     default void addInput(Batch batch, long inputBytes)
     {
         addInput(batch);
+    }
+
+    /**
+     * Adds input while allowing the session to take ownership of the batch. A caller receiving
+     * {@link InputOwnership#SESSION} must not close the batch; the session or an output batch
+     * returned by it will close the input instead.
+     */
+    default InputOwnership addInputWithOwnership(Batch batch, long inputBytes)
+    {
+        addInput(batch, inputBytes);
+        return InputOwnership.CALLER;
     }
 
     default boolean hasOutput()

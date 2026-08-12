@@ -92,13 +92,18 @@ final class InitialAggregationBatchBuilder
 
     Batch build(Batch input, Mask inputMask)
     {
+        return build(input, inputMask, false);
+    }
+
+    private Batch build(Batch input, Mask inputMask, boolean retainInput)
+    {
         requireNonNull(input, "input is null");
         requireNonNull(inputMask, "inputMask is null");
         Allocator.Context context = new Allocator.Context(
                 "InitialAggregationBatch",
                 operatorResources.aggregation().bufferPoolGroup());
         try {
-            Batch direct = buildDirect(input, inputMask, context);
+            Batch direct = buildDirect(input, inputMask, context, retainInput);
             if (direct != null) {
                 return direct;
             }
@@ -150,7 +155,9 @@ final class InitialAggregationBatchBuilder
 
             Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
             for (int output = 0; output < groupedColumns.length; output++) {
-                outputs[output] = ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
+                outputs[output] = retainInput
+                        ? input.output(groupedColumns[output])
+                        : ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
             }
             long start = System.nanoTime();
             try {
@@ -175,13 +182,28 @@ final class InitialAggregationBatchBuilder
                     _ -> {},
                     mask -> allocator.transfer(context, mask),
                     _ -> {},
-                    () -> allocator.release(context),
+                    () -> close(context, retainInput ? input : null),
                     outputs);
         }
         catch (Throwable throwable) {
             allocator.release(context);
             throw throwable;
         }
+    }
+
+    /**
+     * Builds direct initial aggregation output while transferring the lifetime of a dense input
+     * batch to that output. Returning {@code null} means the input cannot be retained without
+     * changing row positions or materializing aggregate state.
+     */
+    Batch buildRetaining(Batch input)
+    {
+        requireNonNull(input, "input is null");
+        Mask inputMask = input.borrowMask();
+        if (!inputMask.all()) {
+            return null;
+        }
+        return build(input, inputMask, true);
     }
 
     Batch empty()
@@ -218,6 +240,11 @@ final class InitialAggregationBatchBuilder
 
     private Batch buildDirect(Batch input, Mask inputMask, Allocator.Context context)
     {
+        return buildDirect(input, inputMask, context, false);
+    }
+
+    private Batch buildDirect(Batch input, Mask inputMask, Allocator.Context context, boolean retainInput)
+    {
         for (PhysicalAggregationUnit unit : program.units()) {
             if (!unit.supportsInitialInput()) {
                 return null;
@@ -228,7 +255,9 @@ final class InitialAggregationBatchBuilder
         Mask outputMask = allocator.allocateAllMask(context, groupCount);
         Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
         for (int output = 0; output < groupedColumns.length; output++) {
-            outputs[output] = ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
+            outputs[output] = retainInput
+                    ? input.output(groupedColumns[output])
+                    : ownedOutput(copyGroupedStreams(input, output, inputMask, context), context);
         }
         long start = System.nanoTime();
         try {
@@ -253,8 +282,20 @@ final class InitialAggregationBatchBuilder
                 _ -> {},
                 mask -> allocator.transfer(context, mask),
                 _ -> {},
-                () -> allocator.release(context),
+                () -> close(context, retainInput ? input : null),
                 outputs);
+    }
+
+    private void close(Allocator.Context context, Batch retainedInput)
+    {
+        try {
+            allocator.release(context);
+        }
+        finally {
+            if (retainedInput != null) {
+                retainedInput.close();
+            }
+        }
     }
 
     private Mask filterMask(Batch batch, int filterColumn, Mask mask, Allocator.Context context)

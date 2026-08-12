@@ -177,6 +177,17 @@ public final class GroupedAggregationSession
     @Override
     public void addInput(Batch batch, long inputBytes)
     {
+        addInput(batch, inputBytes, false);
+    }
+
+    @Override
+    public InputOwnership addInputWithOwnership(Batch batch, long inputBytes)
+    {
+        return addInput(batch, inputBytes, true);
+    }
+
+    private InputOwnership addInput(Batch batch, long inputBytes, boolean mayRetainInput)
+    {
         checkAcceptingInput();
         requireNonNull(batch, "batch is null");
         if (inputBytes < 0) {
@@ -197,9 +208,13 @@ public final class GroupedAggregationSession
                 }
             }
             if (!aggregationEnabled) {
-                pendingOutput = initialAggregationBatchBuilder.build(batch);
+                pendingOutput = mayRetainInput ? initialAggregationBatchBuilder.buildRetaining(batch) : null;
+                InputOwnership ownership = pendingOutput == null ? InputOwnership.CALLER : InputOwnership.SESSION;
+                if (pendingOutput == null) {
+                    pendingOutput = initialAggregationBatchBuilder.build(batch);
+                }
                 partialAggregationControl.onPassthroughFlush(inputBytes, batch.borrowMask().count());
-                return;
+                return ownership;
             }
         }
         ensureAggregation();
@@ -207,6 +222,7 @@ public final class GroupedAggregationSession
         aggregatedInput = true;
         this.inputBytes += inputBytes;
         inputRows += batch.borrowMask().count();
+        return InputOwnership.CALLER;
     }
 
     @Override
