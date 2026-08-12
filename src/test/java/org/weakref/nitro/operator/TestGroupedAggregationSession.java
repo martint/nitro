@@ -592,6 +592,42 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testCardinalityObservationCanReenableAggregationAfterPassthrough()
+    {
+        TestingPartialAggregationControl control = new TestingPartialAggregationControl();
+        control.enabled = false;
+        control.sampleSize = 2;
+        control.enableAfterCardinalityObservations = 2;
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        control)) {
+            allocator.beginExecution();
+            try (Batch first = batch(10, 20);
+                    Batch firstOutput = addAndGetOutput(session, first, 20)) {
+                assertThat(selectedLongValues(firstOutput, 0)).containsExactly(10, 20);
+            }
+            assertThat(control.enabled).isFalse();
+
+            try (Batch second = batch(30, 30)) {
+                session.addInput(second, 20);
+            }
+            assertThat(control.enabled).isTrue();
+            assertThat(control.cardinalityObservations).isEqualTo(2);
+            try (Batch result = session.finish()) {
+                assertThat(selectedLongValues(result, 0)).containsExactly(30);
+                assertThat(selectedLongValues(result, 1)).containsExactly(2);
+            }
+        }
+    }
+
+    @Test
     void testCardinalityObservationHonorsMasksAndEncodedGroupingKeys()
     {
         try (EngineResources resources = EngineResources.createDefault();
@@ -877,6 +913,7 @@ class TestGroupedAggregationSession
         private long outputRows;
         private int sampleSize;
         private int maximumDistinctKeysToAggregate = Integer.MAX_VALUE;
+        private int enableAfterCardinalityObservations = Integer.MAX_VALUE;
         private int cardinalityObservations;
         private PartialAggregationInputStatistics observedInput;
 
@@ -897,6 +934,9 @@ class TestGroupedAggregationSession
         {
             cardinalityObservations++;
             observedInput = inputStatistics;
+            if (cardinalityObservations >= enableAfterCardinalityObservations) {
+                enabled = true;
+            }
             return enabled && inputStatistics.distinctKeyHashes() <= maximumDistinctKeysToAggregate;
         }
 

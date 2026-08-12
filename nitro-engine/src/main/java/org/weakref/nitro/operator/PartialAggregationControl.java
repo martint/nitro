@@ -25,8 +25,10 @@ public interface PartialAggregationControl
     boolean aggregationEnabled();
 
     /**
-     * Maximum number of rows Nitro should inspect before constructing grouping state. Zero disables the
-     * observation. The host owns both this bound and the admission decision.
+     * Maximum number of rows Nitro should inspect before deciding how to consume the current input. Zero disables
+     * the observation. Sampling may remain enabled while aggregation is bypassed so that a host can reconsider a
+     * provisional decision when later input has different cardinality. The host owns both this bound and the
+     * admission decision.
      */
     default int inputCardinalitySampleSize()
     {
@@ -35,7 +37,8 @@ public interface PartialAggregationControl
 
     /**
      * Decides whether the current empty aggregation should consume input after a bounded grouping-key sample.
-     * Hash collisions can only undercount distinct keys; the decision changes physical partial aggregation only.
+     * This can be called while aggregation is provisionally bypassed. Hash collisions can only undercount distinct
+     * keys; the decision changes physical partial aggregation only.
      */
     default boolean aggregationEnabled(PartialAggregationInputStatistics inputStatistics)
     {
