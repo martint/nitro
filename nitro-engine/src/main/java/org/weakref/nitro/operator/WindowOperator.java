@@ -1291,6 +1291,9 @@ public final class WindowOperator
     {
         if (singlePage) {
             Streams sourceStreams = pages.getFirst().columns()[outputIndex];
+            if (singlePageIdentityOrder && startPosition == 0 && batchSize == singlePageRowCount) {
+                return sourceStreams.get(stream).copy(allocator, allocationContext);
+            }
             return sourceStreams.get(stream).copyPositionsInto(
                     allocator,
                     allocationContext,
@@ -1299,6 +1302,15 @@ public final class WindowOperator
                     batchSize,
                     0,
                     batchSize);
+        }
+
+        if (inputOrder.isFullyOrdered(orderingColumns.length)) {
+            long firstRow = rowReferences[startPosition];
+            TableOperator.Page page = pages.get(pageIndex(firstRow));
+            int pagePosition = pagePosition(firstRow);
+            if (pagePosition == 0 && batchSize == page.rows()) {
+                return page.columns()[outputIndex].get(stream).copy(allocator, allocationContext);
+            }
         }
 
         Vector result = null;
@@ -1390,7 +1402,10 @@ public final class WindowOperator
 
         private Vector materializeSourceStream(int outputIndex, Stream stream)
         {
-            int[] sourcePositions = positions();
+            int[] sourcePositions = null;
+            if (singlePage) {
+                sourcePositions = positions();
+            }
             if (singlePage && positionMode != SOURCE_POSITIONS) {
                 if (singlePageIdentityOrder) {
                     for (int index = 0; index < batchSize; index++) {

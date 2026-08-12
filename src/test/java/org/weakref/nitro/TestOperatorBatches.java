@@ -1066,6 +1066,40 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testWindowSessionPreservesEncodedFullyOrderedInput()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (WindowSession session = new WindowSession(
+                allocator,
+                Schema.unspecified(2),
+                new int[] {0},
+                new int[0],
+                new boolean[0],
+                List.of(new PartitionSumI64WindowFunction(1)),
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                new WindowInputOrder(true, 0));
+                Batch input = new Batch(
+                        Mask.all(4),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                new int[] {0, 0, 1, 1},
+                                new I64Vector(new long[] {1, 2})))),
+                        Output.of(Streams.ofValues(new RleVector(
+                                new int[] {4},
+                                new I64Vector(new long[] {10})))))) {
+            session.addInput(input);
+            session.finishInput();
+
+            try (Batch output = session.next()) {
+                assertThat(output.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+                assertThat(output.output(1).borrow(Stream.VALUES)).isInstanceOf(RleVector.class);
+                assertThat(longValues(output.output(2).borrow(Stream.VALUES), 4))
+                        .containsExactly(20L, 20L, 20L, 20L);
+            }
+        }
+    }
+
+    @Test
     void testWindowSessionUsesBoundBinaryAndNullPartitionEqualityAcrossHostBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

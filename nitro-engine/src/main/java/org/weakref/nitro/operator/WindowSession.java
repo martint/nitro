@@ -103,24 +103,35 @@ public final class WindowSession
         if (mask.none()) {
             return;
         }
-        int[] selectedPositions = new int[mask.count()];
-        int selectedIndex = 0;
-        for (int position : mask) {
-            selectedPositions[selectedIndex++] = position;
-        }
-        Streams[] columns = new Streams[inputColumns];
-        for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
-            Output output = batch.output(outputIndex);
-            Streams.Builder borrowed = Streams.builder();
-            for (Stream stream : output.streams()) {
-                borrowed.put(stream, output.borrow(stream));
+        int[] selectedPositions = null;
+        if (!inputFullyOrdered) {
+            selectedPositions = allocator.primitiveArrays().borrowInts(mask.count());
+            int selectedIndex = 0;
+            for (int position : mask) {
+                selectedPositions[selectedIndex++] = position;
             }
-            // Window repeatedly traverses its blocking input while sorting, finding partitions, and evaluating
-            // functions. Materialize encoded host input once, and let WindowOperator retain that owned flat copy,
-            // instead of preserving dictionary indirection and then copying the same page a second time.
-            columns[outputIndex] = allocator.copyStreams(allocationContext, borrowed.build(), selectedPositions);
         }
-        pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
+        try {
+            Streams[] columns = new Streams[inputColumns];
+            for (int outputIndex = 0; outputIndex < columns.length; outputIndex++) {
+                Output output = batch.output(outputIndex);
+                Streams.Builder borrowed = Streams.builder();
+                for (Stream stream : output.streams()) {
+                    borrowed.put(stream, output.borrow(stream));
+                }
+                Streams streams = borrowed.build();
+                // Unordered windows repeatedly traverse input while sorting, finding partitions, and evaluating
+                // functions, so flatten selected rows once. Fully ordered windows traverse each page sequentially;
+                // preserve an owned dictionary/RLE representation and avoid materializing it again on output.
+                columns[outputIndex] = inputFullyOrdered
+                        ? allocator.copyStreams(allocationContext, streams, mask)
+                        : allocator.copyStreams(allocationContext, streams, selectedPositions);
+            }
+            pages.add(new TableOperator.Page(mask.count(), columns, Mask.all(mask.count())));
+        }
+        finally {
+            allocator.primitiveArrays().release(selectedPositions);
+        }
     }
 
     public void finishInput()
