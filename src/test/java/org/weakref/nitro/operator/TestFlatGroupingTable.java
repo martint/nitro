@@ -642,16 +642,21 @@ class TestFlatGroupingTable
         }
         Vector[] values = {
                 // These bases are larger than the live batch, so the layout must retain its cost guard and hash the
-                // fields through resolved long accessors rather than eagerly pre-hashing every dictionary entry.
+                // fields through resolved long/binary accessors rather than eagerly pre-hashing every dictionary
+                // entry. The remaining dictionary lanes stay direct in the same generated kernel.
                 DictionaryVector.wrap(ids, size, new I64Vector(largeLongDictionary)),
-                DictionaryVector.wrap(ids, size, utf8("a", "b", "c")),
+                DictionaryVector.wrap(ids, size, utf8(compactTestStrings("oversized-", size + 1))),
                 DictionaryVector.wrap(ids, size, new I64Vector(largeLongDictionary.clone())),
                 DictionaryVector.wrap(ids, size, utf8("d", "e", "f")),
-                DictionaryVector.wrap(ids, size, utf8("g", "h", "i"))};
+                DictionaryVector.wrap(ids, size, utf8("g", "h", "i")),
+                // SQL joins can change one key lane from dictionary to multi-run RLE between batches. The generated
+                // hybrid must resolve that physical representation once rather than rejecting the complete key.
+                new RleVector(new int[] {size / 2, size / 2}, utf8("rle-a", "rle-b"))};
         Vector[] nulls = {
                 null,
                 new BooleanVector(allNullValues),
                 new BooleanVector(mixedNullValues),
+                null,
                 null,
                 null};
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);

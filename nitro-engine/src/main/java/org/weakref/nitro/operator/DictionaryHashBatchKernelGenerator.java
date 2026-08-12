@@ -34,6 +34,7 @@ final class DictionaryHashBatchKernelGenerator
     static final int ALL_NULL = 1;
     static final int MIXED = 2;
     static final int LONG_ACCESSOR_HASH = 1;
+    static final int BINARY_ACCESSOR_HASH = 2;
 
     // Four low bits retain the field count, followed by two null-shape bits for each of up to 15 fields.
     // Keep hash modes in the upper half of the word so wide SQL grouping keys do not overlap the two regions.
@@ -42,6 +43,7 @@ final class DictionaryHashBatchKernelGenerator
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryHashBatchKernel");
     private static final ClassDesc CD_BOOLEAN_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$BooleanValues");
     private static final ClassDesc CD_LONG_VALUES = ClassDesc.of("org.weakref.nitro.data.VectorAccess$LongValues");
+    private static final ClassDesc CD_BINARY_HASHES = ClassDesc.of("org.weakref.nitro.operator.DictionaryHashBatchKernel$BinaryHashes");
     private static final ClassDesc CD_TABLE = ClassDesc.of("org.weakref.nitro.operator.FlatGroupingTable");
     private static final ClassDesc CD_VECTOR = ClassDesc.of("org.weakref.nitro.data.Vector");
     private static final ClassDesc CD_LONG_BOX = ClassDesc.of("java.lang.Long");
@@ -51,15 +53,17 @@ final class DictionaryHashBatchKernelGenerator
     private static final ClassDesc CD_LONG_ARRAY_ARRAY = CD_LONG_ARRAY.arrayType();
     private static final ClassDesc CD_BOOLEAN_VALUES_ARRAY = CD_BOOLEAN_VALUES.arrayType();
     private static final ClassDesc CD_LONG_VALUES_ARRAY = CD_LONG_VALUES.arrayType();
+    private static final ClassDesc CD_BINARY_HASHES_ARRAY = CD_BINARY_HASHES.arrayType();
     private static final ClassDesc CD_VECTOR_ARRAY = CD_VECTOR.arrayType();
     private static final MethodTypeDesc HASH_TYPE = MethodTypeDesc.of(
-            CD_void, CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_LONG_ARRAY);
+            CD_void, CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY, CD_LONG_ARRAY);
     private static final MethodTypeDesc ASSIGN_TYPE = MethodTypeDesc.of(
             CD_long,
-            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
+            CD_int, CD_INT_ARRAY_ARRAY, CD_LONG_ARRAY_ARRAY, CD_LONG_VALUES_ARRAY, CD_BINARY_HASHES_ARRAY, CD_BOOLEAN_VALUES_ARRAY,
             CD_TABLE, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_long, CD_LONG_ARRAY);
     private static final MethodTypeDesc BOOLEAN_VALUE_TYPE = MethodTypeDesc.of(CD_boolean, CD_int);
     private static final MethodTypeDesc LONG_VALUE_TYPE = MethodTypeDesc.of(CD_long, CD_int);
+    private static final MethodTypeDesc BINARY_HASH_TYPE = MethodTypeDesc.of(CD_long, CD_int);
     private static final MethodTypeDesc LONG_HASH_CODE_TYPE = MethodTypeDesc.of(CD_int, CD_long);
     private static final MethodTypeDesc ASSIGN_HASH_TYPE = MethodTypeDesc.of(
             CD_long, CD_VECTOR_ARRAY, CD_VECTOR_ARRAY, CD_int, CD_long, CD_long);
@@ -68,21 +72,22 @@ final class DictionaryHashBatchKernelGenerator
     private static final int DICTIONARY_IDS = 2;
     private static final int ENTRY_HASHES = 3;
     private static final int LONG_VALUES = 4;
-    private static final int NULLS = 5;
-    private static final int OUTPUT = 6;
-    private static final int POSITION = 7;
-    private static final int RESULT = 8;
+    private static final int BINARY_HASHES = 5;
+    private static final int NULLS = 6;
+    private static final int OUTPUT = 7;
+    private static final int POSITION = 8;
+    private static final int RESULT = 9;
 
-    private static final int ASSIGN_TABLE = 6;
-    private static final int ASSIGN_VALUES = 7;
-    private static final int ASSIGN_NULLS = 8;
-    private static final int ASSIGN_NEXT_GROUP_ID = 9;
-    private static final int ASSIGN_OUTPUT = 11;
-    private static final int ASSIGN_POSITION = 12;
-    private static final int ASSIGN_HASH = 13;
-    private static final int ASSIGN_GROUP_ID = 15;
-    private static final int ASSIGN_TILE_END = 17;
-    private static final int ASSIGN_TILE_START = 18;
+    private static final int ASSIGN_TABLE = 7;
+    private static final int ASSIGN_VALUES = 8;
+    private static final int ASSIGN_NULLS = 9;
+    private static final int ASSIGN_NEXT_GROUP_ID = 10;
+    private static final int ASSIGN_OUTPUT = 12;
+    private static final int ASSIGN_POSITION = 13;
+    private static final int ASSIGN_HASH = 14;
+    private static final int ASSIGN_GROUP_ID = 16;
+    private static final int ASSIGN_TILE_END = 18;
+    private static final int ASSIGN_TILE_START = 19;
 
     private final ConcurrentHashMap<KernelShape, DictionaryHashBatchKernel> kernels = new ConcurrentHashMap<>();
     private boolean closed;
@@ -207,6 +212,14 @@ final class DictionaryHashBatchKernelGenerator
             code.invokeinterface(CD_LONG_VALUES, "value", LONG_VALUE_TYPE);
             code.invokestatic(CD_LONG_BOX, "hashCode", LONG_HASH_CODE_TYPE);
             code.i2l();
+            return;
+        }
+        if (hashMode == BINARY_ACCESSOR_HASH) {
+            code.aload(BINARY_HASHES);
+            code.loadConstant(field);
+            code.aaload();
+            code.iload(position);
+            code.invokeinterface(CD_BINARY_HASHES, "hash", BINARY_HASH_TYPE);
             return;
         }
         emitDictionaryHash(code, field, position);

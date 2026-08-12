@@ -18,11 +18,18 @@ import org.weakref.nitro.data.VectorAccess;
 
 interface DictionaryHashBatchKernel
 {
+    @FunctionalInterface
+    interface BinaryHashes
+    {
+        long hash(int position);
+    }
+
     void hash(
             int count,
             int[][] dictionaryIds,
             long[][] entryHashes,
             VectorAccess.LongValues[] longValues,
+            BinaryHashes[] binaryHashes,
             VectorAccess.BooleanValues[] nulls,
             long[] output);
 
@@ -31,6 +38,7 @@ interface DictionaryHashBatchKernel
             int[][] dictionaryIds,
             long[][] entryHashes,
             VectorAccess.LongValues[] longValues,
+            BinaryHashes[] binaryHashes,
             VectorAccess.BooleanValues[] nulls,
             FlatGroupingTable table,
             Vector[] values,

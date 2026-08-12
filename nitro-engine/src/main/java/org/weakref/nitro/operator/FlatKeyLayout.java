@@ -198,6 +198,7 @@ class FlatKeyLayout
     private boolean debugGeneratedDictionaryHashBatchRejectedPrinted;
     private DictionaryRecordEqualityKernel generatedRecordEqualityKernel;
     private VectorAccess.LongValues[] fieldLong;
+    private DictionaryHashBatchKernel.BinaryHashes[] fieldBinaryHashes;
     private BinaryVector[] fieldBinaryBase;
     private int[][] fieldBinaryIds;
     private long batchSingleRunBinaryFields;
@@ -746,6 +747,7 @@ class FlatKeyLayout
             batchPositionDictionaryMapping = new DictionaryVector[handlers.length];
             fieldLazyIntern = new boolean[handlers.length];
             fieldLong = new VectorAccess.LongValues[handlers.length];
+            fieldBinaryHashes = new DictionaryHashBatchKernel.BinaryHashes[handlers.length];
             fieldBinaryBase = new BinaryVector[handlers.length];
             fieldBinaryIds = new int[handlers.length][];
             fieldBinaryConstantHash = new long[handlers.length];
@@ -962,6 +964,7 @@ class FlatKeyLayout
             }
         }
         prepareCompactBinaryPositionIds(values);
+        prepareBinaryHashAccessors(values);
         batchNullFreeLongBinary = policy.fastNullFreeLongBinary() &&
                 handlers.length == 2 &&
                 fieldKinds[0] == FlatTypeHandler.Kind.LONG &&
@@ -1055,6 +1058,45 @@ class FlatKeyLayout
         batchAccessorsReady = true;
         prepareGeneratedDictionaryRecordEquality();
         decideDiscriminatingHashField(values, nulls);
+    }
+
+    private void prepareBinaryHashAccessors(Vector[] values)
+    {
+        Arrays.fill(fieldBinaryHashes, null);
+        for (int field = 0; field < handlers.length; field++) {
+            BinaryVector base = fieldBinaryBase[field];
+            if (fieldKinds[field] != FlatTypeHandler.Kind.BINARY) {
+                continue;
+            }
+            if (base != null && (batchSingleRunBinaryFields & (1L << field)) != 0) {
+                long hash = fieldBinaryConstantHash[field];
+                fieldBinaryHashes[field] = _ -> hash;
+                continue;
+            }
+            if (base != null) {
+                int[] ids = fieldBinaryIds[field];
+                byte[] data = base.data();
+                int[] offsets = base.offsets();
+                if (ids == null) {
+                    fieldBinaryHashes[field] = position ->
+                            OperatorVectorSupport.binaryHash(data, offsets[position], offsets[position + 1] - offsets[position]);
+                }
+                else {
+                    fieldBinaryHashes[field] = position -> {
+                        int entry = ids[position];
+                        return OperatorVectorSupport.binaryHash(data, offsets[entry], offsets[entry + 1] - offsets[entry]);
+                    };
+                }
+                continue;
+            }
+            int channel = inputChannels[field];
+            if (channel >= values.length || values[channel] == null) {
+                continue;
+            }
+            VectorAccess.BinaryRegions regions = VectorAccess.binaryRegions(values[channel]);
+            fieldBinaryHashes[field] = position -> OperatorVectorSupport.binaryHash(
+                    regions.data(position), regions.offset(position), regions.length(position));
+        }
     }
 
     static boolean shouldReuseDictionaryEntryHashes(
@@ -2287,6 +2329,7 @@ class FlatKeyLayout
                 dictionaryHashedIds,
                 dictionaryEntryHashes,
                 fieldLong,
+                fieldBinaryHashes,
                 fieldNullAccess,
                 output);
         return true;
@@ -2309,6 +2352,7 @@ class FlatKeyLayout
                 dictionaryHashedIds,
                 dictionaryEntryHashes,
                 fieldLong,
+                fieldBinaryHashes,
                 fieldNullAccess,
                 table,
                 values,
@@ -2343,6 +2387,14 @@ class FlatKeyLayout
                     fieldKinds[field] == FlatTypeHandler.Kind.LONG &&
                     fieldLong[field] != null) {
                 shape |= (long) DictionaryHashBatchKernelGenerator.LONG_ACCESSOR_HASH <<
+                        (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
+                accessorHashedFields++;
+                continue;
+            }
+            if (handlers.length >= policy.generatedHybridHashBatchMinFields() &&
+                    fieldKinds[field] == FlatTypeHandler.Kind.BINARY &&
+                    fieldBinaryHashes[field] != null) {
+                shape |= (long) DictionaryHashBatchKernelGenerator.BINARY_ACCESSOR_HASH <<
                         (DictionaryHashBatchKernelGenerator.HASH_MODE_SHIFT + field * 2);
                 accessorHashedFields++;
                 continue;
@@ -2997,6 +3049,7 @@ class FlatKeyLayout
         bytes += booleanArrayBytes(compactLongDomainRejected);
         bytes += referenceArrayBytes(fieldKinds);
         bytes += referenceArrayBytes(fieldLong);
+        bytes += referenceArrayBytes(fieldBinaryHashes);
         bytes += referenceArrayBytes(fieldBinaryBase);
         bytes += nestedIntArrayBytes(fieldBinaryIds);
         bytes += longArrayBytes(fieldBinaryConstantHash);
@@ -3066,6 +3119,7 @@ class FlatKeyLayout
             Arrays.fill(fieldBinaryBase, null);
             Arrays.fill(fieldBinaryIds, null);
             Arrays.fill(fieldLong, null);
+            Arrays.fill(fieldBinaryHashes, null);
             Arrays.fill(fieldNullAccess, null);
         }
         batchAccessorsReady = false;
