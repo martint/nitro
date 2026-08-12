@@ -16,17 +16,18 @@ package org.weakref.nitro.parquet;
 /**
  * Immutable diagnostic choices for a native Parquet scan.
  */
-public record ParquetScanDiagnostics(boolean rowCounts, boolean decompression)
+public record ParquetScanDiagnostics(boolean rowCounts, boolean decompression, boolean sourceWork)
 {
     public static ParquetScanDiagnostics disabled()
     {
-        return new ParquetScanDiagnostics(false, false);
+        return new ParquetScanDiagnostics(false, false, false);
     }
 
     public static ParquetScanDiagnostics fromSystemProperties()
     {
         return new ParquetScanDiagnostics(
                 Boolean.getBoolean("nitro.debug.rowcounts"),
-                Boolean.getBoolean("nitro.debug.decompression"));
+                Boolean.getBoolean("nitro.debug.decompression"),
+                Boolean.getBoolean("nitro.debug.source-work"));
     }
 }

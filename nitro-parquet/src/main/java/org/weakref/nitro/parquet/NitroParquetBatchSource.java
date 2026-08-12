@@ -517,6 +517,14 @@ public final class NitroParquetBatchSource
         this.windowNull = new boolean[columnCount][];
         this.debugFilterInputs = new long[columnCount];
         this.debugFilterOutputs = new long[columnCount];
+        this.debugFullDecoded = new long[columnCount];
+        this.debugSelectedDecoded = new long[columnCount];
+        this.debugDictionaryExamined = new long[columnCount];
+        this.debugSkipped = new long[columnCount];
+        this.debugPublished = new long[columnCount];
+        this.debugCopied = new long[columnCount];
+        this.debugLazyOmitted = new long[columnCount];
+        this.debugNullExamined = new long[columnCount];
     }
 
     private boolean pushLongDomain(int column, LongDomain filter, boolean enforcementRequired)
@@ -890,11 +898,54 @@ public final class NitroParquetBatchSource
     private long debugSurvivors;
     private final long[] debugFilterInputs;
     private final long[] debugFilterOutputs;
+    private final long[] debugFullDecoded;
+    private final long[] debugSelectedDecoded;
+    private final long[] debugDictionaryExamined;
+    private final long[] debugSkipped;
+    private final long[] debugPublished;
+    private final long[] debugCopied;
+    private final long[] debugLazyOmitted;
+    private final long[] debugNullExamined;
     private long debugProgressiveCompactionRows;
     private long debugProgressiveCompactionKept;
     private long debugProgressiveCompactionWindows;
     private boolean debugFusedCompactionCandidatePrinted;
     private boolean debugProspectiveCompactionCandidatePrinted;
+
+    private void recordFullDecode(int column, long positions)
+    {
+        if (diagnostics.sourceWork()) {
+            debugFullDecoded[column] += positions;
+        }
+    }
+
+    private void recordSelectedDecode(int column, long positions)
+    {
+        if (diagnostics.sourceWork()) {
+            debugSelectedDecoded[column] += positions;
+        }
+    }
+
+    private void recordSkipped(int column, long positions)
+    {
+        if (diagnostics.sourceWork()) {
+            debugSkipped[column] += positions;
+        }
+    }
+
+    private void recordPublished(int column, long positions)
+    {
+        if (diagnostics.sourceWork()) {
+            debugPublished[column] += positions;
+        }
+    }
+
+    private void recordCopied(int column, long positions)
+    {
+        if (diagnostics.sourceWork()) {
+            debugCopied[column] += positions;
+        }
+    }
 
     /** Decode windows until one yields surviving rows (or input is exhausted). Returns whether rows are available. */
     private boolean ensureWindow()
@@ -971,6 +1022,7 @@ public final class NitroParquetBatchSource
                     int[] values = ensureInt(colInt[c], count);
                     colInt[c] = values;
                     reader.readInts(values, nulls, count);
+                    recordCopied(c, count);
                     yield copyIntOutput(c, values, 0, count, count);
                 }
                 case LONG -> {
@@ -988,6 +1040,7 @@ public final class NitroParquetBatchSource
                         for (int i = 0; i < count; i++) {
                             values[i] = Double.longBitsToDouble(bits[i]);
                         }
+                        recordCopied(c, count);
                         yield vector;
                     }
                     I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
@@ -998,6 +1051,8 @@ public final class NitroParquetBatchSource
                     yield reader.readBinary(allocator, allocationContext, nulls, count);
                 }
             };
+            recordFullDecode(c, count);
+            recordPublished(c, count);
             currentValues[c] = valueVector;
             currentNulls[c] = nullVector;
 
@@ -1178,6 +1233,9 @@ public final class NitroParquetBatchSource
         // lifecycle rule: empty evidence neither pays decode work nor fixes an irreversible decoder strategy.
         if (lateMaterializationPolicy.deferEmptyConstrainedDecode() && lazyConstrained && lazyMask.none()) {
             lazyPendingAdvance[column] += count;
+            if (diagnostics.sourceWork()) {
+                debugLazyOmitted[column] += count;
+            }
             currentValues[column] = allocateMaskedEmptyColumn(column, reader, count);
             currentNulls[column] = nullVector;
             return;
@@ -1190,7 +1248,7 @@ public final class NitroParquetBatchSource
         boolean skip = useSkipDecode(column);
         long pending = lazyPendingAdvance[column];
         if (pending > 0) {
-            drainPendingAdvance(reader, skip, pending);
+            drainPendingAdvance(column, reader, skip, pending);
             lazyPendingAdvance[column] = 0;
         }
 
@@ -1202,6 +1260,8 @@ public final class NitroParquetBatchSource
         if (!skip) {
             currentValues[column] = decodeFullColumn(column, reader, nulls, count);
             currentNulls[column] = nullVector;
+            recordFullDecode(column, count);
+            recordPublished(column, count);
             return;
         }
 
@@ -1221,6 +1281,8 @@ public final class NitroParquetBatchSource
             // readSelectedBinary returns a position-indexed vector (survivors at their positions, others zero-length)
             // and fills position-indexed nulls, so no scatter is needed.
             Vector vector = reader.readSelectedBinary(allocator, allocationContext, survivors, survivorCount, count, nulls);
+            recordSelectedDecode(column, survivorCount);
+            recordPublished(column, survivorCount);
             currentValues[column] = vector;
             currentNulls[column] = nullVector;
             return;
@@ -1228,8 +1290,10 @@ public final class NitroParquetBatchSource
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(survivorCount, false);
             reader.readSelectedInts(survivors, survivorCount, count, lazyScratchInt, isNullable ? lazyScratchNull : null);
+            recordSelectedDecode(column, survivorCount);
             Vector vector = allocateIntOutput(column, count);
             scatterIntOutput(vector, survivors, lazyScratchInt, survivorCount);
+            recordCopied(column, survivorCount);
             if (nulls != null) {
                 for (int j = 0; j < survivorCount; j++) {
                     nulls[survivors[j]] = lazyScratchNull[j];
@@ -1240,6 +1304,7 @@ public final class NitroParquetBatchSource
         else {
             ensureLazyScratch(survivorCount, true);
             reader.readSelectedLongs(survivors, survivorCount, count, lazyScratchLong, isNullable ? lazyScratchNull : null);
+            recordSelectedDecode(column, survivorCount);
             if (reader.isDouble()) {
                 org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, count);
                 double[] out = vector.values();
@@ -1253,6 +1318,8 @@ public final class NitroParquetBatchSource
                 }
                 currentValues[column] = vector;
                 currentNulls[column] = nullVector;
+                recordCopied(column, survivorCount);
+                recordPublished(column, survivorCount);
                 return;
             }
             I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
@@ -1266,8 +1333,10 @@ public final class NitroParquetBatchSource
                 }
             }
             currentValues[column] = vector;
+            recordCopied(column, survivorCount);
         }
         currentNulls[column] = nullVector;
+        recordPublished(column, survivorCount);
     }
 
     /** Allocate a correctly typed vector for a batch whose active mask is empty; no value is semantically live. */
@@ -1339,6 +1408,7 @@ public final class NitroParquetBatchSource
                 int[] values = ensureInt(colInt[column], count);
                 colInt[column] = values;
                 reader.readInts(values, nulls, count);
+                recordCopied(column, count);
                 yield copyIntOutput(column, values, 0, count, count);
             }
             case LONG -> {
@@ -1348,6 +1418,7 @@ public final class NitroParquetBatchSource
                     }
                     long[] bits = doubleDecodeScratch;
                     reader.readLongs(bits, nulls, count);
+                    recordCopied(column, count);
                     yield longBitsToDoubles(bits, 0, count);
                 }
                 I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
@@ -1379,6 +1450,9 @@ public final class NitroParquetBatchSource
             }
             lazyResolved[c] = true;
             lazyPendingAdvance[c] += lazyCount;
+            if (diagnostics.sourceWork()) {
+                debugLazyOmitted[c] += lazyCount;
+            }
         }
     }
 
@@ -1388,8 +1462,9 @@ public final class NitroParquetBatchSource
      * skip-decode column via the readSelected page-skip with an empty survivor set. Both drop whole data pages that
      * fall entirely within the skip without decoding them.
      */
-    private void drainPendingAdvance(ColumnReader reader, boolean skip, long pending)
+    private void drainPendingAdvance(int column, ColumnReader reader, boolean skip, long pending)
     {
+        recordSkipped(column, pending);
         if (!skip) {
             reader.skip(pending);
             return;
@@ -1477,6 +1552,9 @@ public final class NitroParquetBatchSource
                 }
                 else {
                     kept = readers[column].filterDictInts(predicate, predicateVersion, count, nextSurvivors, colInt[column], cn);
+                }
+                if (diagnostics.sourceWork()) {
+                    debugDictionaryExamined[column] += count;
                 }
                 survivors = applied + 1 < order.length
                         ? snapshotFilterSurvivors(column, nextSurvivors, kept)
@@ -1670,14 +1748,17 @@ public final class NitroParquetBatchSource
                     windowLong[c] = ensureLong(windowLong[c], survivorCount);
                     gatherLong(colLong[c], columnNulls, null, survivors, survivorCount, windowLong[c], nulls);
                 }
+                recordCopied(c, survivorCount);
             }
             else if (readers[c].kind() == ColumnReader.Kind.INT) {
                 windowInt[c] = ensureInt(windowInt[c], survivorCount);
                 readers[c].readSelectedInts(survivors, survivorCount, count, windowInt[c], nulls);
+                recordSelectedDecode(c, survivorCount);
             }
             else {
                 windowLong[c] = ensureLong(windowLong[c], survivorCount);
                 readers[c].readSelectedLongs(survivors, survivorCount, count, windowLong[c], nulls);
+                recordSelectedDecode(c, survivorCount);
             }
         }
 
@@ -1708,6 +1789,7 @@ public final class NitroParquetBatchSource
                 windowLong[c] = ensureLong(windowLong[c], survivorCount);
                 gatherLong(colLong[c], colNull[c], readPositions[c], survivors, survivorCount, windowLong[c], nulls);
             }
+            recordCopied(c, survivorCount);
         }
         windowSurvivorCount = survivorCount;
     }
@@ -1908,6 +1990,8 @@ public final class NitroParquetBatchSource
             }
             currentValues[c] = valueVector;
             currentNulls[c] = nullVector;
+            recordPublished(c, sliceCount);
+            recordCopied(c, sliceCount);
             ScanOutputResolver outputResolver = outputResolvers[c];
             outputs[c] = new VectorColumnGeneration(
                     nullVector == null ? Set.of(Stream.VALUES) : Set.of(Stream.VALUES, Stream.NULLS),
@@ -1997,6 +2081,9 @@ public final class NitroParquetBatchSource
             }
             if (!directNullResolved[column]) {
                 Mask result = resultAllocator.copyMask(resultContext, mask);
+                if (diagnostics.sourceWork()) {
+                    debugNullExamined[column] += lazyCount;
+                }
                 if (filterEvaluationPolicy.directNullMask().compaction()) {
                     reader.retainNulls(result, selectTrue, lazyCount);
                     directNullResolved[column] = true;
@@ -2059,6 +2146,7 @@ public final class NitroParquetBatchSource
         if (reader.kind() == ColumnReader.Kind.INT) {
             ensureLazyScratch(decodeCount, false);
             reader.readSelectedInts(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchInt, isNullable ? lazyScratchNull : null);
+            recordSelectedDecode(column, decodeCount);
             Vector vector = allocateIntOutput(column, batchPolicy.maxRows());
             for (int index = 0; index < decodeCount; index++) {
                 int outputPosition = weakConstraint || outputPositions == null ? index : outputPositions[index];
@@ -2072,10 +2160,12 @@ public final class NitroParquetBatchSource
                     lazyScratchInt,
                     decodeCount);
             currentValues[column] = vector;
+            recordCopied(column, decodeCount);
         }
         else {
             ensureLazyScratch(decodeCount, true);
             reader.readSelectedLongs(deferredRawSurvivors, decodeCount, deferredWindowRows, lazyScratchLong, isNullable ? lazyScratchNull : null);
+            recordSelectedDecode(column, decodeCount);
             if (reader.isDouble()) {
                 org.weakref.nitro.data.F64Vector vector = org.weakref.nitro.data.F64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
                 for (int index = 0; index < decodeCount; index++) {
@@ -2086,6 +2176,7 @@ public final class NitroParquetBatchSource
                     }
                 }
                 currentValues[column] = vector;
+                recordCopied(column, decodeCount);
             }
             else {
                 I64Vector vector = I64Vector.allocate(allocator, allocationContext, batchPolicy.maxRows());
@@ -2097,9 +2188,11 @@ public final class NitroParquetBatchSource
                     }
                 }
                 currentValues[column] = vector;
+                recordCopied(column, decodeCount);
             }
         }
         currentNulls[column] = nullVector;
+        recordPublished(column, decodeCount);
     }
 
     private void advanceUnresolvedFilteredPayload()
@@ -2107,6 +2200,9 @@ public final class NitroParquetBatchSource
         for (int column = 0; column < readers.length; column++) {
             if (!lazyResolved[column]) {
                 lazyResolved[column] = true;
+                if (diagnostics.sourceWork()) {
+                    debugLazyOmitted[column] += lazyCount;
+                }
                 advanceColumn(column, deferredWindowRows);
             }
         }
@@ -2198,17 +2294,27 @@ public final class NitroParquetBatchSource
         if (reader.kind() == ColumnReader.Kind.LONG) {
             if (survivors == null) {
                 reader.readLongs(colLong[column], nulls, batchRows);
+                recordFullDecode(column, batchRows);
             }
             else {
                 reader.readSelectedLongs(survivors, rows, batchRows, colLong[column], nulls);
+                recordSelectedDecode(column, rows);
+                if (rows == 0) {
+                    recordSkipped(column, batchRows);
+                }
             }
         }
         else {
             if (survivors == null) {
                 reader.readInts(colInt[column], nulls, batchRows);
+                recordFullDecode(column, batchRows);
             }
             else {
                 reader.readSelectedInts(survivors, rows, batchRows, colInt[column], nulls);
+                recordSelectedDecode(column, rows);
+                if (rows == 0) {
+                    recordSkipped(column, batchRows);
+                }
             }
         }
     }
@@ -2442,9 +2548,29 @@ public final class NitroParquetBatchSource
                     debugProgressiveCompactionRows,
                     debugProgressiveCompactionKept);
         }
+        String sourceIdentity = Integer.toHexString(System.identityHashCode(this));
         if (diagnostics.decompression()) {
             for (int column = 0; column < readers.length; column++) {
-                System.err.println("[decompression] " + columnNames.get(column) + " " + readers[column].decompressionSummary());
+                System.err.println("[decompression] source=" + sourceIdentity + " column=" + columnNames.get(column) + " " + readers[column].decompressionSummary());
+            }
+        }
+        if (diagnostics.sourceWork()) {
+            System.err.println("[source-work-scan] source=" + sourceIdentity +
+                    " totalRows=" + totalRows +
+                    " admittedRows=" + (nextRow - prunedRows) +
+                    " prunedRows=" + prunedRows +
+                    " columns=" + readers.length);
+            for (int column = 0; column < readers.length; column++) {
+                System.err.println("[source-work] source=" + sourceIdentity +
+                        " column=" + columnNames.get(column) +
+                        " fullDecoded=" + debugFullDecoded[column] +
+                        " selectedDecoded=" + debugSelectedDecoded[column] +
+                        " dictionaryExamined=" + debugDictionaryExamined[column] +
+                        " skipped=" + debugSkipped[column] +
+                        " published=" + debugPublished[column] +
+                        " copied=" + debugCopied[column] +
+                        " lazyOmitted=" + debugLazyOmitted[column] +
+                        " nullExamined=" + debugNullExamined[column]);
             }
         }
         closeCurrentBatch();
