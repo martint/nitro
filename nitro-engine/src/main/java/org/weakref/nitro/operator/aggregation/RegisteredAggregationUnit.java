@@ -206,6 +206,28 @@ public class RegisteredAggregationUnit
                 group, maxGroup, state, existing, outputPosition, size, allocator, allocationContext);
     }
 
+    @Override
+    public Streams copyResultRange(
+            int output,
+            int groupStart,
+            int groupCount,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        if (outputMode == OutputMode.INTERMEDIATE) {
+            return implementation.copyIntermediateRange(
+                    groupStart, groupCount, maxGroup, state, existing, outputStart, size, allocator, allocationContext);
+        }
+        return implementation.copyResultRange(
+                groupStart, groupCount, maxGroup, state, existing, outputStart, size, allocator, allocationContext);
+    }
+
     private AggregationInput input(StreamAccessor streams)
     {
         return (input, stream) -> {

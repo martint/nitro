@@ -159,4 +159,32 @@ public interface AggregationImplementation
     {
         return null;
     }
+
+    default Streams copyResultRange(
+            int groupStart,
+            int groupCount,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
+    default Streams copyIntermediateRange(
+            int groupStart,
+            int groupCount,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return null;
+    }
 }

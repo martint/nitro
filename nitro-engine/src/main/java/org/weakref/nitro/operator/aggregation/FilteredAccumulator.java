@@ -107,6 +107,12 @@ public final class FilteredAccumulator
     }
 
     @Override
+    public Streams copyResultRange(int groupStart, int groupCount, int maxGroup, Streams state, Streams output, int outputStart, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return delegate.copyResultRange(groupStart, groupCount, maxGroup, state, output, outputStart, size, allocator, allocationContext);
+    }
+
+    @Override
     public Streams result(int maxGroup, Streams state, Streams output, Allocator allocator, Allocator.Context allocationContext)
     {
         return delegate.result(maxGroup, state, output, allocator, allocationContext);

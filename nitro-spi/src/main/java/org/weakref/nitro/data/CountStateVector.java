@@ -158,24 +158,34 @@ public final class CountStateVector
 
     public void copyTo(I64Vector output)
     {
+        copyRangeTo(output, 0, 0, length);
+    }
+
+    public void copyRangeTo(I64Vector output, int sourceStart, int outputStart, int count)
+    {
+        if (sourceStart < 0 || sourceStart > length ||
+                outputStart < 0 || outputStart > output.length() ||
+                count < 0 || count > length - sourceStart || count > output.length() - outputStart) {
+            throw new IndexOutOfBoundsException("invalid count-state copy range");
+        }
         long[] values = output.values();
-        int outputOffset = 0;
-        for (int chunkIndex = 0; chunkIndex < compactChunks.length; chunkIndex++) {
-            int copyLength = Math.min(CHUNK_SIZE, length - outputOffset);
-            if (copyLength <= 0) {
-                break;
-            }
+        int copied = 0;
+        while (copied < count) {
+            int sourcePosition = sourceStart + copied;
+            int chunkIndex = sourcePosition >> CHUNK_SHIFT;
+            int chunkOffset = sourcePosition & CHUNK_MASK;
+            int copyLength = Math.min(count - copied, CHUNK_SIZE - chunkOffset);
             long[] wide = wideChunks[chunkIndex];
             if (wide != null) {
-                System.arraycopy(wide, 0, values, outputOffset, copyLength);
+                System.arraycopy(wide, chunkOffset, values, outputStart + copied, copyLength);
             }
             else {
                 byte[] compact = compactChunks[chunkIndex];
                 for (int index = 0; index < copyLength; index++) {
-                    values[outputOffset + index] = Byte.toUnsignedInt(compact[index]);
+                    values[outputStart + copied + index] = Byte.toUnsignedInt(compact[chunkOffset + index]);
                 }
             }
-            outputOffset += copyLength;
+            copied += copyLength;
         }
     }
 

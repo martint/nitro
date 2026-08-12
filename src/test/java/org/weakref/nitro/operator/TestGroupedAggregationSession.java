@@ -313,6 +313,21 @@ class TestGroupedAggregationSession
             {
                 return null;
             }
+
+            @Override
+            public Streams copyResultRange(
+                    int groupStart,
+                    int groupCount,
+                    int maxGroup,
+                    Streams state,
+                    Streams output,
+                    int outputStart,
+                    int size,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                return null;
+            }
         };
         try (EngineResources resources = EngineResources.createDefault();
                 Allocator allocator = new Allocator(resources);

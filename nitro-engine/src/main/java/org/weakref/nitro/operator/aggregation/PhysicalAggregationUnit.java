@@ -90,5 +90,10 @@ public interface PhysicalAggregationUnit
         return null;
     }
 
+    default Streams copyResultRange(int output, int groupStart, int groupCount, int maxGroup, Object state, Streams existing, int outputStart, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
     Streams result(int output, int maxGroup, Object state, Streams existing, Allocator allocator, Allocator.Context allocationContext);
 }

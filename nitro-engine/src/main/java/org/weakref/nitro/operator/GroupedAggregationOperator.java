@@ -1411,6 +1411,22 @@ public class GroupedAggregationOperator
                 allocationContext);
     }
 
+    private Streams aggregationCopyRange(int output, Streams existing, int sourceStart, int sourceCount, int outputStart, int size)
+    {
+        PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+        return aggregations[binding.unit()].copyResultRange(
+                binding.result(),
+                sourceStart,
+                sourceCount,
+                maxGroup,
+                states[binding.unit()],
+                existing,
+                outputStart,
+                size,
+                allocator,
+                allocationContext);
+    }
+
     private Streams groupedKeyOutput(int output, BatchState batchState)
     {
         Streams streams = groupedResults[output];
@@ -1507,6 +1523,19 @@ public class GroupedAggregationOperator
             if (streams != null) {
                 materialized[output] = streams;
                 return streams;
+            }
+            if (mask.all() && output >= groupedResults.length) {
+                streams = aggregationCopyRange(
+                        output - groupedResults.length,
+                        streams,
+                        sourceStart,
+                        size,
+                        0,
+                        size);
+                if (streams != null) {
+                    materialized[output] = streams;
+                    return streams;
+                }
             }
             for (int outputPosition : mask) {
                 Streams copied = copyDenseOutputPosition(

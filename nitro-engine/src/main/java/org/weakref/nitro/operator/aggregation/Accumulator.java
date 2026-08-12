@@ -185,6 +185,23 @@ public interface Accumulator
         return copyResultPosition(output, group, maxGroup, (Streams) state, existing, outputPosition, size, allocator, allocationContext);
     }
 
+    default Streams copyResultRange(int groupStart, int groupCount, int maxGroup, Streams state, Streams output, int outputStart, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return null;
+    }
+
+    default Streams copyResultRange(int output, int groupStart, int groupCount, int maxGroup, Streams state, Streams existing, int outputStart, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        return copyResultRange(groupStart, groupCount, maxGroup, state, existing, outputStart, size, allocator, allocationContext);
+    }
+
+    @Override
+    default Streams copyResultRange(int output, int groupStart, int groupCount, int maxGroup, Object state, Streams existing, int outputStart, int size, Allocator allocator, Allocator.Context allocationContext)
+    {
+        return copyResultRange(output, groupStart, groupCount, maxGroup, (Streams) state, existing, outputStart, size, allocator, allocationContext);
+    }
+
     /**
      * Materializes result streams for groups {@code 0..maxGroup}.
      */

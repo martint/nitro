@@ -717,6 +717,22 @@ public class TestBatchRuntime
     }
 
     @Test
+    void testCountStateVectorCopiesRangesAcrossCompactAndWideChunks()
+    {
+        CountStateVector state = new CountStateVector(8_192);
+        state.increment(4_094, 11);
+        state.increment(4_095, 12);
+        state.increment(4_096, 256);
+        state.increment(4_097, 14);
+
+        I64Vector output = new I64Vector(7);
+        java.util.Arrays.fill(output.values(), -1);
+        state.copyRangeTo(output, 4_094, 2, 4);
+
+        assertThat(output.values()).containsExactly(-1, -1, 11, 12, 256, 14, -1);
+    }
+
+    @Test
     void testAvgStateVectorPromotesOnlyOverflowingCountChunk()
     {
         AvgStateVector state = new AvgStateVector(8_192);

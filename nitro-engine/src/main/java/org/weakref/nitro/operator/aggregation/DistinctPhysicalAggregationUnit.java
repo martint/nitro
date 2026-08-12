@@ -134,6 +134,22 @@ public final class DistinctPhysicalAggregationUnit
     }
 
     @Override
+    public Streams copyResultRange(
+            int output,
+            int groupStart,
+            int groupCount,
+            int maxGroup,
+            Object state,
+            Streams existing,
+            int outputStart,
+            int size,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        return delegate.copyResultRange(output, groupStart, groupCount, maxGroup, state, existing, outputStart, size, allocator, allocationContext);
+    }
+
+    @Override
     public Streams result(
             int output,
             int maxGroup,
