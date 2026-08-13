@@ -1316,6 +1316,21 @@ class TestFlatGroupingTable
                 for (int group = 0; group < expected[field].length; group++) {
                     assertThat(OperatorVectorSupport.binaryEquals(grouped, group, expected[field][group].getBytes(StandardCharsets.UTF_8))).isTrue();
                 }
+
+                Streams copied = table.copyGroupedValuePositions(
+                        field,
+                        null,
+                        new int[] {2, 0, 1},
+                        0,
+                        3,
+                        0,
+                        3,
+                        allocator,
+                        context);
+                assertThat(copied.getOrNull(org.weakref.nitro.data.Stream.NULLS)).isNotNull();
+                assertThat(OperatorVectorSupport.binaryEquals(copied.values(), 0, expected[field][2].getBytes(StandardCharsets.UTF_8))).isTrue();
+                assertThat(OperatorVectorSupport.binaryEquals(copied.values(), 1, expected[field][0].getBytes(StandardCharsets.UTF_8))).isTrue();
+                assertThat(OperatorVectorSupport.binaryEquals(copied.values(), 2, expected[field][1].getBytes(StandardCharsets.UTF_8))).isTrue();
             }
         }
         finally {

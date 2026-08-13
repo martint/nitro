@@ -1032,15 +1032,8 @@ final class FlatGroupingTable
                 case DOUBLE -> ((F64Vector) values).values()[outputPosition] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset));
                 case BINARY -> {
                     if (idBackedBinary) {
-                        values = layout.tryCopyIdBackedBinaryValue(
-                                this,
-                                groupedColumnIndex,
-                                recordIndex,
-                                values,
-                                outputPosition,
-                                size,
-                                allocator,
-                                allocationContext);
+                        layout.copyIdBackedBinaryValueToPrepared(
+                                this, groupedColumnIndex, recordIndex, (BinaryVector) values, outputPosition);
                     }
                     else {
                         field.handler().copyBinaryTo(fixedChunk(recordIndex), fixedOffset, variableWidthArena, (BinaryVector) values, outputPosition);

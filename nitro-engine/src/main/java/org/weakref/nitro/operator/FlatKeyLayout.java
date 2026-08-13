@@ -2242,6 +2242,43 @@ class FlatKeyLayout
         return result;
     }
 
+    void copyIdBackedBinaryValueToPrepared(
+            FlatGroupingTable table,
+            int fieldIndex,
+            int recordIndex,
+            BinaryVector output,
+            int outputPosition)
+    {
+        byte[] chunk = table.fixedChunk(recordIndex);
+        int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(chunk, offset);
+            if (token >= 0) {
+                fieldInterners[fieldIndex].copyValue(token, output, outputPosition);
+            }
+            else {
+                long fallback = compactBinaryFallback(fieldIndex, ~token);
+                output.setBytes(
+                        outputPosition,
+                        table.variableWidthArena().chunk(compactBinaryChunkIndex(fallback)),
+                        compactBinaryChunkOffset(fallback),
+                        compactBinaryLength(fallback));
+            }
+            return;
+        }
+
+        int storedLength = (int) GROUP_INT_HANDLE.get(chunk, offset + Integer.BYTES * 2);
+        if (storedLength < 0) {
+            fieldInterners[fieldIndex].copyValue(
+                    recordDictionaryId(fieldIndex, chunk, offset, recordIndex),
+                    output,
+                    outputPosition);
+        }
+        else {
+            FlatTypeHandlers.BINARY.copyBinaryTo(chunk, offset, table.variableWidthArena(), output, outputPosition);
+        }
+    }
+
     /**
      * Hook called by {@link FlatGroupingTable} after a batch completes. Mirror of
      * {@link #beginBatch}; subclasses release cached references here.
