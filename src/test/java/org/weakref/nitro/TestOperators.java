@@ -114,6 +114,7 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.IrNormalizer;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
+import org.weakref.nitro.operator.evaluator.ir.MaskExpressionResolver;
 import org.weakref.nitro.operator.evaluator.ir.MaterializationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.MemoizationPolicy;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
@@ -3843,6 +3844,45 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(1L, 10L),
                         row(2L, 20L)));
+    }
+
+    @Test
+    void testFilterOperatorReportsCompiledMaskExecution()
+    {
+        PrimitiveRegistry primitiveRegistry = primitiveRegistry();
+        Variable literalThreshold = new Variable(0);
+        Variable predicate = new Variable(1);
+        Reference predicateValues = new Reference(predicate, Stream.VALUES);
+        EvaluationPlan evaluationPlan = new EvaluationPlan(
+                List.of(
+                        new Assignment(literalThreshold, new Literal(3L), AllMask.ALL),
+                        new Assignment(
+                                predicate,
+                                new Call("lt", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(literalThreshold, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+
+        assertThat(operator(new FilterOperator(
+                new ConstantTableOperator(allocator, 1, List.of(row(1L), row(2L), row(3L), row(4L))),
+                evaluationPlan,
+                primitiveRegistry,
+                MaskExpressionResolver.resolve(evaluationPlan, predicateValues),
+                allocator,
+                EngineResources.from(allocator).operatorResources().filter(),
+                (event, value) -> diagnostics.merge(event, value, Long::sum))))
+                .matchesExactly(List.of(row(1L), row(2L)));
+
+        assertThat(diagnostics)
+                .containsEntry(FilterOperator.PLANNED_ASSIGNMENTS, 2L)
+                .containsEntry(FilterOperator.PLANNED_COMPILED_MASKS, 1L)
+                .containsEntry(FilterOperator.INPUT_POSITIONS, 4L)
+                .containsEntry(FilterOperator.OUTPUT_POSITIONS, 2L)
+                .containsEntry(FilterOperator.COMPILED_MASK_SUCCESSES, 1L)
+                .containsEntry(FilterOperator.COMPILED_MASK_FALLBACKS, 0L)
+                .containsEntry(FilterOperator.MATERIALIZED_MASK_FALLBACKS, 0L);
     }
 
     @Test

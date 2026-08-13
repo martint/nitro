@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.function.mask.StaticLongEqualityProvider;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
@@ -38,9 +39,27 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 public class FilterOperator
         implements Operator
 {
+    public static final String PLANNED_ASSIGNMENTS = "nitro.filter.planned-assignments";
+    public static final String PLANNED_SOURCE_MASK_OPTIMIZATIONS = "nitro.filter.planned-source-mask-optimizations";
+    public static final String PLANNED_PREBOUND_MASKS = "nitro.filter.planned-prebound-masks";
+    public static final String PLANNED_COMPILED_MASKS = "nitro.filter.planned-compiled-masks";
+    public static final String INPUT_POSITIONS = "nitro.filter.input-positions";
+    public static final String OUTPUT_POSITIONS = "nitro.filter.output-positions";
+    public static final String SOURCE_MASK_SUCCESSES = "nitro.filter.source-mask-successes";
+    public static final String COMPILED_MASK_ATTEMPTS = "nitro.filter.compiled-mask-attempts";
+    public static final String COMPILED_MASK_SUCCESSES = "nitro.filter.compiled-mask-successes";
+    public static final String COMPILED_MASK_FALLBACKS = "nitro.filter.compiled-mask-fallbacks";
+    public static final String DIRECT_PREBOUND_MASK_SUCCESSES = "nitro.filter.direct-prebound-mask-successes";
+    public static final String PRIMITIVE_MASK_ATTEMPTS = "nitro.filter.primitive-mask-attempts";
+    public static final String PRIMITIVE_MASK_SUCCESSES = "nitro.filter.primitive-mask-successes";
+    public static final String PRIMITIVE_MASK_FALLBACKS = "nitro.filter.primitive-mask-fallbacks";
+    public static final String MATERIALIZED_MASK_FALLBACKS = "nitro.filter.materialized-mask-fallbacks";
+
     private final Allocator.Context allocationContext = new Allocator.Context("FilterOperator");
 
     private final Operator source;
@@ -51,9 +70,13 @@ public class FilterOperator
     private final MaskExpression originalPredicateMask;
     private final List<StaticPredicatePushdown> staticPredicatePushdowns;
     private final FilterOperatorPolicy policy;
+    private final ExecutionDiagnostics diagnostics;
 
     private BatchState currentBatchState;
     private MaskExpression effectivePredicateMask;
+    private long inputPositions;
+    private long outputPositions;
+    private boolean diagnosticsReported;
 
     public FilterOperator(
             Operator source,
@@ -76,15 +99,47 @@ public class FilterOperator
             Operator source,
             EvaluationPlan evaluationPlan,
             PrimitiveRegistry primitiveRegistry,
+            Reference predicateReference,
+            Allocator allocator,
+            FilterOperatorResources resources,
+            ExecutionDiagnostics diagnostics)
+    {
+        this(
+                source,
+                evaluationPlan,
+                primitiveRegistry,
+                MaskExpressionResolver.resolve(evaluationPlan, predicateReference),
+                allocator,
+                resources,
+                diagnostics);
+    }
+
+    public FilterOperator(
+            Operator source,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
             MaskExpression predicateMask,
             Allocator allocator,
             FilterOperatorResources resources)
+    {
+        this(source, evaluationPlan, primitiveRegistry, predicateMask, allocator, resources, (_, _) -> {});
+    }
+
+    public FilterOperator(
+            Operator source,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
+            MaskExpression predicateMask,
+            Allocator allocator,
+            FilterOperatorResources resources,
+            ExecutionDiagnostics diagnostics)
     {
         this.source = source;
         this.allocator = allocator;
         this.evaluationPlan = evaluationPlan;
         this.primitiveRegistry = primitiveRegistry;
         this.policy = resources.policy();
+        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.planEvaluator = new PlanEvaluator(evaluationPlan, primitiveRegistry, new PlanEvaluator.InputResolver()
         {
             @Override
@@ -120,6 +175,11 @@ public class FilterOperator
                             source.pushStaticFilter(candidate.filter()))));
         }
         this.staticPredicatePushdowns = List.copyOf(pushdowns);
+        PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = planEvaluator.maskExecutionDiagnostics();
+        diagnostics.record(PLANNED_ASSIGNMENTS, evaluatorDiagnostics.plannedAssignments());
+        diagnostics.record(PLANNED_SOURCE_MASK_OPTIMIZATIONS, evaluatorDiagnostics.sourceMaskOptimizations());
+        diagnostics.record(PLANNED_PREBOUND_MASKS, evaluatorDiagnostics.preboundMasks());
+        diagnostics.record(PLANNED_COMPILED_MASKS, evaluatorDiagnostics.compiledPreboundMasks());
     }
 
     /**
@@ -260,11 +320,13 @@ public class FilterOperator
         BatchState batchState = new BatchState(sourceBatch);
         currentBatchState = batchState;
         Mask batchMask = allocator.copyMask(allocationContext, sourceBatch.borrowMask());
+        inputPositions += batchMask.count();
         MaskExpression predicateMask = effectivePredicateMask();
         if (predicateMask != AllMask.ALL) {
             batchMask = planEvaluator.evaluateInPlace(predicateMask, batchMask);
         }
         batchState.ownedMask(batchMask);
+        outputPositions += batchMask.count();
         source.constrain(batchMask);
         sourceBatch.constrain(batchMask);
         // The predicate result has been reduced to the owned output mask; no evaluator vector escapes this point.
@@ -361,13 +423,38 @@ public class FilterOperator
     @Override
     public void close()
     {
-        if (currentBatchState != null) {
-            currentBatchState.sourceBatch().close();
-            currentBatchState = null;
+        try {
+            if (currentBatchState != null) {
+                currentBatchState.sourceBatch().close();
+                currentBatchState = null;
+            }
+            source.close();
+            planEvaluator.resetForReuse();
+            allocator.release(allocationContext);
         }
-        source.close();
-        planEvaluator.resetForReuse();
-        allocator.release(allocationContext);
+        finally {
+            reportDiagnostics();
+        }
+    }
+
+    private void reportDiagnostics()
+    {
+        if (diagnosticsReported) {
+            return;
+        }
+        diagnosticsReported = true;
+        PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = planEvaluator.maskExecutionDiagnostics();
+        diagnostics.record(INPUT_POSITIONS, inputPositions);
+        diagnostics.record(OUTPUT_POSITIONS, outputPositions);
+        diagnostics.record(SOURCE_MASK_SUCCESSES, evaluatorDiagnostics.sourceMaskSuccesses());
+        diagnostics.record(COMPILED_MASK_ATTEMPTS, evaluatorDiagnostics.compiledMaskAttempts());
+        diagnostics.record(COMPILED_MASK_SUCCESSES, evaluatorDiagnostics.compiledMaskSuccesses());
+        diagnostics.record(COMPILED_MASK_FALLBACKS, evaluatorDiagnostics.compiledMaskFallbacks());
+        diagnostics.record(DIRECT_PREBOUND_MASK_SUCCESSES, evaluatorDiagnostics.directPreboundMaskSuccesses());
+        diagnostics.record(PRIMITIVE_MASK_ATTEMPTS, evaluatorDiagnostics.primitiveMaskAttempts());
+        diagnostics.record(PRIMITIVE_MASK_SUCCESSES, evaluatorDiagnostics.primitiveMaskSuccesses());
+        diagnostics.record(PRIMITIVE_MASK_FALLBACKS, evaluatorDiagnostics.primitiveMaskFallbacks());
+        diagnostics.record(MATERIALIZED_MASK_FALLBACKS, evaluatorDiagnostics.materializedMaskFallbacks());
     }
 
     private final class BatchState

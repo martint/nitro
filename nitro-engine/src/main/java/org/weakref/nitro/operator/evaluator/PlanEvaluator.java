@@ -125,6 +125,30 @@ public final class PlanEvaluator
     private TermOrderFrames termOrderFrames;
     private final ArrayList<Streams> maskInvocationInputs = new ArrayList<>();
     private final PrimitiveMaskInvocation maskInvocation = new PrimitiveMaskInvocation(maskInvocationInputs);
+    private long sourceMaskSuccesses;
+    private long compiledMaskAttempts;
+    private long compiledMaskSuccesses;
+    private long compiledMaskFallbacks;
+    private long directPreboundMaskSuccesses;
+    private long primitiveMaskAttempts;
+    private long primitiveMaskSuccesses;
+    private long primitiveMaskFallbacks;
+    private long materializedMaskFallbacks;
+
+    public record MaskExecutionDiagnostics(
+            int plannedAssignments,
+            int sourceMaskOptimizations,
+            int preboundMasks,
+            int compiledPreboundMasks,
+            long sourceMaskSuccesses,
+            long compiledMaskAttempts,
+            long compiledMaskSuccesses,
+            long compiledMaskFallbacks,
+            long directPreboundMaskSuccesses,
+            long primitiveMaskAttempts,
+            long primitiveMaskSuccesses,
+            long primitiveMaskFallbacks,
+            long materializedMaskFallbacks) {}
 
     @FunctionalInterface
     public interface InputResolver
@@ -288,6 +312,24 @@ public final class PlanEvaluator
             return mask;
         }
         return evaluateTrueMaskInPlace(expression, mask);
+    }
+
+    public MaskExecutionDiagnostics maskExecutionDiagnostics()
+    {
+        return new MaskExecutionDiagnostics(
+                assignments.size(),
+                sourceMaskOptimizations.size(),
+                preboundMasks.size(),
+                (int) preboundMasks.values().stream().filter(CompiledPreboundMask.class::isInstance).count(),
+                sourceMaskSuccesses,
+                compiledMaskAttempts,
+                compiledMaskSuccesses,
+                compiledMaskFallbacks,
+                directPreboundMaskSuccesses,
+                primitiveMaskAttempts,
+                primitiveMaskSuccesses,
+                primitiveMaskFallbacks,
+                materializedMaskFallbacks);
     }
 
     public void reset()
@@ -1688,52 +1730,80 @@ public final class PlanEvaluator
     {
         MaskOutcome sourcePredicateOutcome = tryEvaluateSourcePredicateMaskOutcome(reference, mask);
         if (sourcePredicateOutcome != null) {
+            sourceMaskSuccesses++;
             return sourcePredicateOutcome;
         }
 
         CompiledPreboundMask compiled = compiledPreboundMask(reference);
         if (compiled != null) {
+            compiledMaskAttempts++;
             prepareCompiledMaskInputs(compiled, mask);
             MaskOutcome outcome = compiled.compiled().evaluateOutcome(
                     compiled.inputs(), mask, executionContext, allocationContext);
             if (outcome != null) {
+                compiledMaskSuccesses++;
                 return applyExcludedOutcomeComponents(compiled, outcome, mask);
             }
+            compiledMaskFallbacks++;
         }
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
         if (invocation == null) {
+            materializedMaskFallbacks++;
             return null;
         }
-        return invocation.function().tryEvaluateMaskOutcome(invocation.inputs(), mask, executionContext);
+        primitiveMaskAttempts++;
+        MaskOutcome outcome = invocation.function().tryEvaluateMaskOutcome(invocation.inputs(), mask, executionContext);
+        if (outcome == null) {
+            primitiveMaskFallbacks++;
+            materializedMaskFallbacks++;
+        }
+        else {
+            primitiveMaskSuccesses++;
+        }
+        return outcome;
     }
 
     private Mask tryEvaluatePrimitiveMask(Reference reference, Mask mask, boolean selectTrue)
     {
         Mask sourcePredicateMask = tryEvaluateSourcePredicateMask(reference, mask, selectTrue);
         if (sourcePredicateMask != null) {
+            sourceMaskSuccesses++;
             return sourcePredicateMask;
         }
 
         CompiledPreboundMask compiled = compiledPreboundMask(reference);
         if (compiled != null) {
+            compiledMaskAttempts++;
             prepareCompiledMaskInputs(compiled, mask);
             Mask result = compiled.compiled().evaluateMask(
                     compiled.inputs(), mask, selectTrue, executionContext, allocationContext);
             if (result != null) {
+                compiledMaskSuccesses++;
                 for (Reference component : compiled.excludedComponents()) {
                     excludeComponent(component, result);
                 }
                 return result;
             }
+            compiledMaskFallbacks++;
         }
 
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
         if (invocation == null) {
+            materializedMaskFallbacks++;
             return null;
         }
-        return selectTrue
+        primitiveMaskAttempts++;
+        Mask result = selectTrue
                 ? invocation.function().tryEvaluateTrueMask(invocation.inputs(), mask, executionContext)
                 : invocation.function().tryEvaluateFalseMask(invocation.inputs(), mask, executionContext);
+        if (result == null) {
+            primitiveMaskFallbacks++;
+            materializedMaskFallbacks++;
+        }
+        else {
+            primitiveMaskSuccesses++;
+        }
+        return result;
     }
 
     private boolean tryEvaluatePrimitiveMaskInPlace(Reference reference, Mask mask, boolean selectTrue)
@@ -1746,16 +1816,27 @@ public final class PlanEvaluator
             return true;
         }
         if (tryEvaluateSourcePredicateMaskInPlace(reference, mask, selectTrue)) {
+            sourceMaskSuccesses++;
             return true;
         }
 
         PrimitiveMaskInvocation invocation = resolveMaskPrimitiveInvocation(reference, mask);
         if (invocation == null) {
+            materializedMaskFallbacks++;
             return false;
         }
-        return selectTrue
+        primitiveMaskAttempts++;
+        boolean success = selectTrue
                 ? invocation.function().tryEvaluateTrueMaskInPlace(invocation.inputs(), mask, executionContext)
                 : invocation.function().tryEvaluateFalseMaskInPlace(invocation.inputs(), mask, executionContext);
+        if (success) {
+            primitiveMaskSuccesses++;
+        }
+        else {
+            primitiveMaskFallbacks++;
+            materializedMaskFallbacks++;
+        }
+        return success;
     }
 
     private Mask tryEvaluatePreboundMask(Reference reference, Mask mask, boolean selectTrue)
@@ -1769,10 +1850,13 @@ public final class PlanEvaluator
             return null;
         }
         if (preboundMask instanceof CompiledPreboundMask compiled) {
+            compiledMaskAttempts++;
             prepareCompiledMaskInputs(compiled, mask);
             if (!compiled.compiled().evaluate(compiled.inputs(), mask, selectTrue)) {
+                compiledMaskFallbacks++;
                 return null;
             }
+            compiledMaskSuccesses++;
             for (Reference component : compiled.excludedComponents()) {
                 excludeComponent(component, mask);
             }
@@ -1782,6 +1866,7 @@ public final class PlanEvaluator
         if (directInput.producer() instanceof org.weakref.nitro.operator.evaluator.ir.Input) {
             Mask inputMask = tryResolveInputMask(directInput, mask, selectTrue);
             if (inputMask != null) {
+                directPreboundMaskSuccesses++;
                 return inputMask;
             }
         }
@@ -1789,8 +1874,10 @@ public final class PlanEvaluator
         Vector values = evaluate(directInput, mask).get(directInput.stream());
         if (policy.inPlaceFlatBooleanClassifier() && values instanceof BooleanVector booleanValues) {
             mask.retainBooleans(booleanValues.values(), selectTrue);
+            directPreboundMaskSuccesses++;
             return mask;
         }
+        directPreboundMaskSuccesses++;
         return selectTrue
                 ? classifyTrueBooleanMask(values, null, null, mask)
                 : classifyFalseBooleanMask(values, null, null, mask);
