@@ -285,7 +285,14 @@ public final class GroupedAggregationSession
         finished = true;
         releaseFlushedAggregation();
         ensureAggregation();
-        return currentAggregation.finishInput(maxFinalOutputBatchRows);
+        Batch output = currentAggregation.finishInput(maxFinalOutputBatchRows);
+        if (partialAggregationControl != null && aggregatedInput) {
+            partialAggregationControl.onAggregatedFlush(inputBytes, inputRows, currentAggregation.sessionOutputRowCount());
+            aggregatedInput = false;
+            inputBytes = 0;
+            inputRows = 0;
+        }
+        return output;
     }
 
     private void checkAcceptingInput()

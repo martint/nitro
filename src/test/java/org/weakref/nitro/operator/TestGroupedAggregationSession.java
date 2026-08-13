@@ -701,6 +701,10 @@ class TestGroupedAggregationSession
             try (Batch result = session.finish()) {
                 assertThat(selectedLongValues(result, 0)).containsExactly(60);
             }
+            assertThat(control.aggregatedFlushes).isEqualTo(2);
+            assertThat(control.inputBytes).isEqualTo(60);
+            assertThat(control.inputRows).isEqualTo(6);
+            assertThat(control.outputRows).isEqualTo(6);
         }
     }
 

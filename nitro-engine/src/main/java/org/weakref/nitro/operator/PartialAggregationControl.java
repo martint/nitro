@@ -45,7 +45,11 @@ public interface PartialAggregationControl
         return aggregationEnabled();
     }
 
+    /**
+     * Reports a completed aggregation cohort, including the final cohort produced when a session finishes normally.
+     */
     void onAggregatedFlush(long inputBytes, long inputRows, long outputRows);
 
+    /** Reports a cohort emitted as planner-authored initial aggregation rows. */
     void onPassthroughFlush(long inputBytes, long inputRows);
 }
