@@ -19,6 +19,7 @@ import java.lang.classfile.Label;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.lang.invoke.MethodHandles;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -35,22 +36,35 @@ final class DictionaryRecordEqualityKernelGenerator
     static final int ALL_NULL = 1;
     static final int MIXED = 2;
 
+    static final int LONG = 0;
+    static final int EMBEDDED_BINARY_ID = 1;
+    static final int COMPACT_BINARY_ID = 2;
+
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryRecordEqualityKernel");
     private static final ClassDesc CD_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.FlatKeyLayout");
     private static final ClassDesc CD_BYTE_ARRAY = ClassDesc.ofDescriptor("[B");
-    private static final MethodTypeDesc IDENTICAL_TYPE = MethodTypeDesc.of(CD_int, CD_LAYOUT, CD_BYTE_ARRAY, CD_int, CD_int);
+    private static final ClassDesc CD_ARENA = ClassDesc.of("org.weakref.nitro.operator.FlatGroupingTable$FlatVariableWidthArena");
+    private static final ClassDesc CD_VECTOR_ARRAY = ClassDesc.ofDescriptor("[Lorg/weakref/nitro/data/Vector;");
+    private static final MethodTypeDesc IDENTICAL_TYPE = MethodTypeDesc.of(
+            CD_int, CD_LAYOUT, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_VECTOR_ARRAY, CD_int, CD_int);
     private static final MethodTypeDesc INPUT_NULL_TYPE = MethodTypeDesc.of(CD_boolean, CD_int, CD_int);
     private static final MethodTypeDesc INPUT_LONG_TYPE = MethodTypeDesc.of(CD_long, CD_int, CD_int);
     private static final MethodTypeDesc INPUT_GLOBAL_ID_TYPE = MethodTypeDesc.of(CD_int, CD_int, CD_int);
     private static final MethodTypeDesc RECORD_INT_TYPE = MethodTypeDesc.of(CD_int, CD_BYTE_ARRAY, CD_int);
     private static final MethodTypeDesc RECORD_LONG_TYPE = MethodTypeDesc.of(CD_long, CD_BYTE_ARRAY, CD_int);
+    private static final MethodTypeDesc LAYOUT_RECORD_LONG_TYPE = MethodTypeDesc.of(CD_long, CD_int, CD_BYTE_ARRAY, CD_int);
+    private static final MethodTypeDesc EXACT_BINARY_TYPE = MethodTypeDesc.of(
+            CD_boolean, CD_int, CD_BYTE_ARRAY, CD_int, CD_ARENA, CD_VECTOR_ARRAY, CD_int, CD_int);
 
     private static final int LAYOUT = 1;
     private static final int FIXED_CHUNK = 2;
     private static final int FIXED_OFFSET = 3;
-    private static final int POSITION = 4;
-    private static final int INPUT_NULL = 5;
-    private static final int INPUT_GLOBAL_ID = 6;
+    private static final int VARIABLE_WIDTH_ARENA = 4;
+    private static final int VALUES = 5;
+    private static final int POSITION = 6;
+    private static final int RECORD_INDEX = 7;
+    private static final int INPUT_NULL = 8;
+    private static final int INPUT_GLOBAL_ID = 9;
 
     private final ConcurrentHashMap<Shape, DictionaryRecordEqualityKernel> kernels = new ConcurrentHashMap<>();
     private final AtomicInteger nextClassId = new AtomicInteger();
@@ -103,9 +117,9 @@ final class DictionaryRecordEqualityKernelGenerator
     {
         Label different = code.newLabel();
         Label fallback = code.newLabel();
-        for (int orderIndex = 0; orderIndex < shape.fieldCount(); orderIndex++) {
-            int field = shape.comparisonField(orderIndex);
-            int nullShape = shape.nullShape(field);
+        for (FieldShape fieldShape : shape.fields()) {
+            int field = fieldShape.field();
+            int nullShape = fieldShape.nullShape();
             Label fieldDone = code.newLabel();
             if (!shape.nullableRecord()) {
                 // A non-nullable flat record has no leading null byte. Do not interpret the first key byte as a
@@ -137,11 +151,14 @@ final class DictionaryRecordEqualityKernelGenerator
                 code.ifne(different);
             }
 
-            if (shape.binary(field)) {
-                emitBinaryComparison(code, shape.fixedOffset(field), field, different, fallback);
+            if (fieldShape.kind() == EMBEDDED_BINARY_ID) {
+                emitEmbeddedBinaryComparison(code, fieldShape.fixedOffset(), field, different, fallback);
+            }
+            else if (fieldShape.kind() == COMPACT_BINARY_ID) {
+                emitCompactBinaryComparison(code, fieldShape.fixedOffset(), field, different);
             }
             else {
-                emitLongComparison(code, shape.fixedOffset(field), field, different);
+                emitLongComparison(code, fieldShape, different);
             }
             code.labelBinding(fieldDone);
         }
@@ -166,21 +183,30 @@ final class DictionaryRecordEqualityKernelGenerator
         code.iand();
     }
 
-    private static void emitLongComparison(CodeBuilder code, int fieldOffset, int field, Label different)
+    private static void emitLongComparison(CodeBuilder code, FieldShape fieldShape, Label different)
     {
-        emitRecordOffset(code, fieldOffset);
-        code.aload(FIXED_CHUNK);
-        code.swap();
-        code.invokestatic(CD_LAYOUT, "generatedEqualityRecordLong", RECORD_LONG_TYPE);
+        if (fieldShape.fixedSize() == Long.BYTES) {
+            emitRecordOffset(code, fieldShape.fixedOffset());
+            code.aload(FIXED_CHUNK);
+            code.swap();
+            code.invokestatic(CD_LAYOUT, "generatedEqualityRecordLong", RECORD_LONG_TYPE);
+        }
+        else {
+            code.aload(LAYOUT);
+            code.loadConstant(fieldShape.field());
+            code.aload(FIXED_CHUNK);
+            emitRecordOffset(code, fieldShape.fixedOffset());
+            code.invokevirtual(CD_LAYOUT, "generatedEqualityRecordLong", LAYOUT_RECORD_LONG_TYPE);
+        }
         code.aload(LAYOUT);
-        code.loadConstant(field);
+        code.loadConstant(fieldShape.field());
         code.iload(POSITION);
         code.invokevirtual(CD_LAYOUT, "generatedEqualityInputLong", INPUT_LONG_TYPE);
         code.lcmp();
         code.ifne(different);
     }
 
-    private static void emitBinaryComparison(CodeBuilder code, int fieldOffset, int field, Label different, Label fallback)
+    private static void emitEmbeddedBinaryComparison(CodeBuilder code, int fieldOffset, int field, Label different, Label fallback)
     {
         code.aload(FIXED_CHUNK);
         emitRecordOffset(code, fieldOffset + Integer.BYTES * 2);
@@ -202,6 +228,43 @@ final class DictionaryRecordEqualityKernelGenerator
         code.if_icmpne(different);
     }
 
+    private static void emitCompactBinaryComparison(CodeBuilder code, int fieldOffset, int field, Label different)
+    {
+        Label exact = code.newLabel();
+        Label done = code.newLabel();
+        code.aload(FIXED_CHUNK);
+        emitRecordOffset(code, fieldOffset);
+        code.invokestatic(CD_LAYOUT, "generatedEqualityRecordInt", RECORD_INT_TYPE);
+        code.istore(INPUT_NULL);
+        code.iload(INPUT_NULL);
+        code.iflt(exact);
+
+        code.aload(LAYOUT);
+        code.loadConstant(field);
+        code.iload(POSITION);
+        code.invokevirtual(CD_LAYOUT, "generatedEqualityInputGlobalId", INPUT_GLOBAL_ID_TYPE);
+        code.istore(INPUT_GLOBAL_ID);
+        code.iload(INPUT_GLOBAL_ID);
+        code.iflt(exact);
+        code.iload(INPUT_GLOBAL_ID);
+        code.iload(INPUT_NULL);
+        code.if_icmpne(different);
+        code.goto_(done);
+
+        code.labelBinding(exact);
+        code.aload(LAYOUT);
+        code.loadConstant(field);
+        code.aload(FIXED_CHUNK);
+        emitRecordOffset(code, fieldOffset);
+        code.aload(VARIABLE_WIDTH_ARENA);
+        code.aload(VALUES);
+        code.iload(POSITION);
+        code.iload(RECORD_INDEX);
+        code.invokevirtual(CD_LAYOUT, "generatedEqualityExactBinary", EXACT_BINARY_TYPE);
+        code.ifeq(different);
+        code.labelBinding(done);
+    }
+
     private static void emitRecordOffset(CodeBuilder code, int fieldOffset)
     {
         code.iload(FIXED_OFFSET);
@@ -209,32 +272,13 @@ final class DictionaryRecordEqualityKernelGenerator
         code.iadd();
     }
 
-    record Shape(
-            int fieldCount,
-            boolean nullableRecord,
-            int nullShapes,
-            int binaryFields,
-            long fixedOffsets,
-            int comparisonOrder)
+    record Shape(boolean nullableRecord, List<FieldShape> fields)
     {
-        int nullShape(int field)
+        Shape
         {
-            return (nullShapes >>> (field * 2)) & 3;
-        }
-
-        boolean binary(int field)
-        {
-            return (binaryFields & (1 << field)) != 0;
-        }
-
-        int fixedOffset(int field)
-        {
-            return (int) ((fixedOffsets >>> (field * 8)) & 0xFF);
-        }
-
-        int comparisonField(int index)
-        {
-            return (comparisonOrder >>> (index * 3)) & 7;
+            fields = List.copyOf(fields);
         }
     }
+
+    record FieldShape(int field, int nullShape, int kind, int fixedOffset, int fixedSize) {}
 }

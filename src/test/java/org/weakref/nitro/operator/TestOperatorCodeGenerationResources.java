@@ -137,7 +137,14 @@ class TestOperatorCodeGenerationResources
         assertThat(second.mixedComposite3Grouping().create(mixedShape)).isNotSameAs(firstMixed);
 
         DictionaryRecordEqualityKernelGenerator.Shape equalityShape =
-                new DictionaryRecordEqualityKernelGenerator.Shape(1, false, 0, 0, 0, 0);
+                new DictionaryRecordEqualityKernelGenerator.Shape(
+                        false,
+                        List.of(new DictionaryRecordEqualityKernelGenerator.FieldShape(
+                                0,
+                                DictionaryRecordEqualityKernelGenerator.NULL_FREE,
+                                DictionaryRecordEqualityKernelGenerator.LONG,
+                                0,
+                                Long.BYTES)));
         DictionaryRecordEqualityKernel firstEquality = first.dictionaryRecordEquality().create(equalityShape);
         assertThat(first.dictionaryRecordEquality().create(equalityShape)).isSameAs(firstEquality);
         assertThat(second.dictionaryRecordEquality().create(equalityShape)).isNotSameAs(firstEquality);

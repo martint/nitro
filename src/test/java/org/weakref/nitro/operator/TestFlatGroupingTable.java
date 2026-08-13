@@ -837,7 +837,10 @@ class TestFlatGroupingTable
                     assertThat(idLayout.generatedDictionaryRecordEquality(
                             fixedChunk,
                             fixedOffset,
-                            position)).isEqualTo(DictionaryRecordEqualityKernel.IDENTICAL);
+                            idRecords.variableWidthArena(),
+                            dictionaryValues,
+                            position,
+                            0)).isEqualTo(DictionaryRecordEqualityKernel.IDENTICAL);
                 }
                 long group = idRecords.assignGroup(dictionaryValues, nulls, position, nextGroup);
                 assertThat(group).isEqualTo(position % distinct);
@@ -1265,6 +1268,7 @@ class TestFlatGroupingTable
         FlatGroupingTable table = new FlatGroupingTable(layout, 4, true);
         try {
             table.beginBatch(first, null);
+            assertThat(layout.usesGeneratedDictionaryRecordEquality()).isTrue();
             assertThat(table.assignGroup(first, null, 0, 0)).isEqualTo(0);
             assertThat(table.assignGroup(first, null, 1, 1)).isEqualTo(1);
             assertThat(table.assignGroup(first, null, 2, 2)).isEqualTo(0);
@@ -1297,6 +1301,7 @@ class TestFlatGroupingTable
                     new I64Vector(new long[] {30}),
                     new I64Vector(new long[] {300})};
             table.beginBatch(dictionaryAgain, null);
+            assertThat(layout.usesGeneratedDictionaryRecordEquality()).isTrue();
             assertThat(table.findGroup(dictionaryAgain, null, 0)).isEqualTo(2);
             table.endBatch();
 

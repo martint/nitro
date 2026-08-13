@@ -27,6 +27,7 @@ import org.weakref.nitro.data.VectorAccess;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -1121,44 +1122,38 @@ class FlatKeyLayout
     {
         if (!policy.generatedDictionaryRecordEquality() ||
                 !embedIdOnlyBinaryIds ||
-                compactEmbeddedBinaryRecords ||
-                handlers.length < 5 ||
-                handlers.length > 7) {
+                handlers.length < 5) {
             return;
         }
-        int nullShapes = 0;
-        int binaryFields = 0;
-        long offsets = 0;
-        int order = 0;
+        List<DictionaryRecordEqualityKernelGenerator.FieldShape> fields = new ArrayList<>(handlers.length);
         for (int field = 0; field < handlers.length; field++) {
-            if (fixedOffsets[field] < 0 || fixedOffsets[field] > 0xFF) {
-                return;
-            }
-            offsets |= (long) fixedOffsets[field] << (field * 8);
-            nullShapes |= batchNullShape(field) << (field * 2);
             if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
                 if (!fieldIdComparable[field] || batchDictionaryIds[field] == null) {
                     return;
                 }
-                binaryFields |= 1 << field;
             }
             else if (fieldKinds[field] != FlatTypeHandler.Kind.LONG ||
-                    handlers[field].fixedSize() != Long.BYTES ||
                     fieldLong[field] == null) {
                 return;
             }
         }
-        for (int index = 0; index < comparisonOrder.length; index++) {
-            order |= comparisonOrder[index] << (index * 3);
+        for (int field : comparisonOrder) {
+            int kind = fieldKinds[field] == FlatTypeHandler.Kind.LONG
+                    ? DictionaryRecordEqualityKernelGenerator.LONG
+                    : compactEmbeddedBinaryRecords
+                            ? DictionaryRecordEqualityKernelGenerator.COMPACT_BINARY_ID
+                            : DictionaryRecordEqualityKernelGenerator.EMBEDDED_BINARY_ID;
+            fields.add(new DictionaryRecordEqualityKernelGenerator.FieldShape(
+                    field,
+                    batchNullShape(field),
+                    kind,
+                    fixedOffsets[field],
+                    handlers[field].fixedSize()));
         }
         generatedRecordEqualityKernel = codeGeneration.dictionaryRecordEquality().create(
                 new DictionaryRecordEqualityKernelGenerator.Shape(
-                        handlers.length,
                         nullByteCount != 0,
-                        nullShapes,
-                        binaryFields,
-                        offsets,
-                        order));
+                        fields));
     }
 
     private void prepareConstantNullMixedComposite3()
@@ -2782,7 +2777,13 @@ class FlatKeyLayout
 
     public boolean identicalRecordToInput(byte[] fixedChunk, int fixedOffset, FlatGroupingTable.FlatVariableWidthArena variableWidthArena, Vector[] values, Vector[] nulls, int position, int recordIndex)
     {
-        int generatedResult = generatedDictionaryRecordEquality(fixedChunk, fixedOffset, position);
+        int generatedResult = generatedDictionaryRecordEquality(
+                fixedChunk,
+                fixedOffset,
+                variableWidthArena,
+                values,
+                position,
+                recordIndex);
         if (generatedResult != DictionaryRecordEqualityKernel.FALLBACK) {
             return generatedResult == DictionaryRecordEqualityKernel.IDENTICAL;
         }
@@ -2845,11 +2846,43 @@ class FlatKeyLayout
         return true;
     }
 
-    int generatedDictionaryRecordEquality(byte[] fixedChunk, int fixedOffset, int position)
+    int generatedDictionaryRecordEquality(
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena variableWidthArena,
+            Vector[] values,
+            int position,
+            int recordIndex)
     {
         return generatedRecordEqualityKernel == null
                 ? DictionaryRecordEqualityKernel.FALLBACK
-                : generatedRecordEqualityKernel.identical(this, fixedChunk, fixedOffset, position);
+                : generatedRecordEqualityKernel.identical(
+                        this,
+                        fixedChunk,
+                        fixedOffset,
+                        variableWidthArena,
+                        values,
+                        position,
+                        recordIndex);
+    }
+
+    boolean generatedEqualityExactBinary(
+            int field,
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena variableWidthArena,
+            Vector[] values,
+            int position,
+            int recordIndex)
+    {
+        return identicalBinaryField(
+                field,
+                fixedChunk,
+                fixedOffset,
+                variableWidthArena,
+                values[inputChannels[field]],
+                position,
+                recordIndex);
     }
 
     boolean generatedEqualityInputNull(int field, int position)
@@ -2876,6 +2909,11 @@ class FlatKeyLayout
     static long generatedEqualityRecordLong(byte[] fixedChunk, int fixedOffset)
     {
         return (long) GROUP_LONG_HANDLE.get(fixedChunk, fixedOffset);
+    }
+
+    long generatedEqualityRecordLong(int field, byte[] fixedChunk, int fixedOffset)
+    {
+        return handlers[field].readLong(fixedChunk, fixedOffset);
     }
 
     private boolean idComparable(int fieldIndex, byte[] fixedChunk, int fixedOffset, int recordIndex)

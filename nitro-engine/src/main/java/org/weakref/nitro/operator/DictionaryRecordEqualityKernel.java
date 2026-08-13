@@ -13,11 +13,20 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.data.Vector;
+
 interface DictionaryRecordEqualityKernel
 {
     int FALLBACK = -1;
     int DIFFERENT = 0;
     int IDENTICAL = 1;
 
-    int identical(FlatKeyLayout layout, byte[] fixedChunk, int fixedOffset, int position);
+    int identical(
+            FlatKeyLayout layout,
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena variableWidthArena,
+            Vector[] values,
+            int position,
+            int recordIndex);
 }
