@@ -299,7 +299,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int sparseCompositeAdmissionMaxDistinct,
             int sparseCompositeExpensiveMinFields,
             int sparseCompositeExpensiveMinDistinct,
-            int packedIdentityProbeTileRows,
+            int hashProbeTileRows,
             boolean identityGroupIds)
     {
         public Table
@@ -312,7 +312,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     sparseCompositeExpensiveMinFields <= 0 ||
                     sparseCompositeExpensiveMinDistinct < 0 ||
                     sparseCompositeExpensiveMinDistinct > sparseCompositeAdmissionSampleSize ||
-                    packedIdentityProbeTileRows <= 0) {
+                    hashProbeTileRows <= 0) {
                 throw new IllegalArgumentException("Invalid flat table admission policy");
             }
         }
@@ -365,8 +365,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Math.max(
                             1,
                             Integer.getInteger(
-                                    "nitro.flatGrouping.packedIdentityProbeTileRows",
-                                    defaults.packedIdentityProbeTileRows())),
+                                    "nitro.flatGrouping.hashProbeTileRows",
+                                    defaults.hashProbeTileRows())),
                     booleanProperty("nitro.flatGrouping.identityGroupIds", defaults.identityGroupIds()));
         }
     }

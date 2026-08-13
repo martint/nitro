@@ -313,18 +313,18 @@ final class FlatGroupingTable
         return layout.assignNormalizedIntBatch(this, values, nulls, mask, nextGroupId, result.values());
     }
 
-    long assignPrefetchedPackedBatch(
+    long assignPrefetchedBatch(
             Vector[] values,
             Vector[] nulls,
             Mask mask,
             I64Vector result,
             long nextGroupId)
     {
-        if (!packedHashRecordSlots || !batchHashesValid || mask.none()) {
+        if (!batchHashesValid || mask.none()) {
             return -1;
         }
         ensureCapacity(nextGroupId + mask.selectedCount());
-        int tileRows = policy.packedIdentityProbeTileRows();
+        int tileRows = policy.hashProbeTileRows();
         if (prefetchedBuckets == null || prefetchedBuckets.length < tileRows) {
             int[] previousBuckets = prefetchedBuckets;
             long[] previousControls = prefetchedControls;
@@ -342,8 +342,8 @@ final class FlatGroupingTable
             for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
                 int position = positions == null ? selectedIndex : positions[selectedIndex];
                 long hash = batchHashes[position];
-                int packedHash = packedTableHash(hash);
-                int bucket = bucket(Integer.rotateRight(packedHash, 7));
+                int packedHash = packedHashRecordSlots ? packedTableHash(hash) : 0;
+                int bucket = bucket(packedHashRecordSlots ? Integer.rotateRight(packedHash, 7) : (int) (hash >> 7));
                 int tileIndex = selectedIndex - tileStart;
                 prefetchedBuckets[tileIndex] = bucket;
                 prefetchedControls[tileIndex] = (long) LONG_HANDLE.get(control, bucket);
@@ -768,7 +768,7 @@ final class FlatGroupingTable
                 prefetchedBucket,
                 prefetchedControl);
         if (index >= 0) {
-            return recordIndexByHash(index);
+            return identityGroupIds ? recordIndexByHash(index) : groupIdsByHash[index];
         }
         addNewGroup(-index - 1, values, nulls, position, hash, newGroupId, normalized, normalizedFirst, normalizedSecond);
         return newGroupId;

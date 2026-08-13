@@ -1263,6 +1263,34 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPrefetchedGeneralFlatTablePreservesSourceOrderForRepeatedNewKeys()
+    {
+        Vector[] values = {
+                new I64Vector(new long[] {7, 7, 8, 9, 9}),
+                new F64Vector(new double[] {1.5, 1.5, 2.5, 3.5, 3.5}),
+                new BooleanVector(new boolean[] {true, true, false, true, true}),
+                utf8("alpha", "alpha", "beta", "gamma", "gamma")};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                4,
+                false);
+        try {
+            I64Vector groups = new I64Vector(5);
+            Vector[] nulls = {null, null, null, null};
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, Mask.all(5));
+            assertThat(table.assignPrefetchedBatch(values, nulls, Mask.all(5), groups, 0)).isEqualTo(3);
+
+            assertThat(groups.values()).containsExactly(0, 0, 1, 2, 2);
+            assertThat(table.recordCount()).isEqualTo(3);
+            assertThat(table.usesPackedHashRecordSlots()).isFalse();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testNestedDictionaryNullMappingsAreRecomposedAtBatchBoundaries()
     {
         Vector[] values = {
