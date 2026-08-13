@@ -1385,6 +1385,12 @@ final class GroupingState
                 nextGroupId = batchNextGroupId;
                 return;
             }
+            long prefetchedNextGroupId = flatGroupingTable.assignPrefetchedPackedBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (prefetchedNextGroupId >= 0) {
+                nextGroupId = prefetchedNextGroupId;
+                return;
+            }
             if (flatGroupingTable.singleDictionaryGroupCacheActive()) {
                 for (int position : mask) {
                     long newGroupId = nextGroupId;

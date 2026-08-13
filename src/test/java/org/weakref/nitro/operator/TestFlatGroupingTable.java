@@ -1225,6 +1225,44 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPrefetchedPackedIdentityPreservesSourceOrderForRepeatedNewKeys()
+    {
+        int size = 1 << 10;
+        long[] first = new long[size];
+        long[] second = new long[size];
+        for (int position = 0; position < size; position++) {
+            first[position] = (1L << 40) + position;
+            second[position] = position * 3L;
+        }
+
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            I64Vector initialGroups = new I64Vector(size);
+            state.assignGroups(
+                    new Vector[] {new I64Vector(first), new I64Vector(second)},
+                    new Vector[] {null, null},
+                    Mask.all(size),
+                    initialGroups);
+            assertThat(state.usesPackedFlatIdentitySlots()).isTrue();
+            assertThat(initialGroups.values()).containsExactly(Arrays.stream(first).map(value -> value - (1L << 40)).toArray());
+
+            long newFirst = (1L << 50) + 7;
+            long newSecond = (1L << 51) + 11;
+            Vector[] repeatedNewKeys = {
+                    new I64Vector(new long[] {newFirst, newFirst, first[17], newSecond, newSecond}),
+                    new I64Vector(new long[] {31, 31, second[17], 47, 47})};
+            I64Vector groups = new I64Vector(5);
+            state.assignGroups(repeatedNewKeys, new Vector[] {null, null}, Mask.all(5), groups);
+
+            assertThat(groups.values()).containsExactly(size, size, 17, size + 1, size + 1);
+            assertThat(state.groupCount()).isEqualTo(size + 2);
+        }
+        finally {
+            state.releaseBuffers();
+        }
+    }
+
+    @Test
     void testNestedDictionaryNullMappingsAreRecomposedAtBatchBoundaries()
     {
         Vector[] values = {

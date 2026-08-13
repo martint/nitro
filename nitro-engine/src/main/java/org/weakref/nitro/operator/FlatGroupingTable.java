@@ -100,6 +100,8 @@ final class FlatGroupingTable
     private int singleDictionaryEpoch;
     private boolean singleDictionaryGroupCacheActive;
     private int[] singleDictionaryIds;
+    private int[] prefetchedBuckets;
+    private long[] prefetchedControls;
 
     public FlatGroupingTable(FlatKeyLayout layout, int expectedSize)
     {
@@ -309,6 +311,61 @@ final class FlatGroupingTable
         prepareSingleDictionaryGroupCache(mask.selectedCount(), mask.all());
         considerSparseCompositeAdmission(mask);
         return layout.assignNormalizedIntBatch(this, values, nulls, mask, nextGroupId, result.values());
+    }
+
+    long assignPrefetchedPackedBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (!packedHashRecordSlots || !batchHashesValid || mask.none()) {
+            return -1;
+        }
+        ensureCapacity(nextGroupId + mask.selectedCount());
+        int tileRows = policy.packedIdentityProbeTileRows();
+        if (prefetchedBuckets == null || prefetchedBuckets.length < tileRows) {
+            int[] previousBuckets = prefetchedBuckets;
+            long[] previousControls = prefetchedControls;
+            prefetchedBuckets = arrayPool.borrowInts(tileRows);
+            prefetchedControls = arrayPool.borrowLongs(tileRows);
+            arrayPool.release(previousBuckets);
+            arrayPool.release(previousControls);
+        }
+
+        int[] positions = mask.selectedPositions();
+        int count = mask.selectedCount();
+        long[] output = result.values();
+        for (int tileStart = 0; tileStart < count; tileStart += tileRows) {
+            int tileEnd = Math.min(count, tileStart + tileRows);
+            for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
+                int position = positions == null ? selectedIndex : positions[selectedIndex];
+                long hash = batchHashes[position];
+                int packedHash = packedTableHash(hash);
+                int bucket = bucket(Integer.rotateRight(packedHash, 7));
+                int tileIndex = selectedIndex - tileStart;
+                prefetchedBuckets[tileIndex] = bucket;
+                prefetchedControls[tileIndex] = (long) LONG_HANDLE.get(control, bucket);
+            }
+            for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
+                int position = positions == null ? selectedIndex : positions[selectedIndex];
+                int tileIndex = selectedIndex - tileStart;
+                long newGroupId = nextGroupId;
+                long groupId = assignGroupHashedPrefetched(
+                        values,
+                        nulls,
+                        position,
+                        newGroupId,
+                        prefetchedBuckets[tileIndex],
+                        prefetchedControls[tileIndex]);
+                if (groupId == newGroupId) {
+                    nextGroupId++;
+                }
+                output[position] = groupId;
+            }
+        }
+        return nextGroupId;
     }
 
     /** Position-list counterpart used when a caller has already removed rows that will not probe the table. */
@@ -685,6 +742,35 @@ final class FlatGroupingTable
         if (nextRecordIndex >= maxFill) {
             rehash();
         }
+        return newGroupId;
+    }
+
+    private long assignGroupHashedPrefetched(
+            Vector[] values,
+            Vector[] nulls,
+            int position,
+            long newGroupId,
+            int prefetchedBucket,
+            long prefetchedControl)
+    {
+        boolean normalized = batchNormalizedHashesValid && batchNormalizedValid[position] != 0;
+        long normalizedFirst = normalized ? batchNormalizedFirst[position] : 0;
+        long normalizedSecond = normalized ? batchNormalizedSecond[position] : 0;
+        long hash = batchHashes[position];
+        int index = getIndex(
+                values,
+                nulls,
+                position,
+                hash,
+                normalized,
+                normalizedFirst,
+                normalizedSecond,
+                prefetchedBucket,
+                prefetchedControl);
+        if (index >= 0) {
+            return recordIndexByHash(index);
+        }
+        addNewGroup(-index - 1, values, nulls, position, hash, newGroupId, normalized, normalizedFirst, normalizedSecond);
         return newGroupId;
     }
 
@@ -1125,6 +1211,20 @@ final class FlatGroupingTable
 
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
+        return getIndex(values, nulls, position, hash, normalized, normalizedFirst, normalizedSecond, -1, 0);
+    }
+
+    private int getIndex(
+            Vector[] values,
+            Vector[] nulls,
+            int position,
+            long hash,
+            boolean normalized,
+            long normalizedFirst,
+            long normalizedSecond,
+            int prefetchedBucket,
+            long prefetchedControl)
+    {
         int packedHash = packedHashRecordSlots ? packedTableHash(hash) : 0;
         byte hashPrefix = (byte) ((packedHashRecordSlots ? packedHash : hash) & 0x7F | 0x80);
         int bucket = bucket(packedHashRecordSlots ? Integer.rotateRight(packedHash, 7) : (int) (hash >> 7));
@@ -1133,6 +1233,12 @@ final class FlatGroupingTable
 
         while (true) {
             long controlVector = (long) LONG_HANDLE.get(control, bucket);
+            if (bucket == prefetchedBucket) {
+                // A prior source-order insertion may have changed this control word, so the current value remains
+                // authoritative. Reading the staged value keeps the preceding tile load live as a software prefetch.
+                controlVector = controlVector == prefetchedControl ? prefetchedControl : controlVector;
+                prefetchedBucket = -1;
+            }
             long controlMatches = match(controlVector, repeated);
             while (controlMatches != 0) {
                 int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));
@@ -1493,6 +1599,8 @@ final class FlatGroupingTable
         bytes += longArrayBytes(normalizedSecondByRecord);
         bytes += longArrayBytes(normalizedValidByRecord);
         bytes += longArrayBytes(singleDictionaryGroups);
+        bytes += intArrayBytes(prefetchedBuckets);
+        bytes += longArrayBytes(prefetchedControls);
         if (fixedRecordChunks != null) {
             bytes += (long) fixedRecordChunks.length * Long.BYTES;
             for (byte[] chunk : fixedRecordChunks) {
@@ -1543,6 +1651,10 @@ final class FlatGroupingTable
         normalizedValidByRecord = null;
         arrayPool.release(singleDictionaryGroups);
         singleDictionaryGroups = null;
+        arrayPool.release(prefetchedBuckets);
+        prefetchedBuckets = null;
+        arrayPool.release(prefetchedControls);
+        prefetchedControls = null;
         singleDictionaryIdentity = null;
         if (fixedRecordChunks != null) {
             for (byte[] chunk : fixedRecordChunks) {

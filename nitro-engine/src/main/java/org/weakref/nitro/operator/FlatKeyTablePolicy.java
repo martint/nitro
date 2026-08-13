@@ -299,6 +299,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int sparseCompositeAdmissionMaxDistinct,
             int sparseCompositeExpensiveMinFields,
             int sparseCompositeExpensiveMinDistinct,
+            int packedIdentityProbeTileRows,
             boolean identityGroupIds)
     {
         public Table
@@ -310,14 +311,15 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     sparseCompositeAdmissionMaxDistinct > sparseCompositeAdmissionSampleSize ||
                     sparseCompositeExpensiveMinFields <= 0 ||
                     sparseCompositeExpensiveMinDistinct < 0 ||
-                    sparseCompositeExpensiveMinDistinct > sparseCompositeAdmissionSampleSize) {
+                    sparseCompositeExpensiveMinDistinct > sparseCompositeAdmissionSampleSize ||
+                    packedIdentityProbeTileRows <= 0) {
                 throw new IllegalArgumentException("Invalid flat table admission policy");
             }
         }
 
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, true);
+            return new Table(false, false, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, 72, true);
         }
 
         public static Table fromSystemProperties()
@@ -360,6 +362,11 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.flatGrouping.sparseCompositeExpensiveMinDistinct",
                             defaults.sparseCompositeExpensiveMinDistinct()),
+                    Math.max(
+                            1,
+                            Integer.getInteger(
+                                    "nitro.flatGrouping.packedIdentityProbeTileRows",
+                                    defaults.packedIdentityProbeTileRows())),
                     booleanProperty("nitro.flatGrouping.identityGroupIds", defaults.identityGroupIds()));
         }
     }
