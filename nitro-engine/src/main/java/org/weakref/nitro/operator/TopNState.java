@@ -504,6 +504,20 @@ final class TopNState
 
     public void flushPendingBatch(Batch batch, List<Integer> retainedSlots)
     {
+        int retained = 0;
+        int[] retainedPositions = new int[Math.min(retainedSlots.size(), batch.borrowMask().count())];
+        for (int slot : retainedSlots) {
+            if (pendingBatches[slot] == batch) {
+                retainedPositions[retained++] = pendingPositions[slot];
+            }
+        }
+        if (retained > 0 && retained < batch.borrowMask().count()) {
+            Arrays.sort(retainedPositions, 0, retained);
+            batch.constrain(allocator.allocateSparseMask(
+                    allocationContext,
+                    Arrays.copyOf(retainedPositions, retained),
+                    batch.borrowMask().size()));
+        }
         for (int slot : retainedSlots) {
             if (pendingBatches[slot] != batch) {
                 continue;

@@ -3664,6 +3664,44 @@ public class TestOperatorBatches
         }
     }
 
+    @Test
+    void testTopNSessionConstrainsLazyPayloadToRetainedCandidates()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        AtomicInteger activePositions = new AtomicInteger(100_000);
+        AtomicInteger payloadPositions = new AtomicInteger();
+        Mask mask = Mask.all(100_000);
+        try (Batch input = new Batch(
+                mask,
+                constrained -> activePositions.set(constrained.count()),
+                java.util.function.Function.identity(),
+                Output.of(Streams.ofValues(new I64Vector(java.util.stream.LongStream.range(0, 100_000).toArray()))),
+                new Output(
+                        Set.of(Stream.VALUES),
+                        ignored -> {
+                            payloadPositions.set(activePositions.get());
+                            return new I64Vector(100_000);
+                        },
+                        (stream, vector) -> vector,
+                        (stream, vector) -> {},
+                        (existing, sourcePosition, outputPosition, size) -> {
+                            payloadPositions.incrementAndGet();
+                            I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
+                            output.values()[outputPosition] = sourcePosition;
+                            return Streams.ofValues(output);
+                        }));
+                TopNSession session = new TopNSession(
+                        allocator,
+                        2,
+                        new int[] {0},
+                        new boolean[] {true},
+                        Schema.unspecified(2))) {
+            session.addInput(input);
+            assertThat(activePositions.get()).isEqualTo(2);
+            assertThat(payloadPositions.get()).isEqualTo(2);
+        }
+    }
+
     private static String binaryValue(VectorAccess.BinaryRegions values, int position)
     {
         return new String(values.data(position), values.offset(position), values.length(position), UTF_8);
