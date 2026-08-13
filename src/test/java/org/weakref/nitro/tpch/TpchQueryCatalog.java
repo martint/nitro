@@ -273,7 +273,8 @@ public final class TpchQueryCatalog
                     SELECT s_suppkey, s_name, s_address, s_phone, total_revenue
                     FROM ${prefix}supplier, revenue0
                     WHERE s_suppkey = supplier_no
-                      AND total_revenue = (SELECT max(total_revenue) FROM revenue0)
+                      AND abs(total_revenue - (SELECT max(total_revenue) FROM revenue0))
+                            <= greatest(abs(total_revenue), 1) * 1e-12
                     ORDER BY s_suppkey
                     """),
             Map.entry("16", """

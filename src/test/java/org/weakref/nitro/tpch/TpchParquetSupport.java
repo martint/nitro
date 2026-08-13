@@ -1350,7 +1350,7 @@ final class TpchParquetSupport
                 revenueCopy(allocator, primitiveRegistry, tables));
         // [supplier_no, total_revenue, max_revenue]
         Operator withMax = new NestedLoopJoinOperator(allocator, revenue, maxRevenue);
-        Operator best = filter(allocator, primitiveRegistry, withMax, equalColumnsF64(1, 2));
+        Operator best = filter(allocator, primitiveRegistry, withMax, approximatelyEqualPositiveColumnsF64(1, 2));
 
         Operator supplier = scannedTable(allocator, tables, "supplier", "s_suppkey", "s_name", "s_address", "s_phone");
         // Match Velox's final boundary directly: supplier fields plus total_revenue; both build keys and max are dead.
@@ -1531,6 +1531,41 @@ final class TpchParquetSupport
     private static FilterSpec equalColumnsF64(int leftInputIndex, int rightInputIndex)
     {
         return columnsComparisonF64("eq_f64", leftInputIndex, rightInputIndex);
+    }
+
+    private static FilterSpec approximatelyEqualPositiveColumnsF64(int leftInputIndex, int rightInputIndex)
+    {
+        Variable lowerFactor = new Variable(0);
+        Variable lowerBound = new Variable(1);
+        Variable aboveLowerBound = new Variable(2);
+        Variable upperFactor = new Variable(3);
+        Variable upperBound = new Variable(4);
+        Variable belowUpperBound = new Variable(5);
+        Variable result = new Variable(6);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(lowerFactor, new Literal(1.0 - 1e-12), AllMask.ALL),
+                new Assignment(lowerBound, new Call("multiply_f64", List.of(
+                        new Reference(new Input(rightInputIndex), Stream.VALUES),
+                        new Reference(lowerFactor, Stream.VALUES))), AllMask.ALL),
+                new Assignment(aboveLowerBound, new Call("gte_f64", List.of(
+                        new Reference(new Input(leftInputIndex), Stream.VALUES),
+                        new Reference(lowerBound, Stream.VALUES))), AllMask.ALL),
+                new Assignment(upperFactor, new Literal(1.0 + 1e-12), AllMask.ALL),
+                new Assignment(upperBound, new Call("multiply_f64", List.of(
+                        new Reference(new Input(rightInputIndex), Stream.VALUES),
+                        new Reference(upperFactor, Stream.VALUES))), AllMask.ALL),
+                new Assignment(belowUpperBound, new Call("lte_f64", List.of(
+                        new Reference(new Input(leftInputIndex), Stream.VALUES),
+                        new Reference(upperBound, Stream.VALUES))), AllMask.ALL),
+                new Assignment(result, new Call("and", List.of(
+                        new Reference(aboveLowerBound, Stream.VALUES),
+                        new Reference(belowUpperBound, Stream.VALUES))), AllMask.ALL)), List.of());
+        return new FilterSpec(
+                plan,
+                new AndMask(List.of(
+                        new ReferenceMask(new Reference(aboveLowerBound, Stream.VALUES)),
+                        new ReferenceMask(new Reference(belowUpperBound, Stream.VALUES)))),
+                new Reference(result, Stream.VALUES));
     }
 
     private static FilterSpec lessThanColumnsF64(int leftInputIndex, int rightInputIndex)

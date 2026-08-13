@@ -2140,7 +2140,15 @@ public final class TrinoTpchParquetSupport
                         namedNestedLoopJoinStep("q15.join.max", new NestedLoopJoinSpec(15_3, revenueTypes, maxRevenue, List.of(DOUBLE))),
                         namedFactoryStep("q15.filter.best", filterAndProjectFactory(
                                 15_4,
-                                Optional.of(equal(field(1, DOUBLE), field(2, DOUBLE), DOUBLE)),
+                                Optional.of(and(
+                                        greaterThanOrEqual(
+                                                field(1, DOUBLE),
+                                                multiply(field(2, DOUBLE), constant(1.0 - 1e-12, DOUBLE), DOUBLE),
+                                                DOUBLE),
+                                        lessThanOrEqual(
+                                                field(1, DOUBLE),
+                                                multiply(field(2, DOUBLE), constant(1.0 + 1e-12, DOUBLE), DOUBLE),
+                                                DOUBLE))),
                                 identityProjections(bestTypes),
                                 bestTypes))),
                 "q15.sink.best",
