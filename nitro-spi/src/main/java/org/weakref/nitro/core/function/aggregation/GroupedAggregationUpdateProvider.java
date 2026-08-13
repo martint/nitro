@@ -24,5 +24,15 @@ import java.util.Optional;
 public interface GroupedAggregationUpdateProvider
         extends FunctionCapability
 {
+    /** Describes the update applied while consuming raw aggregate arguments. */
     Optional<GroupedAggregationUpdateTemplate> update(List<AggregationArgument> arguments);
+
+    /**
+     * Describes the update applied while merging the aggregate's intermediate value. The template's
+     * argument coordinates refer to the intermediate input rather than the aggregate's raw arguments.
+     */
+    default Optional<GroupedAggregationUpdateTemplate> intermediateUpdate()
+    {
+        return Optional.empty();
+    }
 }

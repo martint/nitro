@@ -107,6 +107,7 @@ public class GroupedAggregationOperator
     private boolean fusedPhysicalPathCommitted;
     private FusedGroupingKernel fusedKernel;
     private GroupedAggregationUpdate[] fusedSpecs;
+    private boolean fusedIntermediateMerge;
     private int[] fusedAggregationIndexes;
     private int[] fusedStateOffsets;
     private GeneratedLongGroupingBindings fusedBindings;
@@ -827,6 +828,11 @@ public class GroupedAggregationOperator
         }
         fusedStateOffsets[fusedAggregationIndexes.length] = updates.size();
         fusedSpecs = updates.toArray(GroupedAggregationUpdate[]::new);
+        fusedIntermediateMerge = fusedAggregationIndexes.length > 0;
+        for (int aggregationIndex : fusedAggregationIndexes) {
+            fusedIntermediateMerge &= ((GeneratedGroupedAggregationUnit) aggregations[aggregationIndex])
+                    .mergesIntermediateInput();
+        }
         fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
         fusedStateVectors = new LongStateUpdate[fusedSpecs.length];
     }
@@ -871,8 +877,13 @@ public class GroupedAggregationOperator
         boolean intKey = fusedBindings.intKey();
         boolean keyMapped = fusedBindings.keyMapped();
         boolean directGrouping = fusedLongDirectGrouping
-                && keyMapped
-                && inlineGroupingState.prepareSingleLongDirectGrouping(mask, keyValues, intKey, keyIds);
+                && (keyMapped || fusedIntermediateMerge)
+                && inlineGroupingState.prepareSingleLongDirectGrouping(
+                mask,
+                keyValues,
+                intKey,
+                keyIds,
+                fusedIntermediateMerge);
         long runSample = fusedLongRunCache ? fusedBindings.sampleKeyRuns(mask) : 0;
         int runComparisons = (int) (runSample >>> 32);
         int runHits = (int) runSample;
@@ -896,14 +907,17 @@ public class GroupedAggregationOperator
                     inlineGroupingState.groupCount(), mask.count(), mask.maxPosition(), mask.all(), fusedSpecs.length, keyMapped, runCache, directGrouping);
         }
         // The ordinary fused limit protects random high-cardinality flat state probes. Continue to the larger bound
-        // only when a mapped key keeps the physical input compact or adjacent keys prove that they reuse a group.
-        if (inlineGroupingState.groupCount() >= fuseGroupLimit && !keyMapped && !runCache) {
+        // when a mapped key keeps the physical input compact, adjacent keys prove that they reuse a group, or an
+        // admitted direct table lets an intermediate merge avoid materializing and rereading group IDs.
+        if (inlineGroupingState.groupCount() >= fuseGroupLimit && !keyMapped && !runCache &&
+                !(fusedIntermediateMerge && directGrouping)) {
             return false;
         }
         // Beyond the established local boundary require adjacent reuse plus a second physical reason to keep the
         // generated pass: compact mapped-key access or an input-independent state update that can be coalesced by
         // run. Flat value-reading state retains staged locality; mapped-only q64 likewise stays staged.
-        if (inlineGroupingState.groupCount() >= fuseMappedOnlyGroupLimit
+        if (inlineGroupingState.groupCount() >= fuseMappedOnlyGroupLimit &&
+                !(fusedIntermediateMerge && directGrouping)
                 && (!runCache || (!keyMapped && !inputIndependentAccumulators))) {
             return false;
         }

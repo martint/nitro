@@ -39,4 +39,15 @@ public final class GroupedAggregationUpdateResolver
                 .flatMap(provider -> provider.update(providerArguments))
                 .map(template -> template.bind(bindings));
     }
+
+    public Optional<GroupedAggregationUpdate> resolveIntermediate(
+            ResolvedCall call,
+            AggregationArgumentBinding intermediate)
+    {
+        requireNonNull(call, "call is null");
+        AggregationArgumentBinding binding = requireNonNull(intermediate, "intermediate is null");
+        return call.capability(GroupedAggregationUpdateProvider.class)
+                .flatMap(GroupedAggregationUpdateProvider::intermediateUpdate)
+                .map(template -> template.bind(List.of(binding)));
+    }
 }

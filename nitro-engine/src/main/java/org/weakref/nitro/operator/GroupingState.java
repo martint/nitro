@@ -189,7 +189,12 @@ final class GroupingState
         return useLongGrouping;
     }
 
-    boolean prepareSingleLongDirectGrouping(Mask mask, Object keyValues, boolean intKey, int[] keyIds)
+    boolean prepareSingleLongDirectGrouping(
+            Mask mask,
+            Object keyValues,
+            boolean intKey,
+            int[] keyIds,
+            boolean useStagedRange)
     {
         if (!longPolicy.direct() || longDirectGroupingDisabled) {
             return false;
@@ -208,7 +213,11 @@ final class GroupingState
         // A large first batch can cross the ordinary latest-admission threshold before there has been any
         // opportunity to inspect the domain. Always allow that first check; only a later failed check closes
         // admission. This remains bounded to one historical-key pass for a sparse/high-key workload.
-        if (!useLongDirectGrouping && nextGroupId > longPolicy.directLatestAdmissionGroups() &&
+        int maxRange = useStagedRange ? longPolicy.stagedDirectMaxRange() : longPolicy.directMaxRange();
+        int latestAdmissionGroups = useStagedRange
+                ? longPolicy.stagedDirectLatestAdmissionGroups()
+                : longPolicy.directLatestAdmissionGroups();
+        if (!useLongDirectGrouping && nextGroupId > latestAdmissionGroups &&
                 longDirectNextCheck != longPolicy.directMinGroups()) {
             longDirectGroupingDisabled = true;
             return false;
@@ -221,7 +230,7 @@ final class GroupingState
             int position = positions == null ? index : positions[index];
             int keyPosition = keyIds == null ? position : keyIds[position];
             long key = intKey ? ((int[]) keyValues)[keyPosition] : ((long[]) keyValues)[keyPosition];
-            if (key < 0 || key >= longPolicy.directMaxRange()) {
+            if (key < 0 || key >= maxRange) {
                 disableLongDirectGrouping();
                 longDirectGroupingDisabled = true;
                 return false;
@@ -229,7 +238,7 @@ final class GroupingState
             batchMax = Math.max(batchMax, key);
         }
 
-        return prepareSingleLongDirectGrouping(mask.count(), batchMax, longPolicy.directMaxRange());
+        return prepareSingleLongDirectGrouping(mask.count(), batchMax, maxRange);
     }
 
     private boolean prepareSingleLongDirectGrouping(

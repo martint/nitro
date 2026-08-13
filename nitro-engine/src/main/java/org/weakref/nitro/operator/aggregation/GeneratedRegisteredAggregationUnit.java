@@ -27,6 +27,7 @@ public final class GeneratedRegisteredAggregationUnit
         implements GeneratedGroupedAggregationUnit
 {
     private final GroupedAggregationUpdate update;
+    private final boolean intermediateInput;
 
     public GeneratedRegisteredAggregationUnit(
             AggregationImplementation implementation,
@@ -38,6 +39,7 @@ public final class GeneratedRegisteredAggregationUnit
     {
         super(implementation, inputMode, outputMode, inputColumns, filterInputColumn);
         this.update = requireNonNull(update, "update is null");
+        this.intermediateInput = inputMode == InputMode.INTERMEDIATE;
     }
 
     @Override
@@ -50,5 +52,11 @@ public final class GeneratedRegisteredAggregationUnit
     public void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset)
     {
         targets[offset] = (LongStateUpdate) state;
+    }
+
+    @Override
+    public boolean mergesIntermediateInput()
+    {
+        return intermediateInput;
     }
 }

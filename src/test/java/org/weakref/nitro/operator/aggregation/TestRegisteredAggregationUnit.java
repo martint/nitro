@@ -45,6 +45,16 @@ class TestRegisteredAggregationUnit
 
         assertThat(unit.generatedGroupedUpdates()).containsExactly(update);
         assertThat(targets).containsExactly(state);
+        assertThat(unit.mergesIntermediateInput()).isFalse();
+
+        GeneratedRegisteredAggregationUnit intermediateUnit = new GeneratedRegisteredAggregationUnit(
+                new TrackingImplementation(),
+                RegisteredAggregationUnit.InputMode.INTERMEDIATE,
+                FINAL,
+                new int[] {7},
+                -1,
+                update);
+        assertThat(intermediateUnit.mergesIntermediateInput()).isTrue();
     }
 
     @Test

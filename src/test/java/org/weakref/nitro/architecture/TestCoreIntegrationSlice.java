@@ -307,6 +307,9 @@ class TestCoreIntegrationSlice
         assertThat(new GroupedAggregationUpdateResolver()
                 .resolve(resolvedCall, List.of(AggregationArgumentBinding.computed())))
                 .isEmpty();
+        assertThat(new GroupedAggregationUpdateResolver()
+                .resolveIntermediate(resolvedCall, AggregationArgumentBinding.input(9)))
+                .contains(GroupedAggregationUpdate.inputValue(9));
     }
 
     @Test
@@ -567,6 +570,12 @@ class TestCoreIntegrationSlice
             if (arguments.size() != 1 || arguments.getFirst().kind() != AggregationArgument.Kind.INPUT) {
                 return java.util.Optional.empty();
             }
+            return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
+        }
+
+        @Override
+        public java.util.Optional<GroupedAggregationUpdateTemplate> intermediateUpdate()
+        {
             return java.util.Optional.of(GroupedAggregationUpdateTemplate.inputValue(0));
         }
     }
