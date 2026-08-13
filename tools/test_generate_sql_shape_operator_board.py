@@ -11,6 +11,21 @@ SPEC.loader.exec_module(BOARD)
 
 
 class SqlShapeOperatorBoardTest(unittest.TestCase):
+    def test_parses_query_attributed_current_metrics(self):
+        text = "\n".join([
+            "prefix operator_cpu,nitro,tpch-parquet-sf10,q12,0,3/TrinoNitroAggregationOperator@17,2,1.000,2.000,3.000,10,20,4,5.000,0.100,0.200",
+            "prefix nitro,tpch-parquet-sf10,q12,1,1,1,1,1,7.000,7.000,1,1,1,1,1",
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.log"
+            path.write_text(text)
+            rows = BOARD.parse_log(path, "tpch-parquet-sf10")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["stage"], "3")
+        self.assertEqual(rows[0]["plan_node"], "17")
+        self.assertEqual(rows[0]["physical_input_positions"], 10)
+        self.assertEqual(rows[0]["blocked_wall_ms"], 5)
+
     def test_parses_stage_aware_rich_metrics(self):
         text = "\n".join([
             "prefix operator_cpu,nitro,3/TrinoNitroAggregationOperator@17,2,1.000,2.000,3.000,10,20,4,5.000",

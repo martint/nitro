@@ -17,6 +17,9 @@ ENGINES = ("nitro", "trino")
 OPERATOR_PATTERN = re.compile(
     r"operator_cpu,(nitro|trino),([^,]+),(\d+),([0-9.]+),([0-9.]+),([0-9.]+)"
     r"(?:,(\d+),(\d+),(\d+),([0-9.]+))?")
+QUERY_OPERATOR_PATTERN = re.compile(
+    r"operator_cpu,(nitro|trino),([^,]+),(q[0-9]+[ab]?),(\d+),([^,]+),(\d+),"
+    r"([0-9.]+),([0-9.]+),([0-9.]+),(\d+),(\d+),(\d+),([0-9.]+)")
 
 
 def operator_family(operator):
@@ -51,6 +54,11 @@ def parse_log(path, suite_name):
         rf"(nitro|trino),{re.escape(suite_name)},(q[0-9]+[ab]?),"
         r"(\d+),[0-9.]+,[0-9.]+,[0-9.]+,[0-9.]+,([0-9.]+),([0-9.]+),")
     for line in path.read_text().splitlines():
+        operator = QUERY_OPERATOR_PATTERN.search(line)
+        if operator and operator.group(2) == suite_name:
+            values = operator.groups()
+            pending[(values[0], values[2])].append((values[0], values[4], *values[5:]))
+            continue
         operator = OPERATOR_PATTERN.search(line)
         if operator:
             values = operator.groups()
@@ -61,7 +69,8 @@ def parse_log(path, suite_name):
             continue
         engine, query_id, measurements, cpu_p50, cpu_mean = query.groups()
         measurements = int(measurements)
-        for values in pending.pop(engine, []):
+        values_for_query = pending.pop((engine, query_id), []) + pending.pop(engine, [])
+        for values in values_for_query:
             stage, operator_name, plan_node = split_operator_key(values[1])
             numeric = [float(value) if value is not None else 0.0 for value in values[2:]]
             rows.append({
