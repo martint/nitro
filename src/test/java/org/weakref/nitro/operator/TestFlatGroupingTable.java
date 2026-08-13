@@ -1268,15 +1268,14 @@ class TestFlatGroupingTable
         Vector[] values = {
                 new I64Vector(new long[] {7, 7, 8, 9, 9}),
                 new F64Vector(new double[] {1.5, 1.5, 2.5, 3.5, 3.5}),
-                new BooleanVector(new boolean[] {true, true, false, true, true}),
-                utf8("alpha", "alpha", "beta", "gamma", "gamma")};
+                new BooleanVector(new boolean[] {true, true, false, true, true})};
         FlatGroupingTable table = new FlatGroupingTable(
                 FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
                 4,
                 false);
         try {
             I64Vector groups = new I64Vector(5);
-            Vector[] nulls = {null, null, null, null};
+            Vector[] nulls = {null, null, null};
             table.beginBatch(values, nulls);
             table.prepareBatchHashes(values, nulls, Mask.all(5));
             assertThat(table.assignPrefetchedBatch(values, nulls, Mask.all(5), groups, 0)).isEqualTo(3);
@@ -1287,6 +1286,38 @@ class TestFlatGroupingTable
         }
         finally {
             table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testRejectedPackedSlotsPreserveNonIdentityBinaryRecordLayout()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("rejected-packed-binary-layout");
+        Vector[] values = {utf8("alpha", "beta", "gamma")};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                4,
+                false,
+                true);
+        try {
+            table.beginBatch(values, new Vector[] {null});
+            I64Vector groups = new I64Vector(3);
+            groups.values()[0] = table.assignGroup(values, new Vector[] {null}, 0, 7);
+            groups.values()[1] = table.assignGroup(values, new Vector[] {null}, 1, 8);
+            groups.values()[2] = table.assignGroup(values, new Vector[] {null}, 2, 9);
+            table.endBatch();
+
+            assertThat(table.usesPackedHashRecordSlots()).isFalse();
+            assertThat(groups.values()).containsExactly(7, 8, 9);
+            Streams output = table.copyGroupedValuePositions(0, null, new int[] {7, 8, 9}, 0, 3, 0, 10, allocator, context);
+            assertThat(OperatorVectorSupport.binaryEquals(output.values(), 0, "alpha".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(output.values(), 1, "beta".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(output.values(), 2, "gamma".getBytes(StandardCharsets.UTF_8))).isTrue();
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(context);
         }
     }
 

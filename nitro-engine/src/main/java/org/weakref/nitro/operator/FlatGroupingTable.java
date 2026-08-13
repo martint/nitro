@@ -125,7 +125,7 @@ final class FlatGroupingTable
         // group-id map and are the structurally compact cohort where the wider self-contained slot can win.
         this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds;
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;
-        this.fixedRecordSize = (packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
+        this.fixedRecordSize = (this.packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
         if (policy.poolSizedRecordChunks()) {
             long minimumBytes = arrayPool.minRetainedBytes();
@@ -145,8 +145,8 @@ final class FlatGroupingTable
         this.control = arrayPool.borrowBytes(capacity + VECTOR_LENGTH);
         Arrays.fill(control, (byte) 0);
         this.groupIdsByHash = this.identityGroupIds ? null : arrayPool.borrowInts(capacity);
-        this.recordIndexesByHash = packedHashRecordSlots ? null : arrayPool.borrowInts(capacity);
-        this.hashRecordsByHash = packedHashRecordSlots ? arrayPool.borrowLongs(capacity) : null;
+        this.recordIndexesByHash = this.packedHashRecordSlots ? null : arrayPool.borrowInts(capacity);
+        this.hashRecordsByHash = this.packedHashRecordSlots ? arrayPool.borrowLongs(capacity) : null;
         if (groupIdsByHash != null) {
             Arrays.fill(groupIdsByHash, -1);
         }
@@ -320,7 +320,10 @@ final class FlatGroupingTable
             I64Vector result,
             long nextGroupId)
     {
-        if (!batchHashesValid || mask.none()) {
+        // Variable-width equality immediately follows the control probe with dependent arena loads. Keep that
+        // cohort on the established ordered path; this lookahead is both useful and layout-independent for fixed
+        // records, where the first random control load is the dominant dependency to overlap.
+        if (!batchHashesValid || mask.none() || layout.anyVariableWidth()) {
             return -1;
         }
         ensureCapacity(nextGroupId + mask.selectedCount());

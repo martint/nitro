@@ -1,9 +1,9 @@
 # General flat-table control-prefetch screen
 
-This slice extends the accepted packed-identity first-control staging protocol to every flat grouping table with
-prepared batch hashes. Address calculation uses the table's physical slot representation; staged control metadata is
-never authoritative, and every source-order probe reloads the current word before matching or inserting. General
-tables retain their existing group-id mapping, exact record equality, and rehash semantics.
+This slice extends the accepted packed-identity first-control staging protocol to fixed-width flat grouping tables
+with prepared batch hashes. Address calculation uses the table's physical slot representation; staged control
+metadata is never authoritative, and every source-order probe reloads the current word before matching or inserting.
+Tables retain their existing group-id mapping, exact record equality, and rehash semantics.
 
 TPC-DS q67 used JDK 26, a 12 GiB heap, five warmups, five measurements, an 8 GiB query-memory limit, exact result
 validation, operator CPU attribution, thread allocation, and sampled peak memory. The candidate was measured before
@@ -25,9 +25,15 @@ q33 path retains its larger accepted gain at 6,019 ms wall, 13,027 mean CPU-ms, 
 three-warmup/three-measurement guard. A direct non-identity flat-table test covers repeated new keys staged against
 the same initially empty control word.
 
+The subsequent full-board correctness pass exposed an unsafe variable-width admission in TPC-DS q06. Variable-width
+records now retain the established ordered path: their equality probes immediately add dependent arena loads, so
+control-only lookahead is neither the validated nor the compelling cohort. The same pass exposed and fixed a latent
+constructor invariant: fixed-record stride and slot-array allocation now derive from the admitted packed-slot state,
+not the caller's request. A direct rejected-packed binary-layout test and end-to-end q06 result comparison cover the
+correction.
+
 Artifacts:
 
 - `q67-candidate-w5m5.log`, `q67-control-w5m5.log`, and `q67-candidate-confirm-w5m5.log`.
 - `q40-guard-w10m15.log` and `q40-control-w10m15.log`.
 - `q33-guard-w3m3.log`.
-
