@@ -85,6 +85,8 @@ public final class FusedProjectionCompiler
 
     private enum PhysicalType { LONG, DOUBLE, BOOL, UTF8, NULLS_ONLY }
 
+    public enum InputPhysicalType { LONG, DOUBLE, UTF8, NULLS_ONLY }
+
     private enum Utf8Component { DATA, START, LENGTH }
 
     private sealed interface Operand
@@ -109,7 +111,12 @@ public final class FusedProjectionCompiler
     private record Slice(List<Reference> inputs, List<PhysicalType> inputTypes, List<Step> steps, List<Operand> roots) {}
 
     /** A fused multi-output kernel, the ordered source or staged inputs it expects, and its outputs (in order). */
-    public record CompiledMultiProjection(FusedMultiProjection kernel, List<Reference> inputs, List<Reference> outputs) {}
+    public record CompiledMultiProjection(
+            FusedMultiProjection kernel,
+            List<Reference> inputs,
+            List<InputPhysicalType> inputTypes,
+            List<Boolean> flattensDictionaryValues,
+            List<Reference> outputs) {}
 
     /**
      * Compile every fusible output among {@code candidateOutputs} into one shared-loop kernel. Returns empty if none
@@ -171,7 +178,12 @@ public final class FusedProjectionCompiler
                 throw new IllegalStateException("Failed to instantiate fused projection:\n" + source, e);
             }
         });
-        return Optional.of(new CompiledMultiProjection(kernel, List.copyOf(slice.inputs()), List.copyOf(fusible)));
+        return Optional.of(new CompiledMultiProjection(
+                kernel,
+                List.copyOf(slice.inputs()),
+                slice.inputTypes().stream().map(FusedProjectionCompiler::inputPhysicalType).toList(),
+                slice.inputTypes().stream().map(this::flattensDictionaryValues).toList(),
+                List.copyOf(fusible)));
     }
 
     @Override
@@ -396,6 +408,26 @@ public final class FusedProjectionCompiler
             case BOOLEAN -> PhysicalType.BOOL;
             case UTF8 -> PhysicalType.UTF8;
             case NULLS_ONLY -> PhysicalType.NULLS_ONLY;
+        };
+    }
+
+    private static InputPhysicalType inputPhysicalType(PhysicalType type)
+    {
+        return switch (type) {
+            case LONG -> InputPhysicalType.LONG;
+            case DOUBLE -> InputPhysicalType.DOUBLE;
+            case UTF8 -> InputPhysicalType.UTF8;
+            case NULLS_ONLY -> InputPhysicalType.NULLS_ONLY;
+            case BOOL -> throw new IllegalArgumentException("boolean fused inputs are not supported");
+        };
+    }
+
+    private boolean flattensDictionaryValues(PhysicalType type)
+    {
+        return switch (type) {
+            case LONG -> true;
+            case DOUBLE -> !policy.mappedDictionaryDoubleInputs();
+            case BOOL, UTF8, NULLS_ONLY -> false;
         };
     }
 

@@ -13,12 +13,17 @@
  */
 package org.weakref.nitro.operator;
 
+import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
+import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
@@ -45,6 +50,24 @@ import static java.util.Objects.requireNonNull;
 public class ProjectOperator
         implements Operator
 {
+    public static final String PLANNED_ASSIGNMENTS = "nitro.projection.planned-assignments";
+    public static final String PLANNED_COMPUTED_OUTPUTS = "nitro.projection.planned-computed-outputs";
+    public static final String GENERATED_OUTPUTS = "nitro.projection.generated-outputs";
+    public static final String GENERATED_KERNELS = "nitro.projection.generated-kernels";
+    public static final String GENERATED_ATTEMPTS = "nitro.projection.generated-attempts";
+    public static final String GENERATED_SUCCESSES = "nitro.projection.generated-successes";
+    public static final String GENERATED_ERROR_FALLBACKS = "nitro.projection.generated-error-fallbacks";
+    public static final String GENERATED_LAYOUT_FALLBACKS = "nitro.projection.generated-layout-fallbacks";
+    public static final String GENERATED_SELECTED_POSITIONS = "nitro.projection.generated-selected-positions";
+    public static final String FLAT_INPUT_POSITIONS = "nitro.projection.flat-input-positions";
+    public static final String DICTIONARY_INPUT_POSITIONS = "nitro.projection.dictionary-input-positions";
+    public static final String RLE_INPUT_POSITIONS = "nitro.projection.rle-input-positions";
+    public static final String OTHER_INPUT_POSITIONS = "nitro.projection.other-input-positions";
+    public static final String INTEGER_WIDENING_POSITIONS = "nitro.projection.integer-widening-positions";
+    public static final String DICTIONARY_FLATTENING_POSITIONS = "nitro.projection.dictionary-flattening-positions";
+    public static final String DICTIONARY_NULL_EXPANSION_POSITIONS = "nitro.projection.dictionary-null-expansion-positions";
+    public static final String OTHER_NULL_EXPANSION_POSITIONS = "nitro.projection.other-null-expansion-positions";
+
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
     private final Schema outputSchema;
@@ -52,6 +75,7 @@ public class ProjectOperator
     private final EvaluationPlan evaluationPlan;
     private final PrimitiveRegistry primitiveRegistry;
     private final OperatorResources operatorResources;
+    private final ExecutionDiagnostics diagnostics;
     private final List<Reference> outputReferences;
     // A projection made exclusively of direct input references does not own or recompute any vectors: its outputs
     // are forwarded views of the source batch. Such a projection can safely inherit the source's retention contract.
@@ -69,6 +93,20 @@ public class ProjectOperator
 
     private final Operator source;
     private BatchState currentBatchState;
+    private long generatedAttempts;
+    private long generatedSuccesses;
+    private long generatedErrorFallbacks;
+    private long generatedLayoutFallbacks;
+    private long generatedSelectedPositions;
+    private long flatInputPositions;
+    private long dictionaryInputPositions;
+    private long rleInputPositions;
+    private long otherInputPositions;
+    private long integerWideningPositions;
+    private long dictionaryFlatteningPositions;
+    private long dictionaryNullExpansionPositions;
+    private long otherNullExpansionPositions;
+    private boolean diagnosticsReported;
 
     public ProjectOperator(Allocator allocator, EvaluationPlan evaluationPlan, PrimitiveRegistry primitiveRegistry, Operator source)
     {
@@ -93,8 +131,21 @@ public class ProjectOperator
             Schema outputSchema,
             OperatorResources operatorResources)
     {
+        this(allocator, evaluationPlan, primitiveRegistry, source, outputSchema, operatorResources, (_, _) -> {});
+    }
+
+    public ProjectOperator(
+            Allocator allocator,
+            EvaluationPlan evaluationPlan,
+            PrimitiveRegistry primitiveRegistry,
+            Operator source,
+            Schema outputSchema,
+            OperatorResources operatorResources,
+            ExecutionDiagnostics diagnostics)
+    {
         this.allocator = allocator;
         this.operatorResources = requireNonNull(operatorResources, "operatorResources is null");
+        this.diagnostics = requireNonNull(diagnostics, "diagnostics is null");
         this.source = source;
         this.evaluationPlan = evaluationPlan;
         this.primitiveRegistry = primitiveRegistry;
@@ -121,6 +172,12 @@ public class ProjectOperator
                 fusedOrdinal.put(compiled.outputs().get(ordinal).producer(), ordinal);
             }
         }
+        diagnostics.record(PLANNED_ASSIGNMENTS, evaluationPlan.assignments().size());
+        diagnostics.record(PLANNED_COMPUTED_OUTPUTS, outputReferences.stream()
+                .filter(reference -> !(reference.producer() instanceof Input))
+                .count());
+        diagnostics.record(GENERATED_OUTPUTS, compiled == null ? 0 : compiled.outputs().size());
+        diagnostics.record(GENERATED_KERNELS, compiled == null ? 0 : 1);
     }
 
     private static Schema projectedSchema(EvaluationPlan evaluationPlan, Schema sourceSchema)
@@ -395,12 +452,71 @@ public class ProjectOperator
     @Override
     public void close()
     {
-        if (currentBatchState != null) {
-            currentBatchState.close();
-            currentBatchState = null;
+        try {
+            if (currentBatchState != null) {
+                currentBatchState.close();
+                currentBatchState = null;
+            }
+            source.close();
+            allocator.release(allocationContext);
         }
-        source.close();
-        allocator.release(allocationContext);
+        finally {
+            reportDiagnostics();
+        }
+    }
+
+    private void recordInputShape(int inputIndex, Streams streams)
+    {
+        Vector values = streams.values();
+        long positions = values.length();
+        if (values instanceof DictionaryVector) {
+            dictionaryInputPositions += positions;
+            if (fusedProjection.flattensDictionaryValues().get(inputIndex)) {
+                dictionaryFlatteningPositions += positions;
+            }
+        }
+        else if (values instanceof RleVector) {
+            rleInputPositions += positions;
+        }
+        else if (values instanceof I64Vector || values instanceof I32Vector || values instanceof F64Vector || values instanceof org.weakref.nitro.data.BinaryVector) {
+            flatInputPositions += positions;
+            if (values instanceof I32Vector &&
+                    fusedProjection.inputTypes().get(inputIndex) == org.weakref.nitro.jit.FusedProjectionCompiler.InputPhysicalType.LONG) {
+                integerWideningPositions += positions;
+            }
+        }
+        else {
+            otherInputPositions += positions;
+        }
+
+        Vector nulls = streams.getOrNull(Stream.NULLS);
+        if (nulls instanceof DictionaryVector) {
+            dictionaryNullExpansionPositions += nulls.length();
+        }
+        else if (!VectorAccess.isAllFalseNulls(nulls) && !(nulls instanceof BooleanVector)) {
+            otherNullExpansionPositions += nulls.length();
+        }
+    }
+
+    private void reportDiagnostics()
+    {
+        if (diagnosticsReported) {
+            return;
+        }
+        diagnosticsReported = true;
+        diagnostics.record(GENERATED_ATTEMPTS, generatedAttempts);
+        diagnostics.record(GENERATED_SUCCESSES, generatedSuccesses);
+        diagnostics.record(GENERATED_ERROR_FALLBACKS, generatedErrorFallbacks);
+        diagnostics.record(GENERATED_LAYOUT_FALLBACKS, generatedLayoutFallbacks);
+        diagnostics.record(GENERATED_SELECTED_POSITIONS, generatedSelectedPositions);
+        diagnostics.record(FLAT_INPUT_POSITIONS, flatInputPositions);
+        diagnostics.record(DICTIONARY_INPUT_POSITIONS, dictionaryInputPositions);
+        diagnostics.record(RLE_INPUT_POSITIONS, rleInputPositions);
+        diagnostics.record(OTHER_INPUT_POSITIONS, otherInputPositions);
+        diagnostics.record(INTEGER_WIDENING_POSITIONS, integerWideningPositions);
+        diagnostics.record(DICTIONARY_FLATTENING_POSITIONS, dictionaryFlatteningPositions);
+        diagnostics.record(DICTIONARY_NULL_EXPANSION_POSITIONS, dictionaryNullExpansionPositions);
+        diagnostics.record(OTHER_NULL_EXPANSION_POSITIONS, otherNullExpansionPositions);
     }
 
     private final class BatchState
@@ -443,8 +559,11 @@ public class ProjectOperator
             if (!fusedResultsComputed) {
                 fusedResultsComputed = true;
                 if (fusedProjection != null && !mask.none()) {
+                    generatedAttempts++;
+                    generatedSelectedPositions += mask.count();
                     List<Streams> inputs = new ArrayList<>(fusedProjection.inputs().size());
-                    for (Reference reference : fusedProjection.inputs()) {
+                    for (int inputIndex = 0; inputIndex < fusedProjection.inputs().size(); inputIndex++) {
+                        Reference reference = fusedProjection.inputs().get(inputIndex);
                         Streams streams;
                         if (reference.producer() instanceof Input input) {
                             Output sourceOutput = sourceBatch.output(input.index());
@@ -466,13 +585,21 @@ public class ProjectOperator
                             streams = Streams.of(values, nulls, errors);
                         }
                         if (!VectorAccess.isAllFalseNulls(streams.getOrNull(Stream.ERRORS))) {
+                            generatedErrorFallbacks++;
                             return null;
                         }
                         Vector values = streams.values();
                         Vector nulls = streams.getOrNull(Stream.NULLS);
                         inputs.add(nulls != null ? Streams.of(values, nulls, null) : Streams.ofValues(values));
+                        recordInputShape(inputIndex, streams);
                     }
                     fusedResults = fusedProjection.kernel().apply(inputs, mask, EnumSet.of(Stream.VALUES, Stream.NULLS), executionContext);
+                    if (fusedResults == null) {
+                        generatedLayoutFallbacks++;
+                    }
+                    else {
+                        generatedSuccesses++;
+                    }
                 }
             }
             return fusedResults;

@@ -884,6 +884,50 @@ public class TestOperators
     }
 
     @Test
+    void testFusedProjectionReportsPhysicalExecutionShape()
+    {
+        F64Vector base = new F64Vector(new double[] {10, 20, 30, 40});
+        DictionaryVector values = DictionaryVector.wrapNested(new int[] {3, 1, 0}, 3, base);
+        Operator source = singleBatchOperator(Streams.ofValues(values));
+        Variable one = new Variable(0);
+        Variable incremented = new Variable(1);
+        Variable doubled = new Variable(2);
+        Reference result = new Reference(doubled, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(one, new Literal(1.0), AllMask.ALL),
+                        new Assignment(incremented, new Call("add_f64", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL),
+                        new Assignment(doubled, new Call("multiply_f64", List.of(
+                                new Reference(incremented, Stream.VALUES),
+                                new Reference(one, Stream.VALUES))), AllMask.ALL)),
+                List.of(result));
+        Map<String, Long> diagnostics = new LinkedHashMap<>();
+
+        try (ProjectOperator operator = new ProjectOperator(
+                allocator,
+                plan,
+                primitiveRegistry(),
+                source,
+                Schema.unspecified(1),
+                EngineResources.from(allocator).operatorResources(),
+                (event, value) -> diagnostics.merge(event, value, Long::sum));
+                Batch batch = operator.next()) {
+            assertThat(((F64Vector) batch.output(0).borrow(Stream.VALUES)).values()).containsExactly(41.0, 21.0, 11.0);
+        }
+
+        assertThat(diagnostics)
+                .containsEntry(ProjectOperator.PLANNED_ASSIGNMENTS, 3L)
+                .containsEntry(ProjectOperator.GENERATED_KERNELS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_ATTEMPTS, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SUCCESSES, 1L)
+                .containsEntry(ProjectOperator.GENERATED_SELECTED_POSITIONS, 3L)
+                .containsEntry(ProjectOperator.DICTIONARY_INPUT_POSITIONS, 3L)
+                .containsEntry(ProjectOperator.DICTIONARY_FLATTENING_POSITIONS, 0L);
+    }
+
+    @Test
     void testFusedProjectionCompilesUtf8InList()
     {
         Variable apple = new Variable(0);
