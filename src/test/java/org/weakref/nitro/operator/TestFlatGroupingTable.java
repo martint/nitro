@@ -22,6 +22,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.F64Vector;
 import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -80,6 +81,56 @@ class TestFlatGroupingTable
     private final GroupingStateResources groupingResources = engineResources.groupingState();
     private final AdaptiveLongGroupingPolicy adaptiveLongGroupingPolicy = engineResources.operatorResources().adaptiveLongGroupingPolicy();
     private final FlatKeyTablePolicy flatKeyTablePolicy = engineResources.operatorResources().flatKeyTablePolicy();
+
+    @Test
+    void testBatchedGroupedValueCopyPreservesPhysicalKindsAndNulls()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Allocator.Context context = new Allocator.Context("batched-grouped-value-copy");
+        Vector[] values = {
+                new I64Vector(new long[] {10, 20, 10, 30}),
+                new BooleanVector(new boolean[] {true, false, true, true}),
+                new F64Vector(new double[] {1.5, 2.5, 1.5, 3.5}),
+                utf8("a", "b", "a", "unused")};
+        Vector[] nulls = {
+                null,
+                new BooleanVector(new boolean[] {false, true, false, false}),
+                null,
+                new BooleanVector(new boolean[] {false, false, false, true})};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy), 4, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(values, nulls, 2, 2)).isZero();
+            assertThat(table.assignGroup(values, nulls, 3, 2)).isEqualTo(2);
+            table.endBatch();
+
+            int[] sourcePositions = {2, 0, 1};
+            Streams longs = table.copyGroupedValuePositions(0, null, sourcePositions, 0, 3, 0, 3, allocator, context);
+            assertThat(((I64Vector) longs.values()).values()).containsExactly(30, 10, 20);
+            assertThat(((BooleanVector) longs.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(false, false, false);
+
+            Streams booleans = table.copyGroupedValuePositions(1, null, sourcePositions, 0, 3, 0, 3, allocator, context);
+            assertThat(((BooleanVector) booleans.values()).values()[0]).isTrue();
+            assertThat(((BooleanVector) booleans.values()).values()[1]).isTrue();
+            assertThat(((BooleanVector) booleans.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(false, false, true);
+
+            Streams doubles = table.copyGroupedValuePositions(2, null, sourcePositions, 0, 3, 0, 3, allocator, context);
+            assertThat(((F64Vector) doubles.values()).values()).containsExactly(3.5, 1.5, 2.5);
+            assertThat(((BooleanVector) doubles.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(false, false, false);
+
+            Streams binary = table.copyGroupedValuePositions(3, null, sourcePositions, 0, 3, 0, 3, allocator, context);
+            assertThat(((BooleanVector) binary.getOrNull(org.weakref.nitro.data.Stream.NULLS)).values()).containsExactly(true, false, false);
+            assertThat(OperatorVectorSupport.binaryEquals(binary.values(), 1, "a".getBytes(StandardCharsets.UTF_8))).isTrue();
+            assertThat(OperatorVectorSupport.binaryEquals(binary.values(), 2, "b".getBytes(StandardCharsets.UTF_8))).isTrue();
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(context);
+        }
+    }
 
     @Test
     void testAdaptiveCompactLongRecordPreservesLaterFullWidthValues()

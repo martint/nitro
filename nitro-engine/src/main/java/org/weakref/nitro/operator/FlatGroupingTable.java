@@ -966,9 +966,10 @@ final class FlatGroupingTable
         }
 
         Vector existingValues = output == null ? null : output.values();
+        FlatTypeHandler.Kind kind = field.handler().kind();
         Vector values;
         boolean idBackedBinary = false;
-        if (field.handler().kind() == FlatTypeHandler.Kind.BINARY) {
+        if (kind == FlatTypeHandler.Kind.BINARY) {
             BinaryVector existing = existingValues instanceof BinaryVector binary ? binary : null;
             BinaryVector binaryValues = layout.tryPrepareIdBackedBinaryOutput(
                     this,
@@ -1001,7 +1002,7 @@ final class FlatGroupingTable
             values = binaryValues;
         }
         else {
-            values = switch (field.handler().kind()) {
+            values = switch (kind) {
                 case LONG -> allocator.allocateOrGrow(allocationContext, (I64Vector) existingValues, I64Vector.class, size, I64Vector::new);
                 case BOOLEAN -> VectorAccess.writableBooleanVector(allocator, allocationContext, existingValues, size);
                 case DOUBLE -> allocator.allocateOrGrow(allocationContext, (F64Vector) existingValues, F64Vector.class, size, F64Vector::new);
@@ -1014,34 +1015,112 @@ final class FlatGroupingTable
                 allocationContext,
                 output == null ? null : output.getOrNull(Stream.NULLS),
                 size);
+        switch (kind) {
+            case LONG -> copyGroupedLongPositions(
+                    field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (I64Vector) values, nulls);
+            case BOOLEAN -> copyGroupedBooleanPositions(
+                    field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (BooleanVector) values, nulls);
+            case DOUBLE -> copyGroupedDoublePositions(
+                    field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (F64Vector) values, nulls);
+            case BINARY -> copyGroupedBinaryPositions(
+                    field, groupedColumnIndex, sourcePositions, sourceStart, sourceCount, (BinaryVector) values, nulls, idBackedBinary);
+        }
+        return Streams.ofValuesAndNulls(values, nulls);
+    }
+
+    private void copyGroupedLongPositions(
+            FlatKeyLayout.Field field,
+            int groupedColumnIndex,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            I64Vector values,
+            BooleanVector nulls)
+    {
+        long[] outputValues = values.values();
+        boolean[] outputNulls = nulls.values();
         for (int index = 0; index < sourceCount; index++) {
-            int outputPosition = index;
             int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
             boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
-            nulls.values()[outputPosition] = nullValue;
+            outputNulls[index] = nullValue;
+            if (!nullValue) {
+                int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+                outputValues[index] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset);
+            }
+        }
+    }
+
+    private void copyGroupedBooleanPositions(
+            FlatKeyLayout.Field field,
+            int groupedColumnIndex,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            BooleanVector values,
+            BooleanVector nulls)
+    {
+        boolean[] outputValues = values.values();
+        boolean[] outputNulls = nulls.values();
+        for (int index = 0; index < sourceCount; index++) {
+            int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
+            boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+            outputNulls[index] = nullValue;
+            if (!nullValue) {
+                int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+                outputValues[index] = field.handler().readBoolean(fixedChunk(recordIndex), fixedOffset);
+            }
+        }
+    }
+
+    private void copyGroupedDoublePositions(
+            FlatKeyLayout.Field field,
+            int groupedColumnIndex,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            F64Vector values,
+            BooleanVector nulls)
+    {
+        double[] outputValues = values.values();
+        boolean[] outputNulls = nulls.values();
+        for (int index = 0; index < sourceCount; index++) {
+            int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
+            boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+            outputNulls[index] = nullValue;
+            if (!nullValue) {
+                int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+                outputValues[index] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset));
+            }
+        }
+    }
+
+    private void copyGroupedBinaryPositions(
+            FlatKeyLayout.Field field,
+            int groupedColumnIndex,
+            int[] sourcePositions,
+            int sourceStart,
+            int sourceCount,
+            BinaryVector values,
+            BooleanVector nulls,
+            boolean idBackedBinary)
+    {
+        boolean[] outputNulls = nulls.values();
+        for (int index = 0; index < sourceCount; index++) {
+            int recordIndex = recordIndex(sourcePositions[sourceStart + index]);
+            boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+            outputNulls[index] = nullValue;
             if (nullValue) {
-                if (values instanceof BinaryVector binary) {
-                    binary.setNull(outputPosition);
-                }
+                values.setNull(index);
                 continue;
             }
             int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
-            switch (field.handler().kind()) {
-                case LONG -> ((I64Vector) values).values()[outputPosition] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset);
-                case BOOLEAN -> ((BooleanVector) values).values()[outputPosition] = field.handler().readBoolean(fixedChunk(recordIndex), fixedOffset);
-                case DOUBLE -> ((F64Vector) values).values()[outputPosition] = Double.longBitsToDouble(field.handler().readDoubleBits(fixedChunk(recordIndex), fixedOffset));
-                case BINARY -> {
-                    if (idBackedBinary) {
-                        layout.copyIdBackedBinaryValueToPrepared(
-                                this, groupedColumnIndex, recordIndex, (BinaryVector) values, outputPosition);
-                    }
-                    else {
-                        field.handler().copyBinaryTo(fixedChunk(recordIndex), fixedOffset, variableWidthArena, (BinaryVector) values, outputPosition);
-                    }
-                }
+            if (idBackedBinary) {
+                layout.copyIdBackedBinaryValueToPrepared(this, groupedColumnIndex, recordIndex, values, index);
+            }
+            else {
+                field.handler().copyBinaryTo(fixedChunk(recordIndex), fixedOffset, variableWidthArena, values, index);
             }
         }
-        return Streams.ofValuesAndNulls(values, nulls);
     }
 
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
