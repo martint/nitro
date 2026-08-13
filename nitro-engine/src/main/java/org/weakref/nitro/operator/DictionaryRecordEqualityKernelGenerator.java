@@ -28,7 +28,7 @@ import static java.lang.constant.ConstantDescs.CD_int;
 import static java.lang.constant.ConstantDescs.CD_long;
 import static java.lang.constant.ConstantDescs.CD_void;
 
-/** Emits an unrolled exact record comparator for a dictionary-assisted physical key shape. */
+/** Emits an unrolled exact record comparator for a resolved physical key shape. */
 final class DictionaryRecordEqualityKernelGenerator
         implements AutoCloseable
 {
@@ -39,6 +39,7 @@ final class DictionaryRecordEqualityKernelGenerator
     static final int LONG = 0;
     static final int EMBEDDED_BINARY_ID = 1;
     static final int COMPACT_BINARY_ID = 2;
+    static final int EXACT_BINARY = 3;
 
     private static final ClassDesc CD_KERNEL = ClassDesc.of("org.weakref.nitro.operator.DictionaryRecordEqualityKernel");
     private static final ClassDesc CD_LAYOUT = ClassDesc.of("org.weakref.nitro.operator.FlatKeyLayout");
@@ -157,6 +158,9 @@ final class DictionaryRecordEqualityKernelGenerator
             else if (fieldShape.kind() == COMPACT_BINARY_ID) {
                 emitCompactBinaryComparison(code, fieldShape.fixedOffset(), field, different);
             }
+            else if (fieldShape.kind() == EXACT_BINARY) {
+                emitExactBinaryComparison(code, fieldShape.fixedOffset(), field, different);
+            }
             else {
                 emitLongComparison(code, fieldShape, different);
             }
@@ -263,6 +267,20 @@ final class DictionaryRecordEqualityKernelGenerator
         code.invokevirtual(CD_LAYOUT, "generatedEqualityExactBinary", EXACT_BINARY_TYPE);
         code.ifeq(different);
         code.labelBinding(done);
+    }
+
+    private static void emitExactBinaryComparison(CodeBuilder code, int fieldOffset, int field, Label different)
+    {
+        code.aload(LAYOUT);
+        code.loadConstant(field);
+        code.aload(FIXED_CHUNK);
+        emitRecordOffset(code, fieldOffset);
+        code.aload(VARIABLE_WIDTH_ARENA);
+        code.aload(VALUES);
+        code.iload(POSITION);
+        code.iload(RECORD_INDEX);
+        code.invokevirtual(CD_LAYOUT, "generatedEqualityExactBinary", EXACT_BINARY_TYPE);
+        code.ifeq(different);
     }
 
     private static void emitRecordOffset(CodeBuilder code, int fieldOffset)

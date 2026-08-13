@@ -1121,14 +1121,13 @@ class FlatKeyLayout
     private void prepareGeneratedDictionaryRecordEquality()
     {
         if (!policy.generatedDictionaryRecordEquality() ||
-                !embedIdOnlyBinaryIds ||
                 handlers.length < 5) {
             return;
         }
         List<DictionaryRecordEqualityKernelGenerator.FieldShape> fields = new ArrayList<>(handlers.length);
         for (int field = 0; field < handlers.length; field++) {
             if (fieldKinds[field] == FlatTypeHandler.Kind.BINARY) {
-                if (!fieldIdComparable[field] || batchDictionaryIds[field] == null) {
+                if (fieldBinaryBase[field] == null) {
                     return;
                 }
             }
@@ -1138,11 +1137,19 @@ class FlatKeyLayout
             }
         }
         for (int field : comparisonOrder) {
-            int kind = fieldKinds[field] == FlatTypeHandler.Kind.LONG
-                    ? DictionaryRecordEqualityKernelGenerator.LONG
-                    : compactEmbeddedBinaryRecords
-                            ? DictionaryRecordEqualityKernelGenerator.COMPACT_BINARY_ID
-                            : DictionaryRecordEqualityKernelGenerator.EMBEDDED_BINARY_ID;
+            int kind;
+            if (fieldKinds[field] == FlatTypeHandler.Kind.LONG) {
+                kind = DictionaryRecordEqualityKernelGenerator.LONG;
+            }
+            else if (compactEmbeddedBinaryRecords && fieldIdComparable[field] && batchDictionaryIds[field] != null) {
+                kind = DictionaryRecordEqualityKernelGenerator.COMPACT_BINARY_ID;
+            }
+            else if (embedIdOnlyBinaryIds && fieldIdComparable[field] && batchDictionaryIds[field] != null) {
+                kind = DictionaryRecordEqualityKernelGenerator.EMBEDDED_BINARY_ID;
+            }
+            else {
+                kind = DictionaryRecordEqualityKernelGenerator.EXACT_BINARY;
+            }
             fields.add(new DictionaryRecordEqualityKernelGenerator.FieldShape(
                     field,
                     batchNullShape(field),

@@ -922,13 +922,22 @@ class TestFlatGroupingTable
         FlatGroupingTable fallbackRecords = new FlatGroupingTable(fallbackLayout, 16, true);
         try {
             fallbackRecords.beginBatch(flatValues, nulls);
-            assertThat(fallbackLayout.usesGeneratedDictionaryRecordEquality()).isFalse();
+            assertThat(fallbackLayout.usesGeneratedDictionaryRecordEquality()).isTrue();
             long nextGroup = 0;
             for (int position = 0; position < distinct; position++) {
                 long group = fallbackRecords.assignGroup(flatValues, nulls, position, nextGroup);
                 assertThat(group).isEqualTo(position);
                 nextGroup++;
             }
+            byte[] fixedChunk = fallbackRecords.fixedChunk(0);
+            int fixedOffset = fallbackRecords.keyOffset(fallbackRecords.fixedOffset(0));
+            assertThat(fallbackLayout.generatedDictionaryRecordEquality(
+                    fixedChunk,
+                    fixedOffset,
+                    fallbackRecords.variableWidthArena(),
+                    flatValues,
+                    distinct,
+                    0)).isEqualTo(DictionaryRecordEqualityKernel.IDENTICAL);
             fallbackRecords.endBatch();
 
             fallbackRecords.beginBatch(dictionaryValues, nulls);
