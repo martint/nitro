@@ -191,6 +191,8 @@ public class TestParquetOperator
     private static final ParquetFilteredPayloadPolicy GENERIC_FILTERED_PAYLOAD =
             new ParquetFilteredPayloadPolicy(
                     0,
+                    0,
+                    1,
                     new ParquetFilteredPayloadPolicy.Deferred(
                             false,
                             0,
@@ -203,6 +205,7 @@ public class TestParquetOperator
                     new ParquetFilterWindowPolicy.AdaptiveNarrow(
                             false, 0, 1 << 19, 0, false),
                     false);
+
     private static final ParquetFilterEvaluationPolicy GENERIC_FILTER_EVALUATION =
             new ParquetFilterEvaluationPolicy(
                     new ParquetFilterEvaluationPolicy.Ordering(false, false),
@@ -212,6 +215,26 @@ public class TestParquetOperator
 
     @TempDir
     java.nio.file.Path tempDirectory;
+
+    @Test
+    void testFilteredPayloadDecodeAdmissionAccountsForSurvivorRuns()
+    {
+        ParquetFilteredPayloadPolicy policy = ParquetFilteredPayloadPolicy.defaults();
+
+        assertThat(policy.useBulkDecode(sequence(0, 2, 30), 30, 100)).isTrue();
+        assertThat(policy.useBulkDecode(sequence(20, 1, 30), 30, 100)).isFalse();
+        assertThat(policy.useBulkDecode(sequence(0, 10, 10), 10, 100)).isFalse();
+        assertThat(policy.useBulkDecode(sequence(0, 1, 60), 60, 100)).isTrue();
+    }
+
+    private static int[] sequence(int start, int stride, int count)
+    {
+        int[] values = new int[count];
+        for (int index = 0; index < count; index++) {
+            values[index] = start + index * stride;
+        }
+        return values;
+    }
 
     @Test
     void testNitroParquetScanUsesExplicitConnectorResourcesWithAllocationOnlyAllocator()

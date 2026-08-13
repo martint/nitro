@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.parquet;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -20,17 +21,45 @@ import static java.util.Objects.requireNonNull;
  */
 public record ParquetFilteredPayloadPolicy(
         int bulkMinSurvivorPercent,
+        int fragmentedBulkMinSurvivorPercent,
+        int minAverageSurvivorRun,
         Deferred deferred)
 {
     public ParquetFilteredPayloadPolicy
     {
+        checkArgument(fragmentedBulkMinSurvivorPercent >= 0 && fragmentedBulkMinSurvivorPercent <= 100,
+                "fragmentedBulkMinSurvivorPercent must be between 0 and 100");
+        checkArgument(bulkMinSurvivorPercent >= fragmentedBulkMinSurvivorPercent && bulkMinSurvivorPercent <= 100,
+                "bulkMinSurvivorPercent must be between fragmentedBulkMinSurvivorPercent and 100");
+        checkArgument(minAverageSurvivorRun > 0, "minAverageSurvivorRun must be positive");
         requireNonNull(deferred, "deferred is null");
+    }
+
+    public boolean useBulkDecode(int[] positions, int selected, int total)
+    {
+        checkArgument(selected >= 0 && selected <= total, "selected must be between 0 and total");
+        checkArgument(positions.length >= selected, "positions does not contain selected entries");
+        if (selected > (long) total * bulkMinSurvivorPercent / 100) {
+            return true;
+        }
+        if (selected <= (long) total * fragmentedBulkMinSurvivorPercent / 100) {
+            return false;
+        }
+        int runs = selected == 0 ? 0 : 1;
+        for (int index = 1; index < selected; index++) {
+            if (positions[index] != positions[index - 1] + 1) {
+                runs++;
+            }
+        }
+        return selected < (long) runs * minAverageSurvivorRun;
     }
 
     public static ParquetFilteredPayloadPolicy defaults()
     {
         return new ParquetFilteredPayloadPolicy(
                 50,
+                20,
+                4,
                 new Deferred(
                         true,
                         20,
@@ -42,6 +71,8 @@ public record ParquetFilteredPayloadPolicy(
     {
         return new ParquetFilteredPayloadPolicy(
                 Integer.getInteger("nitro.parquet.dfPayloadBulkPercent", 50),
+                Integer.getInteger("nitro.parquet.dfPayloadFragmentedBulkPercent", 20),
+                Integer.getInteger("nitro.parquet.dfPayloadMinAverageRun", 4),
                 new Deferred(
                         Boolean.parseBoolean(System.getProperty("nitro.parquet.deferFilteredPayload", "true")),
                         Integer.getInteger("nitro.parquet.deferredPayloadMaxSurvivorPercent", 20),

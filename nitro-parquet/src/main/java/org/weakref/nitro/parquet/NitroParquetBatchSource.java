@@ -1170,18 +1170,24 @@ public final class NitroParquetBatchSource
 
     private boolean hasAmortizedSurvivorRuns(Mask mask)
     {
-        int selected = mask.selectedCount();
-        if (selected == 0 || skipDecodePolicy.minAverageRun() <= 1) {
+        return hasAmortizedSurvivorRuns(
+                mask.selectedPositions(),
+                mask.selectedCount(),
+                skipDecodePolicy.minAverageRun());
+    }
+
+    private static boolean hasAmortizedSurvivorRuns(int[] positions, int selected, int minAverageRun)
+    {
+        if (selected == 0 || minAverageRun <= 1) {
             return true;
         }
-        int[] positions = mask.selectedPositions();
         int runs = 1;
         for (int index = 1; index < selected; index++) {
             if (positions[index] != positions[index - 1] + 1) {
                 runs++;
             }
         }
-        return selected >= (long) runs * skipDecodePolicy.minAverageRun();
+        return selected >= (long) runs * minAverageRun;
     }
 
     private int fragmentedNumericPayloadColumns(int currentColumn)
@@ -1704,8 +1710,7 @@ public final class NitroParquetBatchSource
         // when most survive (a weak/unclustered filter). A reader must never mix the two page paths across windows,
         // so the decision is frozen rather than recomputed per window.
         if (!dfPayloadDecided) {
-            dfPayloadBulk = survivorCount >
-                    (int) ((long) count * filteredPayloadPolicy.bulkMinSurvivorPercent() / 100);
+            dfPayloadBulk = filteredPayloadPolicy.useBulkDecode(survivors, survivorCount, count);
             dfPayloadDecided = true;
         }
         // A whole filtered window that fits in one public batch can remain open across the first downstream
