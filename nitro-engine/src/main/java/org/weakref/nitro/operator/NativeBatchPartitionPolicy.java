@@ -34,6 +34,15 @@ public record NativeBatchPartitionPolicy(
         return new NativeBatchPartitionPolicy(true, 2, 65_536);
     }
 
+    /**
+     * Copies selected positions into flat destination vectors. Use this when a downstream boundary accepts native
+     * vectors but has not negotiated dictionary-aware consumption for every operator on the receiving pipeline.
+     */
+    public static NativeBatchPartitionPolicy flat()
+    {
+        return new NativeBatchPartitionPolicy(false, 2, 65_536);
+    }
+
     public boolean preserveDictionary(int dictionaryEntries, int outputPositions)
     {
         return preserveDictionaryEncoding &&

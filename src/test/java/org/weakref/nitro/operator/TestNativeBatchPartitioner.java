@@ -125,6 +125,36 @@ class TestNativeBatchPartitioner
     }
 
     @Test
+    void materializesDictionaryInputWhenFlatPartitionsAreRequired()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                Batch source = new Batch(
+                        Mask.all(4),
+                        Output.of(Streams.ofValues(DictionaryVector.wrap(
+                                new int[] {0, 1, 0, 1},
+                                new I64Vector(new long[] {11, 22})))))) {
+            NativeBatchPartitioner partitioner = new NativeBatchPartitioner(
+                    allocator,
+                    1,
+                    2,
+                    NativeBatchPartitionPolicy.flat());
+
+            List<NativeBatchPartitioner.Partition> partitions = partitioner.partition(source, new int[] {0, 1, 0, 1});
+            try {
+                assertThat(partitions).hasSize(2);
+                assertThat(partitions.get(0).batch().output(0).borrow(Stream.VALUES))
+                        .isInstanceOfSatisfying(I64Vector.class, values -> assertThat(values.values()).containsExactly(11, 11));
+                assertThat(partitions.get(1).batch().output(0).borrow(Stream.VALUES))
+                        .isInstanceOfSatisfying(I64Vector.class, values -> assertThat(values.values()).containsExactly(22, 22));
+            }
+            finally {
+                partitions.forEach(partition -> partition.batch().close());
+            }
+        }
+    }
+
+    @Test
     void copiesExternallyAssignedSparsePositionsToArbitraryPartitionCounts()
     {
         try (EngineResources resources = EngineResources.createDefault();
