@@ -120,13 +120,16 @@ import org.weakref.nitro.parquet.RleReaderPolicy;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.mapType;
 import static org.apache.parquet.schema.LogicalTypeAnnotation.stringType;
@@ -1357,6 +1360,97 @@ public class TestParquetOperator
             }
         }
         assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
+    void testGrowingAliasedFilterScratchDoesNotReturnAnActiveLeaseToThePool()
+            throws Exception
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        int windowRows = 100_000;
+        for (int position = 0; position < windowRows * 2; position++) {
+            boolean firstWindow = position < windowRows;
+            long x = !firstWindow || position < 10 ? 0 : 1;
+            long maybe = firstWindow ? (position == 0 ? 0 : 1) : position & 1;
+            // The first window narrows 10 -> 1 and compacts, making maybe's ten-cell filter scratch the published
+            // window buffer. The second narrows 100,000 -> 50,000 without compaction, forcing both scratch buffers to
+            // grow and making a stale alias observable to a concurrent pool borrower.
+            rows.add(new ParquetRow(x, true, maybe));
+        }
+        java.nio.file.Path file = writeParquetFile("growing-aliased-filter-scratch.parquet", true, rows);
+        ParquetProgressiveFilterCompactionPolicy compaction = new ParquetProgressiveFilterCompactionPolicy(
+                true,
+                12,
+                0,
+                4,
+                new ParquetProgressiveFilterCompactionPolicy.Prospective(false, Long.MAX_VALUE, 100, Long.MAX_VALUE),
+                new ParquetProgressiveFilterCompactionPolicy.Fused(false, 100, Integer.MAX_VALUE, Integer.MAX_VALUE),
+                false);
+        NitroParquetScanResources scanResources = new NitroParquetScanResources(
+                DecompressedPageCachePolicy.defaults(),
+                ParquetReaderPolicy.defaults(),
+                ParquetNumericDecodeAdmissionPolicy.defaults(),
+                GENERIC_LATE_MATERIALIZATION,
+                compaction,
+                GENERIC_FILTERED_PAYLOAD,
+                new ParquetFilterWindowPolicy(
+                        windowRows,
+                        new ParquetFilterWindowPolicy.AdaptiveNarrow(false, 0, windowRows, 0, false),
+                        false),
+                GENERIC_FILTER_EVALUATION,
+                ParquetScanDiagnostics.disabled(),
+                new ParquetScanBatchPolicy(windowRows));
+        PrimitiveArrayPool arrays = new PrimitiveArrayPool(1 << 20, 0);
+        try (scanResources;
+                AllocationResources allocationResources = new AllocationResources(arrays, new PrimitiveArrayPool(1 << 20, 0));
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        scanResources,
+                        allocator,
+                        List.of(file),
+                        new Schema(List.of(new Field("x", BIGINT, false), new Field("maybe", BIGINT, true))))) {
+            addExactRuntimeFilter(source, 0, 0, 0);
+            addExactRuntimeFilter(source, 1, 0, 0);
+            try (var first = ((SourcePoll.Ready) source.poll()).batch()) {
+                assertThat(first.selection().count()).isOne();
+            }
+            AtomicBoolean stop = new AtomicBoolean();
+            CountDownLatch borrowerStarted = new CountDownLatch(1);
+            try (var executor = Executors.newSingleThreadExecutor()) {
+                var duplicateLease = executor.submit(() -> {
+                    Set<long[]> activeLeases = Collections.newSetFromMap(new IdentityHashMap<>());
+                    borrowerStarted.countDown();
+                    while (!stop.get()) {
+                        long[] lease = arrays.borrow(long[].class, 10, long[].class);
+                        if (lease == null) {
+                            Thread.onSpinWait();
+                        }
+                        else if (!activeLeases.add(lease)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                borrowerStarted.await();
+                try {
+                    try (var second = ((SourcePoll.Ready) source.poll()).batch()) {
+                        assertThat(second.selection().count()).isEqualTo(windowRows / 2);
+                    }
+                }
+                finally {
+                    stop.set(true);
+                }
+                assertThat(duplicateLease.get()).isFalse();
+            }
+        }
+    }
+
+    private static void addExactRuntimeFilter(NitroParquetBatchSource source, int column, long min, long max)
+    {
+        source.addRuntimeFilter(new RuntimeFilter(
+                source.column(column),
+                new TestingTypedLongDomain(source.column(column).type(), DynamicFilter.fromRange(column, min, max)),
+                false).withoutResidual());
     }
 
     @Test

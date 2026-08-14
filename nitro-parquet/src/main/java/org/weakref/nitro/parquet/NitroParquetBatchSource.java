@@ -2444,13 +2444,25 @@ public final class NitroParquetBatchSource
     {
         if (readers[column].kind() == ColumnReader.Kind.LONG) {
             if (colLong[column] == null || colLong[column].length < rows) {
+                // A final filter can publish its dense scratch directly as the window buffer. Once that window is
+                // drained, growing the filter scratch ends the alias: detach it before replaceLongs releases the old
+                // lease, otherwise releaseScanScratch can return the same array to the pool a second time.
+                if (windowLong[column] == colLong[column]) {
+                    windowLong[column] = null;
+                }
                 colLong[column] = replaceLongs(colLong[column], rows);
             }
         }
         else if (colInt[column] == null || colInt[column].length < rows) {
+            if (windowInt[column] == colInt[column]) {
+                windowInt[column] = null;
+            }
             colInt[column] = replaceInts(colInt[column], rows);
         }
         if (nullable[column] && (colNull[column] == null || colNull[column].length < rows)) {
+            if (windowNull[column] == colNull[column]) {
+                windowNull[column] = null;
+            }
             colNull[column] = replaceBooleans(colNull[column], rows);
         }
     }
