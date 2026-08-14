@@ -85,7 +85,7 @@ class TestHashJoinOperatorResources
         assertThat(indexPolicy.directRangeBuildInitialCapacity()).isEqualTo(1024);
         assertThat(indexPolicy.directRangeBuild()).isTrue();
         assertThat(indexPolicy.directRangeBuildMinRows()).isEqualTo(256);
-        assertThat(indexPolicy.compressKeyOnlyDuplicates()).isFalse();
+        assertThat(indexPolicy.compressKeyOnlyDuplicates()).isTrue();
         assertThat(indexPolicy.directDuplicateGroupInitialCapacity()).isEqualTo(1024);
         assertThat(indexPolicy.flatLegacyInitialCapacity()).isEqualTo(1024);
         assertThat(first.bufferPoolCompatibilityGroup(firstLocal))

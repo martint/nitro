@@ -120,7 +120,7 @@ public record HashJoinIndexPolicy(
                 1 << 26,
                 true,
                 256,
-                false,
+                true,
                 true,
                 true,
                 true,
