@@ -246,6 +246,22 @@ final class FlatJoinIndex
             LongList[] matches,
             SingleLongList[] singleMatches)
     {
+        // Prepared build storage is shared by every probe driver. FlatGroupingTable also carries batch-local
+        // accessors and hash scratch, so one probe must not replace that state while another is using it.
+        synchronized (table) {
+            matchRowsLocked(values, nulls, hasNulls, positions, positionCount, matches, singleMatches);
+        }
+    }
+
+    private void matchRowsLocked(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            int[] positions,
+            int positionCount,
+            LongList[] matches,
+            SingleLongList[] singleMatches)
+    {
         int[] dictionaryGroups = dictionaryProbeCache.prepare(table, values, positionCount, nextGroupId);
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
@@ -293,6 +309,19 @@ final class FlatJoinIndex
 
     @Override
     public void matchSingleRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            int[] positions,
+            int positionCount,
+            long[] refs)
+    {
+        synchronized (table) {
+            matchSingleRowsLocked(values, nulls, hasNulls, positions, positionCount, refs);
+        }
+    }
+
+    private void matchSingleRowsLocked(
             Vector[] values,
             Vector[] nulls,
             boolean hasNulls,
