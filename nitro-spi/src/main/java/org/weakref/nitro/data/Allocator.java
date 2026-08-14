@@ -1149,8 +1149,14 @@ public class Allocator
         state(context).releaseMask(mask);
     }
 
-    public void release(Context context, Vector vector)
+    public synchronized void release(Context context, Vector vector)
     {
+        // An asynchronous boundary can retain a source generation beyond the operator allocator's lifetime. Closing
+        // the allocator has already released every ordinary owner; detached vector leases remain independently
+        // releasable. A later source-generation unwind is therefore satisfied rather than an ownership error.
+        if (closed) {
+            return;
+        }
         releaseVectorTree(context, vector);
     }
 
@@ -1212,6 +1218,29 @@ public class Allocator
             }
         }
         return new AsyncVectorTreeLease(this, detached);
+    }
+
+    /**
+     * Returns whether every non-shared vector reachable from {@code root} is owned or leased by this allocator.
+     * Boundaries use this to distinguish a detachable local result from a borrowed upstream vector tree that must
+     * first be copied into boundary-owned storage.
+     */
+    public synchronized boolean ownsVectorTree(Vector root)
+    {
+        requireNonNull(root, "root is null");
+        Set<Vector> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<Vector> vectors = new java.util.ArrayList<>();
+        collectVectorTree(root, visited, vectors);
+        for (Vector vector : vectors) {
+            if (isSharedAllFalseBoolean(vector) || vectorLeases.containsKey(vector) || asyncVectorLeases.containsKey(vector)) {
+                continue;
+            }
+            boolean owned = states.values().stream().anyMatch(state -> state.inUseVectors.contains(vector));
+            if (!owned) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

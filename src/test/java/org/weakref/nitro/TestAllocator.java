@@ -45,6 +45,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TestAllocator
 {
     @Test
+    void testLateVectorReleaseAfterAllocatorCloseIsSatisfied()
+    {
+        try (EngineResources resources = EngineResources.createDefault()) {
+            Allocator allocator = new Allocator(resources);
+            Allocator.Context context = new Allocator.Context("late-generation-release");
+            I64Vector vector = allocator.allocate(context, I64Vector.class, 8, I64Vector::new);
+            Allocator.AsyncVectorTreeLease lease = allocator.detachVectorTreeForAsyncRelease(java.util.List.of(vector));
+
+            allocator.close();
+            allocator.release(context, vector);
+            lease.close();
+        }
+    }
+
+    @Test
+    void testRecognizesForeignVectorTrees()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator first = new Allocator(resources);
+                Allocator second = new Allocator(resources)) {
+            Allocator.Context context = new Allocator.Context("ownership");
+            I64Vector vector = first.allocate(context, I64Vector.class, 8, I64Vector::new);
+
+            assertThat(first.ownsVectorTree(vector)).isTrue();
+            assertThat(second.ownsVectorTree(vector)).isFalse();
+        }
+    }
+
+    @Test
     void testSparseVariableWidthCopyIsCompactAndIndependent()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
