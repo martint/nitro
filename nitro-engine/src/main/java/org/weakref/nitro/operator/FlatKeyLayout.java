@@ -218,6 +218,8 @@ class FlatKeyLayout
     private boolean discriminatingHashFieldDecided;
     private int discriminatingHashField = -1;
     private final boolean normalizedIntKeyShape;
+    private boolean hashStrategyEstablished;
+    private boolean normalizedIntKeyEnabled = true;
     private boolean batchNormalizedIntKeyEligible;
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
@@ -516,7 +518,7 @@ class FlatKeyLayout
      */
     boolean tryPrepareNormalizedIntKey(Vector[] values, Vector[] nulls, int position)
     {
-        if (!normalizedIntKeyShape || !batchAccessorsReady) {
+        if (!normalizedIntKeyEnabled || !normalizedIntKeyShape || !batchAccessorsReady) {
             return false;
         }
         long first = 0;
@@ -1061,11 +1063,26 @@ class FlatKeyLayout
             System.err.printf("[mixed-composite] fields=%d eligible=%s product=%d radices=%s%n",
                     handlers.length, batchCompositeEligible, compositeMultiplier, Arrays.toString(radices));
         }
-        batchNormalizedIntKeyEligible = normalizedIntKeyShape && sampledNormalizedIntKeyDomain(values, nulls);
+        batchNormalizedIntKeyEligible = normalizedIntKeyEnabled && normalizedIntKeyShape && sampledNormalizedIntKeyDomain(values, nulls);
         prepareConstantNullMixedComposite3();
         batchAccessorsReady = true;
         prepareGeneratedDictionaryRecordEquality();
         decideDiscriminatingHashField(values, nulls);
+    }
+
+    void establishHashStrategy()
+    {
+        if (hashStrategyEstablished) {
+            return;
+        }
+        hashStrategyEstablished = true;
+        // Batch entry may select a different but exact hash representation (for example normalized compact keys
+        // or one discriminating field). A table first populated through a scalar caller already contains records
+        // under the ordinary composite hash, so later batches may hoist accessors but cannot change placement.
+        if (!batchAccessorsReady) {
+            discriminatingHashFieldDecided = true;
+            normalizedIntKeyEnabled = false;
+        }
     }
 
     private void prepareBinaryHashAccessors(Vector[] values)

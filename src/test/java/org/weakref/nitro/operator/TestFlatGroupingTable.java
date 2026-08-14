@@ -1854,6 +1854,46 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testBatchedProbeCannotChangeScalarBuildHashStrategy()
+    {
+        int size = 128;
+        int[] sharedIds = new int[size];
+        String[][] fields = new String[4][size];
+        for (int position = 0; position < size; position++) {
+            sharedIds[position] = position;
+            fields[0][position] = "customer-" + position;
+            fields[1][position] = "first";
+            fields[2][position] = "last";
+            fields[3][position] = "country";
+        }
+        Vector[] values = {
+                nestedDictionary(sharedIds, fields[0]),
+                nestedDictionary(sharedIds, fields[1]),
+                nestedDictionary(sharedIds, fields[2]),
+                nestedDictionary(sharedIds, fields[3])};
+        Vector[] nulls = {null, null, null, null};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                size,
+                true);
+        try {
+            for (int position = 0; position < size; position++) {
+                assertThat(table.assignGroup(values, nulls, position, position)).isEqualTo(position);
+            }
+
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, Mask.all(size));
+            for (int position = 0; position < size; position++) {
+                assertThat(table.findGroup(values, nulls, position)).isEqualTo(position);
+            }
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testMixedCompositePreservesConstantNullGroupingSets()
     {
         int[] ids = {0, 0, 1, 1};

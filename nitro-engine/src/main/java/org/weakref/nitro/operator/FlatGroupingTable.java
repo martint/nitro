@@ -1324,6 +1324,7 @@ final class FlatGroupingTable
 
     private void addNewGroup(int index, Vector[] values, Vector[] nulls, int position, long hash, long groupId, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
+        layout.establishHashStrategy();
         int recordIndex = nextRecordIndex;
         setControl(index, (byte) ((packedHashRecordSlots ? packedTableHash(hash) : hash) & 0x7F | 0x80));
         nextRecordIndex++;
