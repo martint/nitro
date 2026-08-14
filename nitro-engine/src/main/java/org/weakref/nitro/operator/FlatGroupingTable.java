@@ -898,10 +898,29 @@ final class FlatGroupingTable
 
     public long findGroup(Vector[] values, Vector[] nulls, int position)
     {
-        boolean normalized = layout.tryPrepareNormalizedIntKey(values, nulls, position);
-        long normalizedFirst = normalized ? layout.preparedNormalizedFirst() : 0;
-        long normalizedSecond = normalized ? layout.preparedNormalizedSecond() : 0;
-        long hash = normalized ? FlatKeyLayout.normalizedIntKeyHash(normalizedFirst, normalizedSecond) : layout.hash(values, nulls, position);
+        boolean normalized;
+        long normalizedFirst = 0;
+        long normalizedSecond = 0;
+        long hash;
+        if (batchHashesValid) {
+            hash = batchHashes[position];
+            normalized = batchNormalizedHashesValid && batchNormalizedValid[position] != 0;
+            if (normalized) {
+                normalizedFirst = batchNormalizedFirst[position];
+                normalizedSecond = batchNormalizedSecond[position];
+            }
+        }
+        else {
+            normalized = layout.tryPrepareNormalizedIntKey(values, nulls, position);
+            if (normalized) {
+                normalizedFirst = layout.preparedNormalizedFirst();
+                normalizedSecond = layout.preparedNormalizedSecond();
+                hash = FlatKeyLayout.normalizedIntKeyHash(normalizedFirst, normalizedSecond);
+            }
+            else {
+                hash = layout.hash(values, nulls, position);
+            }
+        }
         int index = getIndex(values, nulls, position, hash, normalized, normalizedFirst, normalizedSecond);
         if (index < 0) {
             return -1;

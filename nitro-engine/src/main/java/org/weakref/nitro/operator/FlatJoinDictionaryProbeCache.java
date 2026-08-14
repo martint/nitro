@@ -81,8 +81,14 @@ final class FlatJoinDictionaryProbeCache
         }
         if (base != identity || contentGeneration != generation) {
             probeValues[0] = base;
-            for (int dictionaryId = 0; dictionaryId < cardinality; dictionaryId++) {
-                groups[dictionaryId] = (int) table.findGroup(probeValues, dictionaryId);
+            table.beginBatch(probeValues, null);
+            try {
+                for (int dictionaryId = 0; dictionaryId < cardinality; dictionaryId++) {
+                    groups[dictionaryId] = (int) table.findGroup(probeValues, dictionaryId);
+                }
+            }
+            finally {
+                table.endBatch();
             }
             identity = base;
             generation = contentGeneration;

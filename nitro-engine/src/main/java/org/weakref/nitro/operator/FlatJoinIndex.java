@@ -17,6 +17,7 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongList;
 import it.unimi.dsi.fastutil.longs.LongLists;
 import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 
@@ -145,6 +146,66 @@ final class FlatJoinIndex
         return rows == null ? singleMatch.withValue(singleRows[(int) groupId]) : rows;
     }
 
+    @Override
+    boolean addBuildRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            BufferedJoinInput.InnerBatch batch,
+            int startPosition,
+            int length,
+            int batchIndex)
+    {
+        table.beginBatch(values, nulls);
+        try {
+            int endPosition = startPosition + length;
+            int[] sourcePositions = batch.positions();
+            for (int logicalPosition = startPosition; logicalPosition < endPosition; logicalPosition++) {
+                int sourcePosition = sourcePositions == null ? logicalPosition : sourcePositions[logicalPosition];
+                long rowReference = JoinRowReference.pack(batchIndex, logicalPosition);
+                if (hasNulls) {
+                    add(values, nulls, sourcePosition, rowReference);
+                }
+                else {
+                    addNoNulls(values, sourcePosition, rowReference);
+                }
+            }
+        }
+        finally {
+            table.endBatch();
+        }
+        return true;
+    }
+
+    @Override
+    boolean addBuildRows(
+            Vector[] values,
+            Vector[] nulls,
+            boolean hasNulls,
+            Mask mask,
+            int batchIndex)
+    {
+        table.beginBatch(values, nulls);
+        try {
+            table.prepareBatchHashes(values, nulls, mask);
+            int count = mask.count();
+            for (int logicalPosition = 0; logicalPosition < count; logicalPosition++) {
+                int sourcePosition = mask.all() ? logicalPosition : mask.position(logicalPosition);
+                long rowReference = JoinRowReference.pack(batchIndex, logicalPosition);
+                if (hasNulls) {
+                    add(values, nulls, sourcePosition, rowReference);
+                }
+                else {
+                    addNoNulls(values, sourcePosition, rowReference);
+                }
+            }
+        }
+        finally {
+            table.endBatch();
+        }
+        return true;
+    }
+
     private void ensureGroupCapacity(int groupId)
     {
         if (groupId < singleRows.length) {
@@ -189,27 +250,38 @@ final class FlatJoinIndex
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
-        for (int index = 0; index < positionCount; index++) {
-            int position = positions[index];
-            if (hasNulls && JoinIndex.hasNull(nulls, position)) {
-                matches[index] = LongLists.emptyList();
-                continue;
+        if (dictionaryGroups == null) {
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, positions, positionCount);
+        }
+        try {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (hasNulls && JoinIndex.hasNull(nulls, position)) {
+                    matches[index] = LongLists.emptyList();
+                    continue;
+                }
+                long groupId = dictionaryGroups == null
+                        ? table.findGroup(values, position)
+                        : dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
+                if (groupId < 0 || groupId >= nextGroupId) {
+                    matches[index] = LongLists.emptyList();
+                    continue;
+                }
+                if (!primitiveSingleRows) {
+                    matches[index] = legacyRowsByGroup[(int) groupId];
+                    continue;
+                }
+                LongArrayList rows = duplicateRows == null ? null : duplicateRows[(int) groupId];
+                matches[index] = rows == null
+                        ? singleMatches[index].withValue(singleRows[(int) groupId])
+                        : rows;
             }
-            long groupId = dictionaryGroups == null
-                    ? table.findGroup(values, position)
-                    : dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
-            if (groupId < 0 || groupId >= nextGroupId) {
-                matches[index] = LongLists.emptyList();
-                continue;
+        }
+        finally {
+            if (dictionaryGroups == null) {
+                table.endBatch();
             }
-            if (!primitiveSingleRows) {
-                matches[index] = legacyRowsByGroup[(int) groupId];
-                continue;
-            }
-            LongArrayList rows = duplicateRows == null ? null : duplicateRows[(int) groupId];
-            matches[index] = rows == null
-                    ? singleMatches[index].withValue(singleRows[(int) groupId])
-                    : rows;
         }
     }
 
@@ -240,23 +312,34 @@ final class FlatJoinIndex
         DictionaryVector dictionary = dictionaryGroups == null ? null : (DictionaryVector) values[0];
         int dictionaryDepth = dictionary == null ? 0 : dictionary.dictionaryDepth();
         int[] dictionaryIds = dictionaryDepth == 1 ? dictionary.ids() : null;
-        for (int index = 0; index < positionCount; index++) {
-            int position = positions[index];
-            if (hasNulls && JoinIndex.hasNull(nulls, position)) {
-                refs[index] = NO_MATCH_ROW_REFERENCE;
-                continue;
+        if (dictionaryGroups == null) {
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, positions, positionCount);
+        }
+        try {
+            for (int index = 0; index < positionCount; index++) {
+                int position = positions[index];
+                if (hasNulls && JoinIndex.hasNull(nulls, position)) {
+                    refs[index] = NO_MATCH_ROW_REFERENCE;
+                    continue;
+                }
+                if (dictionaryGroups != null) {
+                    int groupId = dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
+                    refs[index] = groupId < 0 || groupId >= nextGroupId
+                            ? NO_MATCH_ROW_REFERENCE
+                            : singleRows[groupId];
+                }
+                else {
+                    long groupId = table.findGroup(values, position);
+                    refs[index] = groupId < 0 || groupId >= nextGroupId
+                            ? NO_MATCH_ROW_REFERENCE
+                            : singleRows[(int) groupId];
+                }
             }
-            if (dictionaryGroups != null) {
-                int groupId = dictionaryGroups[dictionaryDepth == 1 ? dictionaryIds[position] : dictionary.basePosition(position, dictionaryDepth)];
-                refs[index] = groupId < 0 || groupId >= nextGroupId
-                        ? NO_MATCH_ROW_REFERENCE
-                        : singleRows[groupId];
-            }
-            else {
-                long groupId = table.findGroup(values, position);
-                refs[index] = groupId < 0 || groupId >= nextGroupId
-                        ? NO_MATCH_ROW_REFERENCE
-                        : singleRows[(int) groupId];
+        }
+        finally {
+            if (dictionaryGroups == null) {
+                table.endBatch();
             }
         }
     }
