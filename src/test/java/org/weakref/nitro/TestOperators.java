@@ -95,6 +95,7 @@ import org.weakref.nitro.operator.aggregation.ConditionalSumsAggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.CountAvgStddevI64AggregationUnit;
 import org.weakref.nitro.operator.aggregation.CountColumn;
+import org.weakref.nitro.operator.aggregation.DiscriminatedAggregationUnit;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.First;
 import org.weakref.nitro.operator.aggregation.GeneratedGroupedAggregationUnit;
@@ -2900,6 +2901,33 @@ public class TestOperators
                 .matchesExactly(List.of(
                         row(10L, 4L, 5L),
                         row(20L, 0L, 0L)));
+    }
+
+    @Test
+    void testDiscriminatedAggregationsRouteToIndependentDelegatesWithSqlNullSemantics()
+    {
+        assertThat(operator(new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                PhysicalAggregationProgram.singleUnit(DiscriminatedAggregationUnit.equalUtf8(
+                        1,
+                        List.of("Monday", "Tuesday"),
+                        List.of(new Sum(2), new Sum(2)))),
+                new ConstantTableOperator(
+                        allocator,
+                        3,
+                        List.of(
+                                row(10L, "Monday", 2L),
+                                row(10L, "Tuesday", 3L),
+                                row(10L, "Monday", null),
+                                row(20L, "Monday", null),
+                                row(30L, "Sunday", 7L),
+                                row(40L, null, 100L))))))
+                .matchesExactly(List.of(
+                        row(10L, 2L, 3L),
+                        row(20L, null, null),
+                        row(30L, null, null),
+                        row(40L, null, null)));
     }
 
     @Test

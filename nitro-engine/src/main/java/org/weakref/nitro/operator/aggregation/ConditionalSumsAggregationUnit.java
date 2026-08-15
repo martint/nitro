@@ -223,7 +223,7 @@ public final class ConditionalSumsAggregationUnit
             VectorAccess.LongValues values,
             VectorAccess.BooleanValues valueNulls) {}
 
-    private interface OrdinalResolver
+    interface OrdinalResolver
             extends AutoCloseable
     {
         int ordinal(int position);
