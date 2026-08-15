@@ -2387,6 +2387,32 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testNormalizedIntKeyDeclinesConstantLongLane()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + position;
+            first[position] = position;
+        }
+        Vector[] values = {
+                utf8(strings),
+                new I64Vector(first),
+                new RleVector(new int[] {positions}, new I64Vector(new long[] {7}))};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, new Vector[] {null, null, null});
+            assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testOutOfRangeMixedLongRejectsBeforeEagerDictionaryInterning()
     {
         int dictionarySize = 2_048;

@@ -312,12 +312,9 @@ public final class GroupIdOperator
 
     private Streams groupIdStreams(int groupingSetIndex, int rowCount)
     {
-        I64Vector values = allocator.allocate(allocationContext, I64Vector.class, rowCount, I64Vector::new);
-        long[] groupIds = values.values();
-        for (int position = 0; position < rowCount; position++) {
-            groupIds[position] = groupingSetIndex;
-        }
-        return Streams.ofValues(values);
+        I64Vector value = allocator.allocate(allocationContext, I64Vector.class, 1, I64Vector::new);
+        value.values()[0] = groupingSetIndex;
+        return Streams.ofValues(allocator.allocateSingleRunRle(allocationContext, rowCount, value));
     }
 
     private Output resultOutput(Streams streams)

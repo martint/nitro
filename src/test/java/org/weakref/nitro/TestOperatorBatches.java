@@ -2964,6 +2964,7 @@ public class TestOperatorBatches
                 EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
             Batch batch = operator.next();
             assertThat(batch.output(1).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+            assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(RleVector.class);
             batch.close();
         }
     }

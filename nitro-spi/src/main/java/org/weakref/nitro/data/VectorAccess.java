@@ -79,6 +79,10 @@ public final class VectorAccess
             }
             case RleVector values -> {
                 LongValues runValues = longValues(values.values());
+                if (values.counts().length == 1) {
+                    long value = runValues.value(0);
+                    yield _ -> value;
+                }
                 int[] hint = {0};
                 yield position -> {
                     int runIndex = values.runIndexFromHint(position, hint[0]);

@@ -22,6 +22,7 @@ import org.weakref.nitro.data.I32Vector;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.RleVector;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 
@@ -1251,6 +1252,14 @@ class FlatKeyLayout
                     return false;
                 }
                 continue;
+            }
+            Vector fieldValue = values[inputChannels[index]];
+            if (fieldValue instanceof RleVector rle && rle.counts().length == 1) {
+                // A constant lane contributes no within-batch discrimination. Normalizing it still pays the
+                // complete position-id and wide generated-kernel setup, while the ordinary grouping path reads the
+                // scalar directly. Grouping-set ids are the dominant example, but the admission rule is purely
+                // physical and applies to any constant long lane.
+                return false;
             }
             if (fieldLong[index] == null) {
                 return false;
