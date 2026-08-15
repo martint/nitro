@@ -1352,6 +1352,17 @@ public class HashJoinOperator
 
     private void loadInnerIfNecessary()
     {
+        // A prepared build already owns the finalized index. Prefer it even when the probe does not expose build
+        // payload columns: the streaming key-only shortcut is useful while constructing an index, but rebuilding
+        // that same index in every independently scheduled probe defeats prepared-build sharing.
+        if (preparedBuild != null && canStreamUnusedBuildPayload()) {
+            joinIndex = preparedBuild.newProbeIndex();
+            long exactInnerRows = inner.exactOutputRows();
+            if (exactInnerRows >= 0) {
+                expectedIndexedInnerRows = (int) Math.min(Integer.MAX_VALUE, exactInnerRows);
+            }
+            return;
+        }
         if (canStreamUnusedBuildPayload()) {
             loadStreamingInner();
             return;

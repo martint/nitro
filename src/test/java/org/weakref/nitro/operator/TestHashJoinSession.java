@@ -355,6 +355,70 @@ class TestHashJoinSession
     }
 
     @Test
+    void testPreparedKeyOnlyProbeDoesNotRebuildIndex()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            HashJoinBuild build = HashJoinSession.prepareBuild(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            table(2, 3, 2),
+                            new int[] {0},
+                            false,
+                            new int[] {0})
+                    .orElseThrow();
+            Operator unconsumableBuild = new Operator()
+            {
+                @Override
+                public int outputCount()
+                {
+                    return 1;
+                }
+
+                @Override
+                public boolean hasNext()
+                {
+                    throw new AssertionError("prepared key-only probe rebuilt the raw build");
+                }
+
+                @Override
+                public Batch next()
+                {
+                    throw new AssertionError("prepared key-only probe rebuilt the raw build");
+                }
+
+                @Override
+                public void constrain(Mask mask) {}
+
+                @Override
+                public void close() {}
+            };
+            try (build;
+                    HashJoinSession session = new HashJoinSession(
+                            resources.operatorResources(),
+                            allocator,
+                            Schema.unspecified(1),
+                            new int[] {0},
+                            unconsumableBuild,
+                            new int[] {0},
+                            false,
+                            build)
+                            .withOutputs(0)) {
+                session.addInput(batch(2));
+                assertThat(session.hasOutput()).isTrue();
+                try (Batch output = session.getOutput()) {
+                    assertThat(output.borrowMask().selectedCount()).isEqualTo(2);
+                    assertThat(VectorAccess.longValues(output.output(0).borrow(Stream.VALUES)).value(0)).isEqualTo(2);
+                    assertThat(VectorAccess.longValues(output.output(0).borrow(Stream.VALUES)).value(1)).isEqualTo(2);
+                }
+            }
+        }
+    }
+
+    @Test
     void testSharesPreparedPairBuildAcrossProbeSessions()
     {
         try (EngineResources resources = EngineResources.createDefault();
