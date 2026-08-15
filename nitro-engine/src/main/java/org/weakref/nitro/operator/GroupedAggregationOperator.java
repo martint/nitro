@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -111,7 +111,7 @@ public class GroupedAggregationOperator
     private int[] fusedAggregationIndexes;
     private int[] fusedStateOffsets;
     private GeneratedLongGroupingBindings fusedBindings;
-    private LongStateUpdate[] fusedStateVectors;
+    private GroupedStateUpdate[] fusedStateVectors;
     private boolean fusedStateVectorsBound;
     private int fusedPhysicalShape = -1;
     private boolean debugFusedLimitPrinted;
@@ -834,7 +834,7 @@ public class GroupedAggregationOperator
                     .mergesIntermediateInput();
         }
         fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
-        fusedStateVectors = new LongStateUpdate[fusedSpecs.length];
+        fusedStateVectors = new GroupedStateUpdate[fusedSpecs.length];
     }
 
     private boolean allPlainAggregationsFusible()
@@ -934,7 +934,7 @@ public class GroupedAggregationOperator
             }
             Output valueOutput = batch.output(spec.inputColumn());
             Vector values = spec.readsValue() ? valueOutput.borrow(Stream.VALUES) : null;
-            if (!fusedBindings.bindInput(index, values, valueOutput.borrowOrNull(Stream.NULLS), spec.readsValue())) {
+            if (!fusedBindings.bindInput(index, values, valueOutput.borrowOrNull(Stream.NULLS), spec.readsValue(), spec.readsDoubleValue())) {
                 return false;
             }
         }
@@ -956,6 +956,7 @@ public class GroupedAggregationOperator
                     directGrouping,
                     idIndexedGrouping,
                     fusedBindings.intInputs(),
+                    fusedBindings.doubleInputs(),
                     fusedBindings.mappedInputs(),
                     fusedBindings.mappedInputNulls(),
                     fusedBindings.inputUsesKeyIds(),

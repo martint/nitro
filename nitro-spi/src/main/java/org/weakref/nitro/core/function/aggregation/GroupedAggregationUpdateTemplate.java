@@ -23,12 +23,21 @@ import static java.util.Objects.requireNonNull;
 public record GroupedAggregationUpdateTemplate(Contribution contribution)
 {
     public sealed interface Contribution
-            permits InputValue, Constant {}
+            permits InputValue, DoubleInputValue, Constant {}
 
     public record InputValue(int argument)
             implements Contribution
     {
         public InputValue
+        {
+            requireArgument(argument);
+        }
+    }
+
+    public record DoubleInputValue(int argument)
+            implements Contribution
+    {
+        public DoubleInputValue
         {
             requireArgument(argument);
         }
@@ -55,6 +64,11 @@ public record GroupedAggregationUpdateTemplate(Contribution contribution)
         return new GroupedAggregationUpdateTemplate(new InputValue(argument));
     }
 
+    public static GroupedAggregationUpdateTemplate doubleInputValue(int argument)
+    {
+        return new GroupedAggregationUpdateTemplate(new DoubleInputValue(argument));
+    }
+
     public static GroupedAggregationUpdateTemplate constant(long value)
     {
         return new GroupedAggregationUpdateTemplate(new Constant(value, -1));
@@ -71,6 +85,7 @@ public record GroupedAggregationUpdateTemplate(Contribution contribution)
         requireNonNull(arguments, "arguments is null");
         return switch (contribution) {
             case InputValue input -> GroupedAggregationUpdate.inputValue(inputColumn(arguments, input.argument()));
+            case DoubleInputValue input -> GroupedAggregationUpdate.doubleInputValue(inputColumn(arguments, input.argument()));
             case Constant constant when constant.nullCheckArgument() >= 0 ->
                     GroupedAggregationUpdate.constantWhenNotNull(constant.value(), inputColumn(arguments, constant.nullCheckArgument()));
             case Constant constant -> GroupedAggregationUpdate.constant(constant.value());

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.core.function.projection.ProjectionArgument;
 import org.weakref.nitro.core.function.projection.ProjectionCodeBuilder;
@@ -6901,11 +6902,11 @@ public class TestOperators
         }
 
         @Override
-        public void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset)
+        public void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset)
         {
             State current = (State) state;
-            targets[offset] = (group, value) -> current.sums[group] += value;
-            targets[offset + 1] = (group, value) -> current.counts[group] += value;
+            targets[offset] = (LongStateUpdate) (group, value) -> current.sums[group] += value;
+            targets[offset + 1] = (LongStateUpdate) (group, value) -> current.counts[group] += value;
         }
 
         @Override

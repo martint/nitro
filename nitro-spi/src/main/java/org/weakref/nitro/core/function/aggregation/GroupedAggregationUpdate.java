@@ -27,12 +27,23 @@ import static java.util.Objects.requireNonNull;
 public record GroupedAggregationUpdate(Contribution contribution)
 {
     public sealed interface Contribution
-            permits InputValue, Constant {}
+            permits InputValue, DoubleInputValue, Constant {}
 
     public record InputValue(int inputColumn)
             implements Contribution
     {
         public InputValue
+        {
+            if (inputColumn < 0) {
+                throw new IllegalArgumentException("inputColumn is negative");
+            }
+        }
+    }
+
+    public record DoubleInputValue(int inputColumn)
+            implements Contribution
+    {
+        public DoubleInputValue
         {
             if (inputColumn < 0) {
                 throw new IllegalArgumentException("inputColumn is negative");
@@ -61,6 +72,11 @@ public record GroupedAggregationUpdate(Contribution contribution)
         return new GroupedAggregationUpdate(new InputValue(inputColumn));
     }
 
+    public static GroupedAggregationUpdate doubleInputValue(int inputColumn)
+    {
+        return new GroupedAggregationUpdate(new DoubleInputValue(inputColumn));
+    }
+
     public static GroupedAggregationUpdate constant(long value)
     {
         return new GroupedAggregationUpdate(new Constant(value, -1));
@@ -75,6 +91,7 @@ public record GroupedAggregationUpdate(Contribution contribution)
     {
         return switch (contribution) {
             case InputValue input -> input.inputColumn();
+            case DoubleInputValue input -> input.inputColumn();
             case Constant constant -> constant.nullCheckInputColumn();
         };
     }
@@ -86,7 +103,12 @@ public record GroupedAggregationUpdate(Contribution contribution)
 
     public boolean readsValue()
     {
-        return contribution instanceof InputValue;
+        return contribution instanceof InputValue || contribution instanceof DoubleInputValue;
+    }
+
+    public boolean readsDoubleValue()
+    {
+        return contribution instanceof DoubleInputValue;
     }
 
     public long constantValue()

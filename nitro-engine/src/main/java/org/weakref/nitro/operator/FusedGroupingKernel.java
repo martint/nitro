@@ -13,7 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 
 /**
  * One fused pass over a batch for single-long-key grouped aggregation: probe the open-addressed
@@ -66,5 +66,5 @@ interface FusedGroupingKernel
             int[][] inputIds,
             boolean[][] inputNulls,
             int[][] inputNullIds,
-            LongStateUpdate[] states);
+            GroupedStateUpdate[] states);
 }

@@ -18,6 +18,7 @@ import org.weakref.nitro.core.function.aggregation.AggregationExecution;
 import org.weakref.nitro.core.function.aggregation.AggregationImplementation;
 import org.weakref.nitro.core.function.aggregation.AggregationInput;
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.I64Vector;
@@ -39,7 +40,7 @@ class TestRegisteredAggregationUnit
         GeneratedRegisteredAggregationUnit unit = new GeneratedRegisteredAggregationUnit(
                 new TrackingImplementation(), RAW, FINAL, new int[] {7}, -1, update);
         LongStateUpdate state = (_, _) -> {};
-        LongStateUpdate[] targets = new LongStateUpdate[1];
+        GroupedStateUpdate[] targets = new GroupedStateUpdate[1];
 
         unit.bindGeneratedGroupedState(state, targets, 0);
 

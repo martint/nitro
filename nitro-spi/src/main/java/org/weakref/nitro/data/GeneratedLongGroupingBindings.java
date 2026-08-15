@@ -30,6 +30,7 @@ public final class GeneratedLongGroupingBindings
     private final boolean[] readsInput;
     private final boolean[] readsValue;
     private final boolean[] intInputs;
+    private final boolean[] doubleInputs;
     private final boolean[] mappedInputs;
     private final boolean[] mappedInputNulls;
     private final boolean[] inputUsesKeyIds;
@@ -54,6 +55,7 @@ public final class GeneratedLongGroupingBindings
         readsInput = new boolean[inputCount];
         readsValue = new boolean[inputCount];
         intInputs = new boolean[inputCount];
+        doubleInputs = new boolean[inputCount];
         mappedInputs = new boolean[inputCount];
         mappedInputNulls = new boolean[inputCount];
         inputUsesKeyIds = new boolean[inputCount];
@@ -93,7 +95,7 @@ public final class GeneratedLongGroupingBindings
         return false;
     }
 
-    public boolean bindInput(int index, Vector values, Vector nulls, boolean valueRequired)
+    public boolean bindInput(int index, Vector values, Vector nulls, boolean valueRequired, boolean doubleValue)
     {
         clearInput(index);
         readsInput[index] = true;
@@ -108,10 +110,14 @@ public final class GeneratedLongGroupingBindings
                 mappedInputs[index] = true;
                 values = dictionary.values();
             }
-            if (values instanceof I64Vector longs) {
+            if (doubleValue && values instanceof F64Vector doubles) {
+                inputs[index] = doubles.values();
+                doubleInputs[index] = true;
+            }
+            else if (!doubleValue && values instanceof I64Vector longs) {
                 inputs[index] = longs.values();
             }
-            else if (values instanceof I32Vector ints) {
+            else if (!doubleValue && values instanceof I32Vector ints) {
                 inputs[index] = ints.values();
                 intInputs[index] = true;
             }
@@ -147,6 +153,7 @@ public final class GeneratedLongGroupingBindings
         readsInput[index] = false;
         readsValue[index] = false;
         intInputs[index] = false;
+        doubleInputs[index] = false;
         mappedInputs[index] = false;
         mappedInputNulls[index] = false;
         inputUsesKeyIds[index] = false;
@@ -168,6 +175,7 @@ public final class GeneratedLongGroupingBindings
         for (int index = 0; index < inputs.length; index++) {
             if (readsValue[index]) {
                 shape = shape * 31 + (intInputs[index] ? 1 : 0);
+                shape = shape * 31 + (doubleInputs[index] ? 1 : 0);
                 shape = shape * 31 + (mappedInputs[index] ? 1 : 0);
                 shape = shape * 31 + (inputUsesKeyIds[index] ? 1 : 0);
             }
@@ -251,6 +259,11 @@ public final class GeneratedLongGroupingBindings
     public boolean[] intInputs()
     {
         return intInputs;
+    }
+
+    public boolean[] doubleInputs()
+    {
+        return doubleInputs;
     }
 
     public boolean[] mappedInputs()

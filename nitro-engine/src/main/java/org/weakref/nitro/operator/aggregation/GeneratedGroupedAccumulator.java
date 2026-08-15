@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.data.Streams;
 
@@ -40,7 +41,7 @@ public interface GeneratedGroupedAccumulator
     }
 
     @Override
-    default void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset)
+    default void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset)
     {
         targets[offset] = (LongStateUpdate) ((Streams) state).values();
     }

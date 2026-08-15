@@ -25,18 +25,21 @@ class TestGeneratedLongGroupingBindings
         GeneratedLongGroupingBindings bindings = new GeneratedLongGroupingBindings(2, true);
         I64Vector keys = new I64Vector(new long[] {7, 8, 7});
         I32Vector values = new I32Vector(new int[] {10, 20, 30});
+        F64Vector doubles = new F64Vector(new double[] {1.5, 2.5, 3.5});
         BooleanVector nulls = new BooleanVector(new boolean[] {false, true, false});
 
         assertThat(bindings.bindKey(keys, null)).isTrue();
-        assertThat(bindings.bindInput(0, values, nulls, true)).isTrue();
-        bindings.clearInput(1);
+        assertThat(bindings.bindInput(0, values, nulls, true, false)).isTrue();
+        assertThat(bindings.bindInput(1, doubles, null, true, true)).isTrue();
         bindings.finish();
 
         assertThat(bindings.keyValues()).isSameAs(keys.values());
         assertThat(bindings.keyIds()).isNull();
         assertThat(bindings.intKey()).isFalse();
         assertThat(bindings.inputs()[0]).isSameAs(values.values());
+        assertThat(bindings.inputs()[1]).isSameAs(doubles.values());
         assertThat(bindings.intInputs()).containsExactly(true, false);
+        assertThat(bindings.doubleInputs()).containsExactly(false, true);
         assertThat(bindings.inputNulls()[0]).isSameAs(nulls.values());
         assertThat(bindings.additionalGroupUpperBound(3)).isEqualTo(3);
     }
@@ -51,7 +54,7 @@ class TestGeneratedLongGroupingBindings
         DictionaryVector nulls = DictionaryVector.wrap(ids, new BooleanVector(new boolean[] {false, true}));
 
         assertThat(bindings.bindKey(keys, null)).isTrue();
-        assertThat(bindings.bindInput(0, values, nulls, true)).isTrue();
+        assertThat(bindings.bindInput(0, values, nulls, true, false)).isTrue();
         bindings.finish();
 
         assertThat(bindings.keyIds()).isSameAs(ids);
@@ -80,6 +83,7 @@ class TestGeneratedLongGroupingBindings
                 0,
                 new F64Vector(new double[] {1, 2}),
                 null,
-                true)).isFalse();
+                true,
+                false)).isFalse();
     }
 }

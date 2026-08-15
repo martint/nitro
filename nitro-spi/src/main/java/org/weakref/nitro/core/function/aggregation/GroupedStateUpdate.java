@@ -14,13 +14,6 @@
 package org.weakref.nitro.core.function.aggregation;
 
 /**
- * Classloader-safe physical invocation convention for a generated grouped-aggregation state update.
- *
- * <p>The engine knows only this SPI carrier. A dynamically loaded aggregate provider may implement it on an
- * otherwise opaque state object; generated engine code does not reference the provider's state class.
+ * Classloader-safe marker for physical state-update conventions used by generated grouped aggregation.
  */
-public interface LongStateUpdate
-        extends GroupedStateUpdate
-{
-    void update(int group, long value);
-}
+public interface GroupedStateUpdate {}

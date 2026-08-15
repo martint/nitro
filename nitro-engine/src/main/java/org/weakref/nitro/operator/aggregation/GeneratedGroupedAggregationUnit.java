@@ -14,7 +14,7 @@
 package org.weakref.nitro.operator.aggregation;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
-import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
+import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
 
 import java.util.List;
 
@@ -29,7 +29,7 @@ public interface GeneratedGroupedAggregationUnit
 {
     List<GroupedAggregationUpdate> generatedGroupedUpdates();
 
-    void bindGeneratedGroupedState(Object state, LongStateUpdate[] targets, int offset);
+    void bindGeneratedGroupedState(Object state, GroupedStateUpdate[] targets, int offset);
 
     /** True when the generated update merges an intermediate aggregate state rather than raw rows. */
     default boolean mergesIntermediateInput()
