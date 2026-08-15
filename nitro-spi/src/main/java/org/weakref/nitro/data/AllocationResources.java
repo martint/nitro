@@ -67,9 +67,18 @@ public final class AllocationResources
      */
     public static AllocationResources createDefault()
     {
+        return createDefault(Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", defaultMaxRetainedBytes()));
+    }
+
+    /**
+     * Constructs a fresh storage owner with an embedding-selected primitive-array retention budget.
+     * Other storage policies retain Nitro's standalone defaults.
+     */
+    public static AllocationResources createDefault(long primitiveArrayMaxRetainedBytes)
+    {
         return new AllocationResources(
                 new PrimitiveArrayPool(
-                        Long.getLong("nitro.primitiveArrayPool.maxRetainedBytes", defaultMaxRetainedBytes()),
+                        primitiveArrayMaxRetainedBytes,
                         Long.getLong("nitro.primitiveArrayPool.minRetainedBytes", DEFAULT_MIN_RETAINED_BYTES)),
                 new PrimitiveArrayPool(
                         Long.getLong("nitro.nativeBufferPool.maxRetainedBytes", DEFAULT_MAX_RETAINED_NATIVE_BYTES),

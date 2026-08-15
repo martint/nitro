@@ -14,12 +14,23 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.AllocationResources;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TestPrimitiveArrayPool
 {
+    @Test
+    void testAllocationResourcesHonorExplicitRetentionBudget()
+    {
+        try (AllocationResources resources = AllocationResources.createDefault(0)) {
+            resources.primitiveArrays().release(new byte[512 * 1024]);
+
+            assertThat(resources.primitiveArrays().retainedBytes()).isZero();
+        }
+    }
+
     @Test
     void testTryBorrowIntsDoesNotAllocateOnMiss()
     {

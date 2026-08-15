@@ -140,6 +140,14 @@ public final class EngineResources
                 OperatorResources.createDefault());
     }
 
+    /** Constructs an isolated owner with an embedding-selected primitive-array retention budget. */
+    public static EngineResources createDefault(long primitiveArrayMaxRetainedBytes)
+    {
+        return new EngineResources(
+                AllocationResources.createDefault(primitiveArrayMaxRetainedBytes),
+                OperatorResources.createDefault());
+    }
+
     public static EngineResources from(Allocator allocator)
     {
         requireNonNull(allocator, "allocator is null");
