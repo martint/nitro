@@ -61,7 +61,20 @@ final class BigintPairFlatKeyLayout
             int nullByteCount,
             int fixedRecordSize)
     {
-        super(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder, nullByteCount, fixedRecordSize, false, false);
+        super(
+                arrayPool,
+                codeGeneration,
+                policy,
+                fields,
+                inputChannels,
+                handlers,
+                fixedOffsets,
+                comparisonOrder,
+                nullByteCount,
+                fixedRecordSize,
+                false,
+                false,
+                new boolean[handlers.length]);
         this.firstHandler = handlers[0];
         this.secondHandler = handlers[1];
         this.firstKeyOffset = fixedOffsets[0];

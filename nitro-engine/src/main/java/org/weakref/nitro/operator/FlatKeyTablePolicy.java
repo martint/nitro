@@ -75,6 +75,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean idOnlyBinaryRecords,
             boolean embedIdOnlyBinaryIds,
             boolean compactEmbeddedBinaryRecords,
+            boolean adaptiveFlatBinaryValueIds,
             boolean adaptiveCompactLongRecords,
             int adaptiveCompactLongRecordsMinRows,
             int compactBinaryMinFields,
@@ -139,6 +140,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     true,
                     128,
                     25,
+                    true,
                     true,
                     true,
                     true,
@@ -231,6 +233,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     booleanProperty(
                             "nitro.group.compactEmbeddedBinaryRecords",
                             defaults.compactEmbeddedBinaryRecords()),
+                    booleanProperty(
+                            "nitro.group.adaptiveFlatBinaryValueIds",
+                            defaults.adaptiveFlatBinaryValueIds()),
                     booleanProperty(
                             "nitro.group.adaptiveCompactLongRecords",
                             defaults.adaptiveCompactLongRecords()),

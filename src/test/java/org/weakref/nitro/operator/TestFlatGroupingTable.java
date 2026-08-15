@@ -1400,7 +1400,81 @@ class TestFlatGroupingTable
                 compactTestLongs(size, 1),
                 compactTestLongs(size, 10),
                 compactTestLongs(size, 100)};
-        assertThat(FlatKeyLayout.tryCreate(flat, arrayPool, codeGeneration, flatKeyTablePolicy).usesCompactEmbeddedBinaryRecords()).isFalse();
+        assertThat(FlatKeyLayout.tryCreate(flat, arrayPool, codeGeneration, flatKeyTablePolicy).usesCompactEmbeddedBinaryRecords()).isTrue();
+    }
+
+    @Test
+    void testCompactEmbeddedBinaryRecordsInternAdmittedFlatFieldsAcrossPhysicalEncodings()
+    {
+        int size = 1024;
+        String[][] strings = {
+                compactTestFlatStrings("category-", size, 10),
+                compactTestFlatStrings("class-", size, 20),
+                compactTestFlatStrings("brand-", size, 64),
+                compactTestFlatStrings("product-", size, size),
+                compactTestFlatStrings("store-", size, 12)};
+        long[] groupIds = new long[size];
+        for (int position = 0; position < size; position++) {
+            groupIds[position] = position;
+        }
+        for (String[] field : strings) {
+            field[size - 1] = field[0];
+        }
+        groupIds[size - 1] = groupIds[0];
+
+        Vector[] flat = {
+                utf8(strings[0]),
+                utf8(strings[1]),
+                utf8(strings[2]),
+                utf8(strings[3]),
+                utf8(strings[4]),
+                new I64Vector(groupIds)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(flat, arrayPool, codeGeneration, flatKeyTablePolicy);
+        assertThat(layout.usesCompactEmbeddedBinaryRecords()).isTrue();
+        assertThat(layout.fixedRecordSize()).isEqualTo(5 * Integer.BYTES + Long.BYTES);
+
+        FlatGroupingTable table = new FlatGroupingTable(layout, 1024, true);
+        try {
+            table.beginBatch(flat, null);
+            table.prepareBatchHashes(flat, null, Mask.all(size));
+            long nextGroup = 0;
+            for (int position = 0; position < size; position++) {
+                long group = table.assignGroup(flat, null, position, nextGroup);
+                if (group == nextGroup) {
+                    nextGroup++;
+                }
+                if (position == size - 1) {
+                    assertThat(group).isZero();
+                }
+            }
+            assertThat(nextGroup).isEqualTo(size - 1);
+            table.endBatch();
+
+            Vector[] dictionaryProbe = {
+                    DictionaryVector.wrap(new int[] {0}, 1, utf8(strings[0][0])),
+                    DictionaryVector.wrap(new int[] {0}, 1, utf8(strings[1][0])),
+                    DictionaryVector.wrap(new int[] {0}, 1, utf8(strings[2][0])),
+                    DictionaryVector.wrap(new int[] {0}, 1, utf8(strings[3][0])),
+                    DictionaryVector.wrap(new int[] {0}, 1, utf8(strings[4][0])),
+                    new I64Vector(new long[] {groupIds[0]})};
+            table.beginBatch(dictionaryProbe, null);
+            assertThat(table.findGroup(dictionaryProbe, null, 0)).isZero();
+            table.endBatch();
+
+            Vector[] rleProbe = {
+                    new RleVector(new int[] {1}, utf8(strings[0][0])),
+                    new RleVector(new int[] {1}, utf8(strings[1][0])),
+                    new RleVector(new int[] {1}, utf8(strings[2][0])),
+                    new RleVector(new int[] {1}, utf8(strings[3][0])),
+                    new RleVector(new int[] {1}, utf8(strings[4][0])),
+                    new RleVector(new int[] {1}, new I64Vector(new long[] {groupIds[0]}))};
+            table.beginBatch(rleProbe, null);
+            assertThat(table.findGroup(rleProbe, null, 0)).isZero();
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
     }
 
     @Test
@@ -1431,8 +1505,8 @@ class TestFlatGroupingTable
             assertThat(table.assignGroup(first, null, 2, 2)).isEqualTo(0);
             table.endBatch();
 
-            // Flat input has no query-stable dictionary id. Existing id-backed records must still compare by
-            // exact bytes, while a new record uses the compact layout's exact fallback metadata.
+            // Reusable flat values receive query-stable ids when a record is created. Existing dictionary-created
+            // records still compare by exact value, and a new record keeps the same compact representation.
             Vector[] flat = {
                     utf8("b", "c"),
                     utf8("x", "x"),

@@ -51,6 +51,7 @@ class FlatKeyLayout
     private final boolean singleField;
     private final boolean embedIdOnlyBinaryIds;
     private final boolean compactEmbeddedBinaryRecords;
+    private final boolean[] adaptiveFlatValueIdFields;
     private final int singleInputChannel;
     private final FlatTypeHandler singleHandler;
     private final int singleFixedOffset;
@@ -237,7 +238,8 @@ class FlatKeyLayout
             int nullByteCount,
             int fixedRecordSize,
             boolean anyVariableWidth,
-            boolean compactEmbeddedBinaryRecords)
+            boolean compactEmbeddedBinaryRecords,
+            boolean[] adaptiveFlatValueIdFields)
     {
         this.arrayPool = arrayPool;
         this.codeGeneration = codeGeneration;
@@ -264,6 +266,7 @@ class FlatKeyLayout
         this.singleField = handlers.length == 1;
         this.embedIdOnlyBinaryIds = policy.embedIdOnlyBinaryIds() && !singleField;
         this.compactEmbeddedBinaryRecords = compactEmbeddedBinaryRecords;
+        this.adaptiveFlatValueIdFields = adaptiveFlatValueIdFields;
         this.singleInputChannel = singleField ? inputChannels[0] : -1;
         this.singleHandler = singleField ? handlers[0] : null;
         this.singleFixedOffset = singleField ? fixedOffsets[0] : -1;
@@ -331,20 +334,23 @@ class FlatKeyLayout
             idBackedBinaryFields += handler.kind() == FlatTypeHandler.Kind.BINARY &&
                     values[index] instanceof DictionaryVector ? 1 : 0;
         }
-        // A compact token is useful only when the first physical batch proves both reusable ids and enough possible
-        // groups to amortize its fallback sidecar. Flat binary fields have no stable value ids: representing all of
-        // them as fallback ordinals merely moves the ordinary 12-byte metadata out of line, without reducing it.
-        // Require the same minimum reusable cohort to be physically id-backed before selecting this immutable
-        // layout. Sampled per-field distinctness then requires one discriminating field and a large product of
-        // distinct counts, so a tiny geographical cube does not optimize ten records.
+        // A compact token is useful only when the first physical batch proves enough reusable fields and enough
+        // possible groups to amortize query-stable value ids and the exact fallback sidecar. Dictionary fields
+        // already carry reusable physical ids. An admitted flat field can create the same query-stable identity in
+        // the layout interner only when a new group record is written, retaining one value copy per query rather
+        // than per group without adding work to every input position. Sampled per-field distinctness requires one
+        // discriminating field and a large
+        // product of distinct counts, so a tiny geographical cube does not optimize ten records.
+        CompactBinaryAdmission compactBinaryAdmission = compactBinaryAdmission(values, handlers, layoutPolicy);
         boolean compactEmbeddedBinaryRecords = layoutPolicy.compactEmbeddedBinaryRecords() &&
                 layoutPolicy.idOnlyBinaryRecords() &&
                 layoutPolicy.embedIdOnlyBinaryIds() &&
                 binaryFields >= layoutPolicy.compactBinaryMinFields() &&
-                idBackedBinaryFields >= layoutPolicy.compactBinaryMinReusableFields() &&
+                (layoutPolicy.adaptiveFlatBinaryValueIds() ||
+                        idBackedBinaryFields >= layoutPolicy.compactBinaryMinReusableFields()) &&
                 values.length > 0 &&
                 values[0].length() >= layoutPolicy.compactBinaryMinRows() &&
-                admitsCompactBinaryRecords(values, handlers, layoutPolicy);
+                compactBinaryAdmission.admitted();
         int fixedOffset = nullByteCount;
         for (int index = 0; index < values.length; index++) {
             FlatTypeHandler handler = handlers[index];
@@ -366,9 +372,10 @@ class FlatKeyLayout
                     comparisonOrder(handlers),
                     nullByteCount,
                     fixedOffset,
-                    anyVariableWidth);
+                    anyVariableWidth,
+                    compactBinaryAdmission.reusableFields());
         }
-        return new FlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords);
+        return new FlatKeyLayout(arrayPool, codeGeneration, policy, fields, inputChannels, handlers, fixedOffsets, comparisonOrder(handlers), nullByteCount, fixedOffset, anyVariableWidth, compactEmbeddedBinaryRecords, compactBinaryAdmission.reusableFields());
     }
 
     private static int dictionaryBackedBinaryFields(Vector[] values)
@@ -382,12 +389,13 @@ class FlatKeyLayout
         return fields;
     }
 
-    private static boolean admitsCompactBinaryRecords(
+    private static CompactBinaryAdmission compactBinaryAdmission(
             Vector[] values,
             FlatTypeHandler[] handlers,
             FlatKeyTablePolicy.Layout policy)
     {
         int reusableFields = 0;
+        boolean[] reusable = new boolean[handlers.length];
         int maximumDistinct = 0;
         long distinctProduct = 1;
         long[] hashes = new long[COMPACT_BINARY_SAMPLE_SIZE];
@@ -399,6 +407,7 @@ class FlatKeyLayout
             int distinct = sampledBinaryDistinct(values[index], samples, hashes);
             maximumDistinct = Math.max(maximumDistinct, distinct);
             if ((long) distinct * 100 <= (long) samples * policy.compactBinaryReusePercent()) {
+                reusable[index] = true;
                 reusableFields++;
             }
             if (distinctProduct < policy.compactBinaryMinDistinctProduct()) {
@@ -407,10 +416,12 @@ class FlatKeyLayout
                         Math.multiplyExact(distinctProduct, Math.max(1, distinct)));
             }
         }
-        return reusableFields >= policy.compactBinaryMinReusableFields() &&
+        return new CompactBinaryAdmission(reusableFields >= policy.compactBinaryMinReusableFields() &&
                 maximumDistinct >= policy.compactBinaryMinDiscriminatingDistinct() &&
-                distinctProduct >= policy.compactBinaryMinDistinctProduct();
+                distinctProduct >= policy.compactBinaryMinDistinctProduct(), reusable);
     }
+
+    private record CompactBinaryAdmission(boolean admitted, boolean[] reusableFields) {}
 
     private static int sampledBinaryDistinct(Vector vector, int samples, long[] hashes)
     {
@@ -2581,6 +2592,27 @@ class FlatKeyLayout
                 return;
             }
         }
+        BinaryVector base = fieldBinaryBase == null ? null : fieldBinaryBase[fieldIndex];
+        if (compactBinaryRecord(fieldIndex) &&
+                policy.adaptiveFlatBinaryValueIds() &&
+                adaptiveFlatValueIdFields[fieldIndex] &&
+                batchDictionaryIds[fieldIndex] == null &&
+                base != null) {
+            int entry = binaryEntry(fieldIndex, position);
+            int offset = base.startOffset(entry);
+            int length = base.length(entry);
+            ValueIdInterner interner = fieldInterners[fieldIndex];
+            if (interner == null) {
+                interner = new ValueIdInterner(policy.valueIdCeiling(), keyTablePolicy.valueIds());
+                fieldInterners[fieldIndex] = interner;
+            }
+            int globalId = interner.intern(base.data(), offset, length);
+            if (globalId >= 0) {
+                GROUP_INT_HANDLE.set(fixedChunk, fixedOffset, globalId);
+                fieldUsesIdOnlyRecords[fieldIndex] = true;
+                return;
+            }
+        }
         if (policy.idOnlyBinaryRecords() &&
                 fieldIdComparable != null &&
                 fieldIdComparable[fieldIndex] &&
@@ -2596,7 +2628,6 @@ class FlatKeyLayout
                 return;
             }
         }
-        BinaryVector base = fieldBinaryBase == null ? null : fieldBinaryBase[fieldIndex];
         if (compactBinaryRecord(fieldIndex)) {
             if (base == null) {
                 writeCompactBinaryFallback(fieldIndex, value, position, fixedChunk, fixedOffset, arena);
@@ -3440,7 +3471,8 @@ class FlatKeyLayout
                 int[] comparisonOrder,
                 int nullByteCount,
                 int fixedRecordSize,
-                boolean anyVariableWidth)
+                boolean anyVariableWidth,
+                boolean[] adaptiveFlatValueIdFields)
         {
             super(
                     arrayPool,
@@ -3454,7 +3486,8 @@ class FlatKeyLayout
                     nullByteCount,
                     fixedRecordSize,
                     anyVariableWidth,
-                    true);
+                    true,
+                    adaptiveFlatValueIdFields);
         }
 
         @Override
