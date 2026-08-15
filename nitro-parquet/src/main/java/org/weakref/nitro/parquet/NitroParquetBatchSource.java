@@ -953,14 +953,12 @@ public final class NitroParquetBatchSource
         if (!adaptiveNarrowFilterWindowDecided) {
             adaptiveNarrowFilterWindowDecided = true;
             ParquetFilterWindowPolicy.AdaptiveNarrow adaptiveNarrowPolicy = filterWindowPolicy.adaptiveNarrow();
-            if (adaptiveNarrowFilterWindowCandidate &&
-                    directNumericBatchDecodeAdmission.scanCount() <= adaptiveNarrowPolicy.maxExecutionScans()) {
+            if (adaptiveNarrowFilterWindowCandidate) {
                 filterWindow = Math.max(filterWindow, adaptiveNarrowPolicy.rows());
             }
             if (adaptiveNarrowPolicy.diagnostics() && adaptiveNarrowFilterWindowCandidate) {
                 System.err.printf(
-                        "[narrow-filter-window] scans=%d columns=%d rows=%d window=%d%n",
-                        directNumericBatchDecodeAdmission.scanCount(),
+                        "[narrow-filter-window] columns=%d rows=%d window=%d%n",
                         readers.length,
                         totalRows,
                         filterWindow);
@@ -2649,11 +2647,6 @@ public final class NitroParquetBatchSource
                         admitted);
             }
             return admitted;
-        }
-
-        public int scanCount()
-        {
-            return scans;
         }
 
         @Override

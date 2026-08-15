@@ -32,7 +32,7 @@ public record ParquetFilterWindowPolicy(
     {
         return new ParquetFilterWindowPolicy(
                 1 << 19,
-                new AdaptiveNarrow(true, 3, 1 << 24, 38, false),
+                new AdaptiveNarrow(true, 3, 1 << 22, false),
                 false);
     }
 
@@ -44,8 +44,7 @@ public record ParquetFilterWindowPolicy(
                         Boolean.parseBoolean(System.getProperty(
                                 "nitro.parquet.scan.adaptiveNarrowFilterWindow", "true")),
                         Integer.getInteger("nitro.parquet.scan.narrowFilterWindowMaxColumns", 3),
-                        Integer.getInteger("nitro.parquet.scan.narrowFilterWindow", 1 << 24),
-                        Integer.getInteger("nitro.parquet.scan.narrowFilterWindowMaxExecutionScans", 38),
+                        Integer.getInteger("nitro.parquet.scan.narrowFilterWindow", 1 << 22),
                         Boolean.getBoolean("nitro.debug.narrowFilterWindow")),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.parquet.scan.eagerFilterWindowScratch", "false")));
@@ -55,6 +54,5 @@ public record ParquetFilterWindowPolicy(
             boolean enabled,
             int maxColumns,
             int rows,
-            int maxExecutionScans,
             boolean diagnostics) {}
 }

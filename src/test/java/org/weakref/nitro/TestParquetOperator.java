@@ -206,7 +206,7 @@ public class TestParquetOperator
             new ParquetFilterWindowPolicy(
                     1 << 19,
                     new ParquetFilterWindowPolicy.AdaptiveNarrow(
-                            false, 0, 1 << 19, 0, false),
+                            false, 0, 1 << 19, false),
                     false);
 
     private static final ParquetFilterEvaluationPolicy GENERIC_FILTER_EVALUATION =
@@ -1395,7 +1395,7 @@ public class TestParquetOperator
                 GENERIC_FILTERED_PAYLOAD,
                 new ParquetFilterWindowPolicy(
                         windowRows,
-                        new ParquetFilterWindowPolicy.AdaptiveNarrow(false, 0, windowRows, 0, false),
+                        new ParquetFilterWindowPolicy.AdaptiveNarrow(false, 0, windowRows, false),
                         false),
                 GENERIC_FILTER_EVALUATION,
                 ParquetScanDiagnostics.disabled(),
