@@ -71,6 +71,43 @@ class TestSharedBuildOuterJoin
         }
     }
 
+    @Test
+    void testUnmatchedFullJoinProbeDoesNotMarkFirstBuildRow()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator buildAllocator = new Allocator(resources);
+                Allocator probeAllocator = new Allocator(resources);
+                Allocator outputAllocator = new Allocator(resources)) {
+            buildAllocator.beginExecution();
+            probeAllocator.beginExecution();
+            outputAllocator.beginExecution();
+
+            ConstantTableOperator probe = new ConstantTableOperator(probeAllocator, 1, List.of(row(3L)));
+            try (SharedBuildOuterJoin shared = SharedBuildOuterJoin.prepare(
+                            resources.operatorResources(),
+                            buildAllocator,
+                            probe.outputSchema(),
+                            new int[] {0},
+                            new ConstantTableOperator(buildAllocator, 1, List.of(row(1L), row(2L))),
+                            new int[] {0},
+                            true,
+                            new int[] {0, 1})
+                    .orElseThrow();
+                    JoinSession session = shared.newProbeSession(resources.operatorResources(), probeAllocator);
+                    Operator unmatched = shared.newUnmatchedBuildOperator(outputAllocator)) {
+                session.addInput(probe.next());
+                session.finish();
+                while (session.hasOutput()) {
+                    session.getOutput().close();
+                }
+                assertThat(session.isFinished()).isTrue();
+
+                assertThat(readBuildValues(unmatched)).containsExactly(1L, 2L);
+            }
+            probe.close();
+        }
+    }
+
     private static void drainMatches(JoinSession session, List<Long> buildValues)
     {
         while (session.hasOutput()) {

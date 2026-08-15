@@ -188,10 +188,14 @@ public final class SharedBuildOuterJoin
 
     private void markMatched(Batch output)
     {
-        VectorAccess.LongValues identities = VectorAccess.longValues(
-                output.output(outputChannels.length).borrow(Stream.VALUES));
+        Output identityOutput = output.output(outputChannels.length);
+        VectorAccess.LongValues identities = VectorAccess.longValues(identityOutput.borrow(Stream.VALUES));
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(identityOutput.borrowOrNull(Stream.NULLS));
         Mask mask = output.borrowMask();
         for (int position : mask) {
+            if (nulls.value(position)) {
+                continue;
+            }
             int identity = toIntExact(identities.value(position));
             int word = identity / Long.SIZE;
             long bit = 1L << (identity % Long.SIZE);
