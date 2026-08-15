@@ -2376,6 +2376,50 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPackedNormalizedTriplePromotesWithoutLosingExactRecords()
+    {
+        Vector[] firstValues = {
+                new I64Vector(new long[] {1, 2}),
+                new I64Vector(new long[] {10, 20}),
+                new I64Vector(new long[] {100, 200})};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(firstValues, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("packedNormalizedTripleOutput");
+        try {
+            table.beginBatch(firstValues, nulls);
+            I64Vector firstGroups = new I64Vector(2);
+            assertThat(table.assignNormalizedIntBatch(firstValues, nulls, Mask.all(2), firstGroups, 0)).isEqualTo(2);
+            assertThat(firstGroups.values()).containsExactly(0, 1);
+            table.endBatch();
+            assertThat(table.usesPackedNormalizedTripleRecords()).isTrue();
+
+            Vector[] laterValues = {
+                    new I64Vector(new long[] {1, 3_000_000}),
+                    new I64Vector(new long[] {10, 30}),
+                    new I64Vector(new long[] {100, 300})};
+            table.beginBatch(laterValues, nulls);
+            I64Vector laterGroups = new I64Vector(2);
+            assertThat(table.assignNormalizedIntBatch(laterValues, nulls, Mask.all(2), laterGroups, 2)).isEqualTo(3);
+            assertThat(laterGroups.values()).containsExactly(0, 2);
+            table.endBatch();
+            assertThat(table.usesPackedNormalizedTripleRecords()).isFalse();
+
+            I64Vector first = (I64Vector) table.groupedValues(0, Mask.all(3), null, allocator, allocationContext).values();
+            I64Vector second = (I64Vector) table.groupedValues(1, Mask.all(3), null, allocator, allocationContext).values();
+            I64Vector third = (I64Vector) table.groupedValues(2, Mask.all(3), null, allocator, allocationContext).values();
+            assertThat(first.values()).containsExactly(1, 2, 3_000_000);
+            assertThat(second.values()).containsExactly(10, 20, 30);
+            assertThat(third.values()).containsExactly(100, 200, 300);
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void testNormalizedIntKeyEligibilityTransitionPreservesExistingGroups()
     {
         Vector[] firstValues = {

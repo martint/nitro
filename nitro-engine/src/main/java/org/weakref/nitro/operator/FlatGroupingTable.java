@@ -40,6 +40,8 @@ final class FlatGroupingTable
     private static final int MIN_RECORDS_PER_CHUNK_SHIFT = 10;
     private static final int MAX_RECORDS_PER_CHUNK_SHIFT = 16;
     private static final double DEFAULT_LOAD_FACTOR = 15.0 / 16;
+    private static final int PACKED_NORMALIZED_TRIPLE_BITS = 21;
+    private static final long PACKED_NORMALIZED_TRIPLE_MASK = (1L << PACKED_NORMALIZED_TRIPLE_BITS) - 1;
 
     private final FlatKeyLayout layout;
     private final FlatKeyTablePolicy.Table policy;
@@ -91,7 +93,9 @@ final class FlatGroupingTable
     private boolean batchNormalizedHashesValid;
     private long[] normalizedFirstByRecord;
     private long[] normalizedSecondByRecord;
+    private int[] normalizedThirdByRecord;
     private long[] normalizedValidByRecord;
+    private boolean packedNormalizedTripleRecords;
     private long normalizedInputCount;
     private int normalizedRecordCount;
     private long[] singleDictionaryGroups;
@@ -123,7 +127,13 @@ final class FlatGroupingTable
         // Packing removes the record-index-to-record-hash dependent load, but widens each hash slot. Record-identity
         // tables already prove that physical record order is the logical group id, so they avoid paying for a second
         // group-id map and are the structurally compact cohort where the wider self-contained slot can win.
-        this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds;
+        // Normalized records already retain the complete equality key and can reconstruct their hash during
+        // rehash. Keeping a packed (hash, record) long in every bucket therefore duplicates key information and
+        // doubles slot storage versus the ordinary int record index. Mixed batches remain correct: rows that
+        // cannot be normalized retain their hash in the fixed record, while normalized rows use their compact
+        // key for equality and hash reconstruction.
+        this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds && !layout.supportsNormalizedRecordWrite();
+        this.packedNormalizedTripleRecords = layout.fieldCount() == 3 && layout.supportsNormalizedRecordWrite();
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;
         this.fixedRecordSize = (this.packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
@@ -941,6 +951,27 @@ final class FlatGroupingTable
         if (values == null) {
             values = layout.tryMaterializeIdBackedBinaryValues(this, groupedColumnIndex, size, mask, output == null ? null : output.values(), allocator, allocationContext);
         }
+        if (values == null && field.handler().kind() == FlatTypeHandler.Kind.LONG) {
+            I64Vector result = allocator.allocateOrGrow(
+                    allocationContext,
+                    output == null ? null : (I64Vector) output.values(),
+                    I64Vector.class,
+                    size,
+                    I64Vector::new);
+            Arrays.fill(result.values(), 0);
+            for (int groupId : mask) {
+                int recordIndex = recordIndex(groupId);
+                if (recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex)) {
+                    continue;
+                }
+                result.values()[groupId] = normalizedRecordValid(recordIndex)
+                        ? normalizedLongValue(recordIndex, groupedColumnIndex)
+                        : field.handler().readLong(
+                                fixedChunk(recordIndex),
+                                keyOffset(fixedOffset(recordIndex)) + field.fixedOffset());
+            }
+            values = result;
+        }
         if (values == null) {
             values = field.handler().materializeValues(this, field, groupedColumnIndex, size, mask, -1, output == null ? null : output.values(), allocator, allocationContext);
         }
@@ -1002,9 +1033,21 @@ final class FlatGroupingTable
                     size,
                     allocator,
                     allocationContext);
-            outputValues = idBackedBinary != null
-                    ? idBackedBinary
-                    : field.handler().copyFlatValue(
+            if (idBackedBinary != null) {
+                outputValues = idBackedBinary;
+            }
+            else if (normalizedRecordValid(recordIndex) && field.handler().kind() == FlatTypeHandler.Kind.LONG) {
+                I64Vector result = allocator.allocateOrGrow(
+                        allocationContext,
+                        (I64Vector) outputValues,
+                        I64Vector.class,
+                        size,
+                        I64Vector::new);
+                result.values()[outputPosition] = normalizedLongValue(recordIndex, groupedColumnIndex);
+                outputValues = result;
+            }
+            else {
+                outputValues = field.handler().copyFlatValue(
                             field,
                             fixedChunk(recordIndex),
                             fixedOffset,
@@ -1014,6 +1057,7 @@ final class FlatGroupingTable
                             size,
                             allocator,
                             allocationContext);
+            }
         }
         else if (outputValues == null) {
             outputValues = field.handler().materializeValues(
@@ -1152,8 +1196,13 @@ final class FlatGroupingTable
             boolean nullValue = recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
             outputNulls[index] = nullValue;
             if (!nullValue) {
-                int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
-                outputValues[index] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset);
+                if (normalizedRecordValid(recordIndex)) {
+                    outputValues[index] = normalizedLongValue(recordIndex, groupedColumnIndex);
+                }
+                else {
+                    int fixedOffset = keyOffset(fixedOffset(recordIndex)) + field.fixedOffset();
+                    outputValues[index] = field.handler().readLong(fixedChunk(recordIndex), fixedOffset);
+                }
             }
         }
     }
@@ -1303,6 +1352,9 @@ final class FlatGroupingTable
 
     private boolean identical(int recordIndex, long hash, Vector[] values, Vector[] nulls, int position, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
+        if (normalizedRecordValid(recordIndex)) {
+            return identicalKey(recordIndex, values, nulls, position, normalized, normalizedFirst, normalizedSecond);
+        }
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
         if ((long) LONG_HANDLE.get(fixedChunk, fixedOffset) != hash) {
@@ -1314,8 +1366,16 @@ final class FlatGroupingTable
     private boolean identicalKey(int recordIndex, Vector[] values, Vector[] nulls, int position, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
         if (normalized && normalizedRecordValid(recordIndex)) {
-            return normalizedFirstByRecord[recordIndex] == normalizedFirst &&
-                    normalizedSecondByRecord[recordIndex] == normalizedSecond;
+            return normalizedFirst(recordIndex) == normalizedFirst &&
+                    normalizedSecond(recordIndex) == normalizedSecond;
+        }
+        if (normalizedRecordValid(recordIndex)) {
+            return layout.normalizedKeyMatchesInput(
+                    normalizedFirst(recordIndex),
+                    normalizedSecond(recordIndex),
+                    values,
+                    nulls,
+                    position);
         }
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
@@ -1349,21 +1409,31 @@ final class FlatGroupingTable
             recordIndexByGroupId[toIntExact(groupId)] = recordIndex;
         }
 
-        byte[] fixedChunk = fixedChunk(recordIndex);
-        int fixedOffset = fixedOffset(recordIndex);
-        if (!packedHashRecordSlots) {
-            LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
-        }
-        if (normalized && layout.supportsNormalizedRecordWrite()) {
-            layout.writeNormalizedRecord(fixedChunk, keyOffset(fixedOffset), normalizedFirst, normalizedSecond);
-        }
-        else {
+        if (!normalized || !layout.supportsNormalizedRecordWrite()) {
+            byte[] fixedChunk = fixedChunk(recordIndex);
+            int fixedOffset = fixedOffset(recordIndex);
+            if (!packedHashRecordSlots) {
+                LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
+            }
             layout.writeRecord(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
         }
         if (normalized) {
+            if (packedNormalizedTripleRecords && !fitsPackedNormalizedTriple(normalizedFirst, normalizedSecond)) {
+                promotePackedNormalizedTripleRecords();
+            }
             ensureNormalizedRecordCapacity(recordIndex + 1);
-            normalizedFirstByRecord[recordIndex] = normalizedFirst;
-            normalizedSecondByRecord[recordIndex] = normalizedSecond;
+            if (packedNormalizedTripleRecords) {
+                normalizedFirstByRecord[recordIndex] = packNormalizedTriple(normalizedFirst, normalizedSecond);
+            }
+            else {
+                normalizedFirstByRecord[recordIndex] = normalizedFirst;
+                if (layout.fieldCount() == 3) {
+                    normalizedThirdByRecord[recordIndex] = (int) normalizedSecond;
+                }
+                else {
+                    normalizedSecondByRecord[recordIndex] = normalizedSecond;
+                }
+            }
             normalizedValidByRecord[recordIndex >>> 6] |= 1L << recordIndex;
             if (policy.debugNormalizedIntKey()) {
                 normalizedRecordCount++;
@@ -1371,10 +1441,15 @@ final class FlatGroupingTable
         }
     }
 
-    private boolean normalizedRecordValid(int recordIndex)
+    boolean normalizedRecordValid(int recordIndex)
     {
         return normalizedValidByRecord != null && recordIndex < normalizedFirstByRecord.length &&
                 (normalizedValidByRecord[recordIndex >>> 6] & (1L << recordIndex)) != 0;
+    }
+
+    boolean usesPackedNormalizedTripleRecords()
+    {
+        return packedNormalizedTripleRecords;
     }
 
     int normalizedBinaryId(int recordIndex, int fieldIndex)
@@ -1382,9 +1457,81 @@ final class FlatGroupingTable
         if (!normalizedRecordValid(recordIndex) || fieldIndex < 0 || fieldIndex >= 4) {
             return -1;
         }
-        long packed = fieldIndex < 2 ? normalizedFirstByRecord[recordIndex] : normalizedSecondByRecord[recordIndex];
+        long packed = fieldIndex < 2 ? normalizedFirst(recordIndex) : normalizedSecond(recordIndex);
         int encoded = (int) (packed >>> ((fieldIndex & 1) * Integer.SIZE));
         return encoded == 0 ? -1 : encoded - 1;
+    }
+
+    long normalizedLongValue(int recordIndex, int fieldIndex)
+    {
+        int encoded = normalizedEncoded(recordIndex, fieldIndex);
+        if (encoded == 0) {
+            throw new IllegalStateException("Normalized key field is null");
+        }
+        return (long) encoded - 1;
+    }
+
+    private int normalizedEncoded(int recordIndex, int fieldIndex)
+    {
+        long packed = fieldIndex < 2 ? normalizedFirst(recordIndex) : normalizedSecond(recordIndex);
+        return (int) (packed >>> ((fieldIndex & 1) * Integer.SIZE));
+    }
+
+    private long normalizedFirst(int recordIndex)
+    {
+        if (!packedNormalizedTripleRecords) {
+            return normalizedFirstByRecord[recordIndex];
+        }
+        long packed = normalizedFirstByRecord[recordIndex];
+        return (packed & PACKED_NORMALIZED_TRIPLE_MASK) |
+                (((packed >>> PACKED_NORMALIZED_TRIPLE_BITS) & PACKED_NORMALIZED_TRIPLE_MASK) << Integer.SIZE);
+    }
+
+    private long normalizedSecond(int recordIndex)
+    {
+        if (packedNormalizedTripleRecords) {
+            return (normalizedFirstByRecord[recordIndex] >>> (PACKED_NORMALIZED_TRIPLE_BITS * 2)) &
+                    PACKED_NORMALIZED_TRIPLE_MASK;
+        }
+        return normalizedThirdByRecord == null
+                ? normalizedSecondByRecord[recordIndex]
+                : Integer.toUnsignedLong(normalizedThirdByRecord[recordIndex]);
+    }
+
+    private static boolean fitsPackedNormalizedTriple(long first, long second)
+    {
+        return Integer.toUnsignedLong((int) first) <= PACKED_NORMALIZED_TRIPLE_MASK &&
+                Integer.toUnsignedLong((int) (first >>> Integer.SIZE)) <= PACKED_NORMALIZED_TRIPLE_MASK &&
+                Integer.toUnsignedLong((int) second) <= PACKED_NORMALIZED_TRIPLE_MASK;
+    }
+
+    private static long packNormalizedTriple(long first, long second)
+    {
+        return Integer.toUnsignedLong((int) first) |
+                (Integer.toUnsignedLong((int) (first >>> Integer.SIZE)) << PACKED_NORMALIZED_TRIPLE_BITS) |
+                (Integer.toUnsignedLong((int) second) << (PACKED_NORMALIZED_TRIPLE_BITS * 2));
+    }
+
+    private void promotePackedNormalizedTripleRecords()
+    {
+        if (!packedNormalizedTripleRecords) {
+            return;
+        }
+        packedNormalizedTripleRecords = false;
+        if (normalizedFirstByRecord == null) {
+            return;
+        }
+        normalizedThirdByRecord = arrayPool.borrowInts(normalizedFirstByRecord.length);
+        for (int recordIndex = 0; recordIndex < nextRecordIndex; recordIndex++) {
+            if (!normalizedRecordValid(recordIndex)) {
+                continue;
+            }
+            long packed = normalizedFirstByRecord[recordIndex];
+            normalizedFirstByRecord[recordIndex] = (packed & PACKED_NORMALIZED_TRIPLE_MASK) |
+                    (((packed >>> PACKED_NORMALIZED_TRIPLE_BITS) & PACKED_NORMALIZED_TRIPLE_MASK) << Integer.SIZE);
+            normalizedThirdByRecord[recordIndex] = (int) ((packed >>> (PACKED_NORMALIZED_TRIPLE_BITS * 2)) &
+                    PACKED_NORMALIZED_TRIPLE_MASK);
+        }
     }
 
     private void ensureNormalizedRecordCapacity(int size)
@@ -1398,18 +1545,32 @@ final class FlatGroupingTable
         }
         long[] previousFirst = normalizedFirstByRecord;
         long[] previousSecond = normalizedSecondByRecord;
+        int[] previousThird = normalizedThirdByRecord;
         long[] previousValid = normalizedValidByRecord;
         normalizedFirstByRecord = arrayPool.borrowLongs(newSize);
-        normalizedSecondByRecord = arrayPool.borrowLongs(newSize);
+        if (layout.fieldCount() == 3) {
+            if (!packedNormalizedTripleRecords) {
+                normalizedThirdByRecord = arrayPool.borrowInts(newSize);
+            }
+        }
+        else {
+            normalizedSecondByRecord = arrayPool.borrowLongs(newSize);
+        }
         normalizedValidByRecord = arrayPool.borrowLongs((newSize + Long.SIZE - 1) / Long.SIZE);
         Arrays.fill(normalizedValidByRecord, 0);
         if (previousFirst != null) {
             System.arraycopy(previousFirst, 0, normalizedFirstByRecord, 0, previousFirst.length);
-            System.arraycopy(previousSecond, 0, normalizedSecondByRecord, 0, previousSecond.length);
+            if (previousThird != null) {
+                System.arraycopy(previousThird, 0, normalizedThirdByRecord, 0, previousThird.length);
+            }
+            else if (previousSecond != null) {
+                System.arraycopy(previousSecond, 0, normalizedSecondByRecord, 0, previousSecond.length);
+            }
             System.arraycopy(previousValid, 0, normalizedValidByRecord, 0, previousValid.length);
         }
         arrayPool.release(previousFirst);
         arrayPool.release(previousSecond);
+        arrayPool.release(previousThird);
         arrayPool.release(previousValid);
     }
 
@@ -1485,7 +1646,9 @@ final class FlatGroupingTable
                 continue;
             }
 
-            long hash = (long) LONG_HANDLE.get(fixedChunk(recordIndex), fixedOffset(recordIndex));
+            long hash = normalizedRecordValid(recordIndex)
+                    ? FlatKeyLayout.normalizedIntKeyHash(normalizedFirst(recordIndex), normalizedSecond(recordIndex))
+                    : (long) LONG_HANDLE.get(fixedChunk(recordIndex), fixedOffset(recordIndex));
             byte hashPrefix = (byte) (hash & 0x7F | 0x80);
             int bucket = bucket((int) (hash >> 7));
             int step = 1;
@@ -1542,6 +1705,9 @@ final class FlatGroupingTable
 
     public boolean fieldNull(int recordIndex, int fieldIndex)
     {
+        if (normalizedRecordValid(recordIndex)) {
+            return normalizedEncoded(recordIndex, fieldIndex) == 0;
+        }
         return layout.fieldNull(fixedChunk(recordIndex), keyOffset(fixedOffset(recordIndex)), fieldIndex);
     }
 
@@ -1620,6 +1786,7 @@ final class FlatGroupingTable
         bytes += batchNormalizedValid == null ? 0 : batchNormalizedValid.length;
         bytes += longArrayBytes(normalizedFirstByRecord);
         bytes += longArrayBytes(normalizedSecondByRecord);
+        bytes += intArrayBytes(normalizedThirdByRecord);
         bytes += longArrayBytes(normalizedValidByRecord);
         bytes += longArrayBytes(singleDictionaryGroups);
         bytes += intArrayBytes(prefetchedBuckets);
@@ -1670,6 +1837,8 @@ final class FlatGroupingTable
         normalizedFirstByRecord = null;
         arrayPool.release(normalizedSecondByRecord);
         normalizedSecondByRecord = null;
+        arrayPool.release(normalizedThirdByRecord);
+        normalizedThirdByRecord = null;
         arrayPool.release(normalizedValidByRecord);
         normalizedValidByRecord = null;
         arrayPool.release(singleDictionaryGroups);

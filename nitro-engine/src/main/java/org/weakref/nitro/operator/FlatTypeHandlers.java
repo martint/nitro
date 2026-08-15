@@ -101,7 +101,9 @@ final class FlatTypeHandlers
                 }
                 int recordIndex = table.recordIndex(index);
                 if (recordIndex >= 0 && !table.fieldNull(recordIndex, fieldIndex)) {
-                    result.values()[index] = readLong(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
+                    result.values()[index] = table.normalizedRecordValid(recordIndex)
+                            ? table.normalizedLongValue(recordIndex, fieldIndex)
+                            : readLong(table.fixedChunk(recordIndex), table.keyOffset(table.fixedOffset(recordIndex)) + field.fixedOffset());
                 }
             }
             return result;

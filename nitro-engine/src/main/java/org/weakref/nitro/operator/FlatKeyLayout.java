@@ -702,6 +702,37 @@ class FlatKeyLayout
         }
     }
 
+    boolean normalizedKeyMatchesInput(long first, long second, Vector[] values, Vector[] nulls, int position)
+    {
+        for (int field = 0; field < fieldKinds.length; field++) {
+            long packed = field < 2 ? first : second;
+            int encoded = (int) (packed >>> ((field & 1) * Integer.SIZE));
+            if (inputFieldNull(field, nulls, position)) {
+                if (encoded != 0) {
+                    return false;
+                }
+                continue;
+            }
+            if (encoded == 0) {
+                return false;
+            }
+            switch (fieldKinds[field]) {
+                case LONG -> {
+                    if (fieldLong[field].value(position) != (long) encoded - 1) {
+                        return false;
+                    }
+                }
+                case BINARY -> {
+                    if (normalizedBinaryValueId(field, position) != encoded - 1) {
+                        return false;
+                    }
+                }
+                case BOOLEAN, DOUBLE -> throw new IllegalStateException("Normalized key contains an unsupported field");
+            }
+        }
+        return true;
+    }
+
     static long normalizedIntKeyHash(long first, long second)
     {
         long hash = first * 0x9E37_79B9_7F4A_7C15L + second * 0xC2B2_AE3D_27D4_EB4FL;
@@ -2092,13 +2123,19 @@ class FlatKeyLayout
             org.weakref.nitro.data.Allocator allocator,
             org.weakref.nitro.data.Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY ||
+                (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex] && !supportsNormalizedRecordWrite())) {
             return null;
         }
         long totalBytes = 0;
         for (int groupId : mask) {
             int recordIndex = table.recordIndex(groupId);
             if (recordIndex < 0 || table.fieldNull(recordIndex, fieldIndex)) {
+                continue;
+            }
+            int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+            if (normalizedId >= 0) {
+                totalBytes += fieldInterners[fieldIndex].valueLength(normalizedId);
                 continue;
             }
             byte[] chunk = table.fixedChunk(recordIndex);
@@ -2133,6 +2170,12 @@ class FlatKeyLayout
                 result.setNull(groupId);
             }
             else {
+                int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+                if (normalizedId >= 0) {
+                    fieldInterners[fieldIndex].copyValue(normalizedId, result, groupId);
+                    previous = groupId + 1;
+                    continue;
+                }
                 byte[] chunk = table.fixedChunk(recordIndex);
                 int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
                 if (compactBinaryRecord(fieldIndex)) {
@@ -2177,8 +2220,32 @@ class FlatKeyLayout
             org.weakref.nitro.data.Allocator allocator,
             org.weakref.nitro.data.Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY ||
+                (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex] && !supportsNormalizedRecordWrite())) {
             return null;
+        }
+
+        int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+        if (normalizedId >= 0) {
+            int length = fieldInterners[fieldIndex].valueLength(normalizedId);
+            BinaryVector existing = output instanceof BinaryVector binary ? binary : null;
+            int outputOffset = existing == null ? 0 : existing.offsets()[outputPosition];
+            BinaryVector result = BinaryVector.allocateOrGrow(
+                    allocator,
+                    allocationContext,
+                    existing,
+                    size,
+                    Math.addExact(outputOffset, length));
+            if (outputPosition == 0) {
+                Arrays.fill(result.offsets(), 0);
+                result.clearTraits();
+                result.addTraits(field(fieldIndex).binaryTraits());
+            }
+            else if (result.traits().isEmpty()) {
+                result.addTraits(field(fieldIndex).binaryTraits());
+            }
+            fieldInterners[fieldIndex].copyValue(normalizedId, result, outputPosition);
+            return result;
         }
 
         byte[] chunk = table.fixedChunk(recordIndex);
@@ -2254,13 +2321,19 @@ class FlatKeyLayout
             Allocator allocator,
             Allocator.Context allocationContext)
     {
-        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY || (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex])) {
+        if (fieldKinds[fieldIndex] != FlatTypeHandler.Kind.BINARY ||
+                (!compactBinaryRecord(fieldIndex) && !fieldUsesIdOnlyRecords[fieldIndex] && !supportsNormalizedRecordWrite())) {
             return null;
         }
         long totalBytes = 0;
         for (int index = 0; index < sourceCount; index++) {
             int recordIndex = table.recordIndex(sourcePositions[sourceStart + index]);
             if (recordIndex < 0 || table.fieldNull(recordIndex, fieldIndex)) {
+                continue;
+            }
+            int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+            if (normalizedId >= 0) {
+                totalBytes += fieldInterners[fieldIndex].valueLength(normalizedId);
                 continue;
             }
             byte[] chunk = table.fixedChunk(recordIndex);
@@ -2293,6 +2366,11 @@ class FlatKeyLayout
             BinaryVector output,
             int outputPosition)
     {
+        int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+        if (normalizedId >= 0) {
+            fieldInterners[fieldIndex].copyValue(normalizedId, output, outputPosition);
+            return;
+        }
         byte[] chunk = table.fixedChunk(recordIndex);
         int offset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
         if (compactBinaryRecord(fieldIndex)) {
