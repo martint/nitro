@@ -50,6 +50,7 @@ import org.weakref.nitro.operator.FullJoinOperator;
 import org.weakref.nitro.operator.FullJoinOperatorPolicy;
 import org.weakref.nitro.operator.GeneratorOperator;
 import org.weakref.nitro.operator.GroupIdOperator;
+import org.weakref.nitro.operator.GroupIdOperatorPolicy;
 import org.weakref.nitro.operator.GroupOperator;
 import org.weakref.nitro.operator.GroupedAggregationOperator;
 import org.weakref.nitro.operator.HashJoinOperator;
@@ -2948,6 +2949,33 @@ public class TestOperatorBatches
                             row("web channel", null, 20L, 1L),
                             row("store channel", "storeA", 10L, 2L),
                             row("web channel", "webB", 20L, 2L));
+        }
+    }
+
+    @Test
+    void testGroupIdOperatorBoundsExpandedInputBatches()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        GroupIdOperatorPolicy policy = new GroupIdOperatorPolicy(2, true, true, 8, true, true);
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                new ConstantTableOperator(allocator, 2, List.of(
+                        row("a", 1L),
+                        row("b", 2L),
+                        row("c", 3L),
+                        row("d", 4L),
+                        row("e", 5L))),
+                new int[][] {
+                        {-1, 1},
+                        {0, 1}},
+                policy)) {
+            List<Integer> batchSizes = new ArrayList<>();
+            while (operator.hasNext()) {
+                try (Batch batch = operator.next()) {
+                    batchSizes.add(batch.borrowMask().count());
+                }
+            }
+            assertThat(batchSizes).containsExactly(2, 2, 2, 2, 1, 1);
         }
     }
 

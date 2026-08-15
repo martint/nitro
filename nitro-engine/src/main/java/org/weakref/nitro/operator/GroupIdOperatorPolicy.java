@@ -17,6 +17,7 @@ package org.weakref.nitro.operator;
  * Engine-selected physical policies for grouping-set expansion.
  */
 public record GroupIdOperatorPolicy(
+        int maxInputBatchRows,
         boolean shareDenseDictionaryIds,
         boolean propagateDenseDictionaryMappingIdentity,
         int denseDictionaryMappingMinGroupingSets,
@@ -25,6 +26,9 @@ public record GroupIdOperatorPolicy(
 {
     public GroupIdOperatorPolicy
     {
+        if (maxInputBatchRows <= 0) {
+            throw new IllegalArgumentException("maxInputBatchRows must be positive");
+        }
         if (denseDictionaryMappingMinGroupingSets < 0) {
             throw new IllegalArgumentException("denseDictionaryMappingMinGroupingSets is negative");
         }
@@ -32,13 +36,14 @@ public record GroupIdOperatorPolicy(
 
     public static GroupIdOperatorPolicy defaults()
     {
-        return new GroupIdOperatorPolicy(true, true, 8, true, true);
+        return new GroupIdOperatorPolicy(1 << 16, true, true, 8, true, true);
     }
 
     public static GroupIdOperatorPolicy fromSystemProperties()
     {
         GroupIdOperatorPolicy defaults = defaults();
         return new GroupIdOperatorPolicy(
+                Integer.getInteger("nitro.groupId.maxInputBatchRows", defaults.maxInputBatchRows()),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.groupId.shareDenseDictionaryIds",
                         Boolean.toString(defaults.shareDenseDictionaryIds()))),

@@ -47,6 +47,7 @@ public final class GroupIdOperator
     private Batch currentSourceBatch;
     private Mask currentSourceMask;
     private boolean currentSourceDense;
+    private int currentSourceOffset;
     private int currentGroupingSet;
     private Batch stagedBatch;
 
@@ -67,11 +68,11 @@ public final class GroupIdOperator
             Field groupIdField,
             GroupIdOperatorPolicy policy)
     {
-        this.allocator = allocator;
-        this.source = source;
+        this.allocator = requireNonNull(allocator, "allocator is null");
         this.groupingSetInputs = copyGroupingSetInputs(groupingSetInputs);
         this.representativeSourceInputs = representativeSourceInputs(this.groupingSetInputs);
         this.policy = requireNonNull(policy, "policy is null");
+        this.source = requireNonNull(source, "source is null");
         this.outputCanBeNullExtended = computeOutputNullExtension(this.groupingSetInputs);
         this.outputSchema = outputSchema(source.outputSchema(), this.groupingSetInputs, outputCanBeNullExtended, groupIdField);
         this.currentDenseDictionaryMappings = new DictionaryVector[outputCanBeNullExtended.length];
@@ -136,12 +137,17 @@ public final class GroupIdOperator
             }
 
             if (currentGroupingSet >= groupingSetInputs.length) {
+                clearDenseDictionaryMappings();
+                if (currentSourceOffset < currentSourceMask.count()) {
+                    prepareNextSourceChunk();
+                    continue;
+                }
                 currentSourceBatch.close();
                 currentSourceBatch = null;
                 currentSourceMask = null;
                 currentSourceDense = false;
                 currentSourcePositions = null;
-                clearDenseDictionaryMappings();
+                currentSourceOffset = 0;
                 currentGroupingSet = 0;
                 continue;
             }
@@ -161,9 +167,8 @@ public final class GroupIdOperator
             }
             currentSourceBatch = batch;
             currentSourceMask = mask;
-            currentSourceDense = mask.all() && mask.count() == mask.size();
-            currentSourcePositions = materializedPositions(mask);
-            currentGroupingSet = 0;
+            currentSourceOffset = 0;
+            prepareNextSourceChunk();
             return true;
         }
         return false;
@@ -171,7 +176,7 @@ public final class GroupIdOperator
 
     private Batch materializeGroupingSetBatch(int groupingSetIndex)
     {
-        int rowCount = currentSourceMask.count();
+        int rowCount = currentSourcePositions.length;
         Output[] outputs = new Output[outputCount()];
         int[] groupingSet = groupingSetInputs[groupingSetIndex];
 
@@ -301,11 +306,21 @@ public final class GroupIdOperator
         return allocator.copyVector(allocationContext, source, currentSourcePositions);
     }
 
-    private static int[] materializedPositions(Mask mask)
+    private void prepareNextSourceChunk()
     {
-        int[] positions = new int[mask.count()];
+        int start = currentSourceOffset;
+        int length = Math.min(currentSourceMask.count() - start, policy.maxInputBatchRows());
+        currentSourcePositions = materializedPositions(currentSourceMask, start, length);
+        currentSourceOffset += length;
+        currentSourceDense = start == 0 && length == currentSourceMask.size() && currentSourceMask.all();
+        currentGroupingSet = 0;
+    }
+
+    private static int[] materializedPositions(Mask mask, int start, int length)
+    {
+        int[] positions = new int[length];
         for (int index = 0; index < positions.length; index++) {
-            positions[index] = mask.position(index);
+            positions[index] = mask.position(start + index);
         }
         return positions;
     }
