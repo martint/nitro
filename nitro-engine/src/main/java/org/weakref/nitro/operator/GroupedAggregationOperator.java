@@ -1350,7 +1350,7 @@ public class GroupedAggregationOperator
         if (output < groupedResults.length) {
             int groupedOutput = output;
             Set<Stream> outputStreams = groupedKeyStreams(batchState);
-            return new Output(
+            Output result = new Output(
                     outputStreams,
                     stream -> groupedKeyOutput(groupedOutput, batchState).get(stream),
                     (stream, vector) -> allocator.transfer(allocationContext, vector),
@@ -1371,6 +1371,25 @@ public class GroupedAggregationOperator
                                     allocator,
                                     allocationContext),
                     (existing, sourcePosition, outputPosition, size) -> groupedKeyCopyPosition(groupedOutput, existing, sourcePosition, outputPosition, size));
+            if (groupByColumns != null && inlineGroupingState.supportsGroupedValuePositionComparison(groupedKeyIndexes[groupedOutput])) {
+                int groupedKeyIndex = groupedKeyIndexes[groupedOutput];
+                result.withPositionAccessor(new Output.PositionAccessor()
+                {
+                    @Override
+                    public boolean isNull(int position)
+                    {
+                        return inlineGroupingState.groupedValuePositionIsNull(groupedKeyIndex, position);
+                    }
+
+                    @Override
+                    public int compareNonNull(int position, Vector otherValues, int otherPosition)
+                    {
+                        return inlineGroupingState.compareGroupedValuePosition(
+                                groupedKeyIndex, position, otherValues, otherPosition);
+                    }
+                });
+            }
+            return result;
         }
 
         Streams streams = result[output - groupedResults.length];

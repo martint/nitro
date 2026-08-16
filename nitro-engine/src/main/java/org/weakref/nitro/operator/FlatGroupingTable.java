@@ -989,6 +989,36 @@ final class FlatGroupingTable
                 materializeNulls(groupedColumnIndex, size, mask, output == null ? null : output.getOrNull(Stream.NULLS), allocator, allocationContext));
     }
 
+    boolean supportsGroupedValuePositionComparison(int groupedColumnIndex)
+    {
+        FlatTypeHandler.Kind kind = layout.field(groupedColumnIndex).handler().kind();
+        return kind == FlatTypeHandler.Kind.LONG || kind == FlatTypeHandler.Kind.BINARY;
+    }
+
+    boolean groupedValuePositionIsNull(int groupedColumnIndex, int groupId)
+    {
+        int recordIndex = recordIndex(groupId);
+        return recordIndex < 0 || fieldNull(recordIndex, groupedColumnIndex);
+    }
+
+    int compareGroupedValuePosition(int groupedColumnIndex, int groupId, Vector otherValues, int otherPosition)
+    {
+        int recordIndex = recordIndex(groupId);
+        FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
+        return switch (field.handler().kind()) {
+            case LONG -> Long.compare(
+                    normalizedRecordValid(recordIndex)
+                            ? normalizedLongValue(recordIndex, groupedColumnIndex)
+                            : field.handler().readLong(
+                                    fixedChunk(recordIndex),
+                                    keyOffset(fixedOffset(recordIndex)) + field.fixedOffset()),
+                    OperatorVectorSupport.longValue(otherValues, otherPosition));
+            case BINARY -> layout.compareBinaryRecordToInput(
+                    this, groupedColumnIndex, recordIndex, otherValues, otherPosition);
+            default -> throw new IllegalStateException("Grouped value does not support direct comparison");
+        };
+    }
+
     Streams groupedValueRangeAsDictionary(
             int groupedColumnIndex,
             int sourceStart,

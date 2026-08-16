@@ -24,12 +24,23 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Execution facade over a source-neutral lazy vector-column generation.
  */
 public final class Output
         extends VectorColumnGeneration
 {
+    public interface PositionAccessor
+    {
+        boolean isNull(int position);
+
+        int compareNonNull(int position, Vector otherValues, int otherPosition);
+    }
+
+    private PositionAccessor positionAccessor;
+
     public static Output of(Streams streams)
     {
         return new Output(streams.streams(), streams::get);
@@ -122,7 +133,7 @@ public final class Output
             SinglePositionResolver singlePositionResolver,
             int knownAllFalseFlags)
     {
-        return new Output(
+        Output output = new Output(
                 exposedStreams,
                 resolver,
                 maskedResolver,
@@ -132,6 +143,19 @@ public final class Output
                 positionsResolver,
                 singlePositionResolver,
                 knownAllFalseFlags);
+        output.positionAccessor = positionAccessor;
+        return output;
+    }
+
+    public Output withPositionAccessor(PositionAccessor positionAccessor)
+    {
+        this.positionAccessor = requireNonNull(positionAccessor, "positionAccessor is null");
+        return this;
+    }
+
+    public PositionAccessor positionAccessor()
+    {
+        return positionAccessor;
     }
 
     @Override

@@ -2234,6 +2234,42 @@ public class TestOperatorBatches
         assertThat(operator.supportsRetainedBatches()).isTrue();
     }
 
+    @Test
+    void testGroupedAggregationOutputComparesBinaryPositionsWithoutMaterializingThem()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        try (Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                new ConstantTableOperator(allocator, 1, List.of(
+                        row("pear"),
+                        row((Object) null),
+                        row("apple"),
+                        row("banana"))));
+                Batch batch = operator.next()) {
+            Output keys = batch.output(0);
+            Output.PositionAccessor accessor = keys.positionAccessor();
+            BinaryVector values = (BinaryVector) keys.borrow(Stream.VALUES);
+            BooleanVector nulls = (BooleanVector) keys.borrow(Stream.NULLS);
+
+            assertThat(accessor).isNotNull();
+            int positionCount = batch.borrowMask().count();
+            for (int left = 0; left < positionCount; left++) {
+                assertThat(accessor.isNull(left)).isEqualTo(nulls.values()[left]);
+                if (nulls.values()[left]) {
+                    continue;
+                }
+                for (int right = 0; right < positionCount; right++) {
+                    if (!nulls.values()[right]) {
+                        assertThat(Integer.signum(accessor.compareNonNull(left, values, right)))
+                                .isEqualTo(Integer.signum(utf8(values, left).compareTo(utf8(values, right))));
+                    }
+                }
+            }
+        }
+    }
+
     void testLimitOperatorProducesLimitedBatch()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
@@ -3706,6 +3742,7 @@ public class TestOperatorBatches
         int[] positions = new int[selectedCount];
         long[] firstValues = new long[totalPositions];
         BinaryVector secondValues = new BinaryVector(totalPositions, selectedCount * 3);
+        AtomicInteger directComparisons = new AtomicInteger();
         for (int position = 0; position < selectedCount; position++) {
             positions[position] = position;
             int value = selectedCount - position - 1;
@@ -3716,8 +3753,35 @@ public class TestOperatorBatches
         Allocator allocator = new Allocator(EngineResources.createDefault());
         Batch input = new Batch(
                 Mask.sparse(positions, totalPositions),
-                Output.of(Streams.of(new I64Vector(firstValues), null, null)),
-                Output.of(Streams.of(secondValues, null, null)));
+                Output.of(Streams.of(new I64Vector(firstValues), null, null)).withPositionAccessor(new Output.PositionAccessor()
+                {
+                    @Override
+                    public boolean isNull(int position)
+                    {
+                        return false;
+                    }
+
+                    @Override
+                    public int compareNonNull(int position, Vector otherValues, int otherPosition)
+                    {
+                        directComparisons.incrementAndGet();
+                        return Long.compare(firstValues[position], ((I64Vector) otherValues).values()[otherPosition]);
+                    }
+                }),
+                Output.of(Streams.of(secondValues, null, null)).withPositionAccessor(new Output.PositionAccessor()
+                {
+                    @Override
+                    public boolean isNull(int position)
+                    {
+                        return false;
+                    }
+
+                    @Override
+                    public int compareNonNull(int position, Vector otherValues, int otherPosition)
+                    {
+                        return utf8(secondValues, position).compareTo(utf8((BinaryVector) otherValues, otherPosition));
+                    }
+                }));
         try (Operator operator = new TopNOperator(
                 allocator,
                 100,
@@ -3737,6 +3801,7 @@ public class TestOperatorBatches
                         .isEqualTo("%03d".formatted(outputPosition));
             }
         }
+        assertThat(directComparisons).hasPositiveValue();
     }
 
     @Test

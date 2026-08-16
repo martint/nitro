@@ -2867,6 +2867,47 @@ class FlatKeyLayout
         return OperatorVectorSupport.binaryEquals(base.data(), base.startOffset(entry), chunk, offset, length);
     }
 
+    int compareBinaryRecordToInput(FlatGroupingTable table, int fieldIndex, int recordIndex, Vector value, int position)
+    {
+        int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+        if (normalizedId >= 0) {
+            return fieldInterners[fieldIndex].compareValue(normalizedId, value, position);
+        }
+        byte[] fixedChunk = table.fixedChunk(recordIndex);
+        int fixedOffset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+            if (token >= 0) {
+                return fieldInterners[fieldIndex].compareValue(token, value, position);
+            }
+            long fallback = compactBinaryFallback(fieldIndex, ~token);
+            return compareStoredBinaryToInput(
+                    table.variableWidthArena().chunk(compactBinaryChunkIndex(fallback)),
+                    compactBinaryChunkOffset(fallback),
+                    compactBinaryLength(fallback),
+                    value,
+                    position);
+        }
+        int length = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES * 2);
+        if (length < 0) {
+            return fieldInterners[fieldIndex].compareValue(
+                    recordDictionaryId(fieldIndex, fixedChunk, fixedOffset, recordIndex),
+                    value,
+                    position);
+        }
+        return compareStoredBinaryToInput(
+                table.variableWidthArena().chunk((int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset)),
+                (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES),
+                length,
+                value,
+                position);
+    }
+
+    private static int compareStoredBinaryToInput(byte[] data, int offset, int length, Vector value, int position)
+    {
+        return -OperatorVectorSupport.binaryCompare(value, position, data, offset, length);
+    }
+
     private boolean idOnlyBinaryEquals(int fieldIndex, int recordId, Vector value, int position)
     {
         if (isSingleRunBinaryField(fieldIndex) && fieldBinaryConstantGlobalId[fieldIndex] >= 0) {

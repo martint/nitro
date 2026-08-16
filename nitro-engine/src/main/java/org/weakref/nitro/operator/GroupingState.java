@@ -2703,6 +2703,49 @@ final class GroupingState
         return Streams.ofValuesAndNulls(values, nulls);
     }
 
+    boolean supportsGroupedValuePositionComparison(int groupedColumnIndex)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.supportsGroupedValuePositionComparison(groupedColumnIndex);
+        }
+        return structuralGrouping == null &&
+                (useLongGrouping || usePackedIntPairGrouping || useMultiLongGrouping);
+    }
+
+    boolean groupedValuePositionIsNull(int groupedColumnIndex, int sourcePosition)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.groupedValuePositionIsNull(groupedColumnIndex, sourcePosition);
+        }
+        if (usePackedIntPairGrouping) {
+            return sourcePosition >= longKeysByGroup.length ||
+                    (packedIntGroupingArity == 3 && (packedIntTripleNullMask(sourcePosition) & (1 << groupedColumnIndex)) != 0);
+        }
+        if (useLongGrouping) {
+            return sourcePosition == nullGroup || sourcePosition >= longKeysByGroup.length;
+        }
+        return sourcePosition >= nextGroupId || multiLongTable.groupedValueIsNull(groupedColumnIndex, sourcePosition);
+    }
+
+    int compareGroupedValuePosition(int groupedColumnIndex, int sourcePosition, Vector otherValues, int otherPosition)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.compareGroupedValuePosition(
+                    groupedColumnIndex, sourcePosition, otherValues, otherPosition);
+        }
+        long value;
+        if (usePackedIntPairGrouping) {
+            value = packedIntGroupedValue(groupedColumnIndex, sourcePosition);
+        }
+        else if (useLongGrouping) {
+            value = longKeysByGroup[sourcePosition];
+        }
+        else {
+            value = multiLongTable.groupedValue(groupedColumnIndex, sourcePosition);
+        }
+        return Long.compare(value, OperatorVectorSupport.longValue(otherValues, otherPosition));
+    }
+
     public Streams copyGroupedValuePositions(
             int groupedColumnIndex,
             Streams output,

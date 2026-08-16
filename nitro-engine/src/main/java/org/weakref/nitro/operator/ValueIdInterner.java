@@ -16,6 +16,7 @@ package org.weakref.nitro.operator;
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorSpecies;
+import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
 
@@ -254,6 +255,16 @@ final class ValueIdInterner
     boolean valueEquals(int id, byte[] value, int offset, int length)
     {
         return id >= 0 && id < distinct && regionEquals(id, value, offset, length);
+    }
+
+    int compareValue(int id, Vector value, int position)
+    {
+        return -OperatorVectorSupport.binaryCompare(
+                value,
+                position,
+                data,
+                valueOffset[id],
+                valueLength[id]);
     }
 
     /** A fresh copy of the interned value with the given id (for materialization / tests). */

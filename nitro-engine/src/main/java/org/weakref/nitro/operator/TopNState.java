@@ -233,8 +233,9 @@ final class TopNState
             Output output = batch.output(orderingColumn);
             Streams slotOrdering = denseColumns == null ? slotColumns[orderingColumn][slot] : denseColumns[orderingColumn];
             int slotPosition = denseColumns == null ? 0 : slot;
+            Output.PositionAccessor positionAccessor = compactCandidate ? output.positionAccessor() : null;
             Streams currentOrdering = null;
-            if (compactCandidate) {
+            if (compactCandidate && positionAccessor == null) {
                 // Prefer the producer's compact single-position path for very large lazy results.
                 // Borrowing VALUES here would materialize every group merely to compare one candidate.
                 comparisonColumns[orderingColumn] = buffers.copyPosition(output, comparisonColumns[orderingColumn], position);
@@ -243,7 +244,9 @@ final class TopNState
             // NULLS LAST regardless of sort direction (matches Trino/SQL default); direction flips only the
             // comparison of non-null values.
             boolean currentNull = compactCandidate
-                    ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
+                    ? positionAccessor == null
+                            ? OperatorVectorSupport.isNull(currentOrdering.getOrNull(Stream.NULLS), 0)
+                            : positionAccessor.isNull(position)
                     : candidateIsNull(orderingColumn, output, position);
             boolean slotNull = OperatorVectorSupport.isNull(slotOrdering.getOrNull(Stream.NULLS), slotPosition);
             int comparison;
@@ -253,7 +256,10 @@ final class TopNState
                 }
                 return currentNull ? -1 : 1;
             }
-            if (compactCandidate) {
+            if (compactCandidate && positionAccessor != null) {
+                comparison = positionAccessor.compareNonNull(position, slotOrdering.values(), slotPosition);
+            }
+            else if (compactCandidate) {
                 comparison = comparisonKernels[orderingColumn].compare(
                         currentOrdering.values(),
                         currentOrdering.getOrNull(Stream.NULLS),
