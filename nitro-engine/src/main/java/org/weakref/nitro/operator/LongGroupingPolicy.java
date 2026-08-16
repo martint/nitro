@@ -27,6 +27,7 @@ public record LongGroupingPolicy(
         int idIndexedMaxGroups,
         boolean idIndexedDenseRehash,
         int idIndexedActivationCapacityMultiplier,
+        int idIndexedUnclusteredActivationCapacityMultiplier,
         boolean direct,
         int directMinGroups,
         int directMaxRange,
@@ -56,6 +57,7 @@ public record LongGroupingPolicy(
             throw new IllegalArgumentException("Invalid id-indexed group bounds");
         }
         if (idIndexedActivationCapacityMultiplier <= 0 ||
+                idIndexedUnclusteredActivationCapacityMultiplier <= 0 ||
                 directMinGroups < 0 ||
                 directMaxRange <= 0 ||
                 directLatestAdmissionGroups < 0 ||
@@ -83,6 +85,7 @@ public record LongGroupingPolicy(
                 MAX_ID_INDEXED_GROUPS,
                 true,
                 16,
+                4,
                 true,
                 1 << 13,
                 1 << 17,
@@ -124,6 +127,9 @@ public record LongGroupingPolicy(
                 Integer.getInteger(
                         "nitro.group.idIndexedLongActivationCapacityMultiplier",
                         defaults.idIndexedActivationCapacityMultiplier()),
+                Integer.getInteger(
+                        "nitro.group.idIndexedLongUnclusteredActivationCapacityMultiplier",
+                        defaults.idIndexedUnclusteredActivationCapacityMultiplier()),
                 booleanProperty("nitro.group.longDirectGrouping", defaults.direct()),
                 Integer.getInteger("nitro.group.longDirectMinGroups", defaults.directMinGroups()),
                 Integer.getInteger("nitro.group.longDirectMaxRange", defaults.directMaxRange()),

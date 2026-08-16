@@ -532,6 +532,33 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testHighCardinalitySingleLongGroupingDropsDuplicateSlotKeysWithoutRuns()
+    {
+        int size = groupingResources.longGroupingPolicy().idIndexedMinGroups();
+        long[] keys = new long[size];
+        for (int position = 0; position < size; position++) {
+            // Unique, sparse keys presented without adjacent reuse: high cardinality alone should make the
+            // duplicate slot-key array more expensive than exact equality through the dense canonical map.
+            keys[position] = ((long) position << 32) | Integer.toUnsignedLong(position * 0x9E37_79B9);
+        }
+
+        GroupingState grouping = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        try {
+            grouping.assignGroups(new I64Vector(keys), null, Mask.all(size), new I64Vector(size));
+
+            int ordinarySlots = grouping.longGroupIds.length;
+            assertThat(grouping.prepareSingleLongIdIndexedGrouping(false, size + 1L)).isTrue();
+            assertThat(grouping.usesIdIndexedLongGrouping()).isTrue();
+            assertThat(grouping.longGroupKeys).isEmpty();
+            assertThat(grouping.longGroupIds).hasSize(
+                    ordinarySlots * groupingResources.longGroupingPolicy().idIndexedUnclusteredActivationCapacityMultiplier());
+        }
+        finally {
+            grouping.releaseBuffers();
+        }
+    }
+
+    @Test
     void testSingleLongGroupingSamplesSelectedPhysicalPositions()
     {
         long[] values = new long[100];

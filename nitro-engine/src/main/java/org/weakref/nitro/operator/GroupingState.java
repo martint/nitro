@@ -56,8 +56,8 @@ final class GroupingState
     private final LongGroupingPolicy longPolicy;
     private final CompositeGroupingPolicy compositePolicy;
     // Single-long grouping key -> group id, as an open-addressed table probed with one fused find-or-insert per
-    // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality run-heavy shape
-    // may instead pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
+    // row. Ordinary slots keep parallel keys and use -1 ids as empty. A proven high-cardinality shape may instead
+    // pack six hash bits plus group+1 into the id slot (zero is empty) and resolve exact equality via
     // longKeysByGroup. Ids remain dense first-seen order in both layouts; the hash only chooses the slot.
     private static final float LONG_GROUP_LOAD_FACTOR = 0.75f;
     private static final int ID_INDEXED_LONG_GROUP_MASK = 0x03FF_FFFF;
@@ -446,10 +446,11 @@ final class GroupingState
     }
 
     /**
-     * Drops the duplicate key-by-slot array once a high-cardinality generated aggregation has proved that adjacent
-     * runs amortize most successful probes. Occupied slots remain exact: their dense group id indexes the canonical
-     * key in {@link #longKeysByGroup}. Activation may reserve a bounded geometric capacity horizon and rebuild from
-     * the dense canonical map, avoiding repeated sparse-table rehashes while the high-cardinality stream grows.
+     * Drops the duplicate key-by-slot array once a generated aggregation has established enough cardinality for
+     * the saved key array to pay for the additional equality indirection. Occupied slots remain exact: their dense
+     * group id indexes the canonical key in {@link #longKeysByGroup}. Activation may reserve a bounded geometric
+     * capacity horizon and rebuild from the dense canonical map, avoiding repeated sparse-table rehashes while the
+     * high-cardinality stream grows.
      */
     boolean prepareSingleLongIdIndexedGrouping(boolean runHeavyInput, long maximumNextGroupId)
     {
@@ -460,13 +461,16 @@ final class GroupingState
             }
             return true;
         }
-        if (!longPolicy.idIndexed() || useLongDirectGrouping || !runHeavyInput || nextGroupId < longPolicy.idIndexedMinGroups() || maximumNextGroupId >= longPolicy.idIndexedMaxGroups()) {
+        if (!longPolicy.idIndexed() || useLongDirectGrouping || nextGroupId < longPolicy.idIndexedMinGroups() || maximumNextGroupId >= longPolicy.idIndexedMaxGroups()) {
             return false;
         }
         long[] previousKeys = longGroupKeys;
         int[] previousIds = longGroupIds;
         int targetCapacity = previousIds.length;
-        for (int multiplier = 1; multiplier < longPolicy.idIndexedActivationCapacityMultiplier(); multiplier <<= 1) {
+        int capacityMultiplier = runHeavyInput
+                ? longPolicy.idIndexedActivationCapacityMultiplier()
+                : longPolicy.idIndexedUnclusteredActivationCapacityMultiplier();
+        for (int multiplier = 1; multiplier < capacityMultiplier; multiplier <<= 1) {
             if (targetCapacity >= ID_INDEXED_LONG_GROUP_MASK / 2) {
                 break;
             }
