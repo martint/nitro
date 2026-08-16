@@ -1,0 +1,245 @@
+[INFO] Enabling strict checksum verification on all artifact downloads.
+[INFO] Processing build on daemon a2cb9cb7
+[INFO] Scanning for projects...
+[INFO] Loaded 0 groupId for remote repository maven-central
+[INFO] Loaded 0 groupId for remote repository google-maven-central-copy
+[INFO] Njord 0.9.9 session created
+[INFO] BuildTimeEventSpy is registered.
+[INFO] 
+[INFO] Using the SmartBuilder implementation with a thread count of 7
+[INFO] 
+[INFO] ------------------------< io.trino:trino-tests >------------------------
+[INFO] Building trino-tests 484-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] Loaded 0 groupId for remote repository ossrh
+[INFO] Loaded 0 groupId for remote repository repo.gradle.org
+[INFO] Loaded 0 groupId for remote repository central.maven.org
+[INFO] 
+[INFO] --- git-commit-id:10.0.0:revision (default) @ trino-tests ---
+[INFO] 
+[INFO] --- build-helper:3.6.1:bsh-property (surefire-enable-preview) @ trino-tests ---
+[INFO] 
+[INFO] --- resources:3.5.0:resources (default-resources) @ trino-tests ---
+[INFO] skip non existing resourceDirectory /root/notes/trino.nitro/testing/trino-tests/src/main/resources
+[INFO] 
+[INFO] --- compiler:3.15.0:compile (default-compile) @ trino-tests ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.5.0:testResources (default-testResources) @ trino-tests ---
+[INFO] Copying 266 resources from src/test/resources to target/test-classes
+[INFO] 
+[INFO] --- compiler:3.15.0:testCompile (default-testCompile) @ trino-tests ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- modernizer:3.4.0:modernizer (modernizer) @ trino-tests ---
+[INFO] Skipping modernizer execution!
+[INFO] 
+[INFO] --- modernizer:3.4.0:modernizer (modernizer-production-code) @ trino-tests ---
+[INFO] Skipping modernizer execution!
+[INFO] 
+[INFO] --- dependency:3.11.0:analyze-only (default) @ trino-tests ---
+[INFO] Skipping plugin execution
+[INFO] 
+[INFO] --- dependency:3.11.0:analyze-duplicate (default) @ trino-tests ---
+[INFO] Skipping plugin execution
+[INFO] 
+[INFO] --- duplicate-finder:2.0.1:check (default) @ trino-tests ---
+[INFO] Skipping duplicate-finder execution!
+[INFO] 
+[INFO] --- surefire:3.5.6:test (default-test) @ trino-tests ---
+[INFO] Tests will run in random order. To reproduce ordering use flag -Dsurefire.runOrder.random.seed=4848867625881275
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[WARNING] [stderr] WARNING: Using incubator modules: jdk.incubator.vector
+[WARNING] [stderr] 2026-08-11T21:39:47.537-0600	INFO	ForkJoinPool-1-worker-1	io.airlift.log.Logging	Logging to stderr
+[INFO] Running io.trino.tests.nitro.TestNitroTpcdsParquetPerformance
+[WARNING] [stderr] 2026-08-11T21:39:48.424-0600	INFO	ForkJoinPool-1-worker-1	io.trino.simd.BlockEncodingSimdSupport	Detected SIMD Support for architecture=amd64, vectorBitWidth=512: SimdSupport[capabilities=[COMPRESS_BYTE, EXPAND_BYTE, COMPRESS_SHORT, EXPAND_SHORT, COMPRESS_INT, EXPAND_INT, COMPRESS_LONG, EXPAND_LONG]]
+[WARNING] [stderr] WARNING: A restricted method in java.lang.System has been called
+[WARNING] [stderr] WARNING: java.lang.System::loadLibrary has been called by com.aayushatharva.brotli4j.Brotli4jLoader in an unnamed module (file:/root/.m2/repository/remote-cache/com/aayushatharva/brotli4j/brotli4j/1.23.0/brotli4j-1.23.0.jar)
+[WARNING] [stderr] WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+[WARNING] [stderr] WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+[WARNING] [stderr] 
+[WARNING] [stderr] 2026-08-11T21:39:49.744-0600	INFO	ForkJoinPool-1-worker-1	io.trino.testing.DistributedQueryRunner	Created DistributedQueryRunner in 1.90s (unclosed instances = 1)
+[WARNING] [stderr] 2026-08-11T21:40:01.027-0600	INFO	ForkJoinPool-1-worker-1	stdout	engine,suite,query,measurements,min_ms,p50_ms,p95_ms,mean_ms,cpu_p50_ms,cpu_mean_ms,native_sources
+[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 18.11 s <<< FAILURE! -- in io.trino.tests.nitro.TestNitroTpcdsParquetPerformance
+[ERROR] io.trino.tests.nitro.TestNitroTpcdsParquetPerformance.testQueryPerformance -- Time elapsed: 4.530 s <<< ERROR!
+io.trino.testing.QueryFailedException: serialized page exhausted with 1801671913 requested bytes remaining
+	at io.trino.testing.AbstractTestingTrinoClient.execute(AbstractTestingTrinoClient.java:138)
+	at io.trino.testing.DistributedQueryRunner.executeInternal(DistributedQueryRunner.java:591)
+	at io.trino.testing.DistributedQueryRunner.executeWithPlan(DistributedQueryRunner.java:580)
+	at io.trino.tests.nitro.TestNitroTpcdsParquetPerformance.measure(TestNitroTpcdsParquetPerformance.java:470)
+	at io.trino.tests.nitro.TestNitroTpcdsParquetPerformance.benchmarkQuery(TestNitroTpcdsParquetPerformance.java:176)
+	at io.trino.tests.nitro.TestNitroTpcdsParquetPerformance.testQueryPerformance(TestNitroTpcdsParquetPerformance.java:131)
+	Suppressed: java.lang.Exception: SQL: WITH
+  cs_ui AS (
+   SELECT
+     "cs_item_sk"
+   , "sum"("cs_ext_list_price") "sale"
+   , "sum"((("cr_refunded_cash" + "cr_reversed_charge") + "cr_store_credit")) "refund"
+   FROM
+     hive.tpcds_sf10.catalog_sales
+   , hive.tpcds_sf10.catalog_returns
+   WHERE ("cs_item_sk" = "cr_item_sk")
+      AND ("cs_order_number" = "cr_order_number")
+   GROUP BY "cs_item_sk"
+   HAVING ("sum"("cs_ext_list_price") > (2 * "sum"((("cr_refunded_cash" + "cr_reversed_charge") + "cr_store_credit"))))
+) 
+, cross_sales AS (
+   SELECT
+     "i_product_name" "product_name"
+   , "i_item_sk" "item_sk"
+   , "s_store_name" "store_name"
+   , "s_zip" "store_zip"
+   , "ad1"."ca_street_number" "b_street_number"
+   , "ad1"."ca_street_name" "b_street_name"
+   , "ad1"."ca_city" "b_city"
+   , "ad1"."ca_zip" "b_zip"
+   , "ad2"."ca_street_number" "c_street_number"
+   , "ad2"."ca_street_name" "c_street_name"
+   , "ad2"."ca_city" "c_city"
+   , "ad2"."ca_zip" "c_zip"
+   , "d1"."d_year" "syear"
+   , "d2"."d_year" "fsyear"
+   , "d3"."d_year" "s2year"
+   , "count"(*) "cnt"
+   , "sum"("ss_wholesale_cost") "s1"
+   , "sum"("ss_list_price") "s2"
+   , "sum"("ss_coupon_amt") "s3"
+   FROM
+     hive.tpcds_sf10.store_sales
+   , hive.tpcds_sf10.store_returns
+   , cs_ui
+   , hive.tpcds_sf10.date_dim d1
+   , hive.tpcds_sf10.date_dim d2
+   , hive.tpcds_sf10.date_dim d3
+   , hive.tpcds_sf10.store
+   , hive.tpcds_sf10.customer
+   , hive.tpcds_sf10.customer_demographics cd1
+   , hive.tpcds_sf10.customer_demographics cd2
+   , hive.tpcds_sf10.promotion
+   , hive.tpcds_sf10.household_demographics hd1
+   , hive.tpcds_sf10.household_demographics hd2
+   , hive.tpcds_sf10.customer_address ad1
+   , hive.tpcds_sf10.customer_address ad2
+   , hive.tpcds_sf10.income_band ib1
+   , hive.tpcds_sf10.income_band ib2
+   , hive.tpcds_sf10.item
+   WHERE ("ss_store_sk" = "s_store_sk")
+      AND ("ss_sold_date_sk" = "d1"."d_date_sk")
+      AND ("ss_customer_sk" = "c_customer_sk")
+      AND ("ss_cdemo_sk" = "cd1"."cd_demo_sk")
+      AND ("ss_hdemo_sk" = "hd1"."hd_demo_sk")
+      AND ("ss_addr_sk" = "ad1"."ca_address_sk")
+      AND ("ss_item_sk" = "i_item_sk")
+      AND ("ss_item_sk" = "sr_item_sk")
+      AND ("ss_ticket_number" = "sr_ticket_number")
+      AND ("ss_item_sk" = "cs_ui"."cs_item_sk")
+      AND ("c_current_cdemo_sk" = "cd2"."cd_demo_sk")
+      AND ("c_current_hdemo_sk" = "hd2"."hd_demo_sk")
+      AND ("c_current_addr_sk" = "ad2"."ca_address_sk")
+      AND ("c_first_sales_date_sk" = "d2"."d_date_sk")
+      AND ("c_first_shipto_date_sk" = "d3"."d_date_sk")
+      AND ("ss_promo_sk" = "p_promo_sk")
+      AND ("hd1"."hd_income_band_sk" = "ib1"."ib_income_band_sk")
+      AND ("hd2"."hd_income_band_sk" = "ib2"."ib_income_band_sk")
+      AND ("cd1"."cd_marital_status" <> "cd2"."cd_marital_status")
+      AND ("i_color" IN ('purple'   , 'burlywood'   , 'indian'   , 'spring'   , 'floral'   , 'medium'))
+      AND ("i_current_price" BETWEEN 64 AND (64 + 10))
+      AND ("i_current_price" BETWEEN (64 + 1) AND (64 + 15))
+   GROUP BY "i_product_name", "i_item_sk", "s_store_name", "s_zip", "ad1"."ca_street_number", "ad1"."ca_street_name", "ad1"."ca_city", "ad1"."ca_zip", "ad2"."ca_street_number", "ad2"."ca_street_name", "ad2"."ca_city", "ad2"."ca_zip", "d1"."d_year", "d2"."d_year", "d3"."d_year"
+) 
+SELECT
+  "cs1"."product_name"
+, "cs1"."store_name"
+, "cs1"."store_zip"
+, "cs1"."b_street_number"
+, "cs1"."b_street_name"
+, "cs1"."b_city"
+, "cs1"."b_zip"
+, "cs1"."c_street_number"
+, "cs1"."c_street_name"
+, "cs1"."c_city"
+, "cs1"."c_zip"
+, "cs1"."syear"
+, "cs1"."cnt"
+, "cs1"."s1" "s11"
+, "cs1"."s2" "s21"
+, "cs1"."s3" "s31"
+, "cs2"."s1" "s12"
+, "cs2"."s2" "s22"
+, "cs2"."s3" "s32"
+, "cs2"."syear"
+, "cs2"."cnt"
+FROM
+  cross_sales cs1
+, cross_sales cs2
+WHERE ("cs1"."item_sk" = "cs2"."item_sk")
+   AND ("cs1"."syear" = 1999)
+   AND ("cs2"."syear" = (1999 + 1))
+   AND ("cs2"."cnt" <= "cs1"."cnt")
+   AND ("cs1"."store_name" = "cs2"."store_name")
+   AND ("cs1"."store_zip" = "cs2"."store_zip")
+ORDER BY "cs1"."product_name" ASC, "cs1"."store_name" ASC, "cs2"."cnt" ASC, 14, 15, 16, 17, 18
+		at io.trino.testing.DistributedQueryRunner.executeInternal(DistributedQueryRunner.java:598)
+		... 4 more
+Caused by: java.lang.IllegalStateException: serialized page exhausted with 1801671913 requested bytes remaining
+	at io.trino.execution.buffer.CompressingDecryptingPageDeserializer$SerializedPageInput.readBytes(CompressingDecryptingPageDeserializer.java:242)
+	at io.airlift.slice.SliceInput.readBytes(SliceInput.java:185)
+	at io.trino.metadata.InternalBlockEncodingSerde.readLengthPrefixedString(InternalBlockEncodingSerde.java:149)
+	at io.trino.metadata.InternalBlockEncodingSerde.readBlock(InternalBlockEncodingSerde.java:73)
+	at io.trino.operator.nitro.TrinoNitroRemoteBlockEncodingSerde.readBlock(TrinoNitroRemoteBlockEncodingSerde.java:49)
+	at io.trino.block.BlockSerdeUtil.readBlock(BlockSerdeUtil.java:33)
+	at io.trino.execution.buffer.PagesSerdeUtil.readRawPage(PagesSerdeUtil.java:72)
+	at io.trino.execution.buffer.CompressingDecryptingPageDeserializer.deserialize(CompressingDecryptingPageDeserializer.java:85)
+	at io.trino.operator.ExchangeOperator.getOutput(ExchangeOperator.java:263)
+	at io.trino.operator.OutputValidatingSourceOperator.getOutput(OutputValidatingSourceOperator.java:70)
+	at io.trino.operator.Driver.processInternal(Driver.java:408)
+	at io.trino.operator.Driver.lambda$process$0(Driver.java:308)
+	at io.trino.operator.Driver.tryWithLock(Driver.java:729)
+	at io.trino.operator.Driver.process(Driver.java:300)
+	at io.trino.operator.Driver.processForDuration(Driver.java:271)
+	at io.trino.execution.SqlTaskExecution$DriverSplitRunner.processFor(SqlTaskExecution.java:852)
+	at io.trino.execution.executor.dedicated.SplitProcessor.run(SplitProcessor.java:77)
+	at io.trino.execution.executor.dedicated.TaskEntry$VersionEmbedderBridge.lambda$run$0(TaskEntry.java:205)
+	at io.trino.$gen.Trino_testversion____20260812_033949_188.run(Unknown Source)
+	at io.trino.execution.executor.dedicated.TaskEntry$VersionEmbedderBridge.run(TaskEntry.java:206)
+	at io.trino.execution.executor.scheduler.FairScheduler.runTask(FairScheduler.java:177)
+	at io.trino.execution.executor.scheduler.FairScheduler.lambda$submit$0(FairScheduler.java:164)
+	at java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:545)
+	at com.google.common.util.concurrent.TrustedListenableFutureTask$TrustedFutureInterruptibleTask.runInterruptibly(TrustedListenableFutureTask.java:128)
+	at com.google.common.util.concurrent.InterruptibleTask.run(InterruptibleTask.java:74)
+	at com.google.common.util.concurrent.TrustedListenableFutureTask.run(TrustedListenableFutureTask.java:80)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1516)
+[WARNING] [stderr] 2026-08-11T21:40:05.663-0600	INFO	main	io.trino.testing.containers.junit.ReportLeakedContainers	DockerClientFactory not initialized, so there should be no leaked containers, skipping the check
+[INFO] 
+[INFO] Results:
+[INFO] 
+[ERROR] Errors: 
+[ERROR]   TestNitroTpcdsParquetPerformance.testQueryPerformance:131->benchmarkQuery:176->measure:470 » QueryFailed serialized page exhausted with 1801671913 requested bytes remaining
+[INFO] 
+[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0
+[INFO] 
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  20.190 s (Wall Clock)
+[INFO] Finished at: 2026-08-12T03:40:05Z
+[INFO] ------------------------------------------------------------------------
+[INFO] Njord session closed
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.6:test (default-test) on project trino-tests: 
+[ERROR] 
+[ERROR] See /root/notes/trino.nitro/testing/trino-tests/target/surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException

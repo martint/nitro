@@ -1,0 +1,1460 @@
+=== q33 run 1/10 ===
+Trino version: testversion
+Queued: 76.12us, Analysis: 5.48ms, Planning: 8.57ms, Execution: 4.60s, Finishing: 215.44us
+Fragment 0 [SINGLE]
+    CPU: 21.25s, Scheduled: 46.95s, Blocked 35.90s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.51GB, Tasks count: 1; per task: max: 3.56GB
+    Output buffer active time: 4.59s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[396605], wallNanosBuckets=[396349]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887565, bucketWidthSeconds=1, cpuNanosBuckets=[4719, 0, 0, 0, 0, 409529], wallNanosBuckets=[4899, 0, 0, 0, 0, 409774]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.59s (12.77%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[55825], wallNanosBuckets=[55213]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.72s (26.96%), Scheduled: 10.37s (22.12%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887565, bucketWidthSeconds=1, cpuNanosBuckets=[22946930, 1054231674, 1053057717, 1375412293, 1375339810, 844392999], wallNanosBuckets=[23777709, 2051154554, 2015999082, 2531435133, 2505616246, 1244783596]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.43, p05=1.43, p10=1.43, p25=1.43, p50=1.43, p75=1.44, p90=1.44, p95=1.44, p99=1.44, min=1.43, max=1.44}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.35, p05=2.35, p10=2.35, p25=2.60, p50=2.66, p75=2.77, p90=2.77, p95=2.77, p99=2.77, min=2.35, max=2.77}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=322672051}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9538928559}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=9920980480}
+                │     'nitroAggregationOutputNanos' = LongCount{total=38944}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=58116931}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=821}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.23s (10.51%), Scheduled: 4.96s (10.57%), Blocked: 31.35s (87.23%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.11, p50=0.17, p75=0.24, p90=0.36, p95=0.39, p99=0.53, min=0.00, max=0.55}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887565, bucketWidthSeconds=1, cpuNanosBuckets=[30248084, 425825257, 310013212, 421576838, 407214652, 111987626], wallNanosBuckets=[50288023, 1086041516, 568038115, 903611739, 795501151, 230972248]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.02, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=62325.10, p50=140318.60, p75=220569.52, p90=278188.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.05, p95=0.08, p99=0.10, min=0.00, max=0.10}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.28s (62.54%), Scheduled: 31.57s (67.31%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887565, bucketWidthSeconds=1, cpuNanosBuckets=[344789501, 3506456326, 2663617509, 3151510389, 2816058184, 799412393], wallNanosBuckets=[455017449, 8313030287, 6265110600, 7387679174, 7160533654, 1990360150]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.04, p50=0.08, p75=0.11, p90=0.14, p95=0.18, p99=0.20, min=0.00, max=0.20}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331396.72, p50=607369.40, p75=991184.05, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.02, p10=0.04, p25=0.09, p50=0.18, p75=0.27, p90=0.36, p95=0.41, p99=0.57, min=0.00, max=0.58}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=636042534}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=4735583}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=26399126007}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=27725754972}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=60227702}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=26853807}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=34579620}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=10547156}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 2/10 ===
+Trino version: testversion
+Queued: 71.54us, Analysis: 5.52ms, Planning: 8.24ms, Execution: 4.60s, Finishing: 188.44us
+Fragment 0 [SINGLE]
+    CPU: 21.28s, Scheduled: 48.63s, Blocked 28.82s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.20GB, Tasks count: 1; per task: max: 3.57GB
+    Output buffer active time: 4.58s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[331713], wallNanosBuckets=[331707]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[9257, 0, 0, 0, 0, 376165], wallNanosBuckets=[9618, 0, 0, 0, 0, 376151]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.58s (15.88%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[60894], wallNanosBuckets=[60464]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.70s (26.82%), Scheduled: 10.05s (20.71%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[416923828, 1069877688, 1301366905, 1253045667, 1380274305, 280765723], wallNanosBuckets=[780347040, 2442817467, 2471197673, 2102118316, 1965144499, 281433714]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.41, p05=1.41, p10=1.41, p25=1.43, p50=1.43, p75=1.43, p90=1.43, p95=1.43, p99=1.43, min=1.41, max=1.43}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.29, p05=2.29, p10=2.29, p25=2.48, p50=2.57, p75=2.71, p90=2.71, p95=2.71, p99=2.71, min=2.29, max=2.71}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=244726339}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9347364501}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=9603123693}
+                │     'nitroAggregationOutputNanos' = LongCount{total=40547}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=9628983}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=817}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.21s (10.40%), Scheduled: 5.04s (10.39%), Blocked: 24.27s (84.12%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.04, p50=0.11, p75=0.20, p90=0.31, p95=0.34, p99=0.68, min=0.00, max=0.74}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[177788060, 363066653, 439230420, 388975392, 328698410], wallNanosBuckets=[363422759, 651517629, 932400525, 957640164, 670852433]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63217.51, p50=139721.12, p75=219051.63, p90=278188.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.04, p95=0.05, p99=0.11, min=0.00, max=0.21}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.35s (62.78%), Scheduled: 33.43s (68.90%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887570, bucketWidthSeconds=1, cpuNanosBuckets=[1696754350, 3179403709, 3510543449, 2676354029, 2291762206], wallNanosBuckets=[4085598967, 7958728759, 7426975661, 7418060592, 6544435051]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.15, p95=0.18, p99=0.20, min=0.00, max=0.21}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332007.41, p50=608460.81, p75=991166.98, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.01, p05=0.01, p10=0.04, p25=0.10, p50=0.19, p75=0.29, p90=0.40, p95=0.46, p99=0.52, min=0.00, max=0.59}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=582020908}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=5816629}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=27591037230}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=28731598421}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=103790660}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=36262251}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=37364719}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=7794247}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 3/10 ===
+Trino version: testversion
+Queued: 81.02us, Analysis: 5.37ms, Planning: 7.93ms, Execution: 4.65s, Finishing: 199.76us
+Fragment 0 [SINGLE]
+    CPU: 21.38s, Scheduled: 48.64s, Blocked 33.11s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.50GB, Tasks count: 1; per task: max: 3.68GB
+    Output buffer active time: 4.63s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[301566], wallNanosBuckets=[301369]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[6082, 0, 0, 0, 427013], wallNanosBuckets=[6312, 0, 0, 0, 427190]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.63s (13.97%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[67887], wallNanosBuckets=[66996]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.78s (27.05%), Scheduled: 11.26s (23.19%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[716755046, 1356063333, 1106500069, 1288292491, 1307928434], wallNanosBuckets=[1847015451, 2185836364, 2755074274, 2582649231, 1896143041]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.43, p05=1.43, p10=1.43, p25=1.44, p50=1.44, p75=1.46, p90=1.46, p95=1.46, p99=1.46, min=1.43, max=1.46}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.49, p05=2.49, p10=2.49, p25=2.85, p50=2.88, p75=3.05, p90=3.05, p95=3.05, p99=3.05, min=2.49, max=3.05}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=401405810}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=10419067081}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=10828810407}
+                │     'nitroAggregationOutputNanos' = LongCount{total=47250}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=2162993}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=816}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.21s (10.33%), Scheduled: 4.95s (10.19%), Blocked: 28.51s (86.03%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.08, p50=0.16, p75=0.22, p90=0.33, p95=0.38, p99=0.57, min=0.00, max=0.69}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[297287900, 423736848, 403003898, 381848736, 185654324], wallNanosBuckets=[575094970, 914059733, 1036207612, 884182622, 332499049]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63151.78, p50=140191.34, p75=219291.88, p90=279627.00, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.06, p95=0.07, p99=0.13, min=0.00, max=0.13}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.38s (62.63%), Scheduled: 32.36s (66.62%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887575, bucketWidthSeconds=1, cpuNanosBuckets=[2973743684, 2865970990, 3098645804, 3101319168, 1337685956], wallNanosBuckets=[6847940527, 7180215236, 7351223873, 7281852733, 3701685045]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.14, p95=0.18, p99=0.20, min=0.00, max=0.20}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332926.20, p50=608765.28, p75=993960.33, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.01, p05=0.02, p10=0.04, p25=0.10, p50=0.18, p75=0.27, p90=0.37, p95=0.43, p99=0.53, min=0.00, max=0.56}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=765940857}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=20748445}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=26466457395}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=27918830909}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=37815607}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=37627963}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=43416691}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=7336532}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 4/10 ===
+Trino version: testversion
+Queued: 72.95us, Analysis: 5.02ms, Planning: 7.59ms, Execution: 4.60s, Finishing: 201.29us
+Fragment 0 [SINGLE]
+    CPU: 21.42s, Scheduled: 48.48s, Blocked 34.51s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.37GB, Tasks count: 1; per task: max: 3.90GB
+    Output buffer active time: 4.59s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[343886], wallNanosBuckets=[343890]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[3597, 0, 0, 0, 0, 375335], wallNanosBuckets=[3757, 0, 0, 0, 0, 390457]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.59s (13.29%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[61957], wallNanosBuckets=[61475]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.72s (26.74%), Scheduled: 10.39s (21.50%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[8015, 1131323095, 1080823147, 1362375865, 1444529322, 707465038], wallNanosBuckets=[8868, 2279971085, 2085004713, 2405155194, 2592563799, 1033428481]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.42, p05=1.42, p10=1.42, p25=1.43, p50=1.44, p75=1.44, p90=1.44, p95=1.44, p99=1.44, min=1.42, max=1.44}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.47, p05=2.47, p10=2.47, p25=2.55, p50=2.66, p75=2.72, p90=2.72, p95=2.72, p99=2.72, min=2.47, max=2.72}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=319186653}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9666077519}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=9989156720}
+                │     'nitroAggregationOutputNanos' = LongCount{total=42369}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=2063848}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=815}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.25s (10.49%), Scheduled: 5.01s (10.37%), Blocked: 29.96s (86.71%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.08, p50=0.17, p75=0.23, p90=0.33, p95=0.39, p99=0.55, min=0.00, max=0.57}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[109508360, 334926347, 432016590, 355794196, 392582132, 88514895], wallNanosBuckets=[198532693, 649512976, 899508165, 616457081, 810237806, 188491280]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63083.51, p50=139955.56, p75=219882.83, p90=279627.00, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.01, p75=0.03, p90=0.04, p95=0.06, p99=0.11, min=0.00, max=0.15}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.43s (62.77%), Scheduled: 32.94s (68.14%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887579, bucketWidthSeconds=1, cpuNanosBuckets=[1026946714, 2837261348, 3390593030, 2618573086, 2845529183, 708394403], wallNanosBuckets=[1976223266, 7323794640, 8116843611, 6693733345, 7216033984, 1614681900]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.15, p95=0.17, p99=0.20, min=0.00, max=0.21}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=334031.26, p50=605096.23, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.01, p05=0.02, p10=0.03, p25=0.09, p50=0.19, p75=0.28, p90=0.39, p95=0.41, p99=0.51, min=0.01, max=0.58}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=643384362}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=7993314}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=27442126206}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=28792910555}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=148041780}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=50585162}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=42022755}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=9339892}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 5/10 ===
+Trino version: testversion
+Queued: 73.70us, Analysis: 4.75ms, Planning: 7.08ms, Execution: 4.70s, Finishing: 193.00us
+Fragment 0 [SINGLE]
+    CPU: 21.20s, Scheduled: 48.54s, Blocked 36.61s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.36GB, Tasks count: 1; per task: max: 3.50GB
+    Output buffer active time: 4.69s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[315963], wallNanosBuckets=[315917]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[3798, 0, 0, 0, 0, 301886], wallNanosBuckets=[3968, 0, 0, 0, 0, 304045]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.68s (12.78%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[62175], wallNanosBuckets=[61626]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.67s (26.78%), Scheduled: 10.43s (21.53%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[450147960, 1233662910, 1173877113, 1190867933, 1345868657, 281108207], wallNanosBuckets=[877323658, 2641766281, 2339574167, 2129505925, 2167506070, 281131503]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.40, p05=1.40, p10=1.40, p25=1.40, p50=1.44, p75=1.44, p90=1.44, p95=1.44, p99=1.44, min=1.40, max=1.44}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.46, p05=2.46, p10=2.46, p25=2.56, p50=2.60, p75=2.82, p90=2.82, p95=2.82, p99=2.82, min=2.46, max=2.82}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=393424292}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9657303058}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=10060961982}
+                │     'nitroAggregationOutputNanos' = LongCount{total=38493}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=5258918}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=813}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.25s (10.61%), Scheduled: 5.35s (11.04%), Blocked: 31.94s (87.22%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.02, p25=0.10, p50=0.18, p75=0.24, p90=0.38, p95=0.40, p99=0.56, min=0.00, max=0.58}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[236292288, 379728275, 394398340, 306892694, 386363477], wallNanosBuckets=[435240255, 807903617, 936668330, 629861066, 1000917116]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.02, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=61705.69, p50=140398.71, p75=220316.16, p90=278188.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.05, p95=0.07, p99=0.11, min=0.00, max=0.13}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.26s (62.60%), Scheduled: 32.68s (67.43%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887584, bucketWidthSeconds=1, cpuNanosBuckets=[2165337033, 3176951969, 3160760541, 2259696554, 2495448029], wallNanosBuckets=[4422114869, 7507571738, 7930122727, 6029782441, 6787674561]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.14, p95=0.17, p99=0.20, min=0.00, max=0.20}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331422.07, p50=604887.29, p75=991166.98, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.02, p10=0.04, p25=0.10, p50=0.17, p75=0.28, p90=0.39, p95=0.45, p99=0.53, min=0.00, max=0.62}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=705164814}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=3708876}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=26824218055}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=28131884524}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=74876734}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=24867896}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=42070095}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=6676730}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 6/10 ===
+Trino version: testversion
+Queued: 76.05us, Analysis: 4.71ms, Planning: 6.94ms, Execution: 4.72s, Finishing: 218.40us
+Fragment 0 [SINGLE]
+    CPU: 21.39s, Scheduled: 49.99s, Blocked 29.70s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.35GB, Tasks count: 1; per task: max: 3.37GB
+    Output buffer active time: 4.71s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[449465], wallNanosBuckets=[449459]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[3757, 0, 0, 0, 471044], wallNanosBuckets=[3907, 0, 0, 0, 471060]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.69s (15.78%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[114805], wallNanosBuckets=[288295]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.80s (27.12%), Scheduled: 10.93s (21.88%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[765416267, 1060301232, 1302441337, 1336722273, 1329630975], wallNanosBuckets=[1677917272, 2173915342, 2318125553, 2555398461, 2206139937]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.43, p05=1.43, p10=1.43, p25=1.44, p50=1.45, p75=1.47, p90=1.47, p95=1.47, p99=1.47, min=1.43, max=1.47}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.56, p05=2.56, p10=2.56, p25=2.65, p50=2.67, p75=3.05, p90=3.05, p95=3.05, p99=3.05, min=2.56, max=3.05}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=313373096}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=10118105723}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=10478093638}
+                │     'nitroAggregationOutputNanos' = LongCount{total=64573}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=9957673}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=821}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.20s (10.30%), Scheduled: 5.00s (10.01%), Blocked: 25.03s (84.22%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.07, p50=0.12, p75=0.23, p90=0.27, p95=0.32, p99=0.37, min=0.00, max=0.39}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[274438495, 363237494, 380669410, 410964841, 259278961], wallNanosBuckets=[576226706, 863966756, 755321399, 793764562, 582407264]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63003.88, p50=139871.90, p75=220646.03, p90=279627.00, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.04, p95=0.05, p99=0.10, min=0.00, max=0.13}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.38s (62.58%), Scheduled: 34.01s (68.10%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887589, bucketWidthSeconds=1, cpuNanosBuckets=[2787961560, 2958428020, 2928371512, 2897788908, 1809617868], wallNanosBuckets=[6991943274, 8202837587, 7365423793, 7501301007, 3944194457]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.14, p95=0.17, p99=0.20, min=0.00, max=0.21}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=330791.01, p50=605319.68, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.01, p05=0.01, p10=0.04, p25=0.10, p50=0.20, p75=0.29, p90=0.38, p95=0.46, p99=0.58, min=0.01, max=0.60}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=667410700}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=31802165}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=28295054831}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=29555719913}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=64424956}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=35718594}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=39448466}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=7407682}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 7/10 ===
+Trino version: testversion
+Queued: 83.04us, Analysis: 4.83ms, Planning: 6.67ms, Execution: 4.53s, Finishing: 205.77us
+Fragment 0 [SINGLE]
+    CPU: 21.37s, Scheduled: 45.30s, Blocked 35.40s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.60GB, Tasks count: 1; per task: max: 3.60GB
+    Output buffer active time: 4.52s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[311305], wallNanosBuckets=[311238]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[12243, 0, 0, 0, 0, 410702], wallNanosBuckets=[12444, 0, 0, 0, 0, 415737]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.51s (12.72%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[56115], wallNanosBuckets=[55524]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.82s (27.23%), Scheduled: 10.71s (23.66%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[21009, 1203623567, 1246215238, 1347031527, 1323740786, 690872953], wallNanosBuckets=[31140, 2365630105, 2410587396, 2865168587, 2212485817, 853676095]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.43, p05=1.43, p10=1.43, p25=1.44, p50=1.46, p75=1.48, p90=1.48, p95=1.48, p99=1.48, min=1.43, max=1.48}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.54, p05=2.54, p10=2.54, p25=2.65, p50=2.70, p75=2.82, p90=2.82, p95=2.82, p99=2.82, min=2.54, max=2.82}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=396451906}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9863497333}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=10266250282}
+                │     'nitroAggregationOutputNanos' = LongCount{total=29045}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=5154987}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=816}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.23s (10.44%), Scheduled: 4.60s (10.17%), Blocked: 30.95s (87.28%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.11, p50=0.17, p75=0.24, p90=0.33, p95=0.36, p99=0.45, min=0.00, max=0.53}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[54558149, 433679367, 368633361, 400254825, 417175811, 27711568], wallNanosBuckets=[99976348, 867029013, 825167520, 851318841, 765482695, 33465667]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.02, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=61758.65, p50=140285.86, p75=221307.11, p90=278188.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.05, p95=0.06, p99=0.08, min=0.00, max=0.10}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.31s (62.32%), Scheduled: 29.95s (66.18%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887593, bucketWidthSeconds=1, cpuNanosBuckets=[586633195, 3708340114, 2928999164, 2987948900, 2916522426, 183567945], wallNanosBuckets=[950033210, 7912850613, 6839396667, 6975664812, 6974334459, 300537817]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.14, p95=0.18, p99=0.21, min=0.00, max=0.21}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331865.54, p50=604887.29, p75=1000000.00, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.01, p10=0.03, p25=0.09, p50=0.17, p75=0.25, p90=0.34, p95=0.40, p99=0.58, min=0.00, max=0.59}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=691796296}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=16448844}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=24634179371}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=26162554656}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=140979128}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=24930376}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=58550077}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=7425081}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 8/10 ===
+Trino version: testversion
+Queued: 72.39us, Analysis: 4.84ms, Planning: 6.23ms, Execution: 4.67s, Finishing: 208.42us
+Fragment 0 [SINGLE]
+    CPU: 21.30s, Scheduled: 49.25s, Blocked 30.87s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.50GB, Tasks count: 1; per task: max: 3.59GB
+    Output buffer active time: 4.66s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887602, bucketWidthSeconds=1, cpuNanosBuckets=[351931], wallNanosBuckets=[351915]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[3126, 0, 0, 0, 406222], wallNanosBuckets=[3267, 0, 0, 0, 406337]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.65s (15.06%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887602, bucketWidthSeconds=1, cpuNanosBuckets=[70002], wallNanosBuckets=[69291]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.73s (26.93%), Scheduled: 10.56s (21.50%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[561377692, 1214676146, 1178803349, 1372500991, 1405666886], wallNanosBuckets=[961404456, 1995085881, 2826852338, 2897255075, 1882443346]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.41, p05=1.41, p10=1.41, p25=1.44, p50=1.44, p75=1.45, p90=1.45, p95=1.45, p99=1.45, min=1.41, max=1.45}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.50, p05=2.50, p10=2.50, p25=2.64, p50=2.70, p75=2.73, p90=2.73, p95=2.73, p99=2.73, min=2.50, max=2.73}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=293868520}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=9838305190}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=10141887255}
+                │     'nitroAggregationOutputNanos' = LongCount{total=55394}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=2131050}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=814}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.23s (10.46%), Scheduled: 4.93s (10.04%), Blocked: 26.22s (84.94%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.08, p50=0.12, p75=0.23, p90=0.32, p95=0.35, p99=0.46, min=0.00, max=0.49}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[245410244, 396403711, 390702489, 360973562, 318721026], wallNanosBuckets=[427698923, 739007661, 870057195, 1006980939, 758203244]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.02, p99=0.03, min=0.00, max=0.04}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=62879.75, p50=139903.64, p75=221288.57, p90=278358.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.05, p95=0.07, p99=0.13, min=0.00, max=0.13}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.32s (62.61%), Scheduled: 33.63s (68.46%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887598, bucketWidthSeconds=1, cpuNanosBuckets=[2310689349, 3133571141, 3213905675, 2479429880, 2183034308], wallNanosBuckets=[5036148329, 8032092171, 7817437390, 6788534979, 5956386538]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.05, p50=0.08, p75=0.11, p90=0.14, p95=0.17, p99=0.20, min=0.00, max=0.21}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332007.41, p50=607214.05, p75=996044.25, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.01, p10=0.04, p25=0.10, p50=0.19, p75=0.30, p90=0.38, p95=0.43, p99=0.53, min=0.00, max=0.62}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=777975231}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=4672115}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=27504489324}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=28973055713}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=76330370}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=31014669}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=46037586}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=8196403}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 9/10 ===
+Trino version: testversion
+Queued: 74.45us, Analysis: 4.58ms, Planning: 6.18ms, Execution: 4.71s, Finishing: 205.94us
+Fragment 0 [SINGLE]
+    CPU: 21.31s, Scheduled: 48.13s, Blocked 33.36s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.51GB, Tasks count: 1; per task: max: 3.51GB
+    Output buffer active time: 4.70s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[292359], wallNanosBuckets=[292312]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887603, bucketWidthSeconds=1, cpuNanosBuckets=[3817, 0, 0, 0, 401896], wallNanosBuckets=[4008, 0, 0, 0, 401899]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.69s (14.03%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[56455], wallNanosBuckets=[55935]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.63s (26.41%), Scheduled: 9.03s (18.77%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887603, bucketWidthSeconds=1, cpuNanosBuckets=[794954362, 1302784784, 1167453699, 1194774078, 1162417812], wallNanosBuckets=[1601234863, 2206325440, 2064055775, 1859847830, 1297127286]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.39, p05=1.39, p10=1.39, p25=1.40, p50=1.41, p75=1.42, p90=1.42, p95=1.42, p99=1.42, min=1.39, max=1.42}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.00, p05=2.00, p10=2.00, p25=2.29, p50=2.31, p75=2.42, p90=2.42, p95=2.42, p99=2.42, min=2.00, max=2.42}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=216524240}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=8427580877}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=8650394391}
+                │     'nitroAggregationOutputNanos' = LongCount{total=25208}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=2051229}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=820}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.33s (10.95%), Scheduled: 5.56s (11.56%), Blocked: 28.73s (85.97%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.08, p50=0.12, p75=0.26, p90=0.37, p95=0.42, p99=0.51, min=0.00, max=0.63}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887603, bucketWidthSeconds=1, cpuNanosBuckets=[353144125, 397613901, 367656388, 412083708, 228102965], wallNanosBuckets=[761384035, 946028347, 934017814, 879758589, 391155332]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.04}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63151.78, p50=140042.64, p75=220585.27, p90=278188.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.02, p75=0.03, p90=0.06, p95=0.08, p99=0.11, min=0.00, max=0.15}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.34s (62.64%), Scheduled: 33.49s (69.67%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887603, bucketWidthSeconds=1, cpuNanosBuckets=[3554117541, 2768813925, 2793320802, 2647844957, 1578572440], wallNanosBuckets=[8086391414, 7329306071, 6662160781, 7138526235, 4270305643]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.04, p50=0.08, p75=0.11, p90=0.14, p95=0.18, p99=0.19, min=0.00, max=0.20}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=331396.72, p50=605968.59, p75=991962.32, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.01, p10=0.04, p25=0.10, p50=0.19, p75=0.29, p90=0.38, p95=0.44, p99=0.55, min=0.00, max=0.60}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=749624494}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=10924693}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=27707751978}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=29157933334}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=60425662}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=67565108}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=42010489}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=15843887}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+
+=== q33 run 10/10 ===
+Trino version: testversion
+Queued: 71.04us, Analysis: 4.56ms, Planning: 6.24ms, Execution: 4.54s, Finishing: 209.95us
+Fragment 0 [SINGLE]
+    CPU: 21.37s, Scheduled: 47.60s, Blocked 32.80s (Input: 0.00ns, Output: 0.00ns), Input: 99997497 rows (0B); per task: avg.: 99997497.00 std.dev.: 0.00, Output: 10 rows (498B)
+    Peak Memory: 3.50GB, Tasks count: 1; per task: max: 3.87GB
+    Output buffer active time: 4.53s, buffer utilization distribution (%): {p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    Task output distribution: {count=1.00, p01=498B, p05=498B, p10=498B, p25=498B, p50=498B, p75=498B, p90=498B, p95=498B, p99=498B, max=498B}
+    Task input distribution: {count=1.00, p01=0B, p05=0B, p10=0B, p25=0B, p50=0B, p75=0B, p90=0B, p95=0B, p99=0B, max=0B}
+    Output layout: [url, count]
+    Output partitioning: SINGLE []
+    Output[columnNames = [URL, c]]
+    │   Layout: [url:varchar, count:bigint]
+    │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+    │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+    │   metrics:
+    │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887612, bucketWidthSeconds=1, cpuNanosBuckets=[297239], wallNanosBuckets=[297232]}
+    │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'Input rows distribution' = {count=1, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+    │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+    │     'exchangeSerializerInputBytes' = LongCount{total=472}
+    │     'exchangeSerializerOutputBytes' = LongCount{total=476}
+    │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+    │   URL := url
+    │   c := count
+    └─ TopN[count = 10, orderBy = [count DESC NULLS LAST]]
+       │   Layout: [url:varchar, count:bigint]
+       │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 0.00ns (0.00%), Output: 10 rows (498B)
+       │   metrics:
+       │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[4709, 0, 0, 0, 0, 264768], wallNanosBuckets=[4880, 0, 0, 0, 0, 264730]}
+       │     'CPU time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │     'Input rows distribution' = {count=1, p01=40.00, p05=40.00, p10=40.00, p25=40.00, p50=40.00, p75=40.00, p90=40.00, p95=40.00, p99=40.00, min=40.00, max=40.00}
+       │     'Scheduled time distribution (s)' = {count=1, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+       │   Input avg.: 40.00 rows, Input std.dev.: 0.00%
+       └─ LocalExchange[partitioning = SINGLE]
+          │   Layout: [url:varchar, count:bigint]
+          │   Estimates: {rows: ? (?), cpu: 0, memory: 0B, network: 0B}
+          │   CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Blocked: 4.53s (13.80%), Output: 40 rows (1.83kB)
+          │   metrics:
+          │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887612, bucketWidthSeconds=1, cpuNanosBuckets=[69070], wallNanosBuckets=[68689]}
+          │     'CPU time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │     'Input rows distribution' = {count=4, p01=10.00, p05=10.00, p10=10.00, p25=10.00, p50=10.00, p75=10.00, p90=10.00, p95=10.00, p99=10.00, min=10.00, max=10.00}
+          │     'Scheduled time distribution (s)' = {count=4, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.00, p75=0.00, p90=0.00, p95=0.00, p99=0.00, min=0.00, max=0.00}
+          │   Input avg.: 10.00 rows, Input std.dev.: 0.00%
+          └─ TopNPartial[count = 10, orderBy = [count DESC NULLS LAST]]
+             │   Layout: [url:varchar, count:bigint]
+             └─ Aggregate[type = FINAL, keys = [url]]
+                │   Layout: [url:varchar, count:bigint]
+                │   CPU: 5.68s (26.61%), Scheduled: 9.44s (19.84%), Blocked: 0.00ns (0.00%), Output: 40 rows (1.83kB)
+                │   metrics:
+                │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[17279407, 1188129274, 1322189829, 1194972822, 1335983028, 627406198], wallNanosBuckets=[40982383, 2004816178, 2189184035, 2164206462, 2250787665, 788263488]}
+                │     'CPU time distribution (s)' = {count=4, p01=1.39, p05=1.39, p10=1.39, p25=1.40, p50=1.42, p75=1.48, p90=1.48, p95=1.48, p99=1.48, min=1.39, max=1.48}
+                │     'Input rows distribution' = {count=4, p01=6157718.00, p05=6157718.00, p10=6157718.00, p25=6159355.00, p50=6160598.00, p75=6160782.00, p90=6160782.00, p95=6160782.00, p99=6160782.00, min=6157718.00, max=6160782.00}
+                │     'Scheduled time distribution (s)' = {count=4, p01=2.14, p05=2.14, p10=2.14, p25=2.32, p50=2.37, p75=2.61, p90=2.61, p95=2.61, p99=2.61, min=2.14, max=2.61}
+                │     'nitroAggregationAccumulationNanos' = LongCount{total=243116399}
+                │     'nitroAggregationFlushNanos' = LongCount{total=0}
+                │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                │     'nitroAggregationGroupingNanos' = LongCount{total=8805465191}
+                │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                │     'nitroAggregationInputNanos' = LongCount{total=9051808856}
+                │     'nitroAggregationOutputNanos' = LongCount{total=28956}
+                │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                │     'nitroAggregationStatePreparationNanos' = LongCount{total=2123301}
+                │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressBytes' = LongCount{total=1879}
+                │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=80}
+                │     'nitroBoundaryPageEgressPages' = LongCount{total=4}
+                │     'nitroBoundaryPageEgressPositions' = LongCount{total=40}
+                │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressBytes' = LongCount{total=4254503526}
+                │     'nitroBoundaryPageIngressDictionaryChannelPositions' = LongCount{total=0}
+                │     'nitroBoundaryPageIngressFlatChannelPositions' = LongCount{total=49276906}
+                │     'nitroBoundaryPageIngressPages' = LongCount{total=813}
+                │     'nitroBoundaryPageIngressPositions' = LongCount{total=24638453}
+                │     'nitroBoundaryPageIngressRunLengthChannelPositions' = LongCount{total=0}
+                │   Input avg.: 6159613.25 rows, Input std.dev.: 0.02%
+                │   count := count(count_2)
+                └─ LocalExchange[partitioning = HASH, arguments = [url::varchar]]
+                   │   Layout: [url:varchar, count_2:bigint]
+                   │   Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                   │   CPU: 2.26s (10.58%), Scheduled: 4.67s (9.82%), Blocked: 28.29s (86.20%), Output: 24638453 rows (3.96GB)
+                   │   metrics:
+                   │     'Blocked time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.09, p50=0.14, p75=0.23, p90=0.32, p95=0.39, p99=0.47, min=0.00, max=0.57}
+                   │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[116544556, 390790158, 402678698, 367320691, 387993242, 64575789], wallNanosBuckets=[228643125, 755490525, 809721021, 949645506, 702168870, 78113716]}
+                   │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.00, p50=0.01, p75=0.02, p90=0.02, p95=0.03, p99=0.03, min=0.00, max=0.03}
+                   │     'Input rows distribution' = {count=165, p01=0.00, p05=5256.00, p10=16916.33, p25=63186.70, p50=139682.94, p75=220874.84, p90=278358.78, p95=305677.00, p99=425613.00, min=0.00, max=428655.00}
+                   │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.00, p25=0.01, p50=0.01, p75=0.03, p90=0.04, p95=0.06, p99=0.12, min=0.00, max=0.12}
+                   │   Input avg.: 149323.96 rows, Input std.dev.: 67.39%
+                   └─ Aggregate[type = PARTIAL, keys = [url]]
+                      │   Layout: [url:varchar, count_2:bigint]
+                      │   CPU: 13.41s (62.81%), Scheduled: 33.45s (70.34%), Blocked: 0.00ns (0.00%), Output: 24638453 rows (3.96GB)
+                      │   metrics:
+                      │     'CPU and scheduled time usage over time' = ResourceUsageTimeSeriesSnapshot{startTimeEpochSeconds=1786887607, bucketWidthSeconds=1, cpuNanosBuckets=[1212115435, 2981948697, 3246565360, 2772385950, 2755445488, 442426228], wallNanosBuckets=[2475341750, 7380406245, 8033517050, 7319129669, 7172786244, 1067407744]}
+                      │     'CPU time distribution (s)' = {count=165, p01=0.00, p05=0.00, p10=0.01, p25=0.04, p50=0.08, p75=0.11, p90=0.15, p95=0.18, p99=0.20, min=0.00, max=0.20}
+                      │     'Input rows distribution' = {count=165, p01=0.00, p05=11858.00, p10=117804.33, p25=332003.48, p50=604561.30, p75=996044.25, p90=1000000.00, p95=1000000.00, p99=1000000.00, min=0.00, max=1000000.00}
+                      │     'Scheduled time distribution (s)' = {count=165, p01=0.00, p05=0.02, p10=0.04, p25=0.10, p50=0.19, p75=0.28, p90=0.38, p95=0.43, p99=0.58, min=0.00, max=0.60}
+                      │     'nitroAggregationAccumulationNanos' = LongCount{total=718803386}
+                      │     'nitroAggregationFlushNanos' = LongCount{total=4594480}
+                      │     'nitroAggregationFusedNanos' = LongCount{total=0}
+                      │     'nitroAggregationGroupingNanos' = LongCount{total=28315125682}
+                      │     'nitroAggregationInitialAggregationNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialEncodedKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialFlatKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInitialKeyNanos' = LongCount{total=0}
+                      │     'nitroAggregationInputNanos' = LongCount{total=29604784043}
+                      │     'nitroAggregationOutputNanos' = LongCount{total=98449271}
+                      │     'nitroAggregationPipelineNanos' = LongCount{total=0}
+                      │     'nitroAggregationStatePreparationNanos' = LongCount{total=50340733}
+                      │     'nitroBoundaryNativeEgressDictionaryChannelPositions' = LongCount{total=10368}
+                      │     'nitroBoundaryNativeEgressFlatChannelPositions' = LongCount{total=49266538}
+                      │     'nitroBoundaryNativeEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressBytes' = LongCount{total=4254503526}
+                      │     'nitroBoundaryPageEgressDictionaryChannelPositions' = LongCount{total=0}
+                      │     'nitroBoundaryPageEgressFlatChannelPositions' = LongCount{total=49276906}
+                      │     'nitroBoundaryPageEgressPages' = LongCount{total=227}
+                      │     'nitroBoundaryPageEgressPositions' = LongCount{total=24638453}
+                      │     'nitroBoundaryPageEgressRunLengthChannelPositions' = LongCount{total=0}
+                      │     'nitroNativeSourceCreationNanos' = LongCount{total=32507584}
+                      │     'nitroOperatorConstructionNanos' = LongCount{total=12484759}
+                      │     'nitroPartialAggregationAggregatedFlushes' = LongCount{total=227}
+                      │     'nitroPartialAggregationAggregatedInputBytes' = LongCount{total=3118899167}
+                      │     'nitroPartialAggregationAggregatedInputRows' = LongCount{total=99997497}
+                      │     'nitroPartialAggregationAggregatedOutputRows' = LongCount{total=24638453}
+                      │     'nitroPartialAggregationAggregationToPassthroughTransitions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityAggregateDecisions' = LongCount{total=1}
+                      │     'nitroPartialAggregationCardinalityBypassDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationCardinalityObservations' = LongCount{total=8}
+                      │     'nitroPartialAggregationCardinalityReconsideredDecisions' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughFlushes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputBytes' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughInputRows' = LongCount{total=0}
+                      │     'nitroPartialAggregationPassthroughToAggregationTransitions' = LongCount{total=0}
+                      │   Input avg.: 606045.44 rows, Input std.dev.: 55.10%
+                      │   count_2 := count(*)
+                      └─ TableScan[table = hive:clickbench:hits_raw]
+                             Layout: [url:varchar]
+                             Estimates: {rows: ? (?), cpu: ?, memory: 0B, network: 0B}
+                             url := url:string:REGULAR
+
+

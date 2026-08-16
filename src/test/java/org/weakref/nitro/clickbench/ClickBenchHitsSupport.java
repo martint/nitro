@@ -892,7 +892,12 @@ public final class ClickBenchHitsSupport
                 List.of(1, 2, 3, 4, 5),
                 List.of(new CountAll()),
                 grouped));
-        Operator ordered = profiled(profile, "q40.topn", new TopNOperator(allocator, 1_010, 5, aggregated));
+        Operator ordered = profiled(profile, "q40.topn", new TopNOperator(
+                allocator,
+                1_010,
+                new int[] {5, 3, 4},
+                new boolean[] {false, false, true},
+                aggregated));
         return profiled(profile, "q40.offset", new OffsetOperator(allocator, 1_000, ordered));
     }
 

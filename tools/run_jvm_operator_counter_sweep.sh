@@ -8,7 +8,7 @@ fi
 
 engine=$1
 suite=$2
-output_dir=$3
+output_dir=$(realpath "$3")
 
 case "$engine" in
     nitro|trino) ;;
@@ -59,7 +59,7 @@ monitor_pid=$!
 trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
 
 export MAVEN_OPTS=-Xmx2g
-mvnd -Dmaven.gitcommitid.skip=true exec:exec@benchmark \
+mvnd -Dmaven.gitcommitid.skip=true -pl nitro-tests exec:exec@benchmark \
     -Dbenchmark.include="$benchmark" \
     -Dbenchmark.options="-wi ${warmup_iterations} -i ${measurement_iterations} -w 1s -r 1s -f ${forks} -foe false -prof perfnorm:events=${events} -prof gc -rf json -rff ${prefix}.json -jvmArgsAppend \"-Xmx12g -XX:+UseTransparentHugePages ${data_args}\"" \
     > "${prefix}.log" 2>&1

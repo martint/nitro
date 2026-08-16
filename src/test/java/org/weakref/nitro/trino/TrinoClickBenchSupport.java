@@ -940,7 +940,12 @@ public final class TrinoClickBenchSupport
                                         field(4, VARCHAR)),
                                 projectedTypes),
                         hashAggregationFactory(2, projectedTypes, List.of(0, 1, 2, 3, 4), COUNT.createAggregatorFactory(Step.SINGLE, List.of(), OptionalInt.empty())),
-                        topNFactory(3, outputTypes, 1_010, List.of(5), List.of(DESC_NULLS_LAST))),
+                        topNFactory(
+                                3,
+                                outputTypes,
+                                1_010,
+                                List.of(5, 3, 4),
+                                List.of(ascending(), ascending(), DESC_NULLS_LAST))),
                 outputTypes), outputTypes, 1_000, 10);
     }
 
@@ -1384,7 +1389,7 @@ public final class TrinoClickBenchSupport
         List<io.trino.testing.MaterializedRow> rows = source.getMaterializedRows();
         int end = Math.min(rows.size(), offset + limit);
         for (int index = offset; index < end; index++) {
-            result.row(rows.get(index).getFields());
+            result.row(rows.get(index).getFields().toArray());
         }
         return result.build();
     }

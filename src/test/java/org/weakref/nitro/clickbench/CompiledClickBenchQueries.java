@@ -760,7 +760,7 @@ public final class CompiledClickBenchQueries
     /**
      * SELECT TraficSourceID, SearchEngineID, AdvEngineID, CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0)
      * THEN Referer ELSE '' END AS Src, URL AS Dst, COUNT(*) FROM hits WHERE CounterID = 62 AND EventDate in
-     * July 2013 AND IsRefresh = 0 GROUP BY 1..5 ORDER BY 6 DESC LIMIT 10 OFFSET 1000. The string CASE folds
+     * July 2013 AND IsRefresh = 0 GROUP BY 1..5 ORDER BY 6, 4, 5 DESC LIMIT 10 OFFSET 1000. The string CASE folds
      * to ids: the value branch is the referer's dictionary id, the else-'' branch the -1 empty-string
      * sentinel, reconstructed through the referer's dictionary.
      */
@@ -793,7 +793,10 @@ public final class CompiledClickBenchQueries
                         new Plan.Lit(-1)),
                 query.column("URL"))
                 .count();
-        query.orderBy(new Plan.Ordering(List.of(new Plan.SortKey(5, true)), 10, 1_000));
+        query.orderBy(new Plan.Ordering(List.of(
+                new Plan.SortKey(5, false),
+                new Plan.SortKey(3, false),
+                new Plan.SortKey(4, true)), 10, 1_000));
         return new Ported(query, List.of(
                 new CompiledTpcdsQueries.DictRef(3, 0, 3),
                 new CompiledTpcdsQueries.DictRef(4, 0, 4)));
