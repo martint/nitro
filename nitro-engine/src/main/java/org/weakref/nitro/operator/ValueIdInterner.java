@@ -146,22 +146,33 @@ final class ValueIdInterner
         int group = ((int) hash) & mask & ~(GROUP - 1);
         while (true) {
             ByteVector groupTags = ByteVector.fromArray(SPECIES, slotTags, group);
-            long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
-            while (matchBits != 0) {
-                int slot = group + Long.numberOfTrailingZeros(matchBits);
+            int matchLane = groupTags.compare(VectorOperators.EQ, tag).firstTrue();
+            if (matchLane < GROUP) {
+                int slot = group + matchLane;
                 int id = slots[slot] - 1;
                 if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
                     return id;
                 }
-                matchBits &= matchBits - 1;
+                // A full tag collision is uncommon. Continue scalarly only after the first candidate rather
+                // than materializing a lane bitmap on every successful or negative probe.
+                for (int lane = matchLane + 1; lane < GROUP; lane++) {
+                    if (slotTags[group + lane] != tag) {
+                        continue;
+                    }
+                    slot = group + lane;
+                    id = slots[slot] - 1;
+                    if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
+                        return id;
+                    }
+                }
             }
-            long emptyBits = groupTags.compare(VectorOperators.EQ, (byte) 0).toLong();
-            if (emptyBits != 0) {
+            int emptyLane = groupTags.compare(VectorOperators.EQ, (byte) 0).firstTrue();
+            if (emptyLane < GROUP) {
                 if (distinct >= maxDistinct) {
                     overflowed = true;
                     return TOO_MANY;
                 }
-                int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                int slot = group + emptyLane;
                 int id = distinct;
                 store(id, value, offset, length, hash, groupingHash);
                 slotTags[slot] = tag;
@@ -215,14 +226,23 @@ final class ValueIdInterner
         int group = ((int) hash) & mask & ~(GROUP - 1);
         while (true) {
             ByteVector groupTags = ByteVector.fromArray(SPECIES, slotTags, group);
-            long matchBits = groupTags.compare(VectorOperators.EQ, tag).toLong();
-            while (matchBits != 0) {
-                int slot = group + Long.numberOfTrailingZeros(matchBits);
+            int matchLane = groupTags.compare(VectorOperators.EQ, tag).firstTrue();
+            if (matchLane < GROUP) {
+                int slot = group + matchLane;
                 int id = slots[slot] - 1;
                 if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
                     return id;
                 }
-                matchBits &= matchBits - 1;
+                for (int lane = matchLane + 1; lane < GROUP; lane++) {
+                    if (slotTags[group + lane] != tag) {
+                        continue;
+                    }
+                    slot = group + lane;
+                    id = slots[slot] - 1;
+                    if (valueHash[id] == hash && regionEquals(id, value, offset, length)) {
+                        return id;
+                    }
+                }
             }
             if (groupTags.compare(VectorOperators.EQ, (byte) 0).anyTrue()) {
                 return TOO_MANY;
@@ -307,9 +327,9 @@ final class ValueIdInterner
             long hash = valueHash[id];
             int group = ((int) hash) & newMask & ~(GROUP - 1);
             while (true) {
-                long emptyBits = ByteVector.fromArray(SPECIES, newTags, group).compare(VectorOperators.EQ, (byte) 0).toLong();
-                if (emptyBits != 0) {
-                    int slot = group + Long.numberOfTrailingZeros(emptyBits);
+                int emptyLane = ByteVector.fromArray(SPECIES, newTags, group).compare(VectorOperators.EQ, (byte) 0).firstTrue();
+                if (emptyLane < GROUP) {
+                    int slot = group + emptyLane;
                     newTags[slot] = (byte) ((hash >>> 56) | 0x80L);
                     newSlots[slot] = id + 1;
                     break;
