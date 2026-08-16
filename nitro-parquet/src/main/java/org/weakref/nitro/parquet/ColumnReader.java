@@ -3133,6 +3133,66 @@ public final class ColumnReader
         return cachedDictionarySize;
     }
 
+    /**
+     * Exact fraction of physical dictionary entries accepted across this column's chunks. The bounded dictionary
+     * inspection is used only to rank filter work before reading begins; data-page ids are not touched. Returns
+     * {@link Double#NaN} for plain/double/binary columns or when the aggregate dictionary exceeds {@code maxEntries}.
+     */
+    public double estimateDictionaryMatchFraction(LongPredicate predicate, int maxEntries)
+    {
+        if (maxEntries == 0 || kind == Kind.BINARY || physicalType == Type.DOUBLE || chunks.isEmpty()) {
+            return Double.NaN;
+        }
+        int entries = 0;
+        for (Chunk chunk : chunks) {
+            ColumnMetaData metadata = chunk.metadata();
+            long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+            long limit = start + metadata.total_compressed_size;
+            readPageHeader(chunk.segment(), start, limit);
+            if (parsedPageType != PageType.DICTIONARY_PAGE.getValue() || parsedValueCount > maxEntries - entries) {
+                return Double.NaN;
+            }
+            entries += parsedValueCount;
+        }
+        if (entries == 0) {
+            return Double.NaN;
+        }
+
+        int accepted = 0;
+        // Inspection must not overwrite the ordinary decoder's scratch page or pollute decompression diagnostics.
+        // This method is intentionally safe to call after a reader has begun consuming data.
+        try (Arena inspectionArena = Arena.ofConfined()) {
+            for (Chunk chunk : chunks) {
+                ColumnMetaData metadata = chunk.metadata();
+                long start = metadata.dictionary_page_offset > 0 ? metadata.dictionary_page_offset : metadata.data_page_offset;
+                long limit = start + metadata.total_compressed_size;
+                long bodyPosition = readPageHeader(chunk.segment(), start, limit);
+                MemorySegment body;
+                if (metadata.codec == CompressionCodec.UNCOMPRESSED) {
+                    body = chunk.segment().asSlice(bodyPosition, parsedCompressedSize);
+                }
+                else if (metadata.codec == CompressionCodec.SNAPPY) {
+                    body = inspectionArena.allocate(parsedUncompressedSize);
+                    snappy.decompress(
+                            chunk.segment().asSlice(bodyPosition, parsedCompressedSize),
+                            body);
+                }
+                else {
+                    throw new IllegalStateException("Unsupported codec for NitroParquet: " + metadata.codec);
+                }
+                for (int index = 0; index < parsedValueCount; index++) {
+                    long value = kind == Kind.INT
+                            ? body.get(LE_INT, (long) index * Integer.BYTES)
+                            : flbaDecimal
+                                    ? bigEndianSignedLong(body, (long) index * typeLength, typeLength)
+                                    : body.get(LE_LONG, (long) index * Long.BYTES);
+                    accepted += predicate.test(value) ? 1 : 0;
+                }
+            }
+        }
+        return (double) accepted / entries;
+    }
+
     /** Whether a numeric row-group chunk can overlap a pushed long domain according to Parquet min/max metadata. */
     public boolean chunkMayMatch(int index, LongDomain domain)
     {

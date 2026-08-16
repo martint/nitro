@@ -33,7 +33,7 @@ public record ParquetFilterEvaluationPolicy(
     public static ParquetFilterEvaluationPolicy defaults()
     {
         return new ParquetFilterEvaluationPolicy(
-                new Ordering(true, true),
+                new Ordering(true, true, 8_192),
                 new NonSelectiveElision(true, true),
                 new DirectNullMask(true, true));
     }
@@ -45,7 +45,8 @@ public record ParquetFilterEvaluationPolicy(
                         Boolean.parseBoolean(System.getProperty(
                                 "nitro.parquet.selectivityFilterOrder", "true")),
                         Boolean.parseBoolean(System.getProperty(
-                                "nitro.parquet.rangeDensityFilterOrder", "true"))),
+                                "nitro.parquet.rangeDensityFilterOrder", "true")),
+                        Integer.getInteger("nitro.parquet.exactDictionaryOrderMaxEntries", 8_192)),
                 new NonSelectiveElision(
                         Boolean.parseBoolean(System.getProperty(
                                 "nitro.parquet.dropNonSelectiveFilters", "true")),
@@ -58,7 +59,15 @@ public record ParquetFilterEvaluationPolicy(
                                 "nitro.parquet.directNullMaskCompaction", "true"))));
     }
 
-    public record Ordering(boolean selectivity, boolean rangeDensity) {}
+    public record Ordering(boolean selectivity, boolean rangeDensity, int exactDictionaryMaxEntries)
+    {
+        public Ordering
+        {
+            if (exactDictionaryMaxEntries < 0) {
+                throw new IllegalArgumentException("exactDictionaryMaxEntries is negative");
+            }
+        }
+    }
 
     public record NonSelectiveElision(boolean enabled, boolean exactDictionaryCoverage) {}
 

@@ -464,7 +464,7 @@ public final class NitroParquetBatchSource
                 ParquetFile.Column column = file.column(columns.get(c), columnNameMatching);
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
-                        : new DecompressedPageCache.Source(splits.get(fileIndex).path(), columns.get(c));
+                        : new DecompressedPageCache.Source(splits.get(fileIndex).path(), column.name());
                 if (source != null) {
                     decompressedPages.register(source);
                 }
@@ -2380,6 +2380,13 @@ public final class NitroParquetBatchSource
      */
     private double estimateSelectivity(int column)
     {
+        int exactDictionaryMaxEntries = filterEvaluationPolicy.ordering().exactDictionaryMaxEntries();
+        double exactDictionaryFraction = readers[column].estimateDictionaryMatchFraction(
+                filtersByColumn[column],
+                exactDictionaryMaxEntries);
+        if (!Double.isNaN(exactDictionaryFraction)) {
+            return exactDictionaryFraction;
+        }
         double filterValues = filtersByColumn[column].size();
         int cardinality = readers[column].peekDictionarySize();
         if (cardinality > 0) {

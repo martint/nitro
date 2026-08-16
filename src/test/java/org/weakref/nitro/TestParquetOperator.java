@@ -211,7 +211,7 @@ public class TestParquetOperator
 
     private static final ParquetFilterEvaluationPolicy GENERIC_FILTER_EVALUATION =
             new ParquetFilterEvaluationPolicy(
-                    new ParquetFilterEvaluationPolicy.Ordering(false, false),
+                    new ParquetFilterEvaluationPolicy.Ordering(false, false, 0),
                     new ParquetFilterEvaluationPolicy.NonSelectiveElision(false, false),
                     new ParquetFilterEvaluationPolicy.DirectNullMask(false, false));
     private final PrimitiveArrayPool arrayPool = EngineResources.createDefault().primitiveArrays();
@@ -1288,6 +1288,40 @@ public class TestParquetOperator
             reader.readLongs(values, null, values.length);
             assertThat(Arrays.copyOfRange(values, 0, 4)).containsExactly(10, 20, 10, 20);
             assertThat(Arrays.copyOfRange(values, 2_000, 2_004)).containsExactly(30, 40, 30, 40);
+        }
+    }
+
+    @Test
+    void testBoundedDictionaryMatchFractionAcrossChunksDoesNotConsumeReader()
+            throws IOException
+    {
+        List<ParquetRow> firstRows = new ArrayList<>();
+        List<ParquetRow> secondRows = new ArrayList<>();
+        for (int position = 0; position < 2_000; position++) {
+            firstRows.add(new ParquetRow((position & 1) == 0 ? 10 : 20, true, null));
+            secondRows.add(new ParquetRow((position & 1) == 0 ? 30 : 40, true, null));
+        }
+        java.nio.file.Path first = writeParquetFile("dictionary-match-fraction-first.parquet", true, firstRows);
+        java.nio.file.Path second = writeParquetFile("dictionary-match-fraction-second.parquet", true, secondRows);
+        assertDictionaryEncoding(first, "x");
+        assertDictionaryEncoding(second, "x");
+
+        try (ParquetFile firstFile = ParquetFile.open(first);
+                ParquetFile secondFile = ParquetFile.open(second);
+                ColumnReader reader = columnReader(List.of(firstFile, secondFile), "x")) {
+            long[] prefix = new long[2];
+            reader.readLongs(prefix, null, prefix.length);
+            assertThat(prefix).containsExactly(10, 20);
+
+            assertThat(reader.estimateDictionaryMatchFraction(value -> value == 10 || value == 30, 4))
+                    .isEqualTo(0.5);
+            assertThat(reader.estimateDictionaryMatchFraction(value -> true, 3)).isNaN();
+            assertThat(reader.estimateDictionaryMatchFraction(value -> true, 0)).isNaN();
+
+            long[] values = new long[3_998];
+            reader.readLongs(values, null, values.length);
+            assertThat(Arrays.copyOfRange(values, 0, 4)).containsExactly(10, 20, 10, 20);
+            assertThat(Arrays.copyOfRange(values, 1_998, 2_002)).containsExactly(30, 40, 30, 40);
         }
     }
 
