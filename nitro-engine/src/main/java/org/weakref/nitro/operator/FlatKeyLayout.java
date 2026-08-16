@@ -2289,14 +2289,14 @@ class FlatKeyLayout
         if (normalizedId >= 0) {
             int length = fieldInterners[fieldIndex].valueLength(normalizedId);
             BinaryVector existing = output instanceof BinaryVector binary ? binary : null;
-            int outputOffset = existing == null ? 0 : existing.offsets()[outputPosition];
+            int outputOffset = existing == null ? 0 : prepareBinaryWriteOffset(existing, outputPosition);
             BinaryVector result = BinaryVector.allocateOrGrow(
                     allocator,
                     allocationContext,
                     existing,
                     size,
                     Math.addExact(outputOffset, length));
-            if (outputPosition == 0) {
+            if (existing == null) {
                 Arrays.fill(result.offsets(), 0);
                 result.clearTraits();
                 result.addTraits(field(fieldIndex).binaryTraits());
@@ -2325,14 +2325,14 @@ class FlatKeyLayout
         }
 
         BinaryVector existing = output instanceof BinaryVector binary ? binary : null;
-        int outputOffset = existing == null ? 0 : existing.offsets()[outputPosition];
+        int outputOffset = existing == null ? 0 : prepareBinaryWriteOffset(existing, outputPosition);
         BinaryVector result = BinaryVector.allocateOrGrow(
                 allocator,
                 allocationContext,
                 existing,
                 size,
                 Math.addExact(outputOffset, length));
-        if (outputPosition == 0) {
+        if (existing == null) {
             Arrays.fill(result.offsets(), 0);
             result.clearTraits();
             result.addTraits(field(fieldIndex).binaryTraits());
@@ -2368,6 +2368,21 @@ class FlatKeyLayout
             }
         }
         return result;
+    }
+
+    private static int prepareBinaryWriteOffset(BinaryVector output, int outputPosition)
+    {
+        if (outputPosition == 0) {
+            return 0;
+        }
+        int[] offsets = output.offsets();
+        int search = outputPosition;
+        while (search > 0 && offsets[search] == 0) {
+            search--;
+        }
+        int currentOffset = offsets[search];
+        Arrays.fill(offsets, search + 1, outputPosition + 1, currentOffset);
+        return currentOffset;
     }
 
     BinaryVector tryPrepareIdBackedBinaryOutput(

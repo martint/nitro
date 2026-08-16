@@ -23,6 +23,35 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class TestScopedVectorAllocator
 {
     @Test
+    void testSparseBinaryCopyClearsRecycledPrefixOffsets()
+    {
+        Allocator.Context context = new Allocator.Context("sparse-binary-copy");
+        try (AllocationResources resources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            BinaryVector recycled = BinaryVector.allocate(allocator, context, 5, 32);
+            for (int position = 0; position < recycled.length(); position++) {
+                recycled.setBytes(position, new byte[] {(byte) ('a' + position)});
+            }
+            allocator.release(context, recycled);
+
+            BinaryVector source = new BinaryVector(1, 1);
+            source.setBytes(0, new byte[] {'x'});
+            BinaryVector copied = (BinaryVector) source.copySinglePositionInto(
+                    allocator,
+                    context,
+                    null,
+                    0,
+                    3,
+                    5);
+
+            assertThat(copied).isSameAs(recycled);
+            assertThat(copied.offsets()).containsExactly(0, 0, 0, 0, 1, 0);
+            assertThat(copied.copyBytes(3)).containsExactly((byte) 'x');
+            allocator.release(context, copied);
+        }
+    }
+
+    @Test
     void testInterleavesStreamBundlesInRowMajorOrder()
     {
         Allocator.Context context = new Allocator.Context("connector");

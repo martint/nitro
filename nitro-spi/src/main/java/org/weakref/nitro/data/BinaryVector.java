@@ -442,7 +442,7 @@ public final class BinaryVector
         }
 
         BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, size, byteCapacity);
-        if (outputStart == 0) {
+        if (existing == null) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
             target.addTraits(traits);
@@ -477,7 +477,7 @@ public final class BinaryVector
         }
 
         BinaryVector target = allocateOrGrow(allocator, allocationContext, (BinaryVector) existing, size, byteCapacity);
-        if (outputPosition == 0) {
+        if (existing == null) {
             Arrays.fill(target.offsets(), 0);
             target.clearTraits();
             target.addTraits(traits);

@@ -2642,6 +2642,46 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSparseNormalizedBinaryGroupCopyClearsRecycledPrefixOffsets()
+    {
+        Vector[] values = {
+                DictionaryVector.wrapNested(new int[] {0, 1}, 2, utf8("alpha", "beta")),
+                new I64Vector(new long[] {1, 2}),
+                new I64Vector(new long[] {10, 20})};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        assertThat(layout.supportsNormalizedRecordWrite()).isTrue();
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        Allocator allocator = new Allocator(engineResources);
+        Allocator.Context allocationContext = new Allocator.Context("sparseNormalizedBinaryGroupCopy");
+        try {
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, Mask.all(2));
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isZero();
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            table.endBatch();
+
+            BinaryVector recycled = BinaryVector.allocate(allocator, allocationContext, 7, 32);
+            for (int position = 0; position < recycled.length(); position++) {
+                recycled.setBytes(position, new byte[] {(byte) ('a' + position)});
+            }
+            allocator.release(allocationContext, recycled);
+
+            Streams output = table.copyGroupedValuePosition(0, null, 0, 1, 7, allocator, allocationContext);
+            output = table.copyGroupedValuePosition(0, output, 1, 5, 7, allocator, allocationContext);
+            BinaryVector binary = (BinaryVector) output.values();
+            assertThat(binary).isSameAs(recycled);
+            assertThat(binary.offsets()).containsExactly(0, 0, 5, 5, 5, 5, 9, 0);
+            assertThat(binary.copyBytes(1)).containsExactly("alpha".getBytes(StandardCharsets.UTF_8));
+            assertThat(binary.copyBytes(5)).containsExactly("beta".getBytes(StandardCharsets.UTF_8));
+        }
+        finally {
+            table.releaseBuffers();
+            allocator.release(allocationContext);
+        }
+    }
+
+    @Test
     void testGeneratedNormalizedIntBatchHandlesSparseNullAndFallbackRows()
     {
         int size = 64;
