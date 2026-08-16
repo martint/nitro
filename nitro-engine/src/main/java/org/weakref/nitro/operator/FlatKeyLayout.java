@@ -2503,6 +2503,16 @@ class FlatKeyLayout
     }
 
     /**
+     * Whether every hash produced over the lifetime of this layout is the sign extension of a 32-bit value.
+     * Single-field layouts always return {@code 31 + intHash}. Composite layouts retain the complete 64-bit
+     * polynomial because their adaptive discriminator is selected only after the table's record layout is fixed.
+     */
+    boolean hashesFitInt()
+    {
+        return singleField;
+    }
+
+    /**
      * Hashes a dense physical batch when each key field either exposes dictionary-id/exact-entry-hash arrays or a
      * resolved integer accessor prepared by {@link #beginBatch}. The latter preserves the oversized-dictionary cost
      * guard: only referenced rows are read, rather than eagerly hashing a large join-output base. The generated loop

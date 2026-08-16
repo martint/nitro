@@ -37,6 +37,7 @@ final class FlatGroupingTable
 {
     private static final int VECTOR_LENGTH = Long.BYTES;
     private static final VarHandle LONG_HANDLE = MethodHandles.byteArrayViewVarHandle(long[].class, LITTLE_ENDIAN);
+    private static final VarHandle INT_HANDLE = MethodHandles.byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
     private static final int MIN_RECORDS_PER_CHUNK_SHIFT = 10;
     private static final int MAX_RECORDS_PER_CHUNK_SHIFT = 16;
     private static final double DEFAULT_LOAD_FACTOR = 15.0 / 16;
@@ -53,6 +54,7 @@ final class FlatGroupingTable
     private final int fixedRecordChunkSize;
     private final boolean identityGroupIds;
     private final boolean packedHashRecordSlots;
+    private final boolean intHashRecords;
     private final PrimitiveArrayPool arrayPool;
 
     private byte[] control;
@@ -134,9 +136,10 @@ final class FlatGroupingTable
         // cannot be normalized retain their hash in the fixed record, while normalized rows use their compact
         // key for equality and hash reconstruction.
         this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds && !layout.supportsNormalizedRecordWrite();
+        this.intHashRecords = !this.packedHashRecordSlots && layout.hashesFitInt();
         this.packedNormalizedTripleRecords = layout.fieldCount() == 3 && layout.supportsNormalizedRecordWrite();
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;
-        this.fixedRecordSize = (this.packedHashRecordSlots ? 0 : Long.BYTES) + layout.fixedRecordSize();
+        this.fixedRecordSize = (this.packedHashRecordSlots ? 0 : intHashRecords ? Integer.BYTES : Long.BYTES) + layout.fixedRecordSize();
         int chunkShift = MIN_RECORDS_PER_CHUNK_SHIFT;
         if (policy.poolSizedRecordChunks()) {
             long minimumBytes = arrayPool.minRetainedBytes();
@@ -684,6 +687,11 @@ final class FlatGroupingTable
     boolean usesPackedHashRecordSlots()
     {
         return packedHashRecordSlots;
+    }
+
+    boolean usesIntHashRecords()
+    {
+        return intHashRecords;
     }
 
     void ensureCapacity(long expectedGroups)
@@ -1358,7 +1366,7 @@ final class FlatGroupingTable
         }
         byte[] fixedChunk = fixedChunk(recordIndex);
         int fixedOffset = fixedOffset(recordIndex);
-        if ((long) LONG_HANDLE.get(fixedChunk, fixedOffset) != hash) {
+        if (recordHash(fixedChunk, fixedOffset) != hash) {
             return false;
         }
         return identicalKey(recordIndex, values, nulls, position, normalized, normalizedFirst, normalizedSecond);
@@ -1414,7 +1422,7 @@ final class FlatGroupingTable
             byte[] fixedChunk = fixedChunk(recordIndex);
             int fixedOffset = fixedOffset(recordIndex);
             if (!packedHashRecordSlots) {
-                LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
+                writeRecordHash(fixedChunk, fixedOffset, hash);
             }
             if (variableWidthArena != null) {
                 variableWidthArena.beginRecord(recordIndex);
@@ -1652,7 +1660,7 @@ final class FlatGroupingTable
 
             long hash = normalizedRecordValid(recordIndex)
                     ? FlatKeyLayout.normalizedIntKeyHash(normalizedFirst(recordIndex), normalizedSecond(recordIndex))
-                    : (long) LONG_HANDLE.get(fixedChunk(recordIndex), fixedOffset(recordIndex));
+                    : recordHash(fixedChunk(recordIndex), fixedOffset(recordIndex));
             byte hashPrefix = (byte) (hash & 0x7F | 0x80);
             int bucket = bucket((int) (hash >> 7));
             int step = 1;
@@ -1747,7 +1755,24 @@ final class FlatGroupingTable
 
     int keyOffset(int fixedOffset)
     {
-        return fixedOffset + (packedHashRecordSlots ? 0 : Long.BYTES);
+        return fixedOffset + (packedHashRecordSlots ? 0 : intHashRecords ? Integer.BYTES : Long.BYTES);
+    }
+
+    private long recordHash(byte[] fixedChunk, int fixedOffset)
+    {
+        return intHashRecords
+                ? (int) INT_HANDLE.get(fixedChunk, fixedOffset)
+                : (long) LONG_HANDLE.get(fixedChunk, fixedOffset);
+    }
+
+    private void writeRecordHash(byte[] fixedChunk, int fixedOffset, long hash)
+    {
+        if (intHashRecords) {
+            INT_HANDLE.set(fixedChunk, fixedOffset, (int) hash);
+        }
+        else {
+            LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
+        }
     }
 
     private byte[] borrowChunk(Object family, int size)

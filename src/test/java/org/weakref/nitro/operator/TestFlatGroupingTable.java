@@ -1149,6 +1149,42 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testHashRecordWidthFollowsImmutableKeyArity()
+    {
+        Vector[] single = {utf8("alpha", "beta")};
+        FlatGroupingTable singleTable = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(single, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                2,
+                true);
+        try {
+            assertThat(singleTable.usesIntHashRecords()).isTrue();
+            singleTable.beginBatch(single, null);
+            assertThat(singleTable.assignGroup(single, null, 0, 0)).isEqualTo(0);
+            assertThat(singleTable.findGroup(single, null, 0)).isEqualTo(0);
+            singleTable.endBatch();
+        }
+        finally {
+            singleTable.releaseBuffers();
+        }
+
+        Vector[] composite = {utf8("alpha", "beta"), new I64Vector(new long[] {11, 12})};
+        FlatGroupingTable compositeTable = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(composite, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                2,
+                true);
+        try {
+            assertThat(compositeTable.usesIntHashRecords()).isFalse();
+            compositeTable.beginBatch(composite, null);
+            assertThat(compositeTable.assignGroup(composite, null, 0, 0)).isEqualTo(0);
+            assertThat(compositeTable.findGroup(composite, null, 0)).isEqualTo(0);
+            compositeTable.endBatch();
+        }
+        finally {
+            compositeTable.releaseBuffers();
+        }
+    }
+
+    @Test
     void testPackedIdentityAdmissionRequiresAnotherInputBatch()
     {
         int size = 4096;
