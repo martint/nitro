@@ -1281,6 +1281,38 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPreparedNullFreeSingleBinaryBatchPreservesHashDomainAcrossNullShapes()
+    {
+        // This value's binary hash is Integer.MAX_VALUE. Adding the grouping seed must happen in the table's
+        // authoritative signed 32-bit domain: widening the addition changes the probe sequence and makes a later
+        // null-free batch insert a duplicate group for a record created by the nullable path.
+        Vector[] nullableValues = {utf8("overflow-152905119", "unused")};
+        Vector[] nullableNulls = {new BooleanVector(new boolean[] {false, true})};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(nullableValues, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                2,
+                true);
+        try {
+            table.beginBatch(nullableValues, nullableNulls);
+            assertThat(table.assignGroup(nullableValues, nullableNulls, 0, 0)).isEqualTo(0);
+            table.endBatch();
+
+            Vector[] nullFreeValues = {utf8("overflow-152905119")};
+            Vector[] nullFreeNulls = {new BooleanVector(new boolean[] {false})};
+            I64Vector groups = new I64Vector(1);
+            table.beginBatch(nullFreeValues, nullFreeNulls);
+            table.prepareBatchHashes(nullFreeValues, nullFreeNulls, Mask.all(1));
+            assertThat(table.assignPreparedPhysicalBatch(
+                    nullFreeValues, nullFreeNulls, Mask.all(1), groups, 1)).isEqualTo(1);
+            assertThat(groups.values()).containsExactly(0);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testHashRecordWidthFollowsImmutableKeyArity()
     {
         Vector[] single = {utf8("alpha", "beta")};

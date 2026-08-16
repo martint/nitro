@@ -2489,7 +2489,7 @@ class FlatKeyLayout
         if (batchNullFreeSingleBinary) {
             BinaryVector binary = fieldBinaryBase[0];
             int entry = binaryEntry(0, position);
-            return 31 + OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(entry), binary.length(entry));
+            return (int) (31L + OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(entry), binary.length(entry)));
         }
         if (batchNullFreeLongBinary) {
             long longHash = Long.hashCode(fieldLong[batchLongField].value(position));
@@ -2502,7 +2502,7 @@ class FlatKeyLayout
             if (inputFieldNull(0, nulls, position)) {
                 return 31;
             }
-            return 31 + fieldHash(0, singleInputChannel, values[singleInputChannel], position);
+            return (int) (31L + fieldHash(0, singleInputChannel, values[singleInputChannel], position));
         }
         if (discriminatingHashField >= 0) {
             int field = discriminatingHashField;
