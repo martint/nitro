@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.BinaryVector;
 
 import java.util.Arrays;
 
@@ -27,6 +28,35 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class TestBinaryEquals
 {
+    @Test
+    void binaryCompareMatchesUnsignedLexicographicOrder()
+    {
+        for (int length = 0; length <= 40; length++) {
+            byte[] leftValue = sequence(length, 0);
+            byte[] rightValue = sequence(length, 0);
+            if (length > 0) {
+                rightValue[length / 2] ^= (byte) 0xFF;
+            }
+
+            BinaryVector left = new BinaryVector(2, length + 1);
+            left.setBytes(0, new byte[] {99});
+            left.setBytes(1, leftValue);
+            BinaryVector right = new BinaryVector(2, length + 1);
+            right.setBytes(0, new byte[] {42});
+            right.setBytes(1, rightValue);
+
+            assertThat(Integer.signum(OperatorVectorSupport.binaryCompare(left, 1, right, 1)))
+                    .as("unsigned comparison at non-zero offsets, length %d", length)
+                    .isEqualTo(Integer.signum(Arrays.compareUnsigned(leftValue, rightValue)));
+        }
+
+        BinaryVector prefixes = new BinaryVector(2, 5);
+        prefixes.setBytes(0, new byte[] {(byte) 0x80, 1});
+        prefixes.setBytes(1, new byte[] {(byte) 0x80, 1, 0});
+        assertThat(OperatorVectorSupport.binaryCompare(prefixes, 0, prefixes, 1)).isNegative();
+        assertThat(OperatorVectorSupport.binaryCompare(prefixes, 1, prefixes, 0)).isPositive();
+    }
+
     @Test
     void equalAcrossAllLengths()
     {

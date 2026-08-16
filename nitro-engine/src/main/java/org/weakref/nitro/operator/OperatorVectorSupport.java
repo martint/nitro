@@ -297,14 +297,13 @@ final class OperatorVectorSupport
 
     private static int binaryCompare(byte[] left, int leftOffset, int leftLength, byte[] right, int rightOffset, int rightLength)
     {
-        int minLength = Math.min(leftLength, rightLength);
-        for (int index = 0; index < minLength; index++) {
-            int comparison = Byte.toUnsignedInt(left[leftOffset + index]) - Byte.toUnsignedInt(right[rightOffset + index]);
-            if (comparison != 0) {
-                return comparison;
-            }
-        }
-        return Integer.compare(leftLength, rightLength);
+        return Arrays.compareUnsigned(
+                left,
+                leftOffset,
+                leftOffset + leftLength,
+                right,
+                rightOffset,
+                rightOffset + rightLength);
     }
 
     private static long mix64(long value)
