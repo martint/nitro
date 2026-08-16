@@ -52,6 +52,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             int generatedDictionaryHashBatchNullFreePairMinRows,
             int generatedDictionaryHashProbeTileRows,
             boolean generatedDictionaryRecordEquality,
+            int generatedDictionaryRecordEqualityMinFields,
+            int generatedDictionaryRecordEqualityMinVariableWidthFields,
             boolean debugGeneratedDictionaryHashBatch,
             boolean mixedCompositeIds,
             int mixedCompositeMaxFields,
@@ -105,6 +107,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
         public Layout
         {
             if (generatedDictionaryHashProbeTileRows <= 0 ||
+                    generatedDictionaryRecordEqualityMinFields <= 0 ||
+                    generatedDictionaryRecordEqualityMinVariableWidthFields <= 0 ||
                     adaptiveCompactLongRecordsMinRows < 0 ||
                     normalizedIntKeyMaxBits < 0 ||
                     normalizedIntKeyMaxBits > Long.SIZE * 2 ||
@@ -130,6 +134,8 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     2048,
                     72,
                     true,
+                    5,
+                    3,
                     false,
                     true,
                     6,
@@ -209,6 +215,16 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     booleanProperty(
                             "nitro.group.generatedDictionaryRecordEquality",
                             defaults.generatedDictionaryRecordEquality()),
+                    Math.max(
+                            1,
+                            Integer.getInteger(
+                                    "nitro.group.generatedDictionaryRecordEqualityMinFields",
+                                    defaults.generatedDictionaryRecordEqualityMinFields())),
+                    Math.max(
+                            1,
+                            Integer.getInteger(
+                                    "nitro.group.generatedDictionaryRecordEqualityMinVariableWidthFields",
+                                    defaults.generatedDictionaryRecordEqualityMinVariableWidthFields())),
                     Boolean.getBoolean("nitro.debug.generatedDictionaryHashBatch"),
                     booleanProperty("nitro.group.mixedCompositeIds", defaults.mixedCompositeIds()),
                     Integer.getInteger("nitro.group.mixedCompositeMaxFields", defaults.mixedCompositeMaxFields()),

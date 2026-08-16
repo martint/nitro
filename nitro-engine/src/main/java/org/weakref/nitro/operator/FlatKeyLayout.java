@@ -1197,8 +1197,10 @@ class FlatKeyLayout
 
     private void prepareGeneratedDictionaryRecordEquality()
     {
-        if (!policy.generatedDictionaryRecordEquality() ||
-                handlers.length < 5) {
+        int minimumFields = anyVariableWidth
+                ? policy.generatedDictionaryRecordEqualityMinVariableWidthFields()
+                : policy.generatedDictionaryRecordEqualityMinFields();
+        if (!policy.generatedDictionaryRecordEquality() || handlers.length < minimumFields) {
             return;
         }
         List<DictionaryRecordEqualityKernelGenerator.FieldShape> fields = new ArrayList<>(handlers.length);

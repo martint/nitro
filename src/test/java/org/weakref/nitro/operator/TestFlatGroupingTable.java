@@ -973,6 +973,49 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedRecordEqualitySupportsNarrowCompositeKeys()
+    {
+        Vector[] values = {
+                new I64Vector(new long[] {7, 8, 7}),
+                utf8("alpha", "beta", "alpha"),
+                new I64Vector(new long[] {11, 12, 11})};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 2, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(layout.usesGeneratedDictionaryRecordEquality()).isTrue();
+            assertThat(table.assignGroup(values, nulls, 0, 0)).isEqualTo(0);
+            assertThat(table.assignGroup(values, nulls, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(values, nulls, 2, 2)).isEqualTo(0);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testGeneratedRecordEqualityRetainsFixedWidthAdmissionThreshold()
+    {
+        Vector[] values = {
+                new I64Vector(new long[] {1}),
+                new I64Vector(new long[] {2}),
+                new I64Vector(new long[] {3}),
+                new I64Vector(new long[] {4})};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, 1, true);
+        try {
+            table.beginBatch(values, null);
+            assertThat(layout.usesGeneratedDictionaryRecordEquality()).isFalse();
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testWideSparseCompositeCachePreservesOffsetsFallbackAndGrowth()
     {
         int uniqueSize = 96;
