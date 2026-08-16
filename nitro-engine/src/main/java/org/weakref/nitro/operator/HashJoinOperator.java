@@ -1477,7 +1477,25 @@ public class HashJoinOperator
                 validateJoinKeyVectors(joinValues, "build");
                 if (joinIndex == null) {
                     if (joinValues.length == 1 && isSingleLongJoinCandidate(joinValues[0])) {
-                        joinIndex = new LongJoinIndex(joinIndexPolicy, outputPolicy, executionPolicy, arrayPool, Math.max(16, mask.count()), true, true, true, lazyDuplicateSlotState, false, false, true, buildPolicy.batchSingleLongBuild());
+                        // A streaming build should size its initial representation from the rows available now.
+                        // The source-wide estimate can be orders of magnitude larger and causes eager hash/direct
+                        // storage allocation before subsequent batches demonstrate that it is useful.
+                        int expectedRows = Math.max(16, mask.count());
+                        joinIndex = new LongJoinIndex(
+                                joinIndexPolicy,
+                                outputPolicy,
+                                executionPolicy,
+                                arrayPool,
+                                expectedRows,
+                                true,
+                                true,
+                                true,
+                                lazyDuplicateSlotState,
+                                false,
+                                genericJoinIndexes.shouldUseDirectRangeBuild(mask, joinValues, expectedRows),
+                                true,
+                                true,
+                                buildPolicy.batchSingleLongBuild());
                     }
                     else {
                         joinIndex = createJoinIndex(joinValues, false, true, false);
@@ -2009,6 +2027,7 @@ public class HashJoinOperator
                     lazyDuplicateSlotState,
                     implicitSequentialBuildRowReferences,
                     directRangeBuild,
+                    false,
                     canStreamUnusedBuildPayload(),
                     buildPolicy.batchSingleLongBuild());
         }
@@ -4187,6 +4206,8 @@ public class HashJoinOperator
         private final boolean compactChains;
         private final boolean compressDuplicateReferences;
         private final int expectedBuildRows;
+        private final boolean directRangeBuild;
+        private final boolean boundedDirectRangeAdmission;
         private final DirectLongBuildIndex directBuild;
         private final CompactedJoinRows compactedRows;
         // A completed duplicate build may have invariant bits inside an otherwise sparse physical key domain.
@@ -4209,6 +4230,7 @@ public class HashJoinOperator
                 boolean lazyDuplicateSlotState,
                 boolean implicitSequentialRowReferences,
                 boolean directRangeBuild,
+                boolean boundedDirectRangeAdmission,
                 boolean buildRowReferencesUnused,
                 boolean batchBuild)
         {
@@ -4244,6 +4266,8 @@ public class HashJoinOperator
             // into its originating batch, particularly when a multi-batch build feeds another join.
             this.compressDuplicateReferences = buildRowReferencesUnused && policy.compressKeyOnlyDuplicates();
             this.expectedBuildRows = expectedSize;
+            this.directRangeBuild = directRangeBuild;
+            this.boundedDirectRangeAdmission = boundedDirectRangeAdmission || directRangeBuild;
             int initialExpectedSize = capInitialHash ? Math.min(expectedSize, policy.initialHashExpectedCap()) : expectedSize;
             int capacity = 16;
             while (capacity < initialExpectedSize / LOAD_FACTOR) {
@@ -4311,6 +4335,8 @@ public class HashJoinOperator
             this.compactChains = prepared.compactChains;
             this.compressDuplicateReferences = prepared.compressDuplicateReferences;
             this.expectedBuildRows = prepared.expectedBuildRows;
+            this.directRangeBuild = prepared.directRangeBuild;
+            this.boundedDirectRangeAdmission = prepared.boundedDirectRangeAdmission;
             this.directBuild = prepared.directBuild;
             this.compactedRows = prepared.compactedRows;
             this.compressedRanges = prepared.compressedRanges;
@@ -5959,7 +5985,8 @@ public class HashJoinOperator
                 maxKey = key;
             }
             if (directBuild.isActive()) {
-                if (key >= 0 && key < policy.maxDirectBuildKey()) {
+                if (key >= 0 && key < policy.maxDirectBuildKey() &&
+                        (!boundedDirectRangeAdmission || key + 1 <= directRangeAdmissionLimit())) {
                     addDirectRangeRow((int) key, rowReference);
                     return;
                 }
@@ -5995,6 +6022,15 @@ public class HashJoinOperator
             }
             // Append at the tail to preserve insertion (FIFO) order within a key.
             rows.link(hashTable.append(slot, ordinal), ordinal);
+        }
+
+        private long directRangeAdmissionLimit()
+        {
+            // A streaming build knows only its first batch size up front. Let the range budget grow with rows
+            // actually observed, plus a fixed sampling tolerance, without allowing a tiny build's absolute key
+            // values to dictate a large sparse array.
+            long admittedRows = Math.max(expectedBuildRows, (long) directBuild.rowCount() + 1);
+            return policy.directRangeMaxCardinalityRatio() * admittedRows + policy.directRangeBuildInitialCapacity();
         }
 
         private void addDirectRangeRow(int key, long rowReference)

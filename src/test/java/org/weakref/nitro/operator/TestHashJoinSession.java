@@ -298,6 +298,36 @@ class TestHashJoinSession
     }
 
     @Test
+    void testTinyHighOffsetStreamingBuildDoesNotAllocateSparseDirectRange()
+    {
+        long[] buildKeys = new long[12];
+        for (int position = 0; position < buildKeys.length; position++) {
+            buildKeys[position] = 2_451_577L + position * 2L;
+        }
+
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                HashJoinSession session = new HashJoinSession(
+                        resources.operatorResources(),
+                        allocator,
+                        Schema.unspecified(1),
+                        new int[] {0},
+                        table(buildKeys),
+                        new int[] {0},
+                        false)
+                        .withOutputs(0)) {
+            allocator.beginExecution();
+            session.addInput(batch(buildKeys[buildKeys.length - 1]));
+
+            assertThat(session.hasOutput()).isTrue();
+            try (Batch output = session.getOutput()) {
+                assertThat(output.borrowMask().selectedCount()).isOne();
+            }
+            assertThat(allocator.allocatedBytes()).isLessThan(1L << 20);
+        }
+    }
+
+    @Test
     void testPreparedProbeReusesCompactedBuildPayload()
     {
         try (EngineResources resources = EngineResources.createDefault();

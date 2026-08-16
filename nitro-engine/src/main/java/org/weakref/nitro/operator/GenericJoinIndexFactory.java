@@ -15,10 +15,12 @@ package org.weakref.nitro.operator;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.weakref.nitro.core.type.TypeBinding;
+import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
 import org.weakref.nitro.data.Vector;
 
 import java.util.List;
+import java.util.function.IntToLongFunction;
 
 import static java.util.Objects.requireNonNull;
 
@@ -212,6 +214,31 @@ final class GenericJoinIndexFactory
             Vector[] values,
             int expectedRows)
     {
+        return shouldUseDirectRangeBuild(
+                values,
+                expectedRows,
+                batch.length(),
+                position -> OperatorVectorSupport.longValue(values[0], batch.sourcePosition(position)));
+    }
+
+    boolean shouldUseDirectRangeBuild(
+            Mask mask,
+            Vector[] values,
+            int expectedRows)
+    {
+        return shouldUseDirectRangeBuild(
+                values,
+                expectedRows,
+                mask.count(),
+                position -> OperatorVectorSupport.longValue(values[0], mask.position(position)));
+    }
+
+    private boolean shouldUseDirectRangeBuild(
+            Vector[] values,
+            int expectedRows,
+            int rowCount,
+            IntToLongFunction keyAt)
+    {
         if (!joinIndexPolicy.directRangeBuild() ||
                 values.length != 1 ||
                 !isLong(values[0])) {
@@ -220,14 +247,14 @@ final class GenericJoinIndexFactory
         if (expectedRows < joinIndexPolicy.directRangeBuildMinRows()) {
             return false;
         }
-        int sampleSize = Math.min(batch.length(), joinIndexPolicy.rangeAdmissionSampleRows());
+        int sampleSize = Math.min(rowCount, joinIndexPolicy.rangeAdmissionSampleRows());
         if (sampleSize < joinIndexPolicy.rangeAdmissionMinSampleRows()) {
             return false;
         }
         long sampleMin = Long.MAX_VALUE;
         long sampleMax = Long.MIN_VALUE;
         for (int position = 0; position < sampleSize; position++) {
-            long key = OperatorVectorSupport.longValue(values[0], batch.sourcePosition(position));
+            long key = keyAt.applyAsLong(position);
             sampleMin = Math.min(sampleMin, key);
             sampleMax = Math.max(sampleMax, key);
         }
@@ -236,7 +263,8 @@ final class GenericJoinIndexFactory
         // mostly-empty array. The builder remains exact and falls back if a later key escapes the admitted ceiling.
         return sampleMin >= 0 &&
                 sampleMax < joinIndexPolicy.maxDirectBuildKey() &&
-                sampleMax + 1 <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows;
+                sampleMax + 1 <= (long) joinIndexPolicy.directRangeMaxCardinalityRatio() * expectedRows +
+                        joinIndexPolicy.directRangeBuildInitialCapacity();
     }
 
     private static boolean isLong(Vector values)
