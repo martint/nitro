@@ -1992,6 +1992,9 @@ final class GroupingState
         VectorAccess.BooleanValues firstNulls = VectorAccess.booleanValues(nulls[0]);
         VectorAccess.BooleanValues secondNulls = VectorAccess.booleanValues(nulls[1]);
         VectorAccess.BooleanValues thirdNulls = VectorAccess.booleanValues(nulls[2]);
+        boolean nullFree = VectorAccess.isAllFalseNulls(nulls[0]) &&
+                VectorAccess.isAllFalseNulls(nulls[1]) &&
+                VectorAccess.isAllFalseNulls(nulls[2]);
         long[] out = result.values();
         byte[] tableControl = packedIntPairControl;
         int[] tableIds = longGroupIds;
@@ -2000,9 +2003,9 @@ final class GroupingState
             long first = firstValues.value(position);
             long second = secondValues.value(position);
             long third = thirdValues.value(position);
-            boolean firstNull = firstNulls.value(position);
-            boolean secondNull = secondNulls.value(position);
-            boolean thirdNull = thirdNulls.value(position);
+            boolean firstNull = !nullFree && firstNulls.value(position);
+            boolean secondNull = !nullFree && secondNulls.value(position);
+            boolean thirdNull = !nullFree && thirdNulls.value(position);
             if ((!firstNull && first != (int) first) ||
                     (!secondNull && second != (int) second) ||
                     (!thirdNull && (third != (int) third ||
