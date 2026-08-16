@@ -2683,6 +2683,40 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testRejectedNormalizedRecordsAllowPackedIdentitySlots()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        long[] second = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + position;
+            first[position] = position;
+            second[position] = position + 1;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second)};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        layout.beginBatch(values, nulls);
+        assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+        layout.endBatch();
+
+        FlatGroupingTable table = new FlatGroupingTable(layout, positions, true, true);
+        try {
+            assertThat(table.usesPackedHashRecordSlots()).isTrue();
+            table.beginBatch(values, nulls);
+            I64Vector groups = new I64Vector(positions);
+            assertThat(table.assignGeneratedDictionaryBatch(
+                    values, nulls, Mask.all(positions), groups, 0)).isEqualTo(positions);
+            assertThat(groups.values()).containsExactly(first);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testCompactNormalizedIntKeyRejectsMostlyOutOfDomainIntegerLane()
     {
         int positions = 128;

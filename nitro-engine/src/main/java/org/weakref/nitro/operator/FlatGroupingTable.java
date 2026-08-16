@@ -135,7 +135,7 @@ final class FlatGroupingTable
         // doubles slot storage versus the ordinary int record index. Mixed batches remain correct: rows that
         // cannot be normalized retain their hash in the fixed record, while normalized rows use their compact
         // key for equality and hash reconstruction.
-        this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds && !layout.supportsNormalizedRecordWrite();
+        this.packedHashRecordSlots = packedHashRecordSlots && this.identityGroupIds && !layout.normalizedRecordWritesEnabled();
         this.intHashRecords = !this.packedHashRecordSlots && layout.hashesFitInt();
         this.packedNormalizedTripleRecords = layout.fieldCount() == 3 && layout.supportsNormalizedRecordWrite();
         this.variableWidthArena = layout.anyVariableWidth() ? new FlatVariableWidthArena(arrayPool) : null;

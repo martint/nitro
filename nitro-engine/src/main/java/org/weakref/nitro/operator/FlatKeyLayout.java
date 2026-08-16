@@ -671,6 +671,11 @@ class FlatKeyLayout
                 embedIdOnlyBinaryIds;
     }
 
+    boolean normalizedRecordWritesEnabled()
+    {
+        return normalizedIntKeyEnabled && supportsNormalizedRecordWrite();
+    }
+
     /**
      * Writes the exact normalized key without copying variable-width values into the record arena. Binary lanes
      * contain query-stable value ids, so the ordinary id-only record representation remains readable by fallback
