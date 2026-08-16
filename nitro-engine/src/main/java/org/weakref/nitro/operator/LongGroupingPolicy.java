@@ -20,6 +20,7 @@ public record LongGroupingPolicy(
         int initialCardinalitySampleSize,
         int initialHighCardinalityPercent,
         int initialLowCardinalityHeadroom,
+        int hashPrecomputeMinBatchSize,
         boolean runCache,
         boolean idIndexed,
         int idIndexedMinGroups,
@@ -48,6 +49,7 @@ public record LongGroupingPolicy(
                 initialHighCardinalityPercent <= 0 ||
                 initialHighCardinalityPercent > 100 ||
                 initialLowCardinalityHeadroom <= 0 ||
+                hashPrecomputeMinBatchSize <= 0 ||
                 idIndexedMinGroups < 0 ||
                 idIndexedMaxGroups <= 0 ||
                 idIndexedMaxGroups > MAX_ID_INDEXED_GROUPS) {
@@ -74,6 +76,7 @@ public record LongGroupingPolicy(
                 256,
                 80,
                 4,
+                256,
                 true,
                 true,
                 1 << 20,
@@ -108,6 +111,9 @@ public record LongGroupingPolicy(
                 Integer.getInteger(
                         "nitro.group.initialLowCardinalityHeadroom",
                         defaults.initialLowCardinalityHeadroom()),
+                Integer.getInteger(
+                        "nitro.group.hashPrecomputeMinBatchSize",
+                        defaults.hashPrecomputeMinBatchSize()),
                 booleanProperty("nitro.group.longRunCache", defaults.runCache()),
                 booleanProperty("nitro.group.idIndexedLong", defaults.idIndexed()),
                 Integer.getInteger("nitro.group.idIndexedLongMinGroups", defaults.idIndexedMinGroups()),

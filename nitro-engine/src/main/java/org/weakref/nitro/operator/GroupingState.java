@@ -97,6 +97,7 @@ final class GroupingState
     private long nullGroup = -1;
     private boolean useLongGrouping;
     private boolean useIdIndexedLongGrouping;
+    private int[] longGroupHashes = new int[0];
     private boolean longRunCacheValid;
     private long longRunCacheKey;
     private int longRunCacheGroupId;
@@ -786,6 +787,7 @@ final class GroupingState
     {
         long bytes = longArrayBytes(longGroupKeys);
         bytes += intArrayBytes(longGroupIds);
+        bytes += intArrayBytes(longGroupHashes);
         bytes += referenceArrayBytes(reusableProbeKeys);
         bytes += referenceArrayBytes(keyHandlers);
         bytes += referenceArrayBytes(binaryTraits);
@@ -1706,6 +1708,61 @@ final class GroupingState
         long cachedKey = longRunCacheKey;
         int cachedGroupId = longRunCacheGroupId;
         boolean useRunCache = longPolicy.runCache() && hasFrequentLongRuns(keyValues, nullValues, mask, cached, cachedKey);
+        int count = mask.count();
+        if (!useRunCache && count >= longPolicy.hashPrecomputeMinBatchSize()) {
+            int[] positions = mask.selectedPositions();
+            ensureLongGroupHashCapacity(count);
+            int[] hashes = longGroupHashes;
+            precomputeLongGroupHashes(keyValues, nullValues, positions, count, hashes, out);
+            for (int index = 0; index < count; index++) {
+                int position = positions == null ? index : positions[index];
+                if (nullValues.value(position)) {
+                    out[position] = nullGroup();
+                    continue;
+                }
+
+                long key = out[position];
+                int hash = hashes[index];
+                int slot = hash & tableMask;
+                while (true) {
+                    int encoded = tableIds[slot];
+                    if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
+                        int groupId = (int) nextGroupId++;
+                        if (!useIdIndexedLongGrouping) {
+                            tableKeys[slot] = key;
+                        }
+                        tableIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, groupId) : groupId;
+                        ensureLongGroupingCapacity(groupId);
+                        longKeysByGroup[groupId] = key;
+                        out[position] = groupId;
+                        cached = true;
+                        cachedKey = key;
+                        cachedGroupId = groupId;
+                        if (++longGroupCount >= longGroupMaxFill) {
+                            rehashLongGroupTable();
+                            tableKeys = longGroupKeys;
+                            tableIds = longGroupIds;
+                            tableMask = longGroupMask;
+                        }
+                        break;
+                    }
+                    int id = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+                    if ((!useIdIndexedLongGrouping || encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT)
+                            && (useIdIndexedLongGrouping ? longKeysByGroup[id] : tableKeys[slot]) == key) {
+                        out[position] = id;
+                        cached = true;
+                        cachedKey = key;
+                        cachedGroupId = id;
+                        break;
+                    }
+                    slot = (slot + 1) & tableMask;
+                }
+            }
+            longRunCacheValid = cached;
+            longRunCacheKey = cachedKey;
+            longRunCacheGroupId = cachedGroupId;
+            return;
+        }
         if (!useRunCache) {
             for (int position : mask) {
                 if (nullValues.value(position)) {
@@ -1805,6 +1862,33 @@ final class GroupingState
         longRunCacheValid = cached;
         longRunCacheKey = cachedKey;
         longRunCacheGroupId = cachedGroupId;
+    }
+
+    private void ensureLongGroupHashCapacity(int size)
+    {
+        if (longGroupHashes.length >= size) {
+            return;
+        }
+        int capacity = Integer.highestOneBit(size - 1) << 1;
+        longGroupHashes = new int[capacity];
+    }
+
+    private static void precomputeLongGroupHashes(
+            VectorAccess.LongValues keyValues,
+            VectorAccess.BooleanValues nullValues,
+            int[] positions,
+            int count,
+            int[] hashes,
+            long[] keys)
+    {
+        for (int index = 0; index < count; index++) {
+            int position = positions == null ? index : positions[index];
+            if (!nullValues.value(position)) {
+                long key = keyValues.value(position);
+                keys[position] = key;
+                hashes[index] = hashLong(key);
+            }
+        }
     }
 
     /**
@@ -2037,6 +2121,7 @@ final class GroupingState
         longGroupIds = null;
         arrayPool.release(longKeysByGroup);
         longKeysByGroup = new long[0];
+        longGroupHashes = new int[0];
         arrayPool.release(packedIntTripleThirdByGroup);
         packedIntTripleThirdByGroup = new int[0];
         arrayPool.release(packedIntTripleNullMasksByGroup);
