@@ -223,6 +223,8 @@ class FlatKeyLayout
     private boolean hashStrategyEstablished;
     private boolean normalizedIntKeyEnabled = true;
     private boolean batchNormalizedIntKeyEligible;
+    private boolean batchNormalizedIntKeyCostRejected;
+    private final long[] normalizedIntKeySamples;
     private long preparedNormalizedFirst;
     private long preparedNormalizedSecond;
 
@@ -280,6 +282,7 @@ class FlatKeyLayout
             normalizedShape &= kind == FlatTypeHandler.Kind.LONG || kind == FlatTypeHandler.Kind.BINARY;
         }
         this.normalizedIntKeyShape = normalizedShape;
+        this.normalizedIntKeySamples = new long[policy.normalizedIntKeyDiscriminatorSampleSize()];
         // Grouped output can be requested by callers that do not drive beginBatch (for example an empty or
         // pre-materialized grouping path). This flag describes record-lifetime state, not batch scratch, so keep it
         // available for the layout's entire lifetime rather than initializing it with the per-batch caches.
@@ -1106,7 +1109,12 @@ class FlatKeyLayout
             System.err.printf("[mixed-composite] fields=%d eligible=%s product=%d radices=%s%n",
                     handlers.length, batchCompositeEligible, compositeMultiplier, Arrays.toString(radices));
         }
+        batchNormalizedIntKeyCostRejected = false;
         batchNormalizedIntKeyEligible = normalizedIntKeyEnabled && normalizedIntKeyShape && sampledNormalizedIntKeyDomain(values, nulls);
+        if (batchNormalizedIntKeyCostRejected && !hashStrategyEstablished) {
+            normalizedIntKeyEnabled = false;
+            batchNormalizedIntKeyEligible = false;
+        }
         prepareConstantNullMixedComposite3();
         batchAccessorsReady = true;
         prepareGeneratedDictionaryRecordEquality();
@@ -1277,9 +1285,12 @@ class FlatKeyLayout
 
     /**
      * Normalized scratch is reserved before the position loop, so reject a batch up front when a representative
-     * sample shows that its integer keys are outside the exact packed domain. Individual positions are still
-     * checked by {@link #tryPrepareNormalizedIntKey}; this admission only avoids reserving dense scratch for a path
-     * that would almost always fall back.
+     * sample shows that its integer keys are outside the exact packed domain. A mixed binary/integer key also stays
+     * on the ordinary record path when one integer lane is already highly discriminating: interning the binary lane
+     * and building a second compact identity cannot repay its extra pass when the ordinary table will insert almost
+     * every row. The same applies when nearly every value in an integer lane is outside the compact domain, since
+     * the per-position normalization attempt would almost always fall back. Individual positions are still checked
+     * by {@link #tryPrepareNormalizedIntKey} after a normalized hash strategy has been established.
      */
     private boolean sampledNormalizedIntKeyDomain(Vector[] values, Vector[] nulls)
     {
@@ -1287,11 +1298,16 @@ class FlatKeyLayout
             return false;
         }
         int length = values[inputChannels[0]].length();
-        int sampleSize = Math.min(length, 32);
+        int sampleSize = Math.min(length, normalizedIntKeySamples.length);
+        boolean hasBinaryField = false;
+        for (FlatTypeHandler.Kind kind : fieldKinds) {
+            hasBinaryField |= kind == FlatTypeHandler.Kind.BINARY;
+        }
+        boolean domainEligible = true;
         for (int index = 0; index < fieldKinds.length; index++) {
             if (fieldKinds[index] == FlatTypeHandler.Kind.BINARY) {
                 if (fieldBinaryBase[index] == null) {
-                    return false;
+                    domainEligible = false;
                 }
                 continue;
             }
@@ -1301,23 +1317,51 @@ class FlatKeyLayout
                 // complete position-id and wide generated-kernel setup, while the ordinary grouping path reads the
                 // scalar directly. Grouping-set ids are the dominant example, but the admission rule is purely
                 // physical and applies to any constant long lane.
-                return false;
+                domainEligible = false;
+                continue;
             }
             if (fieldLong[index] == null) {
-                return false;
+                domainEligible = false;
+                continue;
             }
+            int distinct = 0;
+            int nonNull = 0;
+            int outOfDomain = 0;
             for (int sample = 0; sample < sampleSize; sample++) {
                 int position = sampleSize == 1 ? 0 : (int) ((long) sample * (length - 1) / (sampleSize - 1));
                 if (inputFieldNull(index, nulls, position)) {
                     continue;
                 }
                 long value = fieldLong[index].value(position);
+                nonNull++;
                 if (value < 0 || value >= Integer.MAX_VALUE) {
-                    return false;
+                    domainEligible = false;
+                    outOfDomain++;
+                    continue;
+                }
+                boolean seen = false;
+                for (int previous = 0; previous < distinct; previous++) {
+                    if (normalizedIntKeySamples[previous] == value) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    normalizedIntKeySamples[distinct++] = value;
                 }
             }
+            if (hasBinaryField &&
+                    sampleSize == normalizedIntKeySamples.length &&
+                    nonNull > 0 &&
+                    ((long) outOfDomain * 100 >=
+                            (long) nonNull * policy.normalizedIntKeyFallbackMinPercent() ||
+                            (long) distinct * 100 >=
+                                    (long) (nonNull - outOfDomain) * policy.normalizedIntKeyDiscriminatorMinDistinctPercent())) {
+                batchNormalizedIntKeyCostRejected = true;
+                return false;
+            }
         }
-        return true;
+        return domainEligible;
     }
 
     private void decideDiscriminatingHashField(Vector[] values, Vector[] nulls)

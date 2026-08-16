@@ -2494,7 +2494,7 @@ class TestFlatGroupingTable
     }
 
     @Test
-    void testCompactNormalizedIntKeyDoesNotRequireReuse()
+    void testCompactNormalizedIntKeyRejectsHighCardinalityIntegerDiscriminator()
     {
         int positions = 128;
         String[] strings = new String[positions];
@@ -2509,7 +2509,34 @@ class TestFlatGroupingTable
         FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
         try {
             layout.beginBatch(values, new Vector[] {null, null, null});
-            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            assertThat(layout.tryPrepareNormalizedIntKey(values, new Vector[] {null, null, null}, 0)).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testCompactNormalizedIntKeyRejectsMostlyOutOfDomainIntegerLane()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] userIds = new long[positions];
+        long[] categories = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + (position % 8);
+            userIds[position] = (1L << 40) + position;
+            categories[position] = position % 4;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(userIds), new I64Vector(categories)};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, nulls);
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            assertThat(layout.tryPrepareNormalizedIntKey(values, nulls, 0)).isFalse();
             layout.endBatch();
         }
         finally {

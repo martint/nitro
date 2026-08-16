@@ -94,6 +94,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean adaptiveDiscriminatingFieldHash,
             boolean normalizedIntKey,
             int normalizedIntKeyMaxBits,
+            int normalizedIntKeyDiscriminatorSampleSize,
+            int normalizedIntKeyDiscriminatorMinDistinctPercent,
+            int normalizedIntKeyFallbackMinPercent,
             int discriminatingFieldHashMinFields,
             int discriminatingFieldHashSampleSize,
             int discriminatingFieldHashMinDistinctPercent,
@@ -104,7 +107,12 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             if (generatedDictionaryHashProbeTileRows <= 0 ||
                     adaptiveCompactLongRecordsMinRows < 0 ||
                     normalizedIntKeyMaxBits < 0 ||
-                    normalizedIntKeyMaxBits > Long.SIZE * 2) {
+                    normalizedIntKeyMaxBits > Long.SIZE * 2 ||
+                    normalizedIntKeyDiscriminatorSampleSize <= 0 ||
+                    normalizedIntKeyDiscriminatorMinDistinctPercent < 0 ||
+                    normalizedIntKeyDiscriminatorMinDistinctPercent > 100 ||
+                    normalizedIntKeyFallbackMinPercent < 0 ||
+                    normalizedIntKeyFallbackMinPercent > 100) {
                 throw new IllegalArgumentException("Invalid flat layout admission policy");
             }
         }
@@ -164,6 +172,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     true,
                     true,
                     128,
+                    32,
+                    90,
+                    90,
                     4,
                     128,
                     90,
@@ -276,6 +287,15 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.group.normalizedIntKeyMaxBits",
                             defaults.normalizedIntKeyMaxBits()),
+                    Integer.getInteger(
+                            "nitro.group.normalizedIntKeyDiscriminatorSampleSize",
+                            defaults.normalizedIntKeyDiscriminatorSampleSize()),
+                    Integer.getInteger(
+                            "nitro.group.normalizedIntKeyDiscriminatorMinDistinctPercent",
+                            defaults.normalizedIntKeyDiscriminatorMinDistinctPercent()),
+                    Integer.getInteger(
+                            "nitro.group.normalizedIntKeyFallbackMinPercent",
+                            defaults.normalizedIntKeyFallbackMinPercent()),
                     Integer.getInteger(
                             "nitro.group.discriminatingFieldHashMinFields",
                             defaults.discriminatingFieldHashMinFields()),
