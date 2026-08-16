@@ -94,11 +94,22 @@ public final class KeyOnlyGroupingSession
     @Override
     public void addInput(Batch batch)
     {
+        addInput(batch, false);
+    }
+
+    @Override
+    public InputOwnership addInputWithOwnership(Batch batch, long inputBytes)
+    {
+        return addInput(batch, true);
+    }
+
+    private InputOwnership addInput(Batch batch, boolean mayRetainInput)
+    {
         checkAcceptingInput();
         requireNonNull(batch, "batch is null");
         Mask inputMask = batch.borrowMask();
         if (inputMask.none()) {
-            return;
+            return InputOwnership.CALLER;
         }
         if (distinctPositions.length < inputMask.selectedCount()) {
             int[] previous = distinctPositions;
@@ -134,11 +145,15 @@ public final class KeyOnlyGroupingSession
             Arrays.fill(nulls, null);
         }
         if (selectedCount == 0) {
-            return;
+            return InputOwnership.CALLER;
         }
         if (selectedCount == inputMask.selectedCount()) {
+            pendingOutput = mayRetainInput ? outputBuilder.buildRetaining(batch) : null;
+            if (pendingOutput != null) {
+                return InputOwnership.SESSION;
+            }
             pendingOutput = outputBuilder.build(batch, inputMask);
-            return;
+            return InputOwnership.CALLER;
         }
         Mask distinctMask = allocator.allocateSparseMask(
                 allocationContext,
@@ -151,6 +166,7 @@ public final class KeyOnlyGroupingSession
         finally {
             allocator.release(allocationContext, distinctMask);
         }
+        return InputOwnership.CALLER;
     }
 
     @Override

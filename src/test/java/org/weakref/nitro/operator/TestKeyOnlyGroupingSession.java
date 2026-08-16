@@ -25,6 +25,7 @@ import org.weakref.nitro.execution.EngineResources;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -89,6 +90,39 @@ class TestKeyOnlyGroupingSession
                 session.addInput(input);
             }
             assertThat(session.hasOutput()).isFalse();
+        }
+    }
+
+    @Test
+    void testRetainsAllDistinctInputWhenOwnershipIsOffered()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                KeyOnlyGroupingSession session = new KeyOnlyGroupingSession(
+                        allocator,
+                        Schema.unspecified(1),
+                        List.of(0),
+                        List.of(0),
+                        resources.operatorResources())) {
+            allocator.beginExecution();
+            AtomicBoolean closed = new AtomicBoolean();
+            Batch input = new Batch(
+                    Mask.all(3),
+                    _ -> {},
+                    mask -> mask,
+                    _ -> {},
+                    () -> closed.set(true),
+                    new Output[] {Output.of(Streams.ofValuesAndNulls(
+                            new I64Vector(new long[] {1, 2, 3}),
+                            new BooleanVector(new boolean[3])))});
+
+            assertThat(session.addInputWithOwnership(input, 0)).isEqualTo(BatchAggregationSession.InputOwnership.SESSION);
+            assertThat(closed).isFalse();
+            try (Batch output = session.getOutput()) {
+                assertThat(selectedValues(output)).containsExactly(1L, 2L, 3L);
+                assertThat(closed).isFalse();
+            }
+            assertThat(closed).isTrue();
         }
     }
 
