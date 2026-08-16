@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
+import static java.util.Collections.unmodifiableMap;
+import static java.util.Collections.unmodifiableSet;
 import static java.util.Objects.checkIndex;
 import static java.util.Objects.requireNonNull;
 
@@ -26,6 +28,8 @@ public final class StructVector
 {
     private final int positionCount;
     private final LinkedHashMap<String, Streams> fields = new LinkedHashMap<>();
+    private final Map<String, Streams> fieldsView = unmodifiableMap(fields);
+    private final Set<String> fieldNamesView = unmodifiableSet(fields.keySet());
 
     public StructVector(int positionCount)
     {
@@ -70,12 +74,13 @@ public final class StructVector
 
     public Set<String> fieldNames()
     {
-        return Set.copyOf(fields.keySet());
+        return fieldNamesView;
     }
 
+    /** Returns an unmodifiable insertion-ordered view of the semantic struct fields. */
     public Map<String, Streams> fields()
     {
-        return Map.copyOf(fields);
+        return fieldsView;
     }
 
     public void clearFields()
