@@ -85,6 +85,11 @@ public interface TypeBinding
     default boolean supportsVector(Vector vector)
     {
         requireNonNull(vector, "vector is null");
-        return supportedVectorTypes().stream().anyMatch(type -> type.isInstance(vector));
+        for (Class<? extends Vector> type : supportedVectorTypes()) {
+            if (type.isInstance(vector)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
