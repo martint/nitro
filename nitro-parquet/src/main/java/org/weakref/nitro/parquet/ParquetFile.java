@@ -233,6 +233,11 @@ public final class ParquetFile
         return column(name, ParquetColumnNameMatching.EXACT);
     }
 
+    public Column column(int ordinal)
+    {
+        return columns.get(ordinal);
+    }
+
     public Column column(String name, ParquetColumnNameMatching matching)
     {
         Integer index = columnIndexByName.get(name);

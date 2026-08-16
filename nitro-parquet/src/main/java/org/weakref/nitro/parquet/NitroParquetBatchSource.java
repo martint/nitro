@@ -298,7 +298,23 @@ public final class NitroParquetBatchSource
             Schema schema,
             ParquetColumnNameMatching columnNameMatching)
     {
-        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema, columnNameMatching);
+        return new NitroParquetBatchSource(resources, allocator, new Splits(splits), schema, columnNameMatching, null);
+    }
+
+    public static NitroParquetBatchSource forSplitsByOrdinal(
+            NitroParquetScanResources resources,
+            Allocator allocator,
+            List<Split> splits,
+            Schema schema,
+            List<Integer> sourceOrdinals)
+    {
+        return new NitroParquetBatchSource(
+                resources,
+                allocator,
+                new Splits(splits),
+                schema,
+                ParquetColumnNameMatching.EXACT,
+                List.copyOf(sourceOrdinals));
     }
 
     private NitroParquetBatchSource(
@@ -307,7 +323,7 @@ public final class NitroParquetBatchSource
             Splits splits,
             Schema schema)
     {
-        this(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT);
+        this(resources, allocator, splits, schema, ParquetColumnNameMatching.EXACT, null);
     }
 
     private NitroParquetBatchSource(
@@ -315,7 +331,8 @@ public final class NitroParquetBatchSource
             Allocator allocator,
             Splits splits,
             Schema schema,
-            ParquetColumnNameMatching columnNameMatching)
+            ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals)
     {
         this(
                 allocator,
@@ -323,6 +340,7 @@ public final class NitroParquetBatchSource
                 requireColumnNames(schema),
                 schema,
                 requireNonNull(columnNameMatching, "columnNameMatching is null"),
+                sourceOrdinals,
                 requireNonNull(resources, "resources is null").batchBufferPool(),
                 resources,
                 resources.directNumericBatchDecodeAdmission(),
@@ -347,6 +365,7 @@ public final class NitroParquetBatchSource
             List<String> columns,
             Schema schema,
             ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals,
             Object batchBufferPoolKey,
             NitroParquetScanResources resources,
             Object directNumericBatchDecodeAdmissionKey,
@@ -395,6 +414,9 @@ public final class NitroParquetBatchSource
         if (schema.size() != this.columnNames.size()) {
             throw new IllegalArgumentException("schema size does not match projected columns");
         }
+        if (sourceOrdinals != null && sourceOrdinals.size() != this.columnNames.size()) {
+            throw new IllegalArgumentException("source ordinals size does not match projected columns");
+        }
         this.sourceColumns = new SourceColumnHandle[schema.size()];
         for (int column = 0; column < sourceColumns.length; column++) {
             sourceColumns[column] = new OrdinalSourceColumnHandle(column, schema.field(column).type());
@@ -423,7 +445,7 @@ public final class NitroParquetBatchSource
         this.directNullPendingAdvance = new long[columnCount];
 
         for (int c = 0; c < columnCount; c++) {
-            ParquetFile.Column first = files[0].column(columns.get(c), columnNameMatching);
+            ParquetFile.Column first = resolveColumn(files[0], c, columns, columnNameMatching, sourceOrdinals);
             readers[c] = new ColumnReader(
                     first.type(),
                     first.optional(),
@@ -461,7 +483,7 @@ public final class NitroParquetBatchSource
             List<RowGroup> rowGroups = file.rowGroups(split.start(), split.length());
             rowGroups.forEach(rowGroup -> rowsByGroup.add(rowGroup.num_rows));
             for (int c = 0; c < columnCount; c++) {
-                ParquetFile.Column column = file.column(columns.get(c), columnNameMatching);
+                ParquetFile.Column column = resolveColumn(file, c, columns, columnNameMatching, sourceOrdinals);
                 DecompressedPageCache.Source source = decompressedPages == null
                         ? null
                         : new DecompressedPageCache.Source(splits.get(fileIndex).path(), column.name());
@@ -525,6 +547,19 @@ public final class NitroParquetBatchSource
         this.debugCopied = new long[columnCount];
         this.debugLazyOmitted = new long[columnCount];
         this.debugNullExamined = new long[columnCount];
+    }
+
+    private static ParquetFile.Column resolveColumn(
+            ParquetFile file,
+            int outputColumn,
+            List<String> columns,
+            ParquetColumnNameMatching columnNameMatching,
+            List<Integer> sourceOrdinals)
+    {
+        if (sourceOrdinals != null) {
+            return file.column(sourceOrdinals.get(outputColumn));
+        }
+        return file.column(columns.get(outputColumn), columnNameMatching);
     }
 
     private boolean pushLongDomain(int column, LongDomain filter, boolean enforcementRequired)

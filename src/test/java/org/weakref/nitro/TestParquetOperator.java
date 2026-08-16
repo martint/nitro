@@ -512,6 +512,38 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourceCanProjectConnectorColumnsByOrdinal()
+            throws IOException
+    {
+        java.nio.file.Path file = writeParquetFile("ordinal-projection.parquet", true, List.of(
+                new ParquetRow(10, true, 100L),
+                new ParquetRow(20, false, null),
+                new ParquetRow(30, true, 300L)));
+        Schema schema = new Schema(List.of(
+                new Field("logical_x", BIGINT, false),
+                new Field("logical_maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = NitroParquetBatchSource.forSplitsByOrdinal(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(NitroParquetBatchSource.Split.wholeFile(file)),
+                        schema,
+                        List.of(0, 2))) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            try (var batch = ready.batch()) {
+                assertThat(((I64Vector) batch.column(0).borrow(Stream.VALUES)).values())
+                        .startsWith(10, 20, 30);
+                assertThat(((I64Vector) batch.column(1).borrow(Stream.VALUES)).values())
+                        .startsWith(100, 0, 300);
+                assertThat(((BooleanVector) batch.column(1).borrow(Stream.NULLS)).values())
+                        .startsWith(false, true, false);
+            }
+        }
+    }
+
+    @Test
     void testNitroParquetSourcePrunesMixedPayloadRowGroups()
             throws IOException
     {
