@@ -339,6 +339,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean singleDictionaryGroupCache,
             boolean sparseCompositeGroupCache,
             boolean generatedDictionaryHashProbeBatch,
+            boolean nullFreeSingleBinaryProbeBatch,
             int singleDictionaryGroupCacheMaxCardinalityAmplification,
             int singleDictionaryGroupCacheMaxCardinality,
             int normalizedScratchMinPositions,
@@ -367,7 +368,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
 
         public static Table defaults()
         {
-            return new Table(false, false, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, 72, true);
+            return new Table(false, false, true, true, true, true, true, 2, 1 << 16, 128, 4, 128, 124, 6, 64, 72, true);
         }
 
         public static Table fromSystemProperties()
@@ -386,6 +387,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     booleanProperty(
                             "nitro.group.generatedDictionaryHashProbeBatch",
                             defaults.generatedDictionaryHashProbeBatch()),
+                    booleanProperty(
+                            "nitro.flatGrouping.nullFreeSingleBinaryProbeBatch",
+                            defaults.nullFreeSingleBinaryProbeBatch()),
                     Integer.getInteger(
                             "nitro.flatGrouping.singleDictionaryGroupCacheMaxCardinalityAmplification",
                             defaults.singleDictionaryGroupCacheMaxCardinalityAmplification()),

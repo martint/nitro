@@ -1416,6 +1416,12 @@ final class GroupingState
                 return;
             }
             flatGroupingTable.prepareBatchHashes(values, nulls, mask);
+            long preparedNextGroupId = flatGroupingTable.assignPreparedPhysicalBatch(
+                    values, nulls, mask, result, nextGroupId);
+            if (preparedNextGroupId >= 0) {
+                nextGroupId = preparedNextGroupId;
+                return;
+            }
             long batchNextGroupId = flatGroupingTable.assignMixedComposite3Batch(
                     values, nulls, mask, result, nextGroupId);
             if (batchNextGroupId >= 0) {

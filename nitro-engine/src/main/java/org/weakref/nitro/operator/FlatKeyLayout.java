@@ -2523,6 +2523,35 @@ class FlatKeyLayout
         return result;
     }
 
+    boolean batchSupportsNullFreeSingleBinaryProbe()
+    {
+        return batchNullFreeSingleBinary;
+    }
+
+    boolean nullFreeSingleBinaryRecordMatches(
+            byte[] fixedChunk,
+            int fixedOffset,
+            FlatGroupingTable.FlatVariableWidthArena variableWidthArena,
+            Vector value,
+            int position,
+            int recordIndex)
+    {
+        if (!batchNullFreeSingleBinary) {
+            throw new IllegalStateException("Batch is not null-free single-binary");
+        }
+        if (nullByteCount > 0 && isNull(fixedChunk, fixedOffset, 0)) {
+            return false;
+        }
+        return identicalBinaryField(
+                0,
+                fixedChunk,
+                fixedOffset + singleFixedOffset,
+                variableWidthArena,
+                value,
+                position,
+                recordIndex);
+    }
+
     /**
      * Whether every hash produced over the lifetime of this layout is the sign extension of a 32-bit value.
      * Single-field layouts always return {@code 31 + intHash}. Composite layouts retain the complete 64-bit

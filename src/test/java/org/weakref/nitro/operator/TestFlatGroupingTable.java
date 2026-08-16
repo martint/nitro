@@ -1239,6 +1239,48 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPreparedNullFreeSingleBinaryBatchKeepsEmptyAndNullDistinct()
+    {
+        Vector[] values = {utf8("", "alpha", "")};
+        Vector[] nulls = {new BooleanVector(new boolean[] {false, false, false})};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                4,
+                true);
+        try {
+            I64Vector groups = new I64Vector(3);
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, Mask.all(3));
+            assertThat(table.assignPreparedPhysicalBatch(values, nulls, Mask.all(3), groups, 0)).isEqualTo(2);
+            assertThat(groups.values()).containsExactly(0, 1, 0);
+            table.endBatch();
+
+            Vector[] nullableValues = {utf8("", "beta")};
+            Vector[] nullableNulls = {new BooleanVector(new boolean[] {true, false})};
+            table.beginBatch(nullableValues, nullableNulls);
+            table.prepareBatchHashes(nullableValues, nullableNulls, Mask.all(2));
+            assertThat(table.assignPreparedPhysicalBatch(
+                    nullableValues, nullableNulls, Mask.all(2), new I64Vector(2), 2)).isEqualTo(-1);
+            assertThat(table.assignGroup(nullableValues, nullableNulls, 0, 2)).isEqualTo(2);
+            assertThat(table.assignGroup(nullableValues, nullableNulls, 1, 3)).isEqualTo(3);
+            table.endBatch();
+
+            Vector[] empty = {utf8("")};
+            Vector[] emptyNulls = {new BooleanVector(new boolean[] {false})};
+            I64Vector emptyGroup = new I64Vector(1);
+            table.beginBatch(empty, emptyNulls);
+            table.prepareBatchHashes(empty, emptyNulls, Mask.all(1));
+            assertThat(table.assignPreparedPhysicalBatch(
+                    empty, emptyNulls, Mask.all(1), emptyGroup, 4)).isEqualTo(4);
+            assertThat(emptyGroup.values()).containsExactly(0);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testHashRecordWidthFollowsImmutableKeyArity()
     {
         Vector[] single = {utf8("alpha", "beta")};

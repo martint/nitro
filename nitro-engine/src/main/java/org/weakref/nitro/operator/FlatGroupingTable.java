@@ -327,6 +327,40 @@ final class FlatGroupingTable
         return layout.assignNormalizedIntBatch(this, values, nulls, mask, nextGroupId, result.values());
     }
 
+    long assignPreparedPhysicalBatch(
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        if (!batchHashesValid ||
+                packedHashRecordSlots ||
+                !policy.nullFreeSingleBinaryProbeBatch() ||
+                !layout.batchSupportsNullFreeSingleBinaryProbe()) {
+            return -1;
+        }
+
+        long[] output = result.values();
+        for (int position : mask) {
+            long hash = batchHashes[position];
+            int index = getNullFreeSingleBinaryIndex(values[0], position, hash);
+            long groupId;
+            if (index >= 0) {
+                groupId = identityGroupIds ? recordIndexesByHash[index] : groupIdsByHash[index];
+            }
+            else {
+                groupId = nextGroupId++;
+                addNewGroup(-index - 1, values, nulls, position, hash, groupId, false, 0, 0);
+                if (nextRecordIndex >= maxFill) {
+                    rehash();
+                }
+            }
+            output[position] = groupId;
+        }
+        return nextGroupId;
+    }
+
     long assignPrefetchedBatch(
             Vector[] values,
             Vector[] nulls,
@@ -1322,6 +1356,46 @@ final class FlatGroupingTable
     private int getIndex(Vector[] values, Vector[] nulls, int position, long hash, boolean normalized, long normalizedFirst, long normalizedSecond)
     {
         return getIndex(values, nulls, position, hash, normalized, normalizedFirst, normalizedSecond, -1, 0);
+    }
+
+    private int getNullFreeSingleBinaryIndex(Vector value, int position, long hash)
+    {
+        byte hashPrefix = (byte) (hash & 0x7F | 0x80);
+        int bucket = bucket((int) (hash >> 7));
+        int step = 1;
+        long repeated = repeat(hashPrefix);
+
+        while (true) {
+            long controlVector = (long) LONG_HANDLE.get(control, bucket);
+            long controlMatches = match(controlVector, repeated);
+            while (controlMatches != 0) {
+                int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));
+                int recordIndex = recordIndexesByHash[index];
+                if (recordIndex >= 0) {
+                    byte[] fixedChunk = fixedChunk(recordIndex);
+                    int fixedOffset = fixedOffset(recordIndex);
+                    if (recordHash(fixedChunk, fixedOffset) == hash &&
+                            layout.nullFreeSingleBinaryRecordMatches(
+                                    fixedChunk,
+                                    keyOffset(fixedOffset),
+                                    variableWidthArena,
+                                    value,
+                                    position,
+                                    recordIndex)) {
+                        return index;
+                    }
+                }
+                controlMatches &= controlMatches - 1;
+            }
+
+            long emptyMatches = match(controlVector, 0L);
+            if (emptyMatches != 0) {
+                return -bucket(bucket + (Long.numberOfTrailingZeros(emptyMatches) >>> 3)) - 1;
+            }
+
+            bucket = bucket(bucket + step);
+            step += VECTOR_LENGTH;
+        }
     }
 
     private int getIndex(
