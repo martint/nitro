@@ -99,7 +99,7 @@ public record CompositeGroupingPolicy(
                 true,
                 1 << 12,
                 256,
-                90,
+                80,
                 true,
                 2,
                 1 << 12,

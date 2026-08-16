@@ -2105,6 +2105,7 @@ class TestFlatGroupingTable
         I64Vector distinctGroups = new I64Vector(size);
         distinct.assignGroups(new Vector[] {utf8(distinctValues)}, new Vector[] {null}, Mask.all(size), distinctGroups);
         assertThat(distinct.usesFlatSingleRecordIdentity()).isTrue();
+        assertThat(distinct.usesPackedFlatIdentitySlots()).isFalse();
         assertThat(distinct.groupCount()).isEqualTo(size);
         assertThat(distinctGroups.values()[0]).isZero();
         assertThat(distinctGroups.values()[size - 1]).isEqualTo(size - 1L);
@@ -2117,6 +2118,18 @@ class TestFlatGroupingTable
         assertThat(categorical.groupCount()).isEqualTo(16);
         assertThat(categoricalGroups.values()[0]).isEqualTo(categoricalGroups.values()[16]);
         categorical.releaseBuffers();
+
+        String[] mostlyDistinctValues = new String[size];
+        for (int position = 0; position < size; position++) {
+            // The admission sample is 87.5% distinct: representative of a grouping stream with modest reuse.
+            mostlyDistinctValues[position] = "mostly-" + (position < 224 ? position : position < 256 ? position - 224 : position);
+        }
+        GroupingState mostlyDistinct = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        I64Vector mostlyDistinctGroups = new I64Vector(size);
+        mostlyDistinct.assignGroups(new Vector[] {utf8(mostlyDistinctValues)}, new Vector[] {null}, Mask.all(size), mostlyDistinctGroups);
+        assertThat(mostlyDistinct.usesFlatSingleRecordIdentity()).isTrue();
+        assertThat(mostlyDistinct.usesPackedFlatIdentitySlots()).isFalse();
+        mostlyDistinct.releaseBuffers();
     }
 
     @Test

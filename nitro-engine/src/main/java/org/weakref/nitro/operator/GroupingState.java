@@ -1470,7 +1470,11 @@ final class GroupingState
                 (long) sampledDistinct * 100 >=
                         (long) sampled * compositePolicy.flatSingleKeyRecordIdentityMinDistinctPercent()) {
             flatGroupingTable.releaseBuffers();
-            boolean packedSlots = admitsFlatPackedIdentity(values.length, mask.count(), sampled, sampledDistinct);
+            // A single key needs only the bucket-to-record index. Packing a second hash discriminator into a
+            // wider slot trades one dependent record-hash read for twice the slot bandwidth, which loses for the
+            // high-cardinality binary stream this admission serves. Composite identity tables can still amortize
+            // packed slots by eliminating their additional group-id maps through decideFlatPackedIdentity.
+            boolean packedSlots = false;
             flatGroupingLayout = identityLayout;
             flatGroupingTable = new FlatGroupingTable(
                     identityLayout,
