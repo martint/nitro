@@ -566,6 +566,7 @@ final class DistinctKeySet
         private long minimumKey = Long.MAX_VALUE;
         private long maximumKey = Long.MIN_VALUE;
         private int size;
+        private long addCalls;
 
         private LongDistinctIndex(int expectedSize, PrimitiveArrayPool arrayPool, DistinctKeySetPolicy policy)
         {
@@ -588,6 +589,7 @@ final class DistinctKeySet
             if (OperatorVectorSupport.isNull(nulls[0], position)) {
                 return false;
             }
+            addCalls++;
             return addKey(OperatorVectorSupport.longValue(values[0], position));
         }
 
@@ -600,7 +602,7 @@ final class DistinctKeySet
                 return addDenseBitmapBatch(keyValues, keyNulls, mask.size(), distinctPositions);
             }
             if (bitmapPages == null && (!policy.adaptivePagedLongBitmap() || size >= policy.pagedLongBitmapMinKeys())) {
-                pooledKeys.enableVectorTags();
+                pooledKeys.enableVectorTags(addCalls);
                 return addFinalHashBatch(keyValues, keyNulls, mask, distinctPositions);
             }
             int count = 0;
@@ -610,6 +612,7 @@ final class DistinctKeySet
                     if (keyNulls.value(position)) {
                         continue;
                     }
+                    addCalls++;
                     if (addKey(keyValues.value(position))) {
                         distinctPositions[count++] = position;
                     }
@@ -620,6 +623,7 @@ final class DistinctKeySet
                     if (keyNulls.value(position)) {
                         continue;
                     }
+                    addCalls++;
                     if (addKey(keyValues.value(position))) {
                         distinctPositions[count++] = position;
                     }
@@ -640,6 +644,7 @@ final class DistinctKeySet
                 if (keyNulls.value(position)) {
                     continue;
                 }
+                addCalls++;
                 long key = keyValues.value(position);
                 long pageId = key >> PAGE_SHIFT;
                 long[] page = bitmapPages.get(pageId);
@@ -700,7 +705,11 @@ final class DistinctKeySet
             }
             int currentSize = size;
             for (int position : mask) {
-                if (!keyNulls.value(position) && pooledKeys.addTaggedFinal(keyValues.value(position))) {
+                if (keyNulls.value(position)) {
+                    continue;
+                }
+                addCalls++;
+                if (pooledKeys.addTaggedFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -721,7 +730,11 @@ final class DistinctKeySet
             }
             int currentSize = size;
             for (int position : mask) {
-                if (!keyNulls.value(position) && pooledKeys.addScalarFinal(keyValues.value(position))) {
+                if (keyNulls.value(position)) {
+                    continue;
+                }
+                addCalls++;
+                if (pooledKeys.addScalarFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -754,7 +767,11 @@ final class DistinctKeySet
         {
             int currentSize = size;
             for (int position = startPosition; position < endPosition; position++) {
-                if (!keyNulls.value(position) && pooledKeys.addTaggedFinal(keyValues.value(position))) {
+                if (keyNulls.value(position)) {
+                    continue;
+                }
+                addCalls++;
+                if (pooledKeys.addTaggedFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -773,7 +790,11 @@ final class DistinctKeySet
         {
             int currentSize = size;
             for (int position = startPosition; position < endPosition; position++) {
-                if (!keyNulls.value(position) && pooledKeys.addScalarFinal(keyValues.value(position))) {
+                if (keyNulls.value(position)) {
+                    continue;
+                }
+                addCalls++;
+                if (pooledKeys.addScalarFinal(keyValues.value(position))) {
                     distinctPositions[count++] = position;
                     currentSize++;
                 }
@@ -869,7 +890,7 @@ final class DistinctKeySet
                 arrayPool.release(page);
             }
             bitmapPages = null;
-            pooledKeys.enableVectorTags();
+            pooledKeys.enableVectorTags(addCalls);
         }
 
         @Override

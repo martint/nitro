@@ -53,16 +53,55 @@ class TestPooledLongHashSet
         PooledLongHashSet scalar = new PooledLongHashSet(
                 16,
                 pool,
-                new PooledLongHashSetPolicy(0.5f, false, false, 100, 64, false));
+                new PooledLongHashSetPolicy(0.5f, false, false, 100, 100, 64, false));
         PooledLongHashSet vector = new PooledLongHashSet(
                 16,
                 pool,
-                new PooledLongHashSetPolicy(0.9f, true, true, 0, 256, false));
+                new PooledLongHashSetPolicy(0.9f, true, true, 0, 100, 256, false));
 
         assertThat(scalar.vectorTagsEnabled()).isFalse();
         assertThat(vector.vectorTagsEnabled()).isTrue();
 
         scalar.releaseBuffers();
         vector.releaseBuffers();
+    }
+
+    @Test
+    void testObservedNoveltySelectsScalarVectorKeysOrTags()
+    {
+        PrimitiveArrayPool pool = new PrimitiveArrayPool(1 << 20, 0);
+        PooledLongHashSetPolicy policy = new PooledLongHashSetPolicy(0.75f, true, true, 5, 50, 128, false);
+
+        PooledLongHashSet lowNovelty = new PooledLongHashSet(16, pool, policy, false);
+        for (int key = 1; key <= 2; key++) {
+            lowNovelty.add(key);
+        }
+        lowNovelty.enableVectorTags(100);
+        assertThat(lowNovelty.vectorTagsEnabled()).isFalse();
+
+        PooledLongHashSet moderateNovelty = new PooledLongHashSet(16, pool, policy, false);
+        for (int key = 1; key <= 10; key++) {
+            moderateNovelty.add(key);
+        }
+        // Admission uses the owning index's input-attempt count. This preserves observed novelty when an adaptive
+        // bitmap replays only its unique keys while transferring into the hash representation.
+        moderateNovelty.enableVectorTags(100);
+        assertThat(moderateNovelty.vectorTagsEnabled()).isTrue();
+        assertThat(moderateNovelty.vectorKeysEnabled()).isTrue();
+
+        PooledLongHashSet highNovelty = new PooledLongHashSet(128, pool, policy, false);
+        for (int call = 0; call < 100; call++) {
+            highNovelty.add(call + 1);
+        }
+        highNovelty.enableVectorTags(100);
+        assertThat(highNovelty.vectorTagsEnabled()).isTrue();
+        assertThat(highNovelty.vectorKeysEnabled()).isFalse();
+        for (int call = 0; call < 100; call++) {
+            assertThat(highNovelty.contains(call + 1)).isTrue();
+        }
+
+        lowNovelty.releaseBuffers();
+        moderateNovelty.releaseBuffers();
+        highNovelty.releaseBuffers();
     }
 }

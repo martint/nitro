@@ -35,6 +35,7 @@ final class PooledLongHashSet
     private final VectorSpecies<Byte> tagSpecies;
     private final int tagGroupSize;
     private boolean vectorTags;
+    private boolean vectorKeys;
     private long[] keys;
     private byte[] tags;
     private int mask;
@@ -62,14 +63,13 @@ final class PooledLongHashSet
         };
         this.tagGroupSize = tagSpecies.length();
         this.vectorTags = policy.vectorTags() && vectorTags;
+        this.vectorKeys = this.vectorTags && policy.vectorKeys();
         allocate(capacity(expectedSize));
     }
 
     boolean add(long key)
     {
-        if (policy.debug()) {
-            addCalls++;
-        }
+        addCalls++;
         if (key == 0) {
             if (containsZero) {
                 return false;
@@ -88,9 +88,7 @@ final class PooledLongHashSet
     /** Adds after the owning adaptive index has closed admission and enabled the final hash representation. */
     boolean addTaggedFinal(long key)
     {
-        if (policy.debug()) {
-            addCalls++;
-        }
+        addCalls++;
         if (key == 0) {
             if (containsZero) {
                 return false;
@@ -104,9 +102,7 @@ final class PooledLongHashSet
 
     boolean addScalarFinal(long key)
     {
-        if (policy.debug()) {
-            addCalls++;
-        }
+        addCalls++;
         if (key == 0) {
             if (containsZero) {
                 return false;
@@ -170,15 +166,26 @@ final class PooledLongHashSet
 
     void enableVectorTags()
     {
+        enableVectorTags(addCalls);
+    }
+
+    void enableVectorTags(long observedAddCalls)
+    {
         if (policy.debug() && !admissionReported) {
-            System.err.printf("[scalar-long-distinct-admission] size=%d addCalls=%d capacity=%d%n", size, addCalls, keys.length);
+            System.err.printf("[scalar-long-distinct-admission] size=%d addCalls=%d capacity=%d%n", size, observedAddCalls, keys.length);
             admissionReported = true;
         }
-        if (!policy.vectorTags() || vectorTags || (long) size * 100 < addCalls * policy.minimumVectorTagNewKeyPercent()) {
+        if (!policy.vectorTags() || vectorTags || (long) size * 100 < observedAddCalls * policy.minimumVectorTagNewKeyPercent()) {
             return;
         }
         long[] previousKeys = keys;
         vectorTags = true;
+        // Direct key comparison avoids a metadata stream when duplicates are common. In an insertion-dominated
+        // stream it loads a full 64-byte key group merely to discover an empty lane; compact tags perform that
+        // admission with one narrow control load. Select the immutable representation once, from the same observed
+        // novelty window that decides whether grouped probing is worthwhile at all.
+        vectorKeys = policy.vectorKeys() &&
+                (long) size * 100 <= observedAddCalls * policy.maximumVectorKeyNewKeyPercent();
         allocate(previousKeys.length);
         for (long key : previousKeys) {
             if (key != 0) {
@@ -191,6 +198,11 @@ final class PooledLongHashSet
     boolean vectorTagsEnabled()
     {
         return vectorTags;
+    }
+
+    boolean vectorKeysEnabled()
+    {
+        return vectorTags && vectorKeys;
     }
 
     void ensureCapacity(int expectedSize)
@@ -223,7 +235,7 @@ final class PooledLongHashSet
     void releaseBuffers()
     {
         if (policy.debug()) {
-            System.err.printf("[scalar-long-distinct] tagged=%s size=%d addCalls=%d capacity=%d%n", vectorTags, size, addCalls, keys.length);
+            System.err.printf("[scalar-long-distinct] tagged=%s vectorKeys=%s size=%d addCalls=%d capacity=%d%n", vectorTags, vectorKeys, size, addCalls, keys.length);
         }
         arrayPool.release(keys);
         arrayPool.release(tags);
@@ -235,6 +247,7 @@ final class PooledLongHashSet
         containsZero = false;
         addCalls = 0;
         admissionReported = false;
+        vectorKeys = false;
     }
 
     private int emptySlot(long key)
@@ -285,7 +298,7 @@ final class PooledLongHashSet
     {
         keys = arrayPool.borrowLongs(capacity);
         Arrays.fill(keys, 0);
-        if (vectorTags && !policy.vectorKeys()) {
+        if (vectorTags && !vectorKeys) {
             tags = arrayPool.borrowBytes(capacity);
             Arrays.fill(tags, (byte) 0);
         }
@@ -353,7 +366,7 @@ final class PooledLongHashSet
 
     private boolean addGrouped(long key)
     {
-        if (policy.vectorKeys()) {
+        if (vectorKeys) {
             return addVectorKeys(key);
         }
         return addTagged(key);
@@ -399,7 +412,7 @@ final class PooledLongHashSet
 
     private boolean containsGrouped(long key)
     {
-        if (policy.vectorKeys()) {
+        if (vectorKeys) {
             return containsVectorKeys(key);
         }
         return containsTagged(key);
@@ -441,7 +454,7 @@ final class PooledLongHashSet
 
     private void insertGroupedRehash(long key)
     {
-        if (policy.vectorKeys()) {
+        if (vectorKeys) {
             insertVectorKeysRehash(key);
         }
         else {

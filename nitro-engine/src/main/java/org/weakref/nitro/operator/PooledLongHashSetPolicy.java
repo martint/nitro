@@ -19,6 +19,7 @@ public record PooledLongHashSetPolicy(
         boolean vectorTags,
         boolean vectorKeys,
         int minimumVectorTagNewKeyPercent,
+        int maximumVectorKeyNewKeyPercent,
         int tagGroupBits,
         boolean debug)
 {
@@ -30,6 +31,9 @@ public record PooledLongHashSetPolicy(
         if (minimumVectorTagNewKeyPercent < 0 || minimumVectorTagNewKeyPercent > 100) {
             throw new IllegalArgumentException("minimumVectorTagNewKeyPercent must be between 0 and 100");
         }
+        if (maximumVectorKeyNewKeyPercent < 0 || maximumVectorKeyNewKeyPercent > 100) {
+            throw new IllegalArgumentException("maximumVectorKeyNewKeyPercent must be between 0 and 100");
+        }
         if (tagGroupBits != 64 && tagGroupBits != 128 && tagGroupBits != 256 && tagGroupBits != 512) {
             throw new IllegalArgumentException("tagGroupBits must be 64, 128, 256, or 512");
         }
@@ -37,7 +41,7 @@ public record PooledLongHashSetPolicy(
 
     public static PooledLongHashSetPolicy defaults()
     {
-        return new PooledLongHashSetPolicy(0.75f, true, true, 5, 128, false);
+        return new PooledLongHashSetPolicy(0.75f, true, true, 5, 50, 128, false);
     }
 
     public static PooledLongHashSetPolicy fromSystemProperties()
@@ -47,6 +51,7 @@ public record PooledLongHashSetPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorTags", "true")),
                 Boolean.parseBoolean(System.getProperty("nitro.distinct.scalarLongVectorKeys", "true")),
                 Integer.getInteger("nitro.distinct.scalarLongVectorTagMinNewKeyPercent", 5),
+                Integer.getInteger("nitro.distinct.scalarLongVectorKeyMaxNewKeyPercent", 50),
                 Integer.getInteger("nitro.distinct.scalarLongTagGroupBits", 128),
                 Boolean.getBoolean("nitro.debug.scalarLongDistinct"));
     }
