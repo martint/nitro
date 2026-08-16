@@ -88,6 +88,48 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testStreamsLargeBinaryGroupsAfterReleasingConsumedStorage()
+    {
+        int rows = 40_000;
+        int outputRows = rows / 2;
+        Schema schema = new Schema(List.of(new Field(binaryType(), false)));
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources);
+                GroupedAggregationSession session = new GroupedAggregationSession(
+                        allocator,
+                        schema,
+                        List.of(0),
+                        List.of(0),
+                        PhysicalAggregationProgram.independent(List.of(new CountAll())),
+                        resources.operatorResources(),
+                        null,
+                        outputRows)) {
+            allocator.beginExecution();
+            BinaryVector keys = new BinaryVector(rows, rows * 80);
+            for (int position = 0; position < rows; position++) {
+                keys.setBytes(position, binaryGroupKey(position).getBytes(UTF_8));
+            }
+            try (Batch input = new Batch(Mask.all(rows), Output.of(Streams.ofValues(keys)))) {
+                session.addInput(input);
+            }
+
+            try (Batch first = session.finish()) {
+                assertThat(selectedBinaryValues(first, 0).getFirst()).isEqualTo(binaryGroupKey(0));
+                assertThat(selectedBinaryValues(first, 0).getLast()).isEqualTo(binaryGroupKey(outputRows - 1));
+            }
+            try (Batch second = session.getOutput()) {
+                assertThat(selectedBinaryValues(second, 0).getFirst()).isEqualTo(binaryGroupKey(outputRows));
+                assertThat(selectedBinaryValues(second, 0).getLast()).isEqualTo(binaryGroupKey(rows - 1));
+            }
+        }
+    }
+
+    private static String binaryGroupKey(int position)
+    {
+        return "key-%08d-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ".formatted(position);
+    }
+
+    @Test
     void testStreamsRepeatedBinaryKeysWithIndependentDomainsInBoundedBatches()
     {
         int rows = 10_000;

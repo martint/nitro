@@ -118,6 +118,7 @@ public class GroupedAggregationOperator
     private boolean debugFusedReuseContinuationPrinted;
     private boolean debugFusedConstantRunsPrinted;
     private int nextSessionOutputPosition;
+    private int releasedSessionOutputPosition;
 
     long retainedBytes()
     {
@@ -633,8 +634,22 @@ public class GroupedAggregationOperator
                 batchState::constrain,
                 takenMask -> allocator.transfer(allocationContext, takenMask),
                 releasedMask -> allocator.release(allocationContext, releasedMask),
-                () -> {},
+                () -> releaseDenseOutput(batchState),
                 outputs);
+    }
+
+    private void releaseDenseOutput(DenseBatchState batchState)
+    {
+        if (inlineGroupingState == null || !inlineGroupingState.supportsProgressiveOutputRelease()) {
+            return;
+        }
+        // Output batches are issued in group-id order. Only advance across a contiguous closed prefix so a caller
+        // that temporarily retains an earlier batch cannot invalidate its lazy grouped-key materialization.
+        if (batchState.sourceStart != releasedSessionOutputPosition) {
+            return;
+        }
+        releasedSessionOutputPosition += batchState.size;
+        inlineGroupingState.releaseOutputThrough(releasedSessionOutputPosition);
     }
 
     private Streams copyDenseOutputPosition(int output, Streams existing, int sourcePosition, int outputPosition, int size)
@@ -1286,6 +1301,9 @@ public class GroupedAggregationOperator
         }
         for (int index = 0; index < groupedColumns.length; index++) {
             groupedResults[index] = null;
+        }
+        if (inlineGroupingState != null) {
+            inlineGroupingState.finishInput();
         }
         done = true;
     }

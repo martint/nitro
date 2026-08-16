@@ -805,6 +805,28 @@ final class GroupingState
         return bytes;
     }
 
+    void finishInput()
+    {
+        if (flatGroupingTable != null) {
+            flatGroupingTable.finishInput();
+            accountRetainedState();
+        }
+    }
+
+    boolean supportsProgressiveOutputRelease()
+    {
+        return flatGroupingTable != null && flatGroupingTable.supportsProgressiveOutputRelease();
+    }
+
+    void releaseOutputThrough(int exclusiveGroupId)
+    {
+        if (!supportsProgressiveOutputRelease()) {
+            return;
+        }
+        flatGroupingTable.releaseOutputThrough(exclusiveGroupId);
+        accountRetainedState();
+    }
+
     private static long intArrayBytes(int[] values)
     {
         return values == null ? 0 : (long) values.length * Integer.BYTES;

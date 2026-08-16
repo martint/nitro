@@ -65,6 +65,7 @@ final class FlatGroupingTable
     private int capacity;
     private int mask;
     private int maxFill;
+    private int releasedRecordChunks;
 
     // Array-mode accelerator: a direct-index map from the layout's composite value id to the group ordinal.
     // Populated lazily on the first assignment of each composite; a hit returns the group with no hash, probe,
@@ -1415,6 +1416,9 @@ final class FlatGroupingTable
             if (!packedHashRecordSlots) {
                 LONG_HANDLE.set(fixedChunk, fixedOffset, hash);
             }
+            if (variableWidthArena != null) {
+                variableWidthArena.beginRecord(recordIndex);
+            }
             layout.writeRecord(fixedChunk, keyOffset(fixedOffset), variableWidthArena, values, nulls, position, recordIndex);
         }
         if (normalized) {
@@ -1803,6 +1807,63 @@ final class FlatGroupingTable
         return bytes;
     }
 
+    /** Releases probe-only storage once no further keys can be assigned. Group-ordered records remain readable. */
+    void finishInput()
+    {
+        arrayPool.release(control);
+        control = null;
+        arrayPool.release(groupIdsByHash);
+        groupIdsByHash = null;
+        arrayPool.release(recordIndexesByHash);
+        recordIndexesByHash = null;
+        arrayPool.release(hashRecordsByHash);
+        hashRecordsByHash = null;
+        arrayPool.release(compositeCache);
+        compositeCache = null;
+        arrayPool.release(sparseCompositeKeys);
+        sparseCompositeKeys = null;
+        arrayPool.release(sparseCompositeGroups);
+        sparseCompositeGroups = null;
+        arrayPool.release(batchHashes);
+        batchHashes = null;
+        arrayPool.release(batchNormalizedFirst);
+        batchNormalizedFirst = null;
+        arrayPool.release(batchNormalizedSecond);
+        batchNormalizedSecond = null;
+        arrayPool.release(batchNormalizedValid);
+        batchNormalizedValid = null;
+        arrayPool.release(singleDictionaryGroups);
+        singleDictionaryGroups = null;
+        arrayPool.release(prefetchedBuckets);
+        prefetchedBuckets = null;
+        arrayPool.release(prefetchedControls);
+        prefetchedControls = null;
+    }
+
+    boolean supportsProgressiveOutputRelease()
+    {
+        return identityGroupIds;
+    }
+
+    void releaseOutputThrough(int exclusiveRecordIndex)
+    {
+        if (!identityGroupIds || exclusiveRecordIndex < 0 || exclusiveRecordIndex > nextRecordIndex) {
+            throw new IllegalArgumentException("invalid progressive output release");
+        }
+        int completeChunks = exclusiveRecordIndex == nextRecordIndex
+                ? fixedRecordChunks.length
+                : exclusiveRecordIndex >> recordsPerChunkShift;
+        while (releasedRecordChunks < completeChunks) {
+            byte[] chunk = fixedRecordChunks[releasedRecordChunks];
+            arrayPool.release(chunk);
+            fixedRecordChunks[releasedRecordChunks] = null;
+            releasedRecordChunks++;
+        }
+        if (variableWidthArena != null) {
+            variableWidthArena.releaseThroughRecord(exclusiveRecordIndex, exclusiveRecordIndex == nextRecordIndex);
+        }
+    }
+
     void releaseBuffers()
     {
         if (policy.debugNormalizedIntKey() && normalizedInputCount > 0) {
@@ -1920,18 +1981,31 @@ final class FlatGroupingTable
         private final PrimitiveArrayPool arrayPool;
 
         private byte[][] chunks;
+        private int[] lastRecordByChunk;
         private int chunkIndex;
         private int chunkOffset;
+        private int currentRecord = -1;
+        private int releasedChunks;
 
         private FlatVariableWidthArena(PrimitiveArrayPool arrayPool)
         {
             this.arrayPool = arrayPool;
             this.chunks = new byte[][] {borrowChunk()};
+            this.lastRecordByChunk = new int[] {-1};
+        }
+
+        public void beginRecord(int recordIndex)
+        {
+            currentRecord = recordIndex;
         }
 
         public long append(byte[] source, int sourceOffset, int length)
         {
+            if (currentRecord < 0) {
+                throw new IllegalStateException("variable-width append has no current record");
+            }
             if (length == 0) {
+                lastRecordByChunk[chunkIndex] = currentRecord;
                 return pointer(chunkIndex, chunkOffset);
             }
 
@@ -1940,6 +2014,9 @@ final class FlatGroupingTable
                 chunkOffset = 0;
                 if (chunkIndex >= chunks.length) {
                     chunks = Arrays.copyOf(chunks, chunks.length * 2);
+                    int previousLength = lastRecordByChunk.length;
+                    lastRecordByChunk = Arrays.copyOf(lastRecordByChunk, chunks.length);
+                    Arrays.fill(lastRecordByChunk, previousLength, lastRecordByChunk.length, -1);
                 }
                 if (chunks[chunkIndex] == null) {
                     chunks[chunkIndex] = borrowChunk();
@@ -1950,7 +2027,19 @@ final class FlatGroupingTable
             int offset = chunkOffset;
             System.arraycopy(source, sourceOffset, chunk, offset, length);
             chunkOffset += length;
+            lastRecordByChunk[chunkIndex] = currentRecord;
             return pointer(chunkIndex, offset);
+        }
+
+        private void releaseThroughRecord(int exclusiveRecordIndex, boolean releaseAll)
+        {
+            while (releasedChunks < chunks.length &&
+                    (releaseAll || (lastRecordByChunk[releasedChunks] >= 0 &&
+                            lastRecordByChunk[releasedChunks] < exclusiveRecordIndex))) {
+                arrayPool.release(chunks[releasedChunks]);
+                chunks[releasedChunks] = null;
+                releasedChunks++;
+            }
         }
 
         public byte[] chunk(int index)
