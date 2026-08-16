@@ -266,7 +266,7 @@ final class FlatGroupingTable
             arrayPool.release(previous);
         }
         if (mask.all() &&
-                !layout.supportsNormalizedIntKeyShape() &&
+                !layout.batchSupportsNormalizedIntKey() &&
                 layout.prepareGeneratedDictionaryBatchHashes(size, batchHashes)) {
             batchNormalizedHashesValid = false;
             batchHashesValid = true;
@@ -303,7 +303,7 @@ final class FlatGroupingTable
                 !mask.all() ||
                 mask.none() ||
                 skipBatchHashPrecompute() ||
-                layout.supportsNormalizedIntKeyShape()) {
+                layout.batchSupportsNormalizedIntKey()) {
             return -1;
         }
         return layout.assignGeneratedDictionaryBatch(

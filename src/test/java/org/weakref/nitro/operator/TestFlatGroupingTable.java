@@ -678,6 +678,26 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedHybridHashRetainsFixedWidthAdmissionThreshold()
+    {
+        int size = 128;
+        Vector[] values = {
+                new I64Vector(new long[size]),
+                new I64Vector(new long[size]),
+                new I64Vector(new long[size]),
+                new I64Vector(new long[size])};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, false, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, null);
+            assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testGeneratedDictionaryHashBatchMatchesLogicalHashAcrossNullShapes()
     {
         int size = 128;
@@ -2628,6 +2648,37 @@ class TestFlatGroupingTable
         }
         finally {
             layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testGeneratedHybridHashHandlesRejectedNormalizedVariableWidthBatch()
+    {
+        int positions = 128;
+        String[] strings = new String[positions];
+        long[] first = new long[positions];
+        long[] second = new long[positions];
+        for (int position = 0; position < positions; position++) {
+            strings[position] = "value-" + position;
+            first[position] = position;
+            second[position] = position + 1;
+        }
+        Vector[] values = {utf8(strings), new I64Vector(first), new I64Vector(second)};
+        Vector[] nulls = {null, null, null};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        FlatGroupingTable table = new FlatGroupingTable(layout, positions, true);
+        try {
+            table.beginBatch(values, nulls);
+            assertThat(layout.supportsNormalizedIntKeyShape()).isTrue();
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            I64Vector groups = new I64Vector(positions);
+            assertThat(table.assignGeneratedDictionaryBatch(
+                    values, nulls, Mask.all(positions), groups, 0)).isEqualTo(positions);
+            assertThat(groups.values()).containsExactly(first);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
         }
     }
 

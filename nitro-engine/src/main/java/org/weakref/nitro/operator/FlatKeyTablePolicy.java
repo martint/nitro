@@ -48,6 +48,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
             boolean generatedDictionaryHashBatch,
             int generatedDictionaryHashBatchMinRows,
             int generatedHybridHashBatchMinFields,
+            int generatedHybridHashBatchMinVariableWidthFields,
             int generatedHybridHashBatchMinAccessorFields,
             int generatedDictionaryHashBatchNullFreePairMinRows,
             int generatedDictionaryHashProbeTileRows,
@@ -106,7 +107,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
     {
         public Layout
         {
-            if (generatedDictionaryHashProbeTileRows <= 0 ||
+            if (generatedHybridHashBatchMinFields <= 0 ||
+                    generatedHybridHashBatchMinVariableWidthFields <= 0 ||
+                    generatedDictionaryHashProbeTileRows <= 0 ||
                     generatedDictionaryRecordEqualityMinFields <= 0 ||
                     generatedDictionaryRecordEqualityMinVariableWidthFields <= 0 ||
                     adaptiveCompactLongRecordsMinRows < 0 ||
@@ -130,6 +133,7 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     true,
                     128,
                     5,
+                    3,
                     2,
                     2048,
                     72,
@@ -201,6 +205,9 @@ public record FlatKeyTablePolicy(Layout layout, Table table, ValueIds valueIds)
                     Integer.getInteger(
                             "nitro.group.generatedHybridHashBatchMinFields",
                             defaults.generatedHybridHashBatchMinFields()),
+                    Integer.getInteger(
+                            "nitro.group.generatedHybridHashBatchMinVariableWidthFields",
+                            defaults.generatedHybridHashBatchMinVariableWidthFields()),
                     Integer.getInteger(
                             "nitro.group.generatedHybridHashBatchMinAccessorFields",
                             defaults.generatedHybridHashBatchMinAccessorFields()),

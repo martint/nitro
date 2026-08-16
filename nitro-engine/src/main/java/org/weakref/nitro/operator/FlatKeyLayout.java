@@ -2580,6 +2580,9 @@ class FlatKeyLayout
 
     private DictionaryHashBatchKernel generatedDictionaryHashKernel(int count)
     {
+        int hybridMinimumFields = anyVariableWidth
+                ? policy.generatedHybridHashBatchMinVariableWidthFields()
+                : policy.generatedHybridHashBatchMinFields();
         if (!policy.generatedDictionaryHashBatch() ||
                 count < policy.generatedDictionaryHashBatchMinRows() ||
                 handlers.length < 2 ||
@@ -2600,7 +2603,7 @@ class FlatKeyLayout
             if (dictionaryHashedIds[field] != null && dictionaryEntryHashes[field] != null) {
                 continue;
             }
-            if (handlers.length >= policy.generatedHybridHashBatchMinFields() &&
+            if (handlers.length >= hybridMinimumFields &&
                     fieldKinds[field] == FlatTypeHandler.Kind.LONG &&
                     fieldLong[field] != null) {
                 shape |= (long) DictionaryHashBatchKernelGenerator.LONG_ACCESSOR_HASH <<
@@ -2608,7 +2611,7 @@ class FlatKeyLayout
                 accessorHashedFields++;
                 continue;
             }
-            if (handlers.length >= policy.generatedHybridHashBatchMinFields() &&
+            if (handlers.length >= hybridMinimumFields &&
                     fieldKinds[field] == FlatTypeHandler.Kind.BINARY &&
                     fieldBinaryHashes[field] != null) {
                 shape |= (long) DictionaryHashBatchKernelGenerator.BINARY_ACCESSOR_HASH <<
@@ -2630,7 +2633,7 @@ class FlatKeyLayout
         if (accessorHashedFields > 0 &&
                 accessorHashedFields < policy.generatedHybridHashBatchMinAccessorFields() &&
                 handlers.length - accessorHashedFields <
-                        policy.generatedHybridHashBatchMinFields() + policy.generatedHybridHashBatchMinAccessorFields()) {
+                        hybridMinimumFields + policy.generatedHybridHashBatchMinAccessorFields()) {
             return null;
         }
         if (handlers.length == 2 &&
