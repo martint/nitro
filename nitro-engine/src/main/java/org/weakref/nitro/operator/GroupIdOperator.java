@@ -243,6 +243,10 @@ public final class GroupIdOperator
      */
     private Vector selectValues(Vector source, int[] positions, int outputIndex)
     {
+        boolean shareSelectedMapping = shouldShareSelectedMapping();
+        if (shareSelectedMapping) {
+            source = source.freezeContent();
+        }
         if (source instanceof DictionaryVector dictionary) {
             if (policy.shareDenseDictionaryIds() && currentSourceDense) {
                 // The source batch stays open until every grouping-set output derived from it has been consumed,
@@ -263,6 +267,17 @@ public final class GroupIdOperator
                 }
                 return allocator.adopt(allocationContext, selected);
             }
+            if (shareSelectedMapping) {
+                DictionaryVector selected = currentDenseDictionaryMappings[outputIndex];
+                if (selected == null) {
+                    // Compose the selected positions through every source dictionary layer once. Each grouping set
+                    // then receives a view carrying the same exact mapping identity, while the hot consumer sees a
+                    // single dictionary layer over the physical leaf values.
+                    selected = DictionaryVector.wrap(positions, positions.length, dictionary);
+                    currentDenseDictionaryMappings[outputIndex] = selected;
+                }
+                return allocator.adopt(allocationContext, selected.sharedMappingView());
+            }
             int[] sourceIds = dictionary.ids();
             int[] ids = new int[positions.length];
             for (int index = 0; index < positions.length; index++) {
@@ -270,7 +285,7 @@ public final class GroupIdOperator
             }
             return allocator.allocateDictionary(allocationContext, ids, dictionary.values());
         }
-        if (policy.shareDenseDictionaryIds() && currentSourceDense) {
+        if (shareSelectedMapping || (policy.shareDenseDictionaryIds() && currentSourceDense)) {
             DictionaryVector selected;
             if (shouldPropagateMappingIdentity()) {
                 selected = currentDenseDictionaryMappings[outputIndex];
@@ -299,6 +314,11 @@ public final class GroupIdOperator
     {
         return policy.propagateDenseDictionaryMappingIdentity() &&
                 groupingSetInputs.length >= policy.denseDictionaryMappingMinGroupingSets();
+    }
+
+    private boolean shouldShareSelectedMapping()
+    {
+        return policy.shareSelectedDictionaryIds() && shouldPropagateMappingIdentity();
     }
 
     private Vector copySelectedVector(Vector source)

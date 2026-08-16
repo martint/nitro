@@ -58,6 +58,22 @@ public interface Vector
     }
 
     /**
+     * Marks this vector's current logical contents immutable for the remainder of its allocator lifetime.
+     * Derived encodings can use this together with {@link #contentGeneration()} to share cached work while the
+     * owner retains the vector. Implementations that do not expose stable content retain the default no-op.
+     */
+    default Vector freezeContent()
+    {
+        return this;
+    }
+
+    /** Whether {@link #freezeContent()} established an immutable current logical lifetime. */
+    default boolean contentImmutable()
+    {
+        return false;
+    }
+
+    /**
      * Whether copying this vector's logical values includes variable-size payload storage in addition to its
      * position metadata. Buffering frameworks use this representation property to decide when eliminating a full
      * intermediate copy can amortize a different output layout; operators need not recognize concrete data types.

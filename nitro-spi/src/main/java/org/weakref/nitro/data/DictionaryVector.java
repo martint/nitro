@@ -134,6 +134,19 @@ public final class DictionaryVector
         return values;
     }
 
+    @Override
+    public DictionaryVector freezeContent()
+    {
+        values.freezeContent();
+        return this;
+    }
+
+    @Override
+    public boolean contentImmutable()
+    {
+        return values.contentImmutable();
+    }
+
     /**
      * Creates a non-owning view over this exact immutable mapping and value vector. The shared identity lets a
      * downstream batch cache reuse derived position state without treating a recycled {@code int[]} identity as

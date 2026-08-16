@@ -133,12 +133,14 @@ public final class BinaryVector
     }
 
     /** Marks the current logical contents immutable until this vector begins another allocator lifetime. */
+    @Override
     public BinaryVector freezeContent()
     {
         contentImmutable = true;
         return this;
     }
 
+    @Override
     public boolean contentImmutable()
     {
         return contentImmutable;

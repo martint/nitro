@@ -2956,7 +2956,7 @@ public class TestOperatorBatches
     void testGroupIdOperatorBoundsExpandedInputBatches()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());
-        GroupIdOperatorPolicy policy = new GroupIdOperatorPolicy(2, true, true, 8, true, true);
+        GroupIdOperatorPolicy policy = new GroupIdOperatorPolicy(2, true, true, true, 8, true, true);
         try (Operator operator = new GroupIdOperator(
                 allocator,
                 new ConstantTableOperator(allocator, 2, List.of(
@@ -2995,6 +2995,96 @@ public class TestOperatorBatches
             assertThat(batch.output(2).borrow(Stream.VALUES)).isInstanceOf(RleVector.class);
             batch.close();
         }
+    }
+
+    @Test
+    void testGroupIdOperatorSharesSelectedExpansionValues()
+    {
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator delegate = new ConstantTableOperator(
+                allocator,
+                2,
+                List.of(row("first", 10L), row("discarded", 20L), row("third", 30L)));
+        Operator selectedSource = new Operator()
+        {
+            @Override
+            public int outputCount()
+            {
+                return delegate.outputCount();
+            }
+
+            @Override
+            public Schema outputSchema()
+            {
+                return delegate.outputSchema();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Batch next()
+            {
+                Batch batch = delegate.next();
+                batch.constrain(Mask.sparse(new int[] {0, 2}, 3));
+                return batch;
+            }
+
+            @Override
+            public void constrain(Mask mask) {}
+
+            @Override
+            public void close()
+            {
+                delegate.close();
+            }
+        };
+
+        try (Operator operator = new GroupIdOperator(
+                allocator,
+                selectedSource,
+                new int[][] {
+                        {0, 1},
+                        {0, 1},
+                        {0, 1},
+                        {0, 1},
+                        {0, 1},
+                        {0, 1},
+                        {0, 1},
+                        {0, 1}},
+                EngineResources.from(allocator).operatorResources().groupIdPolicy())) {
+            try (Batch firstSet = operator.next()) {
+                assertThat(firstSet.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+                DictionaryVector firstMapping = (DictionaryVector) firstSet.output(0).borrow(Stream.VALUES);
+                assertThat(firstMapping.ids())
+                        .startsWith(0, 2);
+                try (Batch secondSet = operator.next()) {
+                    assertThat(secondSet.output(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+                    DictionaryVector secondMapping = (DictionaryVector) secondSet.output(0).borrow(Stream.VALUES);
+                    assertThat(firstMapping.hasSameMapping(secondMapping)).isTrue();
+                }
+            }
+        }
+    }
+
+    @Test
+    void testDictionaryFreezeReachesNestedLeaf()
+    {
+        BinaryVector values = new BinaryVector(2, "first".length() + "second".length());
+        values.setBytes(0, "first".getBytes(UTF_8));
+        values.setBytes(1, "second".getBytes(UTF_8));
+        DictionaryVector nested = DictionaryVector.wrapNested(
+                new int[] {0, 1},
+                2,
+                DictionaryVector.wrapNested(new int[] {1, 0}, 2, values));
+
+        assertThat(nested.contentImmutable()).isFalse();
+        assertThat(nested.freezeContent()).isSameAs(nested);
+        assertThat(nested.contentImmutable()).isTrue();
+        assertThat(values.contentImmutable()).isTrue();
     }
 
     @Test

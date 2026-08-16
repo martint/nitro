@@ -19,6 +19,7 @@ package org.weakref.nitro.operator;
 public record GroupIdOperatorPolicy(
         int maxInputBatchRows,
         boolean shareDenseDictionaryIds,
+        boolean shareSelectedDictionaryIds,
         boolean propagateDenseDictionaryMappingIdentity,
         int denseDictionaryMappingMinGroupingSets,
         boolean useKnownFalseMetadata,
@@ -36,7 +37,7 @@ public record GroupIdOperatorPolicy(
 
     public static GroupIdOperatorPolicy defaults()
     {
-        return new GroupIdOperatorPolicy(1 << 16, true, true, 8, true, true);
+        return new GroupIdOperatorPolicy(1 << 16, true, true, true, 8, true, true);
     }
 
     public static GroupIdOperatorPolicy fromSystemProperties()
@@ -47,6 +48,9 @@ public record GroupIdOperatorPolicy(
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.groupId.shareDenseDictionaryIds",
                         Boolean.toString(defaults.shareDenseDictionaryIds()))),
+                Boolean.parseBoolean(System.getProperty(
+                        "nitro.groupId.shareSelectedDictionaryIds",
+                        Boolean.toString(defaults.shareSelectedDictionaryIds()))),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.groupId.propagateDenseDictionaryMappingIdentity",
                         Boolean.toString(defaults.propagateDenseDictionaryMappingIdentity()))),
