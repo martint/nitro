@@ -94,8 +94,19 @@ final class DictionaryHashBatchKernelGenerator
 
     DictionaryHashBatchKernel create(long shape, int assignTileRows)
     {
+        return create(shape, assignTileRows, -1);
+    }
+
+    DictionaryHashBatchKernel create(long shape, int assignTileRows, int discriminatingHashField)
+    {
         checkOpen();
-        return kernels.computeIfAbsent(new KernelShape(shape, assignTileRows), DictionaryHashBatchKernelGenerator::generate);
+        int fieldCount = (int) (shape & 0xF);
+        if (discriminatingHashField < -1 || discriminatingHashField >= fieldCount) {
+            throw new IllegalArgumentException("Invalid discriminating hash field: " + discriminatingHashField);
+        }
+        return kernels.computeIfAbsent(
+                new KernelShape(shape, assignTileRows, discriminatingHashField),
+                DictionaryHashBatchKernelGenerator::generate);
     }
 
     @Override
@@ -117,7 +128,8 @@ final class DictionaryHashBatchKernelGenerator
         long shape = kernelShape.shape();
         int fieldCount = (int) (shape & 0xF);
         ClassDesc thisClass = ClassDesc.of("org.weakref.nitro.operator.GeneratedDictionaryHashBatchKernel" +
-                Long.toUnsignedString(shape) + "Tile" + kernelShape.assignTileRows());
+                Long.toUnsignedString(shape) + "Tile" + kernelShape.assignTileRows() +
+                "Discriminator" + (kernelShape.discriminatingHashField() + 1));
         byte[] bytes = ClassFile.of().build(thisClass, builder -> {
             builder.withSuperclass(ClassDesc.of("java.lang.Object"));
             builder.withInterfaceSymbols(CD_KERNEL);
@@ -127,12 +139,21 @@ final class DictionaryHashBatchKernelGenerator
                 code.invokespecial(ClassDesc.of("java.lang.Object"), "<init>", MethodTypeDesc.of(CD_void));
                 code.return_();
             });
-            builder.withMethodBody("hash", HASH_TYPE, ClassFile.ACC_PUBLIC, code -> emitHash(code, shape, fieldCount));
+            builder.withMethodBody(
+                    "hash",
+                    HASH_TYPE,
+                    ClassFile.ACC_PUBLIC,
+                    code -> emitHash(code, shape, fieldCount, kernelShape.discriminatingHashField()));
             builder.withMethodBody(
                     "assign",
                     ASSIGN_TYPE,
                     ClassFile.ACC_PUBLIC,
-                    code -> emitAssign(code, shape, fieldCount, kernelShape.assignTileRows()));
+                    code -> emitAssign(
+                            code,
+                            shape,
+                            fieldCount,
+                            kernelShape.assignTileRows(),
+                            kernelShape.discriminatingHashField()));
         });
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup().defineHiddenClass(bytes, true, MethodHandles.Lookup.ClassOption.NESTMATE);
@@ -143,7 +164,7 @@ final class DictionaryHashBatchKernelGenerator
         }
     }
 
-    private static void emitHash(CodeBuilder code, long shape, int fieldCount)
+    private static void emitHash(CodeBuilder code, long shape, int fieldCount, int discriminatingHashField)
     {
         code.loadConstant(0);
         code.istore(POSITION);
@@ -153,19 +174,7 @@ final class DictionaryHashBatchKernelGenerator
         code.iload(POSITION);
         code.iload(COUNT);
         code.if_icmpge(exit);
-        code.loadConstant(1L);
-        code.lstore(RESULT);
-
-        for (int field = 0; field < fieldCount; field++) {
-            int nullShape = (int) ((shape >>> (4 + field * 2)) & 3);
-            int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + field * 2)) & 3);
-            code.lload(RESULT);
-            code.loadConstant(31L);
-            code.lmul();
-            emitFieldHash(code, field, nullShape, hashMode, POSITION);
-            code.ladd();
-            code.lstore(RESULT);
-        }
+        emitRowHash(code, shape, fieldCount, discriminatingHashField, POSITION, RESULT);
 
         code.aload(OUTPUT);
         code.iload(POSITION);
@@ -238,7 +247,7 @@ final class DictionaryHashBatchKernelGenerator
         code.laload();
     }
 
-    private static void emitAssign(CodeBuilder code, long shape, int fieldCount, int assignTileRows)
+    private static void emitAssign(CodeBuilder code, long shape, int fieldCount, int assignTileRows, int discriminatingHashField)
     {
         code.loadConstant(0);
         code.istore(ASSIGN_TILE_START);
@@ -271,18 +280,7 @@ final class DictionaryHashBatchKernelGenerator
         code.iload(ASSIGN_POSITION);
         code.iload(ASSIGN_TILE_END);
         code.if_icmpge(probeStart);
-        code.loadConstant(1L);
-        code.lstore(ASSIGN_HASH);
-        for (int field = 0; field < fieldCount; field++) {
-            int nullShape = (int) ((shape >>> (4 + field * 2)) & 3);
-            int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + field * 2)) & 3);
-            code.lload(ASSIGN_HASH);
-            code.loadConstant(31L);
-            code.lmul();
-            emitFieldHash(code, field, nullShape, hashMode, ASSIGN_POSITION);
-            code.ladd();
-            code.lstore(ASSIGN_HASH);
-        }
+        emitRowHash(code, shape, fieldCount, discriminatingHashField, ASSIGN_POSITION, ASSIGN_HASH);
         code.aload(ASSIGN_OUTPUT);
         code.iload(ASSIGN_POSITION);
         code.lload(ASSIGN_HASH);
@@ -337,5 +335,62 @@ final class DictionaryHashBatchKernelGenerator
         code.lreturn();
     }
 
-    private record KernelShape(long shape, int assignTileRows) {}
+    private static void emitRowHash(
+            CodeBuilder code,
+            long shape,
+            int fieldCount,
+            int discriminatingHashField,
+            int position,
+            int result)
+    {
+        if (discriminatingHashField < 0) {
+            code.loadConstant(1L);
+            code.lstore(result);
+            for (int field = 0; field < fieldCount; field++) {
+                int nullShape = (int) ((shape >>> (4 + field * 2)) & 3);
+                int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + field * 2)) & 3);
+                code.lload(result);
+                code.loadConstant(31L);
+                code.lmul();
+                emitFieldHash(code, field, nullShape, hashMode, position);
+                code.ladd();
+                code.lstore(result);
+            }
+            return;
+        }
+
+        int nullShape = (int) ((shape >>> (4 + discriminatingHashField * 2)) & 3);
+        int hashMode = (int) ((shape >>> (HASH_MODE_SHIFT + discriminatingHashField * 2)) & 3);
+        if (nullShape == ALL_NULL) {
+            code.loadConstant(31L);
+            code.lstore(result);
+            return;
+        }
+        if (nullShape == MIXED) {
+            Label notNull = code.newLabel();
+            Label done = code.newLabel();
+            code.aload(NULLS);
+            code.loadConstant(discriminatingHashField);
+            code.aaload();
+            code.iload(position);
+            code.invokeinterface(CD_BOOLEAN_VALUES, "value", BOOLEAN_VALUE_TYPE);
+            code.ifeq(notNull);
+            code.loadConstant(31L);
+            code.lstore(result);
+            code.goto_(done);
+            code.labelBinding(notNull);
+            code.loadConstant(31L);
+            emitValueHash(code, discriminatingHashField, hashMode, position);
+            code.ladd();
+            code.lstore(result);
+            code.labelBinding(done);
+            return;
+        }
+        code.loadConstant(31L);
+        emitValueHash(code, discriminatingHashField, hashMode, position);
+        code.ladd();
+        code.lstore(result);
+    }
+
+    private record KernelShape(long shape, int assignTileRows, int discriminatingHashField) {}
 }

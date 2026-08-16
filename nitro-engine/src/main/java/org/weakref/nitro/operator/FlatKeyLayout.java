@@ -2592,7 +2592,8 @@ class FlatKeyLayout
                 count < policy.generatedDictionaryHashBatchMinRows() ||
                 handlers.length < 2 ||
                 handlers.length > 15 ||
-                dictionaryHashedIds == null) {
+                dictionaryHashedIds == null ||
+                (normalizedIntKeyEnabled && normalizedIntKeyShape)) {
             return null;
         }
         long shape = handlers.length;
@@ -2649,7 +2650,8 @@ class FlatKeyLayout
         }
         DictionaryHashBatchKernel kernel = codeGeneration.dictionaryHash().create(
                 shape,
-                policy.generatedDictionaryHashProbeTileRows());
+                policy.generatedDictionaryHashProbeTileRows(),
+                discriminatingHashField);
         if (policy.debugGeneratedDictionaryHashBatch() && !debugGeneratedDictionaryHashBatchPrinted) {
             debugGeneratedDictionaryHashBatchPrinted = true;
             System.err.printf("[generated-dictionary-hash-batch] fields=%d shape=%d rows=%d compact=%s kinds=%s ids=%s offsets=%s order=%s%n",

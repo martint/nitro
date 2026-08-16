@@ -2088,6 +2088,81 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testGeneratedDictionaryHashHonorsAdaptiveDiscriminatingField()
+    {
+        int size = 128;
+        int[] sharedIds = new int[size];
+        String[][] fields = new String[5][size];
+        for (int position = 0; position < size; position++) {
+            sharedIds[position] = position;
+            fields[0][position] = "customer-" + position;
+            fields[1][position] = "first";
+            fields[2][position] = "last";
+            fields[3][position] = "country";
+            fields[4][position] = "region";
+        }
+        Vector[] values = {
+                nestedDictionary(sharedIds, fields[0]),
+                nestedDictionary(sharedIds, fields[1]),
+                nestedDictionary(sharedIds, fields[2]),
+                nestedDictionary(sharedIds, fields[3]),
+                nestedDictionary(sharedIds, fields[4])};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(values, null);
+            long[] expected = new long[size];
+            for (int position = 0; position < size; position++) {
+                expected[position] = layout.hash(values, null, position);
+            }
+            long[] actual = new long[size];
+            assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, actual)).isTrue();
+            assertThat(actual).containsExactly(expected);
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
+    void testGeneratedDictionaryHashCannotChangeEstablishedNormalizedHashStrategy()
+    {
+        int size = 128;
+        int[] ids = new int[size];
+        long[] repeated = new long[size];
+        for (int position = 0; position < size; position++) {
+            ids[position] = position % 2;
+        }
+        Vector[] first = {
+                DictionaryVector.wrapNested(ids, size, utf8("alpha", "beta")),
+                DictionaryVector.wrapNested(ids, size, utf8("first", "second")),
+                new I64Vector(repeated)};
+        FlatKeyLayout layout = FlatKeyLayout.tryCreate(first, true, arrayPool, codeGeneration, flatKeyTablePolicy);
+        try {
+            layout.beginBatch(first, null);
+            assertThat(layout.batchSupportsNormalizedIntKey()).isTrue();
+            layout.establishHashStrategy();
+            layout.endBatch();
+
+            long[] distinct = new long[size];
+            for (int position = 0; position < size; position++) {
+                distinct[position] = position;
+            }
+            Vector[] later = {
+                    DictionaryVector.wrapNested(ids, size, utf8("alpha", "beta")),
+                    DictionaryVector.wrapNested(ids, size, utf8("first", "second")),
+                    new I64Vector(distinct)};
+            layout.beginBatch(later, null);
+            assertThat(layout.batchSupportsNormalizedIntKey()).isFalse();
+            assertThat(layout.prepareGeneratedDictionaryBatchHashes(size, new long[size])).isFalse();
+            layout.endBatch();
+        }
+        finally {
+            layout.releaseBuffers();
+        }
+    }
+
+    @Test
     void testBatchedProbeCannotChangeScalarBuildHashStrategy()
     {
         int size = 128;
