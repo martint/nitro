@@ -1185,6 +1185,40 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testNullFreeLongBinarySpecializationSupportsEitherFieldOrder()
+    {
+        Vector[] binaryLong = {
+                utf8("alpha", "beta", "alpha", "alpha"),
+                new I64Vector(new long[] {11, 12, 11, 13})};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(binaryLong, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                4,
+                true);
+        try {
+            table.beginBatch(binaryLong, new Vector[] {null, null});
+            table.prepareBatchHashes(binaryLong, new Vector[] {null, null}, Mask.all(4));
+            assertThat(table.assignGroup(binaryLong, null, 0, 0)).isEqualTo(0);
+            assertThat(table.assignGroup(binaryLong, null, 1, 1)).isEqualTo(1);
+            assertThat(table.assignGroup(binaryLong, null, 2, 2)).isEqualTo(0);
+            assertThat(table.assignGroup(binaryLong, null, 3, 2)).isEqualTo(2);
+            table.endBatch();
+
+            Vector[] later = {
+                    utf8("beta", "alpha", "gamma"),
+                    new I64Vector(new long[] {12, 13, 14})};
+            table.beginBatch(later, new Vector[] {null, null});
+            table.prepareBatchHashes(later, new Vector[] {null, null}, Mask.all(3));
+            assertThat(table.assignGroup(later, null, 0, 3)).isEqualTo(1);
+            assertThat(table.assignGroup(later, null, 1, 3)).isEqualTo(2);
+            assertThat(table.assignGroup(later, null, 2, 3)).isEqualTo(3);
+            table.endBatch();
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testPackedIdentityAdmissionRequiresAnotherInputBatch()
     {
         int size = 4096;

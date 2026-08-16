@@ -192,6 +192,8 @@ class FlatKeyLayout
     private static final VarHandle GROUP_INT_HANDLE = MethodHandles.byteArrayViewVarHandle(int[].class, LITTLE_ENDIAN);
     private boolean batchAccessorsReady;
     private boolean batchNullFreeLongBinary;
+    private int batchLongField = -1;
+    private int batchBinaryField = -1;
     private boolean batchNullFreeSingleBinaryCandidate;
     private boolean batchNullFreeSingleBinary;
     private boolean dictionarySingleBinaryFastPathDecided;
@@ -1021,12 +1023,19 @@ class FlatKeyLayout
         }
         prepareCompactBinaryPositionIds(values);
         prepareBinaryHashAccessors(values);
-        batchNullFreeLongBinary = policy.fastNullFreeLongBinary() &&
-                handlers.length == 2 &&
-                fieldKinds[0] == FlatTypeHandler.Kind.LONG &&
-                fieldKinds[1] == FlatTypeHandler.Kind.BINARY &&
-                batchFieldNullFree[0] &&
-                batchFieldNullFree[1];
+        batchLongField = -1;
+        batchBinaryField = -1;
+        if (policy.fastNullFreeLongBinary() && handlers.length == 2 && batchFieldNullFree[0] && batchFieldNullFree[1]) {
+            if (fieldKinds[0] == FlatTypeHandler.Kind.LONG && fieldKinds[1] == FlatTypeHandler.Kind.BINARY) {
+                batchLongField = 0;
+                batchBinaryField = 1;
+            }
+            else if (fieldKinds[0] == FlatTypeHandler.Kind.BINARY && fieldKinds[1] == FlatTypeHandler.Kind.LONG) {
+                batchLongField = 1;
+                batchBinaryField = 0;
+            }
+        }
+        batchNullFreeLongBinary = batchLongField >= 0;
         // Version this concrete physical shape once at the batch boundary. Set-like and grouping operators then use
         // the same layout API without carrying flat/dictionary/null/type checks through every hash, insert, and
         // equality probe. This is a layout specialization, not an operator- or query-specific implementation.
@@ -1622,17 +1631,17 @@ class FlatKeyLayout
         if (!batchCompositeEncodable) {
             return -1;
         }
-        if (policy.fastNullFreeLongBinaryComposite() && batchNullFreeLongBinary && !fieldLazyIntern[1]) {
-            long longDigit = fieldLong[0].value(position);
+        if (policy.fastNullFreeLongBinaryComposite() && batchNullFreeLongBinary && !fieldLazyIntern[batchBinaryField]) {
+            long longDigit = fieldLong[batchLongField].value(position);
             if (longDigit < 0 || longDigit >= LONG_COMPOSITE_CARDINALITY) {
                 return -1;
             }
-            int binaryRadix = compositeRadix(1);
-            long binaryDigit = batchEntryGlobalId[1][batchDictionaryIds[1][position]];
+            int binaryRadix = compositeRadix(batchBinaryField);
+            long binaryDigit = batchEntryGlobalId[batchBinaryField][batchDictionaryIds[batchBinaryField][position]];
             if (binaryDigit < 0 || binaryDigit >= binaryRadix - 1L) {
                 return -1;
             }
-            if (compositeOrder[0] == 0) {
+            if (compositeOrder[0] == batchLongField) {
                 return longDigit + LONG_COMPOSITE_RADIX * binaryDigit;
             }
             return binaryDigit + (long) binaryRadix * longDigit;
@@ -2454,6 +2463,8 @@ class FlatKeyLayout
         batchAccessorsReady = false;
         generatedRecordEqualityKernel = null;
         batchNullFreeLongBinary = false;
+        batchLongField = -1;
+        batchBinaryField = -1;
         batchNullFreeSingleBinaryCandidate = false;
         batchNullFreeSingleBinary = false;
         if (dictionaryHashedIds == null) {
@@ -2474,8 +2485,11 @@ class FlatKeyLayout
             return 31 + OperatorVectorSupport.binaryHash(binary.data(), binary.startOffset(entry), binary.length(entry));
         }
         if (batchNullFreeLongBinary) {
-            long result = 31L + Long.hashCode(fieldLong[0].value(position));
-            return 31 * result + binaryFieldHash(1, values[inputChannels[1]], position);
+            long longHash = Long.hashCode(fieldLong[batchLongField].value(position));
+            long binaryHash = binaryFieldHash(batchBinaryField, values[inputChannels[batchBinaryField]], position);
+            return batchLongField == 0
+                    ? 31 * (31L + longHash) + binaryHash
+                    : 31 * (31L + binaryHash) + longHash;
         }
         if (singleField) {
             if (inputFieldNull(0, nulls, position)) {
@@ -2972,8 +2986,18 @@ class FlatKeyLayout
             if (nullByteCount > 0) {
                 fixedChunk[fixedOffset] = 0;
             }
-            handlers[0].writeLong(fixedChunk, fixedOffset + fixedOffsets[0], fieldLong[0].value(position));
-            writeBinaryField(1, values[inputChannels[1]], position, fixedChunk, fixedOffset + fixedOffsets[1], variableWidthArena, recordIndex);
+            handlers[batchLongField].writeLong(
+                    fixedChunk,
+                    fixedOffset + fixedOffsets[batchLongField],
+                    fieldLong[batchLongField].value(position));
+            writeBinaryField(
+                    batchBinaryField,
+                    values[inputChannels[batchBinaryField]],
+                    position,
+                    fixedChunk,
+                    fixedOffset + fixedOffsets[batchBinaryField],
+                    variableWidthArena,
+                    recordIndex);
             storeRecordDictionaryIds(recordIndex, position);
             return;
         }
@@ -3024,17 +3048,25 @@ class FlatKeyLayout
             return identicalBinaryField(0, fixedChunk, fixedOffset + singleFixedOffset, variableWidthArena, values[singleInputChannel], position, recordIndex);
         }
         if (batchNullFreeLongBinary) {
-            if (handlers[0].readLong(fixedChunk, fixedOffset + fixedOffsets[0]) != fieldLong[0].value(position)) {
+            if (handlers[batchLongField].readLong(fixedChunk, fixedOffset + fixedOffsets[batchLongField]) !=
+                    fieldLong[batchLongField].value(position)) {
                 return false;
             }
-            int fieldOffset = fixedOffset + fixedOffsets[1];
-            if (idComparable(1, fixedChunk, fieldOffset, recordIndex)) {
-                int probeId = globalIdAtPosition(1, position);
+            int fieldOffset = fixedOffset + fixedOffsets[batchBinaryField];
+            if (idComparable(batchBinaryField, fixedChunk, fieldOffset, recordIndex)) {
+                int probeId = globalIdAtPosition(batchBinaryField, position);
                 if (probeId >= 0) {
-                    return recordDictionaryId(1, fixedChunk, fieldOffset, recordIndex) == probeId;
+                    return recordDictionaryId(batchBinaryField, fixedChunk, fieldOffset, recordIndex) == probeId;
                 }
             }
-            return identicalBinaryField(1, fixedChunk, fieldOffset, variableWidthArena, values[inputChannels[1]], position, recordIndex);
+            return identicalBinaryField(
+                    batchBinaryField,
+                    fixedChunk,
+                    fieldOffset,
+                    variableWidthArena,
+                    values[inputChannels[batchBinaryField]],
+                    position,
+                    recordIndex);
         }
         if (singleField) {
             if (inputFieldNull(0, nulls, position)) {
