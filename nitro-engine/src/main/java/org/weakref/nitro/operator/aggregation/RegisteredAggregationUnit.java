@@ -153,6 +153,29 @@ public class RegisteredAggregationUnit
     }
 
     @Override
+    public boolean supportsPositionPreservingInitialInput()
+    {
+        return supportsInitialInput() && implementation.supportsPositionPreservingInitialRawIntermediate();
+    }
+
+    @Override
+    public Streams positionPreservingInitialInput(
+            int output,
+            Mask mask,
+            StreamAccessor streams,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        requireOnlyOutput(output);
+        if (!supportsPositionPreservingInitialInput()) {
+            throw new UnsupportedOperationException("position-preserving initial input is not supported");
+        }
+        return requireNonNull(
+                implementation.positionPreservingInitialRawIntermediate(mask, input(streams), allocator, allocationContext),
+                "position-preserving initial raw intermediate result is null");
+    }
+
+    @Override
     public Streams result(
             int output,
             int maxGroup,

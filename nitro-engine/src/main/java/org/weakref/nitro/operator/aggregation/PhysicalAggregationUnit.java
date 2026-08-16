@@ -80,6 +80,21 @@ public interface PhysicalAggregationUnit
         throw new UnsupportedOperationException("direct initial input is not supported");
     }
 
+    default boolean supportsPositionPreservingInitialInput()
+    {
+        return false;
+    }
+
+    default Streams positionPreservingInitialInput(
+            int output,
+            Mask mask,
+            StreamAccessor streams,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException("position-preserving initial input is not supported");
+    }
+
     default Streams result(int output, int maxGroup, Object state, Mask mask, Streams existing, Allocator allocator, Allocator.Context allocationContext)
     {
         return result(output, maxGroup, state, existing, allocator, allocationContext);

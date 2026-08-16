@@ -798,6 +798,76 @@ class TestGroupedAggregationSession
     }
 
     @Test
+    void testRetainsSparseInputWhenInitialAggregationPreservesPositions()
+    {
+        CountAll positionPreservingCount = new CountAll()
+        {
+            @Override
+            public boolean supportsInitialInput()
+            {
+                return true;
+            }
+
+            @Override
+            public Streams initialInput(
+                    int output,
+                    Mask mask,
+                    StreamAccessor streams,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                return Streams.ofValues(allocator.adopt(allocationContext, new I64Vector(new long[mask.count()])));
+            }
+
+            @Override
+            public boolean supportsPositionPreservingInitialInput()
+            {
+                return true;
+            }
+
+            @Override
+            public Streams positionPreservingInitialInput(
+                    int output,
+                    Mask mask,
+                    StreamAccessor streams,
+                    Allocator allocator,
+                    Allocator.Context allocationContext)
+            {
+                long[] values = new long[mask.maxPosition() + 1];
+                for (int position : mask) {
+                    values[position] = 1;
+                }
+                return Streams.ofValues(allocator.adopt(allocationContext, new I64Vector(values)));
+            }
+        };
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator allocator = new Allocator(resources)) {
+            allocator.beginExecution();
+            InitialAggregationBatchBuilder builder = new InitialAggregationBatchBuilder(
+                    allocator,
+                    Schema.unspecified(1),
+                    List.of(0),
+                    PhysicalAggregationProgram.independent(List.of(positionPreservingCount)),
+                    resources.operatorResources());
+
+            DictionaryVector keys = new DictionaryVector(
+                    new int[] {0, 1, 2, 3},
+                    new I64Vector(new long[] {10, 20, 30, 40}));
+            Batch input = new Batch(
+                    Mask.sparse(new int[] {1, 3}, 4),
+                    Output.of(Streams.ofValues(keys)));
+            try (Batch result = builder.buildRetaining(input)) {
+                assertThat(result).isNotNull();
+                assertThat(result.borrowMask().all()).isFalse();
+                assertThat(result.output(0).borrow(Stream.VALUES)).isSameAs(keys);
+                assertThat(OperatorVectorSupport.longValue(result.output(0).borrow(Stream.VALUES), 1)).isEqualTo(20);
+                assertThat(OperatorVectorSupport.longValue(result.output(0).borrow(Stream.VALUES), 3)).isEqualTo(40);
+                assertThat(selectedLongValues(result, 1)).containsExactly(1, 1);
+            }
+        }
+    }
+
+    @Test
     void testAccumulatesGroupsAcrossIndependentlyScheduledBatches()
     {
         try (EngineResources resources = EngineResources.createDefault();

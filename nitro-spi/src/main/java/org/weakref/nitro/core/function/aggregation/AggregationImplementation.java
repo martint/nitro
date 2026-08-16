@@ -88,6 +88,28 @@ public interface AggregationImplementation
         throw new UnsupportedOperationException("direct initial intermediate state is not supported");
     }
 
+    /**
+     * Whether direct initial output can preserve the input mask's physical positions instead of compacting
+     * selected rows to {@code [0, mask.count())}.
+     */
+    default boolean supportsPositionPreservingInitialRawIntermediate()
+    {
+        return false;
+    }
+
+    /**
+     * Lowers raw rows to intermediate state at their original physical positions. Unselected positions are
+     * unspecified and consumers must retain the supplied mask.
+     */
+    default Streams positionPreservingInitialRawIntermediate(
+            Mask mask,
+            AggregationInput input,
+            Allocator allocator,
+            Allocator.Context allocationContext)
+    {
+        throw new UnsupportedOperationException("position-preserving initial intermediate state is not supported");
+    }
+
     Streams intermediate(
             int maxGroup,
             Object state,

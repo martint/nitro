@@ -107,6 +107,10 @@ final class InitialAggregationBatchBuilder
             if (direct != null) {
                 return direct;
             }
+            if (retainInput && !inputMask.all()) {
+                allocator.release(context);
+                return null;
+            }
             int groupCount = inputMask.count();
             int maxGroup = groupCount - 1;
             Mask outputMask = allocator.allocateAllMask(context, groupCount);
@@ -192,17 +196,14 @@ final class InitialAggregationBatchBuilder
     }
 
     /**
-     * Builds direct initial aggregation output while transferring the lifetime of a dense input
-     * batch to that output. Returning {@code null} means the input cannot be retained without
-     * changing row positions or materializing aggregate state.
+     * Builds direct initial aggregation output while transferring the input batch lifetime to the
+     * output. Sparse input is retained only when every aggregation can preserve physical row
+     * positions. Returning {@code null} means retention would require compaction or materialization.
      */
     Batch buildRetaining(Batch input)
     {
         requireNonNull(input, "input is null");
         Mask inputMask = input.borrowMask();
-        if (!inputMask.all()) {
-            return null;
-        }
         return build(input, inputMask, true);
     }
 
@@ -249,10 +250,16 @@ final class InitialAggregationBatchBuilder
             if (!unit.supportsInitialInput()) {
                 return null;
             }
+            if (retainInput && !inputMask.all() && !unit.supportsPositionPreservingInitialInput()) {
+                return null;
+            }
         }
 
+        boolean preservePositions = retainInput && !inputMask.all();
         int groupCount = inputMask.count();
-        Mask outputMask = allocator.allocateAllMask(context, groupCount);
+        Mask outputMask = preservePositions
+                ? allocator.copyMask(context, inputMask)
+                : allocator.allocateAllMask(context, groupCount);
         Output[] outputs = new Output[groupedColumns.length + program.outputs().size()];
         for (int output = 0; output < groupedColumns.length; output++) {
             outputs[output] = retainInput
@@ -263,13 +270,21 @@ final class InitialAggregationBatchBuilder
         try {
             for (int output = 0; output < program.outputs().size(); output++) {
                 PhysicalAggregationProgram.Output binding = program.outputs().get(output);
+                PhysicalAggregationUnit unit = program.units().get(binding.unit());
                 Streams result = requireNonNull(
-                        program.units().get(binding.unit()).initialInput(
-                                binding.result(),
-                                inputMask,
-                                StreamAccessors.forBatch(input),
-                                allocator,
-                                context),
+                        preservePositions
+                                ? unit.positionPreservingInitialInput(
+                                        binding.result(),
+                                        inputMask,
+                                        StreamAccessors.forBatch(input),
+                                        allocator,
+                                        context)
+                                : unit.initialInput(
+                                        binding.result(),
+                                        inputMask,
+                                        StreamAccessors.forBatch(input),
+                                        allocator,
+                                        context),
                         "direct initial aggregation result is null");
                 outputs[groupedColumns.length + output] = ownedOutput(result, context);
             }
