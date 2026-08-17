@@ -2949,6 +2949,70 @@ class FlatKeyLayout
                 position);
     }
 
+    int compareBinaryRecords(
+            FlatGroupingTable table,
+            int fieldIndex,
+            int leftRecordIndex,
+            int rightRecordIndex)
+    {
+        int leftId = storedBinaryId(table, fieldIndex, leftRecordIndex);
+        int rightId = storedBinaryId(table, fieldIndex, rightRecordIndex);
+        ValueIdInterner interner = fieldInterners[fieldIndex];
+        if (leftId >= 0 && rightId >= 0) {
+            return interner.compareValues(leftId, rightId);
+        }
+
+        StoredBinary left = leftId >= 0 ? null : storedBinary(table, fieldIndex, leftRecordIndex);
+        StoredBinary right = rightId >= 0 ? null : storedBinary(table, fieldIndex, rightRecordIndex);
+        if (leftId >= 0) {
+            return interner.compareValue(leftId, right.data(), right.offset(), right.length());
+        }
+        if (rightId >= 0) {
+            return -interner.compareValue(rightId, left.data(), left.offset(), left.length());
+        }
+        return Arrays.compareUnsigned(
+                left.data(), left.offset(), left.offset() + left.length(),
+                right.data(), right.offset(), right.offset() + right.length());
+    }
+
+    private int storedBinaryId(FlatGroupingTable table, int fieldIndex, int recordIndex)
+    {
+        int normalizedId = table.normalizedBinaryId(recordIndex, fieldIndex);
+        if (normalizedId >= 0) {
+            return normalizedId;
+        }
+        byte[] fixedChunk = table.fixedChunk(recordIndex);
+        int fixedOffset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+            return token >= 0 ? token : ValueIdInterner.TOO_MANY;
+        }
+        int length = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES * 2);
+        return length < 0
+                ? recordDictionaryId(fieldIndex, fixedChunk, fixedOffset, recordIndex)
+                : ValueIdInterner.TOO_MANY;
+    }
+
+    private StoredBinary storedBinary(FlatGroupingTable table, int fieldIndex, int recordIndex)
+    {
+        byte[] fixedChunk = table.fixedChunk(recordIndex);
+        int fixedOffset = table.keyOffset(table.fixedOffset(recordIndex)) + fixedOffsets[fieldIndex];
+        if (compactBinaryRecord(fieldIndex)) {
+            int token = (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset);
+            long fallback = compactBinaryFallback(fieldIndex, ~token);
+            return new StoredBinary(
+                    table.variableWidthArena().chunk(compactBinaryChunkIndex(fallback)),
+                    compactBinaryChunkOffset(fallback),
+                    compactBinaryLength(fallback));
+        }
+        return new StoredBinary(
+                table.variableWidthArena().chunk((int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset)),
+                (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES),
+                (int) GROUP_INT_HANDLE.get(fixedChunk, fixedOffset + Integer.BYTES * 2));
+    }
+
+    private record StoredBinary(byte[] data, int offset, int length) {}
+
     private static int compareStoredBinaryToInput(byte[] data, int offset, int length, Vector value, int position)
     {
         return -OperatorVectorSupport.binaryCompare(value, position, data, offset, length);

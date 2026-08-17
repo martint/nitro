@@ -1114,6 +1114,29 @@ final class FlatGroupingTable
         };
     }
 
+    int compareGroupedValuePositions(int groupedColumnIndex, int leftGroupId, int rightGroupId)
+    {
+        int leftRecordIndex = recordIndex(leftGroupId);
+        int rightRecordIndex = recordIndex(rightGroupId);
+        FlatKeyLayout.Field field = layout.field(groupedColumnIndex);
+        return switch (field.handler().kind()) {
+            case LONG -> Long.compare(
+                    normalizedRecordValid(leftRecordIndex)
+                            ? normalizedLongValue(leftRecordIndex, groupedColumnIndex)
+                            : field.handler().readLong(
+                                    fixedChunk(leftRecordIndex),
+                                    keyOffset(fixedOffset(leftRecordIndex)) + field.fixedOffset()),
+                    normalizedRecordValid(rightRecordIndex)
+                            ? normalizedLongValue(rightRecordIndex, groupedColumnIndex)
+                            : field.handler().readLong(
+                                    fixedChunk(rightRecordIndex),
+                                    keyOffset(fixedOffset(rightRecordIndex)) + field.fixedOffset()));
+            case BINARY -> layout.compareBinaryRecords(
+                    this, groupedColumnIndex, leftRecordIndex, rightRecordIndex);
+            default -> throw new IllegalStateException("Grouped value does not support direct comparison");
+        };
+    }
+
     Streams groupedValueRangeAsDictionary(
             int groupedColumnIndex,
             int sourceStart,

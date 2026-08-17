@@ -267,6 +267,28 @@ final class ValueIdInterner
                 valueLength[id]);
     }
 
+    int compareValues(int leftId, int rightId)
+    {
+        return Arrays.compareUnsigned(
+                data,
+                valueOffset[leftId],
+                valueOffset[leftId] + valueLength[leftId],
+                data,
+                valueOffset[rightId],
+                valueOffset[rightId] + valueLength[rightId]);
+    }
+
+    int compareValue(int id, byte[] other, int otherOffset, int otherLength)
+    {
+        return Arrays.compareUnsigned(
+                data,
+                valueOffset[id],
+                valueOffset[id] + valueLength[id],
+                other,
+                otherOffset,
+                otherOffset + otherLength);
+    }
+
     /** A fresh copy of the interned value with the given id (for materialization / tests). */
     byte[] value(int id)
     {

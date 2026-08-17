@@ -37,6 +37,16 @@ public final class Output
         boolean isNull(int position);
 
         int compareNonNull(int position, Vector otherValues, int otherPosition);
+
+        default boolean supportsPositionComparison()
+        {
+            return false;
+        }
+
+        default int compareNonNullPositions(int leftPosition, int rightPosition)
+        {
+            throw new UnsupportedOperationException("Position-to-position comparison is not supported");
+        }
     }
 
     private PositionAccessor positionAccessor;

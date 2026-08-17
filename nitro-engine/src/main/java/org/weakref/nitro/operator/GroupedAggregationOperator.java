@@ -1387,6 +1387,19 @@ public class GroupedAggregationOperator
                         return inlineGroupingState.compareGroupedValuePosition(
                                 groupedKeyIndex, position, otherValues, otherPosition);
                     }
+
+                    @Override
+                    public boolean supportsPositionComparison()
+                    {
+                        return true;
+                    }
+
+                    @Override
+                    public int compareNonNullPositions(int leftPosition, int rightPosition)
+                    {
+                        return inlineGroupingState.compareGroupedValuePositions(
+                                groupedKeyIndex, leftPosition, rightPosition);
+                    }
                 });
             }
             return result;

@@ -4120,6 +4120,61 @@ public class TestOperatorBatches
     }
 
     @Test
+    void testSingleBatchTopNComparesRetainedPositionsWithoutMaterializingOrderingVector()
+    {
+        int positions = 128;
+        long[] values = java.util.stream.LongStream.range(0, positions).toArray();
+        AtomicInteger vectorBorrows = new AtomicInteger();
+        AtomicInteger positionComparisons = new AtomicInteger();
+        Output ordering = new Output(
+                Set.of(Stream.VALUES),
+                ignored -> {
+                    vectorBorrows.incrementAndGet();
+                    return new I64Vector(values);
+                }).withPositionAccessor(new Output.PositionAccessor()
+                {
+                    @Override
+                    public boolean isNull(int position)
+                    {
+                        return false;
+                    }
+
+                    @Override
+                    public int compareNonNull(int position, Vector otherValues, int otherPosition)
+                    {
+                        return Long.compare(values[position], VectorAccess.longValues(otherValues).value(otherPosition));
+                    }
+
+                    @Override
+                    public boolean supportsPositionComparison()
+                    {
+                        return true;
+                    }
+
+                    @Override
+                    public int compareNonNullPositions(int leftPosition, int rightPosition)
+                    {
+                        positionComparisons.incrementAndGet();
+                        return Long.compare(values[leftPosition], values[rightPosition]);
+                    }
+                });
+
+        try (Operator operator = new TopNOperator(
+                new Allocator(EngineResources.createDefault()),
+                2,
+                0,
+                new SingleBatchOperator(
+                        Schema.unspecified(1),
+                        new Batch(Mask.all(positions), ordering)));
+                Batch output = operator.next()) {
+            assertThat(vectorBorrows).hasValue(0);
+            assertThat(positionComparisons).hasPositiveValue();
+            assertThat(longValues(output.output(0).borrow(Stream.VALUES), output.borrowMask().count()))
+                    .containsExactly(127L, 126L);
+        }
+    }
+
+    @Test
     void testSingleBatchOperatorAcceptsSequentialNativeBatches()
     {
         try (SingleBatchOperator operator = new SingleBatchOperator(Schema.unspecified(1))) {

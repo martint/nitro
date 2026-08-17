@@ -2759,6 +2759,29 @@ final class GroupingState
         return Long.compare(value, OperatorVectorSupport.longValue(otherValues, otherPosition));
     }
 
+    int compareGroupedValuePositions(int groupedColumnIndex, int leftPosition, int rightPosition)
+    {
+        if (useFlatGrouping || sharedDictionaryFlatBacking) {
+            return flatGroupingTable.compareGroupedValuePositions(
+                    groupedColumnIndex, leftPosition, rightPosition);
+        }
+        long leftValue;
+        long rightValue;
+        if (usePackedIntPairGrouping) {
+            leftValue = packedIntGroupedValue(groupedColumnIndex, leftPosition);
+            rightValue = packedIntGroupedValue(groupedColumnIndex, rightPosition);
+        }
+        else if (useLongGrouping) {
+            leftValue = longKeysByGroup[leftPosition];
+            rightValue = longKeysByGroup[rightPosition];
+        }
+        else {
+            leftValue = multiLongTable.groupedValue(groupedColumnIndex, leftPosition);
+            rightValue = multiLongTable.groupedValue(groupedColumnIndex, rightPosition);
+        }
+        return Long.compare(leftValue, rightValue);
+    }
+
     public Streams copyGroupedValuePositions(
             int groupedColumnIndex,
             Streams output,
