@@ -13,25 +13,39 @@
  */
 package org.weakref.nitro.operator;
 
-public record TopNOperatorPolicy(int columnarOrderingMinLimit)
+public record TopNOperatorPolicy(
+        int columnarOrderingMinLimit,
+        int retainedSingleBatchMinimumRowsPerLimit)
 {
+    public TopNOperatorPolicy(int columnarOrderingMinLimit)
+    {
+        this(columnarOrderingMinLimit, 64);
+    }
+
     public TopNOperatorPolicy
     {
         if (columnarOrderingMinLimit < 1) {
             throw new IllegalArgumentException("columnarOrderingMinLimit must be positive");
         }
+        if (retainedSingleBatchMinimumRowsPerLimit < 1) {
+            throw new IllegalArgumentException("retainedSingleBatchMinimumRowsPerLimit must be positive");
+        }
     }
 
     public static TopNOperatorPolicy defaults()
     {
-        return new TopNOperatorPolicy(4_096);
+        return new TopNOperatorPolicy(4_096, 64);
     }
 
     public static TopNOperatorPolicy fromSystemProperties()
     {
         TopNOperatorPolicy defaults = defaults();
-        return new TopNOperatorPolicy(Integer.getInteger(
-                "nitro.topN.columnarOrderingMinLimit",
-                defaults.columnarOrderingMinLimit()));
+        return new TopNOperatorPolicy(
+                Integer.getInteger(
+                        "nitro.topN.columnarOrderingMinLimit",
+                        defaults.columnarOrderingMinLimit()),
+                Integer.getInteger(
+                        "nitro.topN.retainedSingleBatchMinimumRowsPerLimit",
+                        defaults.retainedSingleBatchMinimumRowsPerLimit()));
     }
 }

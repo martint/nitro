@@ -152,11 +152,19 @@ public class TopNOperator
 
         boolean deferSchemaBorrow = source.supportsConstrainedReborrow();
         Boolean denseOrdering = null;
+        boolean firstBatch = true;
         while (source.hasNext()) {
             Batch batch = source.next();
             state.beginBatch();
             state.captureSchema(batch, deferSchemaBorrow);
             Mask mask = batch.borrowMask();
+            if (firstBatch &&
+                    source.supportsConstrainedReborrow() &&
+                    retainedSingleBatchAdmission(mask) &&
+                    !source.hasNext()) {
+                return computeRetainedSingleBatchTopN(batch, mask);
+            }
+            firstBatch = false;
             // Dense ordering vectors win for modest results. For large lazy grouped results, compact
             // candidate copies avoid materializing every group merely to retain N rows (ClickBench Q33).
             boolean compactOrderingCandidates = mask.size() > (1 << 16);
@@ -246,6 +254,77 @@ public class TopNOperator
 
         done = true;
         return allocator.allocateRangeMask(allocationContext, 0, count);
+    }
+
+    private boolean retainedSingleBatchAdmission(Mask mask)
+    {
+        return mask.count() >= (long) n * policy.retainedSingleBatchMinimumRowsPerLimit();
+    }
+
+    private Mask computeRetainedSingleBatchTopN(Batch batch, Mask mask)
+    {
+        state.prepareRetainedBatchOrdering(batch);
+        int capacity = Math.min(n, mask.count());
+        int[] heap = new int[capacity];
+        int size = 0;
+        for (int position : mask) {
+            if (size < capacity) {
+                heap[size] = position;
+                siftRetainedUp(heap, size++);
+            }
+            else if (state.compareRetainedBatchPositions(position, heap[0]) > 0) {
+                heap[0] = position;
+                siftRetainedDown(heap, 0, size);
+            }
+        }
+
+        int[] orderedPositions = new int[size];
+        for (int output = size - 1; output >= 0; output--) {
+            orderedPositions[output] = heap[0];
+            int remaining = output;
+            if (remaining > 0) {
+                heap[0] = heap[remaining];
+                siftRetainedDown(heap, 0, remaining);
+            }
+        }
+        state.setRetainedBatchPositions(batch, orderedPositions);
+        done = true;
+        return allocator.allocateRangeMask(allocationContext, 0, orderedPositions.length);
+    }
+
+    private void siftRetainedUp(int[] heap, int index)
+    {
+        while (index > 0) {
+            int parent = (index - 1) >>> 1;
+            if (state.compareRetainedBatchPositions(heap[index], heap[parent]) >= 0) {
+                return;
+            }
+            int value = heap[index];
+            heap[index] = heap[parent];
+            heap[parent] = value;
+            index = parent;
+        }
+    }
+
+    private void siftRetainedDown(int[] heap, int index, int size)
+    {
+        while (true) {
+            int left = (index << 1) + 1;
+            if (left >= size) {
+                return;
+            }
+            int right = left + 1;
+            int child = right < size && state.compareRetainedBatchPositions(heap[right], heap[left]) < 0
+                    ? right
+                    : left;
+            if (state.compareRetainedBatchPositions(heap[child], heap[index]) >= 0) {
+                return;
+            }
+            int value = heap[index];
+            heap[index] = heap[child];
+            heap[child] = value;
+            index = child;
+        }
     }
 
     @Override

@@ -34,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static java.util.Objects.requireNonNull;
+
 final class TopNState
 {
     private final Allocator allocator;
@@ -65,6 +67,10 @@ final class TopNState
     private Streams[] materialized;
     private Streams[] denseColumns;
     private Batch fallbackBatch;
+    private Batch retainedBatch;
+    private int[] retainedSourcePositions;
+    private Vector[] retainedOrderingValues;
+    private Vector[] retainedOrderingNulls;
 
     @SuppressWarnings("unchecked")
     TopNState(
@@ -284,6 +290,46 @@ final class TopNState
                             slotPosition);
                 }
             }
+            comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
+            if (comparison != 0) {
+                return comparison;
+            }
+        }
+        return 0;
+    }
+
+    public void prepareRetainedBatchOrdering(Batch batch)
+    {
+        retainedOrderingValues = new Vector[slotColumns.length];
+        retainedOrderingNulls = new Vector[slotColumns.length];
+        for (int orderingColumn : orderingColumns) {
+            Output output = batch.output(orderingColumn);
+            retainedOrderingValues[orderingColumn] = output.borrow(Stream.VALUES);
+            retainedOrderingNulls[orderingColumn] = output.borrowOrNull(Stream.NULLS);
+        }
+    }
+
+    public int compareRetainedBatchPositions(int leftPosition, int rightPosition)
+    {
+        for (int orderingIndex = 0; orderingIndex < orderingColumns.length; orderingIndex++) {
+            int orderingColumn = orderingColumns[orderingIndex];
+            Vector nulls = retainedOrderingNulls[orderingColumn];
+            boolean leftNull = OperatorVectorSupport.isNull(nulls, leftPosition);
+            boolean rightNull = OperatorVectorSupport.isNull(nulls, rightPosition);
+            if (leftNull || rightNull) {
+                if (leftNull == rightNull) {
+                    continue;
+                }
+                return leftNull ? -1 : 1;
+            }
+            Vector values = retainedOrderingValues[orderingColumn];
+            int comparison = comparisonKernels[orderingColumn].compare(
+                    values,
+                    nulls,
+                    leftPosition,
+                    values,
+                    nulls,
+                    rightPosition);
             comparison = descendingByColumn[orderingIndex] ? comparison : -comparison;
             if (comparison != 0) {
                 return comparison;
@@ -579,6 +625,27 @@ final class TopNState
         this.materialized = new Streams[schema.length];
     }
 
+    public void setRetainedBatchPositions(Batch batch, int[] sourcePositions)
+    {
+        retainedBatch = requireNonNull(batch, "batch is null");
+        retainedSourcePositions = requireNonNull(sourcePositions, "sourcePositions is null");
+        // Comparisons are complete. Constraining the batch may invalidate and release the
+        // ordering vectors, so do not retain stale references to them during output.
+        retainedOrderingValues = null;
+        retainedOrderingNulls = null;
+        int[] constrainedPositions = sourcePositions.clone();
+        Arrays.sort(constrainedPositions);
+        batch.constrain(allocator.allocateSparseMask(
+                allocationContext,
+                constrainedPositions,
+                batch.borrowMask().size()));
+        orderedSlots = List.of();
+        primitiveOrderedSlots = null;
+        primitiveOrderedSlotCount = 0;
+        outputMask = allocator.allocateAllMask(allocationContext, sourcePositions.length);
+        materialized = new Streams[schema.length];
+    }
+
     public void constrain(Mask mask)
     {
         outputMask = mask;
@@ -592,7 +659,10 @@ final class TopNState
             return output;
         }
 
-        if (orderedSlotCount() == 0) {
+        if (retainedBatch != null) {
+            output = materializeRetainedBatchColumn(index);
+        }
+        else if (orderedSlotCount() == 0) {
             Streams columnSchema = ensureEmptySchema(index);
             output = buffers.emptyLike(columnSchema);
         }
@@ -606,6 +676,41 @@ final class TopNState
         }
         materialized[index] = output;
         return output;
+    }
+
+    private Streams materializeRetainedBatchColumn(int outputIndex)
+    {
+        Output input = retainedBatch.output(outputIndex);
+        if (outputMask.all()) {
+            Streams specialized = input.copyPositions(
+                    null,
+                    retainedSourcePositions,
+                    0,
+                    retainedSourcePositions.length,
+                    0,
+                    retainedSourcePositions.length,
+                    true);
+            if (specialized != null) {
+                return specialized;
+            }
+            return buffers.copyPositions(
+                    input,
+                    null,
+                    retainedSourcePositions,
+                    retainedSourcePositions.length,
+                    0,
+                    retainedSourcePositions.length);
+        }
+        Streams result = null;
+        for (int outputPosition : outputMask) {
+            result = buffers.copySinglePosition(
+                    input,
+                    result,
+                    outputMask.size(),
+                    outputPosition,
+                    retainedSourcePositions[outputPosition]);
+        }
+        return result == null ? buffers.emptyLike(buffers.borrowStreams(input)) : result;
     }
 
     public Set<Stream> outputStreams(int index)

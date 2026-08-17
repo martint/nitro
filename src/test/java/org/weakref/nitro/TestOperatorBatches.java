@@ -4075,17 +4075,17 @@ public class TestOperatorBatches
     {
         AtomicInteger payloadRows = new AtomicInteger();
         Mask mask = Mask.all(100_000);
+        long[] orderingValues = java.util.stream.LongStream.range(0, mask.count()).toArray();
         Batch delegate = new Batch(
                 mask,
                 constrained -> payloadRows.set(constrained.count()),
                 java.util.function.Function.identity(),
                 new Output(
                         Set.of(Stream.VALUES),
-                        ignored -> new I64Vector(100_000),
+                        ignored -> new I64Vector(orderingValues),
                         (stream, vector) -> vector,
                         (stream, vector) -> {},
                         (existing, sourcePosition, outputPosition, size) -> {
-                            payloadRows.incrementAndGet();
                             I64Vector output = existing == null ? new I64Vector(size) : (I64Vector) existing.values();
                             output.values()[outputPosition] = sourcePosition;
                             return Streams.ofValues(output);
@@ -4111,7 +4111,10 @@ public class TestOperatorBatches
                 0,
                 new SingleBatchOperator(Schema.unspecified(2), delegate));
                 Batch output = operator.next()) {
-            output.output(1).borrow(Stream.VALUES);
+            assertThat(longValues(output.output(0).borrow(Stream.VALUES), output.borrowMask().count()))
+                    .containsExactly(99_999L, 99_998L);
+            assertThat(longValues(output.output(1).borrow(Stream.VALUES), output.borrowMask().count()))
+                    .containsExactly(99_999L, 99_998L);
             assertThat(payloadRows.get()).isEqualTo(4);
         }
     }
