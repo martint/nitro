@@ -19,6 +19,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Vector;
 
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -32,6 +33,16 @@ final class GroupingCardinalitySampler
             List<Integer> groupByColumns,
             int maximumSampleSize,
             PrimitiveArrayPool arrays)
+    {
+        return sample(batch, groupByColumns, maximumSampleSize, arrays, true);
+    }
+
+    public static PartialAggregationInputStatistics sample(
+            Batch batch,
+            List<Integer> groupByColumns,
+            int maximumSampleSize,
+            PrimitiveArrayPool arrays,
+            boolean aggregationReadsInput)
     {
         requireNonNull(batch, "batch is null");
         requireNonNull(groupByColumns, "groupByColumns is null");
@@ -91,7 +102,12 @@ final class GroupingCardinalitySampler
                     distinctHashes[output++] = hashes[sample];
                 }
             }
-            return new PartialAggregationInputStatistics(sampledRows, distinctHashes);
+            return new PartialAggregationInputStatistics(
+                    sampledRows,
+                    distinctHashes,
+                    sampledRetainedKeyBytes(values, sampledRows, mask.size()),
+                    Arrays.stream(values).anyMatch(Vector::isVariableWidth),
+                    aggregationReadsInput);
         }
         catch (IllegalArgumentException ignored) {
             return new PartialAggregationInputStatistics(0, new long[0]);
@@ -99,5 +115,32 @@ final class GroupingCardinalitySampler
         finally {
             arrays.release(hashes);
         }
+    }
+
+    private static long sampledRetainedKeyBytes(Vector[] values, int sampledRows, int inputRows)
+    {
+        IdentityHashMap<Vector, Boolean> visited = new IdentityHashMap<>();
+        long retainedBytes = 0;
+        for (Vector value : values) {
+            retainedBytes = Math.addExact(retainedBytes, retainedBytes(value, visited));
+        }
+        if (inputRows == 0) {
+            return 0;
+        }
+        long quotient = retainedBytes / inputRows;
+        long remainder = retainedBytes % inputRows;
+        return Math.addExact(
+                Math.multiplyExact(quotient, sampledRows),
+                (Math.multiplyExact(remainder, sampledRows) + inputRows - 1) / inputRows);
+    }
+
+    private static long retainedBytes(Vector vector, IdentityHashMap<Vector, Boolean> visited)
+    {
+        if (visited.put(vector, Boolean.TRUE) != null) {
+            return 0;
+        }
+        long[] bytes = {vector.retainedBytes()};
+        vector.forEachChildVector(child -> bytes[0] = Math.addExact(bytes[0], retainedBytes(child, visited)));
+        return bytes[0];
     }
 }

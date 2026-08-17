@@ -87,6 +87,21 @@ public record PhysicalAggregationProgram(List<PhysicalAggregationUnit> units, Li
         return new PhysicalAggregationProgram(List.of(unit), outputs);
     }
 
+    /**
+     * Whether any update reads an input value, conservatively treating units without generated
+     * update metadata as value-reading.
+     */
+    public boolean readsInputValues()
+    {
+        for (PhysicalAggregationUnit unit : units) {
+            if (!(unit instanceof GeneratedGroupedAggregationUnit generated) ||
+                    generated.generatedGroupedUpdates().stream().anyMatch(update -> update.readsInput())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public record Output(int unit, int result)
     {
         public Output

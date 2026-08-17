@@ -23,8 +23,26 @@ public final class PartialAggregationInputStatistics
 {
     private final int sampledRows;
     private final long[] distinctKeyHashes;
+    private final long sampledKeyBytes;
+    private final boolean variableWidthGroupingKeys;
+    private final boolean aggregationReadsInput;
 
     public PartialAggregationInputStatistics(int sampledRows, long[] distinctKeyHashes)
+    {
+        this(sampledRows, distinctKeyHashes, 0, false, true);
+    }
+
+    public PartialAggregationInputStatistics(int sampledRows, long[] distinctKeyHashes, long sampledKeyBytes)
+    {
+        this(sampledRows, distinctKeyHashes, sampledKeyBytes, false, true);
+    }
+
+    public PartialAggregationInputStatistics(
+            int sampledRows,
+            long[] distinctKeyHashes,
+            long sampledKeyBytes,
+            boolean variableWidthGroupingKeys,
+            boolean aggregationReadsInput)
     {
         if (sampledRows < 0) {
             throw new IllegalArgumentException("sampledRows is negative");
@@ -33,8 +51,14 @@ public final class PartialAggregationInputStatistics
         if (distinctKeyHashes.length > sampledRows) {
             throw new IllegalArgumentException("distinctKeyHashes is larger than the sampled row count");
         }
+        if (sampledKeyBytes < 0) {
+            throw new IllegalArgumentException("sampledKeyBytes is negative");
+        }
         this.sampledRows = sampledRows;
         this.distinctKeyHashes = distinctKeyHashes.clone();
+        this.sampledKeyBytes = sampledKeyBytes;
+        this.variableWidthGroupingKeys = variableWidthGroupingKeys;
+        this.aggregationReadsInput = aggregationReadsInput;
     }
 
     public int sampledRows()
@@ -45,6 +69,24 @@ public final class PartialAggregationInputStatistics
     public int distinctKeyHashes()
     {
         return distinctKeyHashes.length;
+    }
+
+    /** Estimated physical bytes retained by the sampled grouping-key rows, including encoded backing values. */
+    public long sampledKeyBytes()
+    {
+        return sampledKeyBytes;
+    }
+
+    /** True when at least one physical grouping-key vector has variable-width values. */
+    public boolean variableWidthGroupingKeys()
+    {
+        return variableWidthGroupingKeys;
+    }
+
+    /** True when any physical aggregation update reads an input value or has unknown input cost. */
+    public boolean aggregationReadsInput()
+    {
+        return aggregationReadsInput;
     }
 
     /** Supplies the immutable primitive hash sample without exposing its backing array. */
@@ -62,19 +104,27 @@ public final class PartialAggregationInputStatistics
         return object == this ||
                 (object instanceof PartialAggregationInputStatistics other &&
                         sampledRows == other.sampledRows &&
+                        sampledKeyBytes == other.sampledKeyBytes &&
+                        variableWidthGroupingKeys == other.variableWidthGroupingKeys &&
+                        aggregationReadsInput == other.aggregationReadsInput &&
                         Arrays.equals(distinctKeyHashes, other.distinctKeyHashes));
     }
 
     @Override
     public int hashCode()
     {
-        return 31 * sampledRows + Arrays.hashCode(distinctKeyHashes);
+        int result = 31 * (31 * sampledRows + Long.hashCode(sampledKeyBytes)) + Arrays.hashCode(distinctKeyHashes);
+        result = 31 * result + Boolean.hashCode(variableWidthGroupingKeys);
+        return 31 * result + Boolean.hashCode(aggregationReadsInput);
     }
 
     @Override
     public String toString()
     {
         return "PartialAggregationInputStatistics[sampledRows=" + sampledRows +
-                ", distinctKeyHashes=" + distinctKeyHashes.length + ']';
+                ", distinctKeyHashes=" + distinctKeyHashes.length +
+                ", sampledKeyBytes=" + sampledKeyBytes +
+                ", variableWidthGroupingKeys=" + variableWidthGroupingKeys +
+                ", aggregationReadsInput=" + aggregationReadsInput + ']';
     }
 }

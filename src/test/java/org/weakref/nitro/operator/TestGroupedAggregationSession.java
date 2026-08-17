@@ -36,6 +36,7 @@ import org.weakref.nitro.operator.aggregation.CountAll;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.PhysicalAggregationProgram;
 import org.weakref.nitro.operator.aggregation.StreamAccessor;
+import org.weakref.nitro.operator.aggregation.Sum;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -53,6 +54,14 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 class TestGroupedAggregationSession
 {
+    @Test
+    void testAggregationProgramDescribesInputValueReads()
+    {
+        assertThat(PhysicalAggregationProgram.independent(List.of(new CountAll())).readsInputValues()).isFalse();
+        assertThat(PhysicalAggregationProgram.independent(List.of(new Sum(0))).readsInputValues()).isTrue();
+        assertThat(PhysicalAggregationProgram.independent(List.of(new CountAll(), new Sum(0))).readsInputValues()).isTrue();
+    }
+
     @Test
     void testStreamsFinalGroupsInBoundedBatches()
     {
@@ -690,6 +699,9 @@ class TestGroupedAggregationSession
                         .satisfies(statistics -> {
                             assertThat(statistics.sampledRows()).isEqualTo(4);
                             assertThat(statistics.distinctKeyHashes()).isEqualTo(2);
+                            assertThat(statistics.sampledKeyBytes()).isEqualTo(68);
+                            assertThat(statistics.variableWidthGroupingKeys()).isFalse();
+                            assertThat(statistics.aggregationReadsInput()).isTrue();
                         });
             }
         }

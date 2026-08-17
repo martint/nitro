@@ -202,7 +202,8 @@ public final class GroupedAggregationSession
                         batch,
                         groupByColumns,
                         sampleSize,
-                        allocator.primitiveArrays());
+                        allocator.primitiveArrays(),
+                        program.readsInputValues());
                 if (inputStatistics.sampledRows() > 0) {
                     aggregationEnabled = partialAggregationControl.aggregationEnabled(inputStatistics);
                 }
