@@ -166,6 +166,8 @@ public final class ColumnReader
     // loads vectors straight from it via ByteVector.fromMemorySegment.
     private final Arena scratchArena;
     private final boolean ownsScratchArena;
+    private final ParquetDecodeScratchPool scratchPool;
+    private ParquetDecodeScratchPool.Lease decompressScratch;
     private final Decompressor snappy = SnappyDecompressor.create();
     private MemorySegment decompressSegment;
     private long decompressCapacity;
@@ -338,7 +340,8 @@ public final class ColumnReader
                 readerPolicy,
                 arenaPolicy,
                 arenaPolicy.createArena(),
-                true);
+                true,
+                null);
     }
 
     ColumnReader(
@@ -362,7 +365,32 @@ public final class ColumnReader
                 readerPolicy,
                 arenaPolicy,
                 scratchArena,
-                false);
+                false,
+                null);
+    }
+
+    ColumnReader(
+            Type physicalType,
+            boolean optional,
+            int typeLength,
+            boolean decimal,
+            DecompressedPageCache decompressedPages,
+            PrimitiveArrayPool arrayPool,
+            ParquetReaderPolicy readerPolicy,
+            ParquetDecodeScratchPool scratchPool)
+    {
+        this(
+                physicalType,
+                optional,
+                typeLength,
+                decimal,
+                decompressedPages,
+                arrayPool,
+                readerPolicy,
+                ParquetArenaPolicy.shared(),
+                null,
+                false,
+                requireNonNull(scratchPool, "scratchPool is null"));
     }
 
     private ColumnReader(
@@ -375,14 +403,19 @@ public final class ColumnReader
             ParquetReaderPolicy readerPolicy,
             ParquetArenaPolicy arenaPolicy,
             Arena scratchArena,
-            boolean ownsScratchArena)
+            boolean ownsScratchArena,
+            ParquetDecodeScratchPool scratchPool)
     {
         this.arrayPool = requireNonNull(arrayPool, "arrayPool is null");
         this.readerPolicy = requireNonNull(readerPolicy, "readerPolicy is null");
         this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
-        this.scratchArena = requireNonNull(scratchArena, "scratchArena is null");
+        if ((scratchArena == null) == (scratchPool == null)) {
+            throw new IllegalArgumentException("Exactly one decode scratch owner is required");
+        }
+        this.scratchArena = scratchArena;
         this.ownsScratchArena = ownsScratchArena;
-        this.decompressSegment = scratchArena.allocate(0);
+        this.scratchPool = scratchPool;
+        this.decompressSegment = MemorySegment.ofArray(EMPTY_BYTES);
         this.rleReaderPolicy = readerPolicy.rle();
         this.pageNavigationPolicy = readerPolicy.pageNavigation();
         this.diagnostics = readerPolicy.diagnostics();
@@ -434,7 +467,18 @@ public final class ColumnReader
     public ColumnReader newSibling()
     {
         ColumnReader sibling;
-        if (ownsScratchArena) {
+        if (scratchPool != null) {
+            sibling = new ColumnReader(
+                    physicalType,
+                    optional,
+                    typeLength,
+                    flbaDecimal,
+                    decompressedPages,
+                    arrayPool,
+                    readerPolicy,
+                    scratchPool);
+        }
+        else if (ownsScratchArena) {
             sibling = new ColumnReader(
                     physicalType,
                     optional,
@@ -551,6 +595,10 @@ public final class ColumnReader
         reusableDictionaryBytes = EMPTY_BYTES;
         if (ownsScratchArena) {
             scratchArena.close();
+        }
+        if (decompressScratch != null) {
+            decompressScratch.close();
+            decompressScratch = null;
         }
     }
 
@@ -3471,7 +3519,16 @@ public final class ColumnReader
             }
         }
         if (decompressCapacity < uncompressedSize + SLACK) {
-            decompressSegment = scratchArena.allocate(uncompressedSize + SLACK);
+            if (scratchPool == null) {
+                decompressSegment = scratchArena.allocate(uncompressedSize + SLACK);
+            }
+            else {
+                if (decompressScratch != null) {
+                    decompressScratch.close();
+                }
+                decompressScratch = scratchPool.borrow(uncompressedSize + SLACK);
+                decompressSegment = decompressScratch.segment();
+            }
             decompressCapacity = uncompressedSize + SLACK;
         }
         MemorySegment target = decompressSegment.asSlice(0, uncompressedSize);

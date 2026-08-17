@@ -99,6 +99,7 @@ import org.weakref.nitro.parquet.DecompressedPageCachePolicy;
 import org.weakref.nitro.parquet.NitroParquetBatchSource;
 import org.weakref.nitro.parquet.NitroParquetScanResources;
 import org.weakref.nitro.parquet.ParquetColumnNameMatching;
+import org.weakref.nitro.parquet.ParquetDecodeScratchPolicy;
 import org.weakref.nitro.parquet.ParquetDictionaryFilterPolicy;
 import org.weakref.nitro.parquet.ParquetFile;
 import org.weakref.nitro.parquet.ParquetFilterEvaluationPolicy;
@@ -258,7 +259,8 @@ public class TestParquetOperator
                                         ParquetReaderDiagnostics.disabled(),
                                         GENERIC_MATERIALIZATION,
                                         new ParquetNumericDecodePolicy(false, false, false),
-                                        GENERIC_DICTIONARY_FILTER),
+                                        GENERIC_DICTIONARY_FILTER,
+                                        ParquetDecodeScratchPolicy.defaults()),
                                 new ParquetNumericDecodeAdmissionPolicy(
                                         Integer.MAX_VALUE,
                                         Long.MAX_VALUE,
@@ -1939,7 +1941,8 @@ public class TestParquetOperator
                             ParquetReaderDiagnostics.disabled(),
                             ParquetMaterializationPolicy.defaults(),
                             ParquetNumericDecodePolicy.defaults(),
-                            ParquetDictionaryFilterPolicy.defaults()))) {
+                            ParquetDictionaryFilterPolicy.defaults(),
+                            ParquetDecodeScratchPolicy.defaults()))) {
                 for (org.apache.parquet.format.RowGroup rowGroup : parquet.rowGroups()) {
                     reader.addChunk(parquet.data(), parquet.columnChunk(rowGroup, column).meta_data, rowGroup.num_rows);
                 }

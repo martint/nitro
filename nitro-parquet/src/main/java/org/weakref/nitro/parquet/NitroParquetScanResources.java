@@ -36,6 +36,7 @@ public final class NitroParquetScanResources
     private final Object directNumericBatchDecodeAdmission = new Object();
     private final ParquetMetadataCache metadataCache;
     private final ParquetMappedFileCache mappedFileCache;
+    private final ParquetDecodeScratchPool decodeScratchPool;
     private final DecompressedPageCachePolicy decompressedPageCachePolicy;
     private final ParquetReaderPolicy readerPolicy;
     private final ParquetNumericDecodeAdmissionPolicy numericDecodeAdmissionPolicy;
@@ -198,6 +199,7 @@ public final class NitroParquetScanResources
         this.batchPolicy = requireNonNull(batchPolicy, "batchPolicy is null");
         this.arenaPolicy = requireNonNull(arenaPolicy, "arenaPolicy is null");
         this.metadataCache = new ParquetMetadataCache(requireNonNull(metadataCachePolicy, "metadataCachePolicy is null"));
+        this.decodeScratchPool = new ParquetDecodeScratchPool(readerPolicy.decodeScratch());
         this.mappedFileCache = arenaPolicy.crossThread()
                 ? new ParquetMappedFileCache(metadataCache, requireNonNull(mappedFileCachePolicy, "mappedFileCachePolicy is null"))
                 : null;
@@ -286,6 +288,7 @@ public final class NitroParquetScanResources
         if (mappedFileCache != null) {
             mappedFileCache.close();
         }
+        decodeScratchPool.close();
     }
 
     DecompressedPageCachePolicy decompressedPageCachePolicy()
@@ -346,6 +349,11 @@ public final class NitroParquetScanResources
     ParquetArenaPolicy arenaPolicy()
     {
         return arenaPolicy;
+    }
+
+    ParquetDecodeScratchPool decodeScratchPool()
+    {
+        return decodeScratchPool;
     }
 
     synchronized DecompressedPageCacheLease acquireDecompressedPageCache(Allocator allocator)

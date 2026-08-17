@@ -24,7 +24,8 @@ public record ParquetReaderPolicy(
         ParquetReaderDiagnostics diagnostics,
         ParquetMaterializationPolicy materialization,
         ParquetNumericDecodePolicy numericDecode,
-        ParquetDictionaryFilterPolicy dictionaryFilter)
+        ParquetDictionaryFilterPolicy dictionaryFilter,
+        ParquetDecodeScratchPolicy decodeScratch)
 {
     public ParquetReaderPolicy
     {
@@ -34,6 +35,7 @@ public record ParquetReaderPolicy(
         requireNonNull(materialization, "materialization is null");
         requireNonNull(numericDecode, "numericDecode is null");
         requireNonNull(dictionaryFilter, "dictionaryFilter is null");
+        requireNonNull(decodeScratch, "decodeScratch is null");
     }
 
     public static ParquetReaderPolicy defaults()
@@ -44,7 +46,8 @@ public record ParquetReaderPolicy(
                 ParquetReaderDiagnostics.disabled(),
                 ParquetMaterializationPolicy.defaults(),
                 ParquetNumericDecodePolicy.defaults(),
-                ParquetDictionaryFilterPolicy.defaults());
+                ParquetDictionaryFilterPolicy.defaults(),
+                ParquetDecodeScratchPolicy.defaults());
     }
 
     public static ParquetReaderPolicy fromSystemProperties()
@@ -55,6 +58,7 @@ public record ParquetReaderPolicy(
                 ParquetReaderDiagnostics.fromSystemProperties(),
                 ParquetMaterializationPolicy.fromSystemProperties(),
                 ParquetNumericDecodePolicy.fromSystemProperties(),
-                ParquetDictionaryFilterPolicy.fromSystemProperties());
+                ParquetDictionaryFilterPolicy.fromSystemProperties(),
+                ParquetDecodeScratchPolicy.fromSystemProperties());
     }
 }

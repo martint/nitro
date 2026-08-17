@@ -130,7 +130,7 @@ public final class NitroParquetBatchSource
     // window is convincingly dense — a genuinely non-selective filter reads dense everywhere, so even a biased sample
     // clears this higher bar. A merely-front-loaded window (q39: 21.9% first vs 1.5% overall) stays on skip.
     private final Allocator allocator;
-    private final Arena arena;
+    private Arena arena;
     private final VectorBatchScope batchBuffers;
     private final Allocator.Context allocationContext;
     private final NitroParquetScanResources.DecompressedPageCacheLease decompressedPageCacheLease;
@@ -383,7 +383,7 @@ public final class NitroParquetBatchSource
             ParquetArenaPolicy arenaPolicy)
     {
         this.allocator = requireNonNull(allocator, "allocator is null");
-        this.arena = requireNonNull(arenaPolicy, "arenaPolicy is null").createArena();
+        requireNonNull(arenaPolicy, "arenaPolicy is null");
         this.arrayPool = allocator.primitiveArrays();
         this.batchBuffers = new VectorBatchScope(allocator, "NitroParquetBatchSource", batchBufferPoolKey);
         this.allocationContext = batchBuffers.context();
@@ -427,9 +427,15 @@ public final class NitroParquetBatchSource
         for (int file = 0; file < splits.size(); file++) {
             Path path = splits.get(file).path();
             mappedFileLeases[file] = resources.acquireMappedFile(path);
-            files[file] = mappedFileLeases[file] == null
-                    ? ParquetFile.open(path, arena, metadataCache)
-                    : mappedFileLeases[file].file();
+            if (mappedFileLeases[file] == null) {
+                if (arena == null) {
+                    arena = arenaPolicy.createArena();
+                }
+                files[file] = ParquetFile.open(path, arena, metadataCache);
+            }
+            else {
+                files[file] = mappedFileLeases[file].file();
+            }
         }
         int columnCount = columns.size();
         this.readers = new ColumnReader[columnCount];
@@ -453,8 +459,7 @@ public final class NitroParquetBatchSource
                     decompressedPages,
                     arrayPool,
                     readerPolicy,
-                    arenaPolicy,
-                    arena);
+                    resources.decodeScratchPool());
             nullable[c] = first.optional();
             if (readers[c].kind() == ColumnReader.Kind.INT) {
                 Set<Class<? extends Vector>> supportedVectors = schema.field(c).type().supportedVectorTypes();
@@ -2658,7 +2663,9 @@ public final class NitroParquetBatchSource
                 mappedFileLeases[file].close();
             }
         }
-        arena.close();
+        if (arena != null) {
+            arena.close();
+        }
         if (decompressedPageCacheLease != null) {
             decompressedPageCacheLease.close();
         }
