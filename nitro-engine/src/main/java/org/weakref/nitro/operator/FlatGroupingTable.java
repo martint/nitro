@@ -341,6 +341,10 @@ final class FlatGroupingTable
             return -1;
         }
 
+        if (identityGroupIds && mask.selectedCount() >= policy.hashProbeTileRows()) {
+            return assignPrefetchedNullFreeSingleBinaryBatch(values[0], values, nulls, mask, result, nextGroupId);
+        }
+
         long[] output = result.values();
         for (int position : mask) {
             long hash = batchHashes[position];
@@ -361,6 +365,58 @@ final class FlatGroupingTable
         return nextGroupId;
     }
 
+    private long assignPrefetchedNullFreeSingleBinaryBatch(
+            Vector value,
+            Vector[] values,
+            Vector[] nulls,
+            Mask mask,
+            I64Vector result,
+            long nextGroupId)
+    {
+        // Record-identity admission already established a high-cardinality stream. In that cohort most probes
+        // terminate at an empty control byte, so stage independent first control words before doing any dependent
+        // variable-width equality. Prefix collisions retain the exact established comparison path below.
+        ensureCapacity(nextGroupId + mask.selectedCount());
+        int tileRows = policy.hashProbeTileRows();
+        ensurePrefetchScratch(tileRows);
+
+        int[] positions = mask.selectedPositions();
+        int count = mask.selectedCount();
+        long[] output = result.values();
+        for (int tileStart = 0; tileStart < count; tileStart += tileRows) {
+            int tileEnd = Math.min(count, tileStart + tileRows);
+            for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
+                int position = positions == null ? selectedIndex : positions[selectedIndex];
+                long hash = batchHashes[position];
+                int bucket = bucket((int) (hash >> 7));
+                int tileIndex = selectedIndex - tileStart;
+                prefetchedBuckets[tileIndex] = bucket;
+                prefetchedControls[tileIndex] = (long) LONG_HANDLE.get(control, bucket);
+            }
+            for (int selectedIndex = tileStart; selectedIndex < tileEnd; selectedIndex++) {
+                int position = positions == null ? selectedIndex : positions[selectedIndex];
+                int tileIndex = selectedIndex - tileStart;
+                long hash = batchHashes[position];
+                int index = getNullFreeSingleBinaryIndex(
+                        value,
+                        position,
+                        hash,
+                        prefetchedBuckets[tileIndex],
+                        prefetchedControls[tileIndex]);
+                long groupId;
+                if (index >= 0) {
+                    groupId = recordIndexesByHash[index];
+                }
+                else {
+                    groupId = nextGroupId++;
+                    addNewGroup(-index - 1, values, nulls, position, hash, groupId, false, 0, 0);
+                }
+                output[position] = groupId;
+            }
+        }
+        return nextGroupId;
+    }
+
     long assignPrefetchedBatch(
             Vector[] values,
             Vector[] nulls,
@@ -376,14 +432,7 @@ final class FlatGroupingTable
         }
         ensureCapacity(nextGroupId + mask.selectedCount());
         int tileRows = policy.hashProbeTileRows();
-        if (prefetchedBuckets == null || prefetchedBuckets.length < tileRows) {
-            int[] previousBuckets = prefetchedBuckets;
-            long[] previousControls = prefetchedControls;
-            prefetchedBuckets = arrayPool.borrowInts(tileRows);
-            prefetchedControls = arrayPool.borrowLongs(tileRows);
-            arrayPool.release(previousBuckets);
-            arrayPool.release(previousControls);
-        }
+        ensurePrefetchScratch(tileRows);
 
         int[] positions = mask.selectedPositions();
         int count = mask.selectedCount();
@@ -417,6 +466,18 @@ final class FlatGroupingTable
             }
         }
         return nextGroupId;
+    }
+
+    private void ensurePrefetchScratch(int tileRows)
+    {
+        if (prefetchedBuckets == null || prefetchedBuckets.length < tileRows) {
+            int[] previousBuckets = prefetchedBuckets;
+            long[] previousControls = prefetchedControls;
+            prefetchedBuckets = arrayPool.borrowInts(tileRows);
+            prefetchedControls = arrayPool.borrowLongs(tileRows);
+            arrayPool.release(previousBuckets);
+            arrayPool.release(previousControls);
+        }
     }
 
     /** Position-list counterpart used when a caller has already removed rows that will not probe the table. */
@@ -1360,6 +1421,16 @@ final class FlatGroupingTable
 
     private int getNullFreeSingleBinaryIndex(Vector value, int position, long hash)
     {
+        return getNullFreeSingleBinaryIndex(value, position, hash, -1, 0);
+    }
+
+    private int getNullFreeSingleBinaryIndex(
+            Vector value,
+            int position,
+            long hash,
+            int prefetchedBucket,
+            long prefetchedControl)
+    {
         byte hashPrefix = (byte) (hash & 0x7F | 0x80);
         int bucket = bucket((int) (hash >> 7));
         int step = 1;
@@ -1367,6 +1438,12 @@ final class FlatGroupingTable
 
         while (true) {
             long controlVector = (long) LONG_HANDLE.get(control, bucket);
+            if (bucket == prefetchedBucket) {
+                // A preceding row in the tile may have inserted into this word. Preserve source-order semantics by
+                // treating the current load as authoritative while keeping the staged load live as a prefetch.
+                controlVector = controlVector == prefetchedControl ? prefetchedControl : controlVector;
+                prefetchedBucket = -1;
+            }
             long controlMatches = match(controlVector, repeated);
             while (controlMatches != 0) {
                 int index = bucket(bucket + (Long.numberOfTrailingZeros(controlMatches) >>> 3));

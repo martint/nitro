@@ -1313,6 +1313,40 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testPreparedNullFreeSingleBinaryIdentityBatchPrefetchesAcrossDuplicatesAndGrowth()
+    {
+        int positions = 512;
+        String[] strings = new String[positions];
+        long[] expectedGroups = new long[positions];
+        Map<String, Long> groupIds = new HashMap<>();
+        for (int position = 0; position < positions; position++) {
+            // Repeat every third row after the first tile while retaining enough distinct keys to force growth.
+            int key = position >= 96 && position % 3 == 0 ? position - 96 : position;
+            strings[position] = "variable-width-key-" + key;
+            expectedGroups[position] = groupIds.computeIfAbsent(strings[position], ignored -> (long) groupIds.size());
+        }
+        Vector[] values = {utf8(strings)};
+        Vector[] nulls = {new BooleanVector(positions)};
+        FlatGroupingTable table = new FlatGroupingTable(
+                FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy),
+                2,
+                true);
+        try {
+            I64Vector groups = new I64Vector(positions);
+            table.beginBatch(values, nulls);
+            table.prepareBatchHashes(values, nulls, Mask.all(positions));
+            long nextGroupId = table.assignPreparedPhysicalBatch(values, nulls, Mask.all(positions), groups, 0);
+            table.endBatch();
+
+            assertThat(nextGroupId).isEqualTo(groupIds.size());
+            assertThat(groups.values()).containsExactly(expectedGroups);
+        }
+        finally {
+            table.releaseBuffers();
+        }
+    }
+
+    @Test
     void testHashRecordWidthFollowsImmutableKeyArity()
     {
         Vector[] single = {utf8("alpha", "beta")};
