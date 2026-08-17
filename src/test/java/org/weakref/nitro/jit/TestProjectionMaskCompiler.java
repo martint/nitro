@@ -160,6 +160,32 @@ class TestProjectionMaskCompiler
     }
 
     @Test
+    void testCompiledEmptyUtf8LiteralEqualityUsesFlatAndDictionaryEncodings()
+    {
+        ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(
+                new EqualUtf8ProjectionOptimization(),
+                List.of(ProjectionArgument.input(), ProjectionArgument.literal("")))
+                .orElseThrow();
+
+        Mask flatTrue = Mask.all(4);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(utf8("", "A", "", "BC")), Streams.empty()),
+                flatTrue,
+                true)).isTrue();
+        assertThat(flatTrue).containsExactly(0, 2);
+
+        DictionaryVector dictionary = new DictionaryVector(
+                new int[] {3, 0, 3, 1},
+                utf8("A", "BC", "D", ""));
+        Mask dictionaryFalse = Mask.sparse(new int[] {0, 1, 3}, 4);
+        assertThat(compiled.evaluate(
+                List.of(Streams.ofValues(dictionary), Streams.empty()),
+                dictionaryFalse,
+                false)).isTrue();
+        assertThat(dictionaryFalse).containsExactly(1, 3);
+    }
+
+    @Test
     void testCompilesProviderAuthoredUtf8InputEquality()
     {
         ProjectionMaskCompiler.CompiledMask compiled = compiler.tryCompile(

@@ -30,11 +30,13 @@ import org.weakref.nitro.data.Vector;
 final class Utf8LiteralMaskSupport
 {
     private final Utf8LiteralMatcher matcher;
+    private final boolean emptyLiteral;
     private boolean[] dictionaryMatches = new boolean[0];
 
     Utf8LiteralMaskSupport(byte[] literal)
     {
         matcher = Utf8LiteralMatcherGenerator.generate(literal);
+        emptyLiteral = literal.length == 0;
     }
 
     boolean evaluate(Streams input, Mask mask, boolean selectMatches)
@@ -75,6 +77,10 @@ final class Utf8LiteralMaskSupport
         int[] offsets = values.offsets();
         if (dictionary.dictionaryDepth() == 1) {
             int[] ids = dictionary.ids();
+            if (emptyLiteral) {
+                retainEmptyDictionary(ids, offsets, mask, selectMatches);
+                return;
+            }
             retainMapped(mask, selectMatches, position -> {
                 int valuePosition = ids[position];
                 return matcher.matches(
@@ -101,11 +107,18 @@ final class Utf8LiteralMaskSupport
         }
         byte[] data = values.data();
         int[] offsets = values.offsets();
-        for (int position = 0; position < dictionarySize; position++) {
-            dictionaryMatches[position] = matcher.matches(
-                    data,
-                    offsets[position],
-                    offsets[position + 1] - offsets[position]);
+        if (emptyLiteral) {
+            for (int position = 0; position < dictionarySize; position++) {
+                dictionaryMatches[position] = offsets[position] == offsets[position + 1];
+            }
+        }
+        else {
+            for (int position = 0; position < dictionarySize; position++) {
+                dictionaryMatches[position] = matcher.matches(
+                        data,
+                        offsets[position],
+                        offsets[position + 1] - offsets[position]);
+            }
         }
         if (dictionary.dictionaryDepth() == 1) {
             int matchingId = singleMatchingId(dictionaryMatches, dictionarySize);
@@ -137,10 +150,51 @@ final class Utf8LiteralMaskSupport
 
     private void retainFlat(BinaryVector values, Mask mask, boolean selectMatches)
     {
-        byte[] data = values.data();
         int[] offsets = values.offsets();
+        if (emptyLiteral) {
+            retainEmptyFlat(offsets, mask, selectMatches);
+            return;
+        }
+        byte[] data = values.data();
         retainMapped(mask, selectMatches, position ->
                 matcher.matches(data, offsets[position], offsets[position + 1] - offsets[position]));
+    }
+
+    private static void retainEmptyFlat(int[] offsets, Mask mask, boolean selectMatches)
+    {
+        if (mask.none()) {
+            return;
+        }
+        boolean dense = mask.all();
+        int iterations = mask.selectedCount();
+        int[] positions = dense ? mask.positionsArrayForOverwrite(iterations) : mask.selectedPositions();
+        int retained = 0;
+        for (int index = 0; index < iterations; index++) {
+            int position = dense ? index : positions[index];
+            if ((offsets[position] == offsets[position + 1]) == selectMatches) {
+                positions[retained++] = position;
+            }
+        }
+        mask.finishRetain(retained);
+    }
+
+    private static void retainEmptyDictionary(int[] ids, int[] offsets, Mask mask, boolean selectMatches)
+    {
+        if (mask.none()) {
+            return;
+        }
+        boolean dense = mask.all();
+        int iterations = mask.selectedCount();
+        int[] positions = dense ? mask.positionsArrayForOverwrite(iterations) : mask.selectedPositions();
+        int retained = 0;
+        for (int index = 0; index < iterations; index++) {
+            int position = dense ? index : positions[index];
+            int valuePosition = ids[position];
+            if ((offsets[valuePosition] == offsets[valuePosition + 1]) == selectMatches) {
+                positions[retained++] = position;
+            }
+        }
+        mask.finishRetain(retained);
     }
 
     private void retainRle(RleVector rle, BinaryVector values, Mask mask, boolean selectMatches)
