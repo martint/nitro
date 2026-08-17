@@ -2171,6 +2171,45 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testForwardsInputErrorsPastDictionaryEncodedEmptyErrors()
+    {
+        PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
+        primitiveRegistry.register("dictionary_empty_errors", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                return Streams.of(
+                        Stream.ERRORS,
+                        DictionaryVector.wrap(
+                                new int[] {0, 0, 0},
+                                new BooleanVector(new boolean[] {false})));
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+        });
+        BooleanVector inputErrors = new BooleanVector(new boolean[] {false, true, false});
+        Variable result = new Variable(0);
+        Reference inputValues = new Reference(new Input(0), Stream.VALUES);
+        Reference resultErrors = new Reference(result, Stream.ERRORS);
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("dictionary_empty_errors", List.of(inputValues)), AllMask.ALL)),
+                        List.of(resultErrors)),
+                primitiveRegistry,
+                inputResolver(Map.of(
+                        inputValues, new I64Vector(new long[] {1, 2, 3}),
+                        new Reference(new Input(0), Stream.ERRORS), inputErrors)),
+                new Allocator(EngineResources.createDefault()));
+
+        assertThat(evaluator.evaluate(resultErrors, Mask.all(3)).get(Stream.ERRORS)).isSameAs(inputErrors);
+    }
+
+    @Test
     void testCopyOfErrorsRequestsOnlyErrors()
     {
         AtomicReference<Set<Stream>> requestedStreams = new AtomicReference<>(Set.of());

@@ -1046,6 +1046,15 @@ public final class PlanEvaluator
         if (childStream == null) {
             return parentStream;
         }
+        // Dictionary peeling commonly produces a dictionary-wrapped all-false error stream. Merging it with an
+        // all-false input error stream position by position would turn a domain-sized scalar evaluation back into
+        // a row-sized boolean loop. Either identity can be forwarded without inspecting dictionary ids.
+        if (VectorAccess.isAllFalseNulls(parentStream)) {
+            return childStream;
+        }
+        if (VectorAccess.isAllFalseNulls(childStream)) {
+            return parentStream;
+        }
 
         if (parentStream instanceof ErrorVector ||
                 childStream instanceof ErrorVector ||

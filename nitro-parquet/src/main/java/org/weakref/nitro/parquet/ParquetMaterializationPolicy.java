@@ -28,12 +28,13 @@ public record ParquetMaterializationPolicy(
         int plainCopyLoopMaxValues,
         boolean bulkSelectedNumericDictionaryIds,
         boolean bulkSelectedNumericDictionaryIdsRequirePageReuse,
-        boolean binaryDictionary)
+        boolean binaryDictionary,
+        boolean numericDictionary)
 {
     public static ParquetMaterializationPolicy defaults()
     {
         return new ParquetMaterializationPolicy(
-                true, true, true, true, true, true, 1L << 20, true, 16, true, true, true);
+                true, true, true, true, true, true, 1L << 20, true, 16, true, true, true, true);
     }
 
     public static ParquetMaterializationPolicy fromSystemProperties()
@@ -51,6 +52,7 @@ public record ParquetMaterializationPolicy(
                 Boolean.parseBoolean(System.getProperty("nitro.parquet.bulkSelectedNumericDictionaryIds", "true")),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.parquet.bulkSelectedNumericDictionaryIdsRequirePageReuse", "true")),
-                !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary"));
+                !Boolean.getBoolean("nitro.parquet.disableBinaryDictionary"),
+                !Boolean.getBoolean("nitro.parquet.disableNumericDictionary"));
     }
 }

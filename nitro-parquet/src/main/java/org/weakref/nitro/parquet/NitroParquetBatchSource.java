@@ -1067,11 +1067,7 @@ public final class NitroParquetBatchSource
             boolean[] nulls = nullVector == null ? null : nullVector.values();
             Vector valueVector = switch (reader.kind()) {
                 case INT -> {
-                    int[] values = ensureInt(colInt[c], count);
-                    colInt[c] = values;
-                    reader.readInts(values, nulls, count);
-                    recordCopied(c, count);
-                    yield copyIntOutput(c, values, 0, count, count);
+                    yield reader.readNumeric(allocator, allocationContext, nulls, count, intOutputAsLong[c]);
                 }
                 case LONG -> {
                     if (reader.isDouble()) {
@@ -1091,9 +1087,7 @@ public final class NitroParquetBatchSource
                         recordCopied(c, count);
                         yield vector;
                     }
-                    I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
-                    reader.readLongs(vector.values(), nulls, count);
-                    yield vector;
+                    yield reader.readNumeric(allocator, allocationContext, nulls, count, false);
                 }
                 case BINARY -> {
                     yield reader.readBinary(allocator, allocationContext, nulls, count);
@@ -1459,11 +1453,7 @@ public final class NitroParquetBatchSource
     {
         return switch (reader.kind()) {
             case INT -> {
-                int[] values = ensureInt(colInt[column], count);
-                colInt[column] = values;
-                reader.readInts(values, nulls, count);
-                recordCopied(column, count);
-                yield copyIntOutput(column, values, 0, count, count);
+                yield reader.readNumeric(allocator, allocationContext, nulls, count, intOutputAsLong[column]);
             }
             case LONG -> {
                 if (reader.isDouble()) {
@@ -1475,9 +1465,7 @@ public final class NitroParquetBatchSource
                     recordCopied(column, count);
                     yield longBitsToDoubles(bits, 0, count);
                 }
-                I64Vector vector = I64Vector.allocate(allocator, allocationContext, count);
-                reader.readLongs(vector.values(), nulls, count);
-                yield vector;
+                yield reader.readNumeric(allocator, allocationContext, nulls, count, false);
             }
             case BINARY -> {
                 yield reader.readBinary(allocator, allocationContext, nulls, count);

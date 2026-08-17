@@ -156,7 +156,7 @@ public class TestParquetOperator
             new ParquetPageNavigationPolicy(false, 0, 101, Integer.MAX_VALUE, false, 0, Integer.MAX_VALUE, false);
     private static final ParquetMaterializationPolicy GENERIC_MATERIALIZATION =
             new ParquetMaterializationPolicy(
-                    false, false, false, false, false, false, Long.MAX_VALUE, false, 0, false, false, false);
+                    false, false, false, false, false, false, Long.MAX_VALUE, false, 0, false, false, false, false);
     private static final ParquetDictionaryFilterPolicy GENERIC_DICTIONARY_FILTER =
             new ParquetDictionaryFilterPolicy(
                     false,
@@ -320,6 +320,45 @@ public class TestParquetOperator
             assertThat(metrics.completedBytes().orElseThrow()).isPositive();
             assertThat(metrics.completedPositions()).hasValue(3);
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourcePreservesNumericDictionaryEncoding()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 2_048; position++) {
+            rows.add(new ParquetRow((position % 3) * 10, true, (long) (position % 5) * 100));
+        }
+        java.nio.file.Path file = writeParquetFile("nitro-native-numeric-dictionary.parquet", true, rows);
+        assertDictionaryEncoding(file, "x");
+        assertDictionaryEncoding(file, "maybe");
+        Schema schema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            var batch = ready.batch();
+            DictionaryVector required = (DictionaryVector) batch.column(0).borrow(Stream.VALUES);
+            DictionaryVector optional = (DictionaryVector) batch.column(1).borrow(Stream.VALUES);
+
+            assertThat(required.values()).isInstanceOf(I64Vector.class);
+            assertThat(optional.values()).isInstanceOf(I64Vector.class);
+            long[] requiredValues = ((I64Vector) required.values()).values();
+            long[] optionalValues = ((I64Vector) optional.values()).values();
+            for (int position = 0; position < required.length(); position++) {
+                assertThat(requiredValues[required.ids()[position]]).isEqualTo((position % 3) * 10L);
+                assertThat(optionalValues[optional.ids()[position]]).isEqualTo((position % 5) * 100L);
+            }
+            batch.close();
         }
     }
 
@@ -555,8 +594,9 @@ public class TestParquetOperator
                         ParquetColumnNameMatching.CASE_INSENSITIVE)) {
             SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
             try (var batch = ready.batch()) {
-                assertThat(((I32Vector) batch.column(0).borrow(Stream.VALUES)).values())
-                        .startsWith(0, 10, 10);
+                var values = org.weakref.nitro.data.VectorAccess.longValues(batch.column(0).borrow(Stream.VALUES));
+                assertThat(new long[] {values.value(0), values.value(1), values.value(2)})
+                        .containsExactly(0, 10, 10);
             }
         }
     }
@@ -1143,7 +1183,7 @@ public class TestParquetOperator
             int batchStart = 0;
             while (scan.hasNext()) {
                 try (Batch batch = scan.next()) {
-                    I32Vector keys = (I32Vector) batch.output(0).borrow(Stream.VALUES);
+                    var keys = org.weakref.nitro.data.VectorAccess.longValues(batch.output(0).borrow(Stream.VALUES));
                     int count = batch.borrowMask().selectedCount();
                     if (batchStart == 0) {
                         scan.constrain(Mask.none(count));
@@ -1160,7 +1200,7 @@ public class TestParquetOperator
                     int[] ids = payload instanceof DictionaryVector dictionary ? dictionary.ids() : null;
                     for (int position : selected) {
                         int row = batchStart + position;
-                        assertThat(keys.values()[position]).isEqualTo(row % 31);
+                        assertThat(keys.value(position)).isEqualTo(row % 31);
                         assertThat(utf8(values, ids == null ? position : ids[position]))
                                 .isEqualTo("payload-" + (row % 31));
                     }

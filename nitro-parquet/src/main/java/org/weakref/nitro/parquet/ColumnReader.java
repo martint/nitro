@@ -26,8 +26,12 @@ import org.weakref.nitro.core.function.VersionedLongPredicate;
 import org.weakref.nitro.core.source.LongDomain;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BinaryVector;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I32Vector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.PrimitiveArrayPool;
+import org.weakref.nitro.data.Vector;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -211,6 +215,9 @@ public final class ColumnReader
     // stable instance across batches and a flat fallback can expand ids of an earlier generation after a chunk change.
     private final java.util.HashMap<Integer, org.weakref.nitro.data.BinaryVector> dictionaryVectorCache = new java.util.HashMap<>();
     private final java.util.IdentityHashMap<org.weakref.nitro.data.BinaryVector, Boolean> escapedBinaryDictionaries = new java.util.IdentityHashMap<>();
+    private final java.util.HashMap<Integer, I32Vector> intDictionaryVectorCache = new java.util.HashMap<>();
+    private final java.util.HashMap<Integer, I64Vector> widenedIntDictionaryVectorCache = new java.util.HashMap<>();
+    private final java.util.HashMap<Integer, I64Vector> longDictionaryVectorCache = new java.util.HashMap<>();
 
     // current chunk dictionary
     private int[] dictionaryInts;
@@ -547,6 +554,8 @@ public final class ColumnReader
         runDef = EMPTY_INTS;
         arrayPool.release(idBuffer);
         idBuffer = EMPTY_INTS;
+        arrayPool.release(numericOutputScratch);
+        numericOutputScratch = EMPTY_INTS;
         arrayPool.release(filterAcceptInts);
         filterAcceptInts = EMPTY_INTS;
         arrayPool.release(filterAcceptBytes);
@@ -590,6 +599,9 @@ public final class ColumnReader
         }
         dictionaryVectorCache.clear();
         escapedBinaryDictionaries.clear();
+        intDictionaryVectorCache.clear();
+        widenedIntDictionaryVectorCache.clear();
+        longDictionaryVectorCache.clear();
         dictionaryByteOffsets = null;
         dictionaryBytes = null;
         reusableDictionaryBytes = EMPTY_BYTES;
@@ -765,6 +777,206 @@ public final class ColumnReader
             pageCursor += n;
             produced += n;
         }
+    }
+
+    /**
+     * Reads a fixed-width numeric batch while preserving a single Parquet dictionary as a Nitro dictionary vector.
+     * A batch that crosses a plain page, a nullable dictionary page, or a dictionary generation boundary falls back
+     * to the ordinary flat representation without changing its values.
+     */
+    public Vector readNumeric(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count, boolean intAsLong)
+    {
+        if (!materializationPolicy.numericDictionary()) {
+            return readNumericFlat(allocator, allocationContext, nullsOut, count, intAsLong);
+        }
+        if (kind == Kind.BINARY || (kind == Kind.LONG && physicalType == Type.DOUBLE)) {
+            throw new IllegalStateException("Encoded numeric read does not support " + physicalType);
+        }
+
+        I32Vector ownedIds = I32Vector.allocate(allocator, allocationContext, count);
+        int[] batchIds = ownedIds.values();
+        Vector flat = null;
+        int batchGeneration = -1;
+        int produced = 0;
+        while (produced < count) {
+            if (pageCursor >= pageValueCount) {
+                directFullDecodeRequested = true;
+                fullSequentialReadRequested = true;
+                try {
+                    if (!decodeNextDataPage()) {
+                        throw new IllegalStateException("Ran out of Parquet values: needed " + count + ", got " + produced);
+                    }
+                }
+                finally {
+                    directFullDecodeRequested = false;
+                    fullSequentialReadRequested = false;
+                }
+            }
+            int n = Math.min(pageValueCount - pageCursor, count - produced);
+            boolean compatibleDictionary = pageDirectDictionary &&
+                    (batchGeneration == -1 || batchGeneration == dictionaryGeneration);
+            if (flat == null && compatibleDictionary) {
+                batchGeneration = dictionaryGeneration;
+                System.arraycopy(idBuffer, pageCursor, batchIds, produced, n);
+                if (nullsOut != null) {
+                    Arrays.fill(nullsOut, produced, produced + n, false);
+                }
+            }
+            else {
+                if (flat == null) {
+                    flat = allocateNumericOutput(allocator, allocationContext, count, intAsLong);
+                    if (produced > 0) {
+                        materializeNumericIds(flat, numericDictionary(batchGeneration, intAsLong), batchIds, produced);
+                    }
+                }
+                readNumericPageSlice(flat, nullsOut, produced, n, intAsLong);
+            }
+            pageCursor += n;
+            produced += n;
+        }
+
+        if (flat != null) {
+            allocator.release(allocationContext, ownedIds);
+            return flat;
+        }
+        return DictionaryVector.wrapOwnedIds(ownedIds, count, numericDictionary(batchGeneration, intAsLong));
+    }
+
+    private Vector readNumericFlat(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count, boolean intAsLong)
+    {
+        Vector output = allocateNumericOutput(allocator, allocationContext, count, intAsLong);
+        if (kind == Kind.INT) {
+            int[] values = output instanceof I32Vector ints
+                    ? ints.values()
+                    : ensureIntOutputScratch(count);
+            readInts(values, nullsOut, count);
+            if (output instanceof I64Vector longs) {
+                for (int index = 0; index < count; index++) {
+                    longs.values()[index] = values[index];
+                }
+            }
+        }
+        else {
+            readLongs(((I64Vector) output).values(), nullsOut, count);
+        }
+        return output;
+    }
+
+    private Vector allocateNumericOutput(Allocator allocator, Allocator.Context allocationContext, int count, boolean intAsLong)
+    {
+        return kind == Kind.INT && !intAsLong
+                ? I32Vector.allocate(allocator, allocationContext, count)
+                : I64Vector.allocate(allocator, allocationContext, count);
+    }
+
+    private void readNumericPageSlice(Vector output, boolean[] nullsOut, int outputOffset, int count, boolean intAsLong)
+    {
+        if (kind == Kind.INT) {
+            int[] values = output instanceof I32Vector ints ? ints.values() : null;
+            int[] scratch = values == null ? ensureIntOutputScratch(outputOffset + count) : values;
+            readIntPageSlice(scratch, nullsOut, outputOffset, count);
+            if (values == null) {
+                long[] longs = ((I64Vector) output).values();
+                for (int index = 0; index < count; index++) {
+                    longs[outputOffset + index] = scratch[outputOffset + index];
+                }
+            }
+            return;
+        }
+        readLongPageSlice(((I64Vector) output).values(), nullsOut, outputOffset, count);
+    }
+
+    private int[] numericOutputScratch = EMPTY_INTS;
+
+    private int[] ensureIntOutputScratch(int count)
+    {
+        if (numericOutputScratch.length < count) {
+            numericOutputScratch = replaceInts(numericOutputScratch, count);
+        }
+        return numericOutputScratch;
+    }
+
+    private void readIntPageSlice(int[] out, boolean[] nullsOut, int outputOffset, int count)
+    {
+        if (pageDefStreaming) {
+            readStreamingNullableDictionaryInts(out, outputOffset, count, nullsOut);
+        }
+        else if (pagePlainStreaming) {
+            readStreamingNullablePlainInts(out, outputOffset, count, nullsOut);
+        }
+        else if (pageDirectDictionary) {
+            gatherInts(dictionaryInts, idBuffer, pageCursor, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (pageDirectPlain) {
+            MemorySegment.copy(pageDirectPlainBody, LE_INT, pageDirectPlainOffset + (long) pageCursor * Integer.BYTES, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else {
+            System.arraycopy(pageInts, pageCursor, out, outputOffset, count);
+            if (nullsOut != null) {
+                System.arraycopy(pageNulls, pageCursor, nullsOut, outputOffset, count);
+            }
+        }
+    }
+
+    private void readLongPageSlice(long[] out, boolean[] nullsOut, int outputOffset, int count)
+    {
+        if (pageDefStreaming) {
+            readStreamingNullableDictionaryLongs(out, outputOffset, count, nullsOut);
+        }
+        else if (pagePlainStreaming) {
+            readStreamingNullablePlainLongs(out, outputOffset, count, nullsOut);
+        }
+        else if (pageDirectDictionary) {
+            gatherLongs(dictionaryLongs, idBuffer, pageCursor, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else if (pageDirectPlain) {
+            MemorySegment.copy(pageDirectPlainBody, LE_LONG, pageDirectPlainOffset + (long) pageCursor * Long.BYTES, out, outputOffset, count);
+            if (nullsOut != null) {
+                Arrays.fill(nullsOut, outputOffset, outputOffset + count, false);
+            }
+        }
+        else {
+            System.arraycopy(pageLongs, pageCursor, out, outputOffset, count);
+            if (nullsOut != null) {
+                System.arraycopy(pageNulls, pageCursor, nullsOut, outputOffset, count);
+            }
+        }
+    }
+
+    private static void materializeNumericIds(Vector output, Vector dictionary, int[] ids, int count)
+    {
+        if (output instanceof I32Vector ints) {
+            int[] values = ints.values();
+            int[] entries = ((I32Vector) dictionary).values();
+            for (int index = 0; index < count; index++) {
+                values[index] = entries[ids[index]];
+            }
+            return;
+        }
+        long[] values = ((I64Vector) output).values();
+        long[] entries = ((I64Vector) dictionary).values();
+        for (int index = 0; index < count; index++) {
+            values[index] = entries[ids[index]];
+        }
+    }
+
+    private Vector numericDictionary(int generation, boolean intAsLong)
+    {
+        if (kind == Kind.INT) {
+            return intAsLong
+                    ? widenedIntDictionaryVectorCache.get(generation)
+                    : intDictionaryVectorCache.get(generation);
+        }
+        return longDictionaryVectorCache.get(generation);
     }
 
     private void readStreamingNullableDictionaryInts(int[] out, int outputOffset, int count, boolean[] nullsOut)
@@ -3568,6 +3780,19 @@ public final class ColumnReader
                 dictionaryInts = replaceInts(dictionaryInts, numValues);
             }
             MemorySegment.copy(body, LE_INT, 0, dictionaryInts, 0, numValues);
+            if (materializationPolicy.numericDictionary()) {
+                int[] ints = Arrays.copyOf(dictionaryInts, numValues);
+                I32Vector intVector = new I32Vector(ints);
+                intVector.freezeContent();
+                intDictionaryVectorCache.put(dictionaryGeneration, intVector);
+                long[] longs = new long[numValues];
+                for (int index = 0; index < numValues; index++) {
+                    longs[index] = ints[index];
+                }
+                I64Vector widenedVector = new I64Vector(longs);
+                widenedVector.freezeContent();
+                widenedIntDictionaryVectorCache.put(dictionaryGeneration, widenedVector);
+            }
         }
         else if (kind == Kind.LONG) {
             if (dictionaryLongs == null || dictionaryLongs.length < numValues) {
@@ -3580,6 +3805,11 @@ public final class ColumnReader
             }
             else {
                 MemorySegment.copy(body, LE_LONG, 0, dictionaryLongs, 0, numValues);
+            }
+            if (materializationPolicy.numericDictionary() && physicalType != Type.DOUBLE) {
+                I64Vector longVector = new I64Vector(Arrays.copyOf(dictionaryLongs, numValues));
+                longVector.freezeContent();
+                longDictionaryVectorCache.put(dictionaryGeneration, longVector);
             }
         }
         else {
@@ -3622,6 +3852,10 @@ public final class ColumnReader
                 dictionaryVectorCache.keySet().removeIf(generation -> generation < dictionaryGeneration - 3);
             }
         }
+        int minimumGeneration = dictionaryGeneration - 3;
+        intDictionaryVectorCache.keySet().removeIf(generation -> generation < minimumGeneration);
+        widenedIntDictionaryVectorCache.keySet().removeIf(generation -> generation < minimumGeneration);
+        longDictionaryVectorCache.keySet().removeIf(generation -> generation < minimumGeneration);
     }
 
     private byte[] borrowDictionaryBytes(int required)
