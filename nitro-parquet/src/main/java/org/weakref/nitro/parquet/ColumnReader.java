@@ -172,6 +172,7 @@ public final class ColumnReader
     private long compressedPageCount;
     private long compressedPageBytes;
     private long uncompressedPageBytes;
+    private long consumedPageBytes;
     private int minimumCompressedPageBytes = Integer.MAX_VALUE;
     private int maximumCompressedPageBytes;
     private int[] idBuffer = EMPTY_INTS;
@@ -3420,6 +3421,11 @@ public final class ColumnReader
      */
     private MemorySegment decompress(MemorySegment fileSegment, long offset, int compressedSize, int uncompressedSize, CompressionCodec codec)
     {
+        // Source accounting must follow pages the decoder actually consumes. Summing every selected column chunk
+        // overstates physical work when late materialization or selection pushdown leaves payload pages untouched.
+        // Count before the cache lookup as a cache hit still represents a page consumed by this source; the metric
+        // describes source work rather than process-wide storage traffic shared by multiple source instances.
+        consumedPageBytes = Math.addExact(consumedPageBytes, compressedSize);
         // Decode out of an off-heap native buffer: measured faster than a heap byte[] for the RLE/bit-unpack hot
         // loop on this JVM (segment LE_LONG loads + ByteVector.fromMemorySegment beat byte[] VarHandle + fromArray).
         // Snappy decompresses native->native (no heap marshalling); SLACK trailing bytes keep the bit-unpacker's
@@ -3485,6 +3491,11 @@ public final class ColumnReader
                 " compressed_max=" + maximumCompressedPageBytes +
                 " compressed_avg=" + (compressedPageBytes / compressedPageCount) +
                 " uncompressed_avg=" + (uncompressedPageBytes / compressedPageCount);
+    }
+
+    long consumedPageBytes()
+    {
+        return consumedPageBytes;
     }
 
     // Bumped on every dictionary page; a binary batch can only be emitted as a DictionaryVector if every page it

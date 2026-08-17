@@ -159,7 +159,6 @@ public final class NitroParquetBatchSource
     private final boolean[] nullable;
     private final boolean[] intOutputAsLong;
     private final long totalRows;
-    private final long totalCompressedBytes;
     private final long[] rowGroupRows;
 
     private final boolean allNumeric;
@@ -475,7 +474,6 @@ public final class NitroParquetBatchSource
             outputResolvers[c] = new ScanOutputResolver(c);
         }
         long rows = 0;
-        long compressedBytes = 0;
         List<Long> rowsByGroup = new ArrayList<>();
         for (int fileIndex = 0; fileIndex < files.length; fileIndex++) {
             ParquetFile file = files[fileIndex];
@@ -493,7 +491,6 @@ public final class NitroParquetBatchSource
                 for (RowGroup rowGroup : rowGroups) {
                     var columnMetadata = file.columnChunk(rowGroup, column).meta_data;
                     readers[c].addChunk(file.data(), columnMetadata, rowGroup.num_rows, source);
-                    compressedBytes = addExact(compressedBytes, columnMetadata.total_compressed_size);
                 }
             }
             rows += rowGroups.stream()
@@ -501,7 +498,6 @@ public final class NitroParquetBatchSource
                     .sum();
         }
         this.totalRows = rows;
-        this.totalCompressedBytes = compressedBytes;
         this.rowGroupRows = rowsByGroup.stream().mapToLong(Long::longValue).toArray();
 
         int intColumns = 0;
@@ -667,7 +663,7 @@ public final class NitroParquetBatchSource
                 @Override
                 public OptionalLong completedBytes()
                 {
-                    return nextRow == totalRows ? OptionalLong.of(totalCompressedBytes) : OptionalLong.empty();
+                    return nextRow == totalRows ? OptionalLong.of(consumedPageBytes()) : OptionalLong.empty();
                 }
 
                 @Override
@@ -685,6 +681,20 @@ public final class NitroParquetBatchSource
             return Optional.of(protocol.valueType().cast(metrics));
         }
         return Optional.empty();
+    }
+
+    private long consumedPageBytes()
+    {
+        long bytes = 0;
+        for (ColumnReader reader : readers) {
+            bytes = addExact(bytes, reader.consumedPageBytes());
+        }
+        for (ColumnReader reader : nullReaders) {
+            if (reader != null) {
+                bytes = addExact(bytes, reader.consumedPageBytes());
+            }
+        }
+        return bytes;
     }
 
     @Override

@@ -322,6 +322,54 @@ public class TestParquetOperator
     }
 
     @Test
+    void testNitroParquetSourceReportsOnlyConsumedLazyColumnPages()
+            throws IOException
+    {
+        List<ParquetRow> rows = new ArrayList<>();
+        for (int value = 0; value < 1_000; value++) {
+            rows.add(new ParquetRow(value, true, (long) value * 17));
+        }
+        java.nio.file.Path file = writeParquetFile("nitro-consumed-page-metrics.parquet", false, rows);
+        Schema schema = new Schema(List.of(
+                new Field("x", BIGINT, false),
+                new Field("maybe", BIGINT, true)));
+
+        long keyOnlyBytes;
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            ready.batch().column(0).borrow(Stream.VALUES);
+            ready.batch().close();
+            keyOnlyBytes = metrics.completedBytes().orElseThrow();
+        }
+
+        long allColumnBytes;
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema)) {
+            SourceMetrics metrics = source.protocol(SourceMetricsProtocol.METRICS).orElseThrow();
+            SourcePoll.Ready ready = (SourcePoll.Ready) source.poll();
+            ready.batch().column(0).borrow(Stream.VALUES);
+            ready.batch().column(1).borrow(Stream.VALUES);
+            ready.batch().close();
+            allColumnBytes = metrics.completedBytes().orElseThrow();
+        }
+
+        assertThat(keyOnlyBytes).isPositive();
+        assertThat(allColumnBytes).isGreaterThan(keyOnlyBytes);
+    }
+
+    @Test
     void testNitroParquetSourceGrowsBatchAfterSustainedSparseDownstreamSelection()
             throws IOException
     {
