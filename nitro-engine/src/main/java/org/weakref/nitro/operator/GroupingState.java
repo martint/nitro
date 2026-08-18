@@ -2596,6 +2596,82 @@ final class GroupingState
         }
     }
 
+    /**
+     * Counts a single dictionary key's logical occurrences and resolves each used physical value to a group once.
+     * The extra domain slot represents top-level nulls.  This deliberately lives beside the grouping
+     * representations: callers need not know whether the key was admitted to a primitive, flat, or object table.
+     */
+    int assignSingleDictionaryDomain(
+            DictionaryVector dictionary,
+            Vector nullVector,
+            Mask mask,
+            int[] counts,
+            int[] domainGroups,
+            int[] representatives)
+    {
+        int domainSize = dictionary.values().length();
+        int slots = domainSize + 1;
+        Arrays.fill(counts, 0, slots, 0);
+        Arrays.fill(representatives, 0, domainSize, -1);
+
+        int[] ids = dictionary.ids();
+        int used = 0;
+        for (int position : mask) {
+            int domain = OperatorVectorSupport.isNull(nullVector, position) ? domainSize : ids[position];
+            if (counts[domain]++ == 0) {
+                used++;
+                if (domain < domainSize) {
+                    representatives[domain] = position;
+                }
+            }
+        }
+        reserveAdditionalGroups(used);
+
+        Vector dictionaryValues = dictionary.values();
+        if (useLongGrouping) {
+            VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
+            for (int domain = 0; domain < domainSize; domain++) {
+                if (counts[domain] != 0) {
+                    domainGroups[domain] = groupForLongKey(values.value(domain));
+                }
+            }
+        }
+        else if (useFlatGrouping) {
+            Vector[] values = {dictionary};
+            Vector[] nulls = {nullVector};
+            flatGroupingTable.beginBatch(values, nulls);
+            try {
+                for (int domain = 0; domain < domainSize; domain++) {
+                    if (counts[domain] != 0) {
+                        long newGroupId = nextGroupId;
+                        long groupId = flatGroupingTable.assignGroup(values, nulls, representatives[domain], newGroupId);
+                        if (groupId == newGroupId) {
+                            nextGroupId++;
+                        }
+                        domainGroups[domain] = toIntExact(groupId);
+                    }
+                }
+            }
+            finally {
+                flatGroupingTable.endBatch();
+            }
+        }
+        else {
+            for (int domain = 0; domain < domainSize; domain++) {
+                if (counts[domain] != 0) {
+                    OperatorKeySemantics.Key key = OperatorKeySemantics.probeKey(
+                            dictionaryValues, null, domain, reusableProbeKeys[0]);
+                    domainGroups[domain] = toIntExact(groupForSingleKey(key));
+                }
+            }
+        }
+        if (counts[domainSize] != 0) {
+            domainGroups[domainSize] = toIntExact(nullGroup());
+        }
+        accountRetainedState();
+        return slots;
+    }
+
     private void assignDictionaryLongGroups(DictionaryVector dictionary, Vector nullVector, Mask mask, I64Vector result)
     {
         int[] ids = dictionary.ids();

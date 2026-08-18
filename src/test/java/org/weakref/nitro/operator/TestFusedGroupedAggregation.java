@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.junit.jupiter.api.Test;
 import org.weakref.nitro.data.Allocator;
+import org.weakref.nitro.data.BinaryVector;
 import org.weakref.nitro.data.BooleanVector;
 import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.I32Vector;
@@ -22,6 +23,7 @@ import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.data.Utf8Traits;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
 import org.weakref.nitro.execution.EngineResources;
@@ -31,7 +33,9 @@ import org.weakref.nitro.operator.aggregation.CountColumn;
 import org.weakref.nitro.operator.aggregation.FilteredAccumulator;
 import org.weakref.nitro.operator.aggregation.Sum;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -448,6 +452,54 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void binaryDictionaryDomainCountMatchesAcrossSparseBatchesAndReorderedDomains()
+    {
+        Map<String, Long> expected = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        String[][] domains = {
+                {"alpha", "beta", "gamma", "delta"},
+                {"delta", "alpha", "gamma", "beta"}};
+        for (int batch = 0; batch < domains.length; batch++) {
+            int size = 4_096;
+            int[] ids = new int[size];
+            int[] selected = new int[size - (size + 4) / 5];
+            int selectedCount = 0;
+            for (int position = 0; position < size; position++) {
+                int id = (position * 3 + batch) & 3;
+                ids[position] = id;
+                if (position % 5 != 0) {
+                    selected[selectedCount++] = position;
+                    expected.merge(domains[batch][id], 1L, Long::sum);
+                }
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {DictionaryVector.ofTrustedIds(ids, utf8(domains[batch]))},
+                    Mask.sparse(selected, size)));
+        }
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        Operator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(new CountAll()),
+                new TableOperator(1, pages));
+        Map<String, Long> actual = new HashMap<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    Vector keys = result.output(0).borrow(Stream.VALUES);
+                    I64Vector counts = (I64Vector) result.output(1).borrow(Stream.VALUES);
+                    for (int position : result.borrowMask()) {
+                        actual.put(utf8(keys, position), counts.values()[position]);
+                    }
+                }
+            }
+        }
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    @Test
     void keyOnlyDictionaryGroupingDiscardsLogicalGroupIds()
     {
         int size = 100_000;
@@ -618,6 +670,27 @@ class TestFusedGroupedAggregation
             pages.add(TableOperator.Page.values(size, new Vector[] {new I64Vector(keys), new I64Vector(values)}, Mask.all(size)));
         }
         return pages;
+    }
+
+    private static BinaryVector utf8(String... values)
+    {
+        int totalBytes = Arrays.stream(values).mapToInt(String::length).sum();
+        BinaryVector vector = new BinaryVector(values.length, totalBytes);
+        vector.addTrait(Utf8Traits.UTF8_STRING);
+        vector.addTrait(Utf8Traits.ASCII_ONLY);
+        for (int index = 0; index < values.length; index++) {
+            vector.setBytes(index, values[index].getBytes(StandardCharsets.UTF_8));
+        }
+        return vector;
+    }
+
+    private static String utf8(Vector vector, int position)
+    {
+        return switch (vector) {
+            case BinaryVector binary -> new String(binary.copyBytes(position), StandardCharsets.UTF_8);
+            case DictionaryVector dictionary -> utf8(dictionary.values(), dictionary.ids()[position]);
+            default -> throw new IllegalArgumentException("Expected binary vector but found " + vector.getClass().getSimpleName());
+        };
     }
 
     private static void restoreProperty(String name, String value)

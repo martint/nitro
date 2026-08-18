@@ -21,6 +21,7 @@ import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.BooleanVector;
+import org.weakref.nitro.data.DictionaryVector;
 import org.weakref.nitro.data.GeneratedLongGroupingBindings;
 import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
@@ -122,6 +123,7 @@ public class GroupedAggregationOperator
     private boolean debugFusedConstantRunsPrinted;
     private int[] dictionaryDomainCounts = new int[0];
     private int[] dictionaryDomainGroups = new int[0];
+    private int[] dictionaryDomainRepresentatives = new int[0];
     private int nextSessionOutputPosition;
     private int releasedSessionOutputPosition;
 
@@ -728,6 +730,10 @@ public class GroupedAggregationOperator
             fusedChecked = true;
         }
 
+        if (tryEncodedKeyDomainAggregation(batch, mask)) {
+            return;
+        }
+
         // Fuse only while the group table + state stay cache-resident. Beyond that the staged two-pass
         // wins on memory-level parallelism (each pass streams one random-access array the OOO window
         // overlaps), whereas fusion serializes probe-miss -> state-miss per row.
@@ -824,18 +830,18 @@ public class GroupedAggregationOperator
      */
     private void prepareFusedKernel()
     {
-        fusedEligible = groupByColumns != null
+        boolean generatedEligible = groupByColumns != null
                 && groupByColumns.length == 1
                 // A filtered-only aggregation can still use a generated grouping-only pass that writes
                 // group IDs for the explicit masked stage.
                 && (plainAggregationIndexes.length > 0 || filteredAggregationIndexes.length > 0)
                 && (filteredAggregationIndexes.length == 0 || partialGeneratedGrouping)
                 && (distinctAggregationGroups.length == 0 || partialGeneratedGrouping)
-                && inlineGroupingState.usesSingleLongGrouping()
                 && allPlainAggregationsFusible();
-        if (!fusedEligible) {
+        if (!generatedEligible) {
             return;
         }
+        fusedEligible = inlineGroupingState.usesSingleLongGrouping();
         fusedAggregationIndexes = plainAggregationIndexes.clone();
         fusedStateOffsets = new int[fusedAggregationIndexes.length + 1];
         List<GroupedAggregationUpdate> updates = new ArrayList<>();
@@ -857,6 +863,87 @@ public class GroupedAggregationOperator
         }
         fusedBindings = new GeneratedLongGroupingBindings(fusedSpecs.length, fusedDictionaryInput);
         fusedStateVectors = new GroupedStateUpdate[fusedSpecs.length];
+    }
+
+    /**
+     * Applies input-independent updates over an encoded key's physical domain.  Unlike the generated long-key
+     * loop, this path is deliberately representation-neutral and therefore benefits text and other flat keys too.
+     */
+    private boolean tryEncodedKeyDomainAggregation(Batch batch, Mask mask)
+    {
+        if (!dictionaryDomainAggregation || fusedSpecs == null || !canBatchInputIndependentFusedAccumulator() ||
+                filteredAggregationIndexes.length != 0 || distinctAggregationGroups.length != 0) {
+            return false;
+        }
+        Output keyOutput = batch.output(groupByColumns[0]);
+        Vector keyVector = keyOutput.borrow(Stream.VALUES);
+        if (!(keyVector instanceof DictionaryVector dictionary) || dictionary.values() instanceof DictionaryVector) {
+            return false;
+        }
+        int slots = dictionary.values().length() + 1;
+        if ((long) slots * dictionaryDomainAggregationMinReduction > mask.count()) {
+            return false;
+        }
+        if (dictionaryDomainCounts.length < slots) {
+            int capacity = Allocator.computeCapacity(slots);
+            dictionaryDomainCounts = new int[capacity];
+            dictionaryDomainGroups = new int[capacity];
+            dictionaryDomainRepresentatives = new int[capacity];
+        }
+
+        long previousMaxGroup = maxObservedGroup;
+        long start = System.nanoTime();
+        int domainSlots;
+        try {
+            domainSlots = inlineGroupingState.assignSingleDictionaryDomain(
+                    dictionary,
+                    keyOutput.borrowOrNull(Stream.NULLS),
+                    mask,
+                    dictionaryDomainCounts,
+                    dictionaryDomainGroups,
+                    dictionaryDomainRepresentatives);
+        }
+        finally {
+            phaseMetrics.recordGrouping(System.nanoTime() - start);
+        }
+        maxObservedGroup = inlineGroupingState.groupCount() - 1;
+        int requiredCapacity = toIntExact(maxObservedGroup + 1);
+        int defaultCapacity = Allocator.computeCapacity(requiredCapacity);
+        int newCapacity = requiredCapacity;
+        for (PhysicalAggregationUnit aggregation : aggregations) {
+            int preferredCapacity = aggregation.stateCapacity(requiredCapacity, defaultCapacity);
+            if (preferredCapacity < requiredCapacity) {
+                throw new IllegalArgumentException("aggregation state capacity is less than required group count");
+            }
+            newCapacity = Math.max(newCapacity, preferredCapacity);
+        }
+        start = System.nanoTime();
+        try {
+            prepareAggregationStates(previousMaxGroup, maxObservedGroup, newCapacity);
+        }
+        finally {
+            phaseMetrics.recordStatePreparation(System.nanoTime() - start);
+        }
+        if (!fusedStateVectorsBound) {
+            refreshFusedStateVectors();
+        }
+        start = System.nanoTime();
+        try {
+            for (int update = 0; update < fusedSpecs.length; update++) {
+                LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
+                long constant = fusedSpecs[update].constantValue();
+                for (int domain = 0; domain < domainSlots; domain++) {
+                    int frequency = dictionaryDomainCounts[domain];
+                    if (frequency != 0) {
+                        state.update(dictionaryDomainGroups[domain], constant * frequency);
+                    }
+                }
+            }
+        }
+        finally {
+            phaseMetrics.recordAccumulation(System.nanoTime() - start);
+        }
+        return true;
     }
 
     private boolean allPlainAggregationsFusible()
