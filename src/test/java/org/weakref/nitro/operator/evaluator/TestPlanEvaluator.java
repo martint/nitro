@@ -52,6 +52,8 @@ import org.weakref.nitro.function.scalar.builtin.InUtf8;
 import org.weakref.nitro.function.scalar.builtin.InUtf8SourceMaskOptimization;
 import org.weakref.nitro.function.scalar.builtin.LessThanI64;
 import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualI64;
+import org.weakref.nitro.function.scalar.builtin.LessThanOrEqualUtf8;
+import org.weakref.nitro.function.scalar.builtin.LessThanUtf8;
 import org.weakref.nitro.function.scalar.builtin.ScaledRelativeDifferenceGtI64;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8;
 import org.weakref.nitro.function.scalar.builtin.SubstringUtf8BinarySliceProjection;
@@ -718,6 +720,46 @@ public class TestPlanEvaluator
 
         assertThat(result.selectedCount()).isEqualTo(1);
         assertThat(result.position(0)).isEqualTo(1);
+    }
+
+    @Test
+    void testReferenceMaskOptimizesUtf8RangeComparisonsViaPrimitiveMaskEvaluation()
+    {
+        Variable lower = new Variable(0);
+        Variable upper = new Variable(1);
+        Variable afterLower = new Variable(2);
+        Variable beforeUpper = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(lower, new Literal("b"), AllMask.ALL),
+                        new Assignment(upper, new Literal("d"), AllMask.ALL),
+                        new Assignment(afterLower, new Call("lte_utf8", List.of(
+                                new Reference(lower, Stream.VALUES),
+                                new Reference(new Input(0), Stream.VALUES))), AllMask.ALL),
+                        new Assignment(beforeUpper, new Call("lt_utf8", List.of(
+                                new Reference(new Input(0), Stream.VALUES),
+                                new Reference(upper, Stream.VALUES))), AllMask.ALL)),
+                List.of());
+
+        int[] ids = {0, 1, 2, 3, 2};
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                builtinPrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES),
+                        DictionaryVector.wrap(ids, utf8Vector("a", "b", "c", "d")))),
+                new Allocator(EngineResources.createDefault()));
+
+        Mask result = evaluator.evaluate(
+                new AndMask(List.of(
+                        new ReferenceMask(new Reference(afterLower, Stream.VALUES)),
+                        new ReferenceMask(new Reference(beforeUpper, Stream.VALUES)))),
+                Mask.all(ids.length));
+
+        assertThat(result.selectedCount()).isEqualTo(3);
+        assertThat(result.position(0)).isEqualTo(1);
+        assertThat(result.position(1)).isEqualTo(2);
+        assertThat(result.position(2)).isEqualTo(4);
     }
 
     @Test
@@ -4523,6 +4565,8 @@ public class TestPlanEvaluator
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(InUtf8.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanI64.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualI64.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanUtf8.class)));
+        primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(LessThanOrEqualUtf8.class)));
         primitiveRegistry.register(scalarRegistry.register(scalarLoader.load(ScaledRelativeDifferenceGtI64.class)));
         return primitiveRegistry;
     }

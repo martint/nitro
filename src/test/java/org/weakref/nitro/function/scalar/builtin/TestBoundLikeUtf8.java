@@ -119,6 +119,42 @@ class TestBoundLikeUtf8
                 .containsExactly(true, false, true, false);
     }
 
+    @Test
+    void testDictionaryDirectMaskHonorsNullsAndErrors()
+    {
+        BoundLikeUtf8 function = new BoundLikeUtf8("%google%");
+        Streams input = Streams.ofValues(new DictionaryVector(
+                        new int[] {0, 1, 2, 0, 1},
+                        utf8("google", "other", "xgoogley")))
+                .with(Stream.NULLS, new BooleanVector(new boolean[] {false, false, false, true, false}))
+                .with(Stream.ERRORS, new BooleanVector(new boolean[] {false, false, true, false, false}));
+        Mask mask = Mask.all(5);
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            assertThat(function.tryEvaluateTrueMaskInPlace(
+                    List.of(input), mask, new PrimitiveExecutionContext(allocator))).isTrue();
+        }
+
+        assertThat(mask.selectedCount()).isEqualTo(1);
+        assertThat(mask.position(0)).isZero();
+    }
+
+    @Test
+    void testFlatDirectMaskDeclinesToPreserveVectorizedSweep()
+    {
+        BoundLikeUtf8 function = new BoundLikeUtf8("%google%");
+        Mask mask = Mask.all(2);
+
+        try (Allocator allocator = new Allocator(EngineResources.createDefault())) {
+            assertThat(function.tryEvaluateTrueMaskInPlace(
+                    List.of(Streams.ofValues(utf8("google", "other"))),
+                    mask,
+                    new PrimitiveExecutionContext(allocator))).isFalse();
+        }
+
+        assertThat(mask.all()).isTrue();
+    }
+
     private static void assertMatches(Vector input, Mask mask, boolean... expected)
     {
         Streams result = evaluate(new BoundLikeUtf8("%google%"), Streams.ofValues(input), mask);

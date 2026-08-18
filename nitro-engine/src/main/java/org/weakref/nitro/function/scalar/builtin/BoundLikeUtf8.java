@@ -26,6 +26,7 @@ import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
 import org.weakref.nitro.data.Vector;
 import org.weakref.nitro.data.VectorAccess;
+import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarFunction;
@@ -43,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  */
 @ScalarFunction(name = "bound_like_utf8")
 public final class BoundLikeUtf8
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("BoundLikeUtf8");
     private final LikeUtf8.Pattern pattern;
@@ -74,6 +75,21 @@ public final class BoundLikeUtf8
             throw new IllegalArgumentException("Unexpected argument index for bound_like_utf8: " + inputIndex);
         }
         return requestedOutputStreams.isEmpty() ? NO_INPUT_STREAMS : ALL_INPUT_STREAMS;
+    }
+
+    @Override
+    public Set<Stream> requiredMaskInputStreams(int inputIndex)
+    {
+        if (inputIndex != 0) {
+            throw new IllegalArgumentException("Unexpected argument index for bound_like_utf8: " + inputIndex);
+        }
+        return ALL_INPUT_STREAMS;
+    }
+
+    @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return false;
     }
 
     @Override
@@ -145,6 +161,93 @@ public final class BoundLikeUtf8
             result = result.with(Stream.ERRORS, errors);
         }
         return result;
+    }
+
+    @Override
+    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return evaluateMask(inputs, mask, context, true);
+    }
+
+    @Override
+    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return evaluateMask(inputs, mask, context, false);
+    }
+
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryRetainMask(inputs, mask, true);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryRetainMask(inputs, mask, false);
+    }
+
+    private Mask evaluateMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, boolean selectMatches)
+    {
+        if (!supportsDirectMask(inputs)) {
+            return null;
+        }
+        Mask result = context.allocator().copyMask(allocationContext, mask);
+        if (!tryRetainMask(inputs, result, selectMatches)) {
+            context.allocator().release(allocationContext, result);
+            return null;
+        }
+        return result;
+    }
+
+    private boolean tryRetainMask(List<Streams> inputs, Mask mask, boolean selectMatches)
+    {
+        if (inputs.size() != 1) {
+            throw new IllegalArgumentException("Unexpected argument count for bound_like_utf8");
+        }
+        Streams input = inputs.getFirst();
+        Vector values = input.values();
+        VectorAccess.BooleanValues nulls = VectorAccess.booleanValues(input.getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues errors = VectorAccess.booleanValues(input.getOrNull(Stream.ERRORS));
+
+        switch (values) {
+            case DictionaryVector dictionary when dictionary.values() instanceof BinaryVector entries -> {
+                boolean[] entryMatches = new boolean[entries.length()];
+                for (int entry = 0; entry < entries.length(); entry++) {
+                    entryMatches[entry] = matches(entries, entry);
+                }
+                int[] ids = dictionary.ids();
+                mask.retainIf(position ->
+                        !nulls.value(position) &&
+                        !errors.value(position) &&
+                        entryMatches[ids[position]] == selectMatches);
+                return true;
+            }
+            case RleVector rle when rle.values() instanceof BinaryVector entries -> {
+                mask.retainIf(position ->
+                        !nulls.value(position) &&
+                        !errors.value(position) &&
+                        matches(entries, rle.runIndex(position)) == selectMatches);
+                return true;
+            }
+            default -> {
+                // Flat LIKE already has a vectorized contains sweep. Materializing that result is cheaper than
+                // replacing it with scalar predicate calls merely to avoid the BooleanVector.
+                return false;
+            }
+        }
+    }
+
+    private static boolean supportsDirectMask(List<Streams> inputs)
+    {
+        if (inputs.size() != 1 || !inputs.getFirst().has(Stream.VALUES)) {
+            return false;
+        }
+        return switch (inputs.getFirst().values()) {
+            case DictionaryVector dictionary -> dictionary.values() instanceof BinaryVector;
+            case RleVector rle -> rle.values() instanceof BinaryVector;
+            default -> false;
+        };
     }
 
     private Vector prepareErrors(Vector inputErrors, Vector existing, int length, PrimitiveExecutionContext context)

@@ -17,6 +17,7 @@ import org.weakref.nitro.data.Allocator;
 import org.weakref.nitro.data.Mask;
 import org.weakref.nitro.data.Stream;
 import org.weakref.nitro.data.Streams;
+import org.weakref.nitro.function.scalar.MaskEvaluablePrimitiveFunction;
 import org.weakref.nitro.function.scalar.PrimitiveExecutionContext;
 import org.weakref.nitro.function.scalar.PrimitiveFunction;
 import org.weakref.nitro.function.scalar.ScalarFunction;
@@ -26,7 +27,7 @@ import java.util.Set;
 
 @ScalarFunction(name = "lte_utf8")
 public final class LessThanOrEqualUtf8
-        implements PrimitiveFunction
+        implements PrimitiveFunction, MaskEvaluablePrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("LessThanOrEqualUtf8");
     private final Utf8BinaryDispatch dispatch;
@@ -54,8 +55,44 @@ public final class LessThanOrEqualUtf8
     }
 
     @Override
+    public Set<Stream> requiredMaskInputStreams(int inputIndex)
+    {
+        return PrimitiveFunction.VALUES_AND_NULLS_INPUT_STREAMS;
+    }
+
+    @Override
+    public boolean requiresCompletedInputCompanionStreamsForMask()
+    {
+        return false;
+    }
+
+    @Override
     public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         return dispatch.applyLessThanOrEqual("lte_utf8", allocationContext, inputs, mask, requestedStreams, output, context);
+    }
+
+    @Override
+    public Mask tryEvaluateTrueMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return dispatch.tryEvaluateLessThanOrEqualTrueMask("lte_utf8", allocationContext, inputs, mask, context);
+    }
+
+    @Override
+    public Mask tryEvaluateFalseMask(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return dispatch.tryEvaluateLessThanOrEqualFalseMask("lte_utf8", allocationContext, inputs, mask, context);
+    }
+
+    @Override
+    public boolean tryEvaluateTrueMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return dispatch.tryEvaluateLessThanOrEqualTrueMaskInPlace("lte_utf8", inputs, mask);
+    }
+
+    @Override
+    public boolean tryEvaluateFalseMaskInPlace(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return dispatch.tryEvaluateLessThanOrEqualFalseMaskInPlace("lte_utf8", inputs, mask);
     }
 }

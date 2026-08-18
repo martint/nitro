@@ -97,6 +97,46 @@ public final class Utf8BinaryDispatch
         return tryEvaluateEqualsMaskInPlace(functionName, inputs, mask, false);
     }
 
+    public Mask tryEvaluateLessThanTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateComparisonMask(functionName, allocationContext, Operation.LESS_THAN, inputs, mask, context, true);
+    }
+
+    public Mask tryEvaluateLessThanFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateComparisonMask(functionName, allocationContext, Operation.LESS_THAN, inputs, mask, context, false);
+    }
+
+    public boolean tryEvaluateLessThanTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateComparisonMaskInPlace(functionName, Operation.LESS_THAN, inputs, mask, true);
+    }
+
+    public boolean tryEvaluateLessThanFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateComparisonMaskInPlace(functionName, Operation.LESS_THAN, inputs, mask, false);
+    }
+
+    public Mask tryEvaluateLessThanOrEqualTrueMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateComparisonMask(functionName, allocationContext, Operation.LESS_THAN_OR_EQUAL, inputs, mask, context, true);
+    }
+
+    public Mask tryEvaluateLessThanOrEqualFalseMask(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, PrimitiveExecutionContext context)
+    {
+        return tryEvaluateComparisonMask(functionName, allocationContext, Operation.LESS_THAN_OR_EQUAL, inputs, mask, context, false);
+    }
+
+    public boolean tryEvaluateLessThanOrEqualTrueMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateComparisonMaskInPlace(functionName, Operation.LESS_THAN_OR_EQUAL, inputs, mask, true);
+    }
+
+    public boolean tryEvaluateLessThanOrEqualFalseMaskInPlace(String functionName, List<Streams> inputs, Mask mask)
+    {
+        return tryEvaluateComparisonMaskInPlace(functionName, Operation.LESS_THAN_OR_EQUAL, inputs, mask, false);
+    }
+
     public Streams applyInSet(String functionName, Allocator.Context allocationContext, List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
     {
         checkArgument(inputs.size() >= 2, "Unexpected argument count for %s", functionName);
@@ -281,6 +321,77 @@ public final class Utf8BinaryDispatch
                         !isNull(leftNulls, position) &&
                         !isNull(rightNulls, position) &&
                         binaryEquals(functionName, left, position, right, position) == selectMatches);
+        return true;
+    }
+
+    private Mask tryEvaluateComparisonMask(
+            String functionName,
+            Allocator.Context allocationContext,
+            Operation operation,
+            List<Streams> inputs,
+            Mask mask,
+            PrimitiveExecutionContext context,
+            boolean selectMatches)
+    {
+        Mask result = context.allocator().copyMask(allocationContext, mask);
+        if (tryEvaluateComparisonMaskInPlace(functionName, operation, inputs, result, selectMatches)) {
+            return result;
+        }
+        context.allocator().release(allocationContext, result);
+        return null;
+    }
+
+    private boolean tryEvaluateComparisonMaskInPlace(
+            String functionName,
+            Operation operation,
+            List<Streams> inputs,
+            Mask mask,
+            boolean selectMatches)
+    {
+        checkArgument(inputs.size() == 2, "Unexpected argument count for %s", functionName);
+        Vector left = inputs.get(0).values();
+        Vector right = inputs.get(1).values();
+        requireUtf8Traits(functionName, left, right);
+        VectorAccess.BooleanValues leftNulls = VectorAccess.booleanValues(inputs.get(0).getOrNull(Stream.NULLS));
+        VectorAccess.BooleanValues rightNulls = VectorAccess.booleanValues(inputs.get(1).getOrNull(Stream.NULLS));
+
+        if (left instanceof DictionaryVector dictionary &&
+                dictionary.values() instanceof BinaryVector dictionaryValues &&
+                right instanceof RleVector rle && rle.counts().length == 1 &&
+                rle.values() instanceof BinaryVector literal) {
+            boolean[] matches = new boolean[dictionaryValues.length()];
+            for (int entry = 0; entry < matches.length; entry++) {
+                matches[entry] = evaluate(functionName, operation, dictionaryValues, entry, literal, 0, null, null, 0);
+            }
+            int[] ids = dictionary.ids();
+            mask.retainIf(position ->
+                    !isNull(leftNulls, position) &&
+                    !isNull(rightNulls, position) &&
+                    matches[ids[position]] == selectMatches);
+            return true;
+        }
+        if (left instanceof RleVector rle && rle.counts().length == 1 &&
+                rle.values() instanceof BinaryVector literal &&
+                right instanceof DictionaryVector dictionary &&
+                dictionary.values() instanceof BinaryVector dictionaryValues) {
+            boolean[] matches = new boolean[dictionaryValues.length()];
+            for (int entry = 0; entry < matches.length; entry++) {
+                matches[entry] = evaluate(functionName, operation, literal, 0, dictionaryValues, entry, null, null, 0);
+            }
+            int[] ids = dictionary.ids();
+            mask.retainIf(position ->
+                    !isNull(leftNulls, position) &&
+                    !isNull(rightNulls, position) &&
+                    matches[ids[position]] == selectMatches);
+            return true;
+        }
+
+        VectorAccess.BinaryValues leftValues = VectorAccess.binaryValues(left);
+        VectorAccess.BinaryValues rightValues = VectorAccess.binaryValues(right);
+        mask.retainIf(position ->
+                !isNull(leftNulls, position) &&
+                !isNull(rightNulls, position) &&
+                evaluateGeneric(operation, leftValues, rightValues, leftNulls, rightNulls, position) == selectMatches);
         return true;
     }
 
