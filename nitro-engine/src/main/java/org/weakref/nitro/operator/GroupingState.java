@@ -2616,7 +2616,7 @@ final class GroupingState
         }
     }
 
-    private int groupForLongKey(long key)
+    int groupForLongKey(long key)
     {
         if (useLongDirectGrouping) {
             long directKey = useCompressedLongDirectGrouping ? Long.compress(key, longDirectCompressionMask) : key;

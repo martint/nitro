@@ -15,6 +15,7 @@ package org.weakref.nitro.operator;
 
 import org.weakref.nitro.core.function.aggregation.GroupedAggregationUpdate;
 import org.weakref.nitro.core.function.aggregation.GroupedStateUpdate;
+import org.weakref.nitro.core.function.aggregation.LongStateUpdate;
 import org.weakref.nitro.core.type.Field;
 import org.weakref.nitro.core.type.Schema;
 import org.weakref.nitro.core.type.TypeBinding;
@@ -65,6 +66,8 @@ public class GroupedAggregationOperator
     private final boolean groupPartitionedLongDistinct;
     private final boolean partialGeneratedGrouping;
     private final boolean fusedDictionaryInput;
+    private final boolean dictionaryDomainAggregation;
+    private final int dictionaryDomainAggregationMinReduction;
     private final boolean fusedLongRunCache;
     private final boolean fusedConstantRuns;
     private final int fusedConstantRunGroupMin;
@@ -117,6 +120,8 @@ public class GroupedAggregationOperator
     private boolean debugFusedLimitPrinted;
     private boolean debugFusedReuseContinuationPrinted;
     private boolean debugFusedConstantRunsPrinted;
+    private int[] dictionaryDomainCounts = new int[0];
+    private int[] dictionaryDomainGroups = new int[0];
     private int nextSessionOutputPosition;
     private int releasedSessionOutputPosition;
 
@@ -345,6 +350,8 @@ public class GroupedAggregationOperator
         this.groupPartitionedLongDistinct = policy.groupPartitionedLongDistinct();
         this.partialGeneratedGrouping = policy.partialGeneratedGrouping();
         this.fusedDictionaryInput = policy.fusedDictionaryInput();
+        this.dictionaryDomainAggregation = policy.dictionaryDomainAggregation();
+        this.dictionaryDomainAggregationMinReduction = policy.dictionaryDomainAggregationMinReduction();
         this.fusedLongRunCache = policy.fusedLongRunCache();
         this.fusedConstantRuns = policy.fusedConstantRuns();
         this.fusedConstantRunGroupMin = policy.fusedConstantRunGroupMin();
@@ -904,6 +911,15 @@ public class GroupedAggregationOperator
         int runHits = (int) runSample;
         boolean runCache = runComparisons >= 4 && runHits * 2 >= runComparisons;
         boolean inputIndependentAccumulators = canBatchInputIndependentFusedAccumulator();
+        if (dictionaryDomainAggregation
+                && keyMapped
+                && inputIndependentAccumulators
+                && filteredAggregationIndexes.length == 0
+                && distinctAggregationGroups.length == 0
+                && fusedBindings.keyDomainSize() * (long) dictionaryDomainAggregationMinReduction <= mask.count()
+                && tryDictionaryDomainAggregation(mask)) {
+            return true;
+        }
         boolean constantRuns = fusedConstantRuns
                 && runCache
                 && inlineGroupingState.groupCount() >= fusedConstantRunGroupMin
@@ -1016,6 +1032,43 @@ public class GroupedAggregationOperator
 
         inlineGroupingState.nextGroupId = nextId;
         inlineGroupingState.longGroupCount = (int) nextId;
+        return true;
+    }
+
+    /**
+     * Executes input-independent grouped updates over the physical key domain. The adapter counts logical rows by
+     * dictionary position, so grouping and state dispatch happen once per used domain value rather than once per row.
+     */
+    private boolean tryDictionaryDomainAggregation(Mask mask)
+    {
+        int domainSize = fusedBindings.keyDomainSize();
+        if (dictionaryDomainCounts.length < domainSize) {
+            dictionaryDomainCounts = new int[Allocator.computeCapacity(domainSize)];
+            dictionaryDomainGroups = new int[dictionaryDomainCounts.length];
+        }
+        domainSize = fusedBindings.countKeyDomain(mask, dictionaryDomainCounts);
+        if (domainSize == 0) {
+            return false;
+        }
+
+        inlineGroupingState.reserveSingleLongTable(domainSize);
+        for (int domain = 0; domain < domainSize; domain++) {
+            if (dictionaryDomainCounts[domain] != 0) {
+                dictionaryDomainGroups[domain] = inlineGroupingState.groupForLongKey(fusedBindings.keyDomainValue(domain));
+            }
+        }
+        ensureFusedStateCapacity(toIntExact(inlineGroupingState.groupCount()));
+
+        for (int update = 0; update < fusedSpecs.length; update++) {
+            LongStateUpdate state = (LongStateUpdate) fusedStateVectors[update];
+            long constant = fusedSpecs[update].constantValue();
+            for (int domain = 0; domain < domainSize; domain++) {
+                int frequency = dictionaryDomainCounts[domain];
+                if (frequency != 0) {
+                    state.update(dictionaryDomainGroups[domain], constant * frequency);
+                }
+            }
+        }
         return true;
     }
 

@@ -418,6 +418,36 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void dictionaryDomainCountMatchesAcrossSparseBatchesAndReorderedDomains()
+    {
+        Map<Long, long[]> reference = new HashMap<>();
+        List<TableOperator.Page> pages = new ArrayList<>();
+        long[][] domains = {
+                {11, 22, 33, 44},
+                {44, 11, 33, 22}};
+        for (int batch = 0; batch < domains.length; batch++) {
+            int size = 4_096;
+            int[] ids = new int[size];
+            int[] selected = new int[size - (size + 4) / 5];
+            int selectedCount = 0;
+            for (int position = 0; position < size; position++) {
+                int id = (position * 3 + batch) & 3;
+                ids[position] = id;
+                if (position % 5 != 0) {
+                    selected[selectedCount++] = position;
+                    reference.computeIfAbsent(domains[batch][id], ignored -> new long[2])[0]++;
+                }
+            }
+            pages.add(TableOperator.Page.values(
+                    size,
+                    new Vector[] {DictionaryVector.ofTrustedIds(ids, new I64Vector(domains[batch]))},
+                    Mask.sparse(selected, size)));
+        }
+
+        assertGroupedSumAndCount(pages, List.of(new CountAll()), reference, false);
+    }
+
+    @Test
     void fusedPlainAggregationWritesGroupsForFilteredAccumulator()
     {
         Map<Long, long[]> reference = new HashMap<>();

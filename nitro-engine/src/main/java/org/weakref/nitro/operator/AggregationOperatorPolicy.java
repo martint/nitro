@@ -29,6 +29,8 @@ public record AggregationOperatorPolicy(
         boolean groupPartitionedLongDistinct,
         boolean partialGeneratedGrouping,
         boolean fusedDictionaryInput,
+        boolean dictionaryDomainAggregation,
+        int dictionaryDomainAggregationMinReduction,
         boolean fusedLongRunCache,
         boolean fusedConstantRuns,
         int fusedConstantRunGroupMin,
@@ -42,6 +44,7 @@ public record AggregationOperatorPolicy(
         checkArgument(fuseGroupLimit > 0, "fuseGroupLimit must be positive");
         checkArgument(fuseLocalGroupLimit > 0, "fuseLocalGroupLimit must be positive");
         checkArgument(fuseMappedOnlyGroupLimit > 0, "fuseMappedOnlyGroupLimit must be positive");
+        checkArgument(dictionaryDomainAggregationMinReduction > 0, "dictionaryDomainAggregationMinReduction must be positive");
         checkArgument(fusedConstantRunGroupMin > 0, "fusedConstantRunGroupMin must be positive");
     }
 
@@ -58,6 +61,8 @@ public record AggregationOperatorPolicy(
                 true,
                 true,
                 true,
+                true,
+                4,
                 true,
                 true,
                 1 << 15,
@@ -95,6 +100,12 @@ public record AggregationOperatorPolicy(
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.groupedAggregation.fusedDictionaryInput",
                         Boolean.toString(defaults.fusedDictionaryInput()))),
+                Boolean.parseBoolean(System.getProperty(
+                        "nitro.groupedAggregation.dictionaryDomainAggregation",
+                        Boolean.toString(defaults.dictionaryDomainAggregation()))),
+                Integer.getInteger(
+                        "nitro.groupedAggregation.dictionaryDomainAggregationMinReduction",
+                        defaults.dictionaryDomainAggregationMinReduction()),
                 Boolean.parseBoolean(System.getProperty(
                         "nitro.groupedAggregation.fusedLongRunCache",
                         Boolean.toString(defaults.fusedLongRunCache()))),

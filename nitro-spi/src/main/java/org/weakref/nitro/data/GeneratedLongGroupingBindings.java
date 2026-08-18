@@ -13,6 +13,8 @@
  */
 package org.weakref.nitro.data;
 
+import java.util.Arrays;
+
 /**
  * Reusable physical bindings for the generated single-long grouping convention.
  *
@@ -214,6 +216,38 @@ public final class GeneratedLongGroupingBindings
     public int additionalGroupUpperBound(int selectedRows)
     {
         return keyMapped ? Math.min(selectedRows, keyPhysicalLength) : selectedRows;
+    }
+
+    public int keyDomainSize()
+    {
+        return keyMapped ? keyPhysicalLength : 0;
+    }
+
+    /**
+     * Counts selected logical rows by physical key-domain position. Returns zero when the key is not mapped.
+     * Representation inspection stays in this data-layer adapter; execution operators see only a compact domain.
+     */
+    public int countKeyDomain(Mask mask, int[] counts)
+    {
+        if (!keyMapped) {
+            return 0;
+        }
+        if (counts.length < keyPhysicalLength) {
+            throw new IllegalArgumentException("counts is smaller than key domain");
+        }
+        Arrays.fill(counts, 0, keyPhysicalLength, 0);
+        for (int position : mask) {
+            counts[keyIds[position]]++;
+        }
+        return keyPhysicalLength;
+    }
+
+    public long keyDomainValue(int position)
+    {
+        if (!keyMapped || position < 0 || position >= keyPhysicalLength) {
+            throw new IllegalArgumentException("invalid key domain position");
+        }
+        return intKey ? ((int[]) keyValues)[position] : ((long[]) keyValues)[position];
     }
 
     public Object keyValues()
