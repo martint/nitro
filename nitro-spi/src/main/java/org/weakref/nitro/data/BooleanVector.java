@@ -132,6 +132,14 @@ public class BooleanVector
         sharedAllFalseOwner = null;
     }
 
+    /** Invalidates cached constant-content state before a subclass mutates individual positions. */
+    protected final void invalidateContentSummary()
+    {
+        isAllFalseCache = null;
+        isAllTrueCache = null;
+        sharedAllFalseOwner = null;
+    }
+
     public void markAllTrue()
     {
         Arrays.fill(values, true);

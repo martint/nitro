@@ -1162,17 +1162,88 @@ public final class PlanEvaluator
 
     private Streams evaluateMerge(Set<Stream> requestedStreams, Merge merge, Mask mask, Streams output)
     {
-        Mask trueMask = evaluateMaskOutcome(merge.condition(), mask).trueMask();
+        MaskOutcome conditionOutcome = evaluateMaskOutcome(merge.condition(), mask);
+        Mask trueMask = conditionOutcome.trueMask();
         Mask falseMask = allocator.differenceMask(allocationContext, mask, trueMask);
+        if (!conditionOutcome.errorMask().none()) {
+            falseMask = allocator.differenceMask(allocationContext, falseMask, conditionOutcome.errorMask());
+        }
 
         Streams.Builder result = Streams.builder();
         for (Stream stream : requestedStreams) {
             Vector merged = evaluateMergeStream(stream, merge, mask, trueMask, falseMask, output);
+            if ((stream == Stream.NULLS || stream == Stream.ERRORS) && !conditionOutcome.errorMask().none()) {
+                merged = fillFalseBoolean(merged, conditionOutcome.errorMask(), mask.size());
+            }
+            if (stream == Stream.ERRORS && !conditionOutcome.errorMask().none()) {
+                Vector conditionErrors = materializeMaskErrors(
+                        evaluateMaskExpressionErrors(merge.condition(), conditionOutcome.errorMask()),
+                        conditionOutcome.errorMask(),
+                        mask.size());
+                merged = mergeOptionalBooleanStreams(conditionErrors, merged, null, mask);
+            }
             if (merged != null) {
                 result.put(stream, merged);
             }
         }
         return completeRequestedStreams(requestedStreams, result.build(), mask);
+    }
+
+    private Vector evaluateMaskExpressionErrors(MaskExpression expression, Mask mask)
+    {
+        return switch (expression) {
+            case AllMask _ -> null;
+            case RangeConstrainedAndMask(_, _, _, _, _, AndMask fallback) -> evaluateMaskExpressionErrors(fallback, mask);
+            case ReferenceMask(Reference reference) -> {
+                MaskExpression resolved = MaskExpressionResolver.resolve(plan, new ReferenceMask(reference));
+                if (!(resolved instanceof ReferenceMask(Reference resolvedReference) && resolvedReference.equals(reference))) {
+                    yield evaluateMaskExpressionErrors(resolved, mask);
+                }
+                yield optionalBooleanStream(reference.producer(), Stream.ERRORS, mask);
+            }
+            case NotMask(MaskExpression source) -> evaluateMaskExpressionErrors(source, mask);
+            case AndMask(List<MaskExpression> terms) -> evaluateMaskTermErrors(terms, mask);
+            case OrMask(List<MaskExpression> terms) -> evaluateMaskTermErrors(terms, mask);
+        };
+    }
+
+    private Vector evaluateMaskTermErrors(List<MaskExpression> terms, Mask mask)
+    {
+        Vector errors = null;
+        for (MaskExpression term : terms) {
+            errors = mergeOptionalBooleanStreams(errors, evaluateMaskExpressionErrors(term, mask), null, mask);
+        }
+        return errors;
+    }
+
+    private Vector materializeMaskErrors(Vector source, Mask errorMask, int length)
+    {
+        if (ErrorVectors.hasDiagnostics(source)) {
+            ErrorVector errors = allocator.allocateOrGrow(
+                    allocationContext,
+                    null,
+                    ErrorVector.class,
+                    length,
+                    ErrorVector::new);
+            fillFalseBoolean(errors, Mask.all(length), length);
+            for (int position : errorMask) {
+                ErrorValue error = ErrorVectors.errorAt(source, position);
+                if (error != null) {
+                    errors.setError(position, error);
+                }
+                else {
+                    errors.clearError(position);
+                    errors.values()[position] = true;
+                }
+            }
+            return errors;
+        }
+
+        BooleanVector errors = fillFalseBoolean(null, Mask.all(length), length);
+        for (int position : errorMask) {
+            errors.values()[position] = true;
+        }
+        return errors;
     }
 
     private Streams evaluateSequence(Set<Stream> requestedStreams, Sequence sequence, Mask mask, Streams output)

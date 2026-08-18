@@ -39,12 +39,14 @@ public final class ErrorVector
 
     public void setError(int position, ErrorValue error)
     {
+        invalidateContentSummary();
         errors[position] = requireNonNull(error, "error is null");
         values()[position] = true;
     }
 
     public void clearError(int position)
     {
+        invalidateContentSummary();
         errors[position] = null;
         values()[position] = false;
     }
@@ -180,6 +182,7 @@ public final class ErrorVector
 
     private void copyPosition(ErrorVector target, int sourcePosition, int targetPosition)
     {
+        target.invalidateContentSummary();
         target.values()[targetPosition] = values()[sourcePosition];
         target.errors[targetPosition] = errors[sourcePosition];
     }

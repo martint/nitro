@@ -450,6 +450,41 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testConditionalPropagatesConditionErrorsAndTreatsNullAsFalse()
+    {
+        ErrorValue diagnostic = new ErrorValue("test", 23, "CONDITION_ERROR", "USER_ERROR", "condition failed");
+        ErrorVector conditionErrors = new ErrorVector(3);
+        conditionErrors.setError(2, diagnostic);
+
+        Variable result = new Variable(0);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(
+                        result,
+                        new org.weakref.nitro.operator.evaluator.ir.Merge(
+                                new ReferenceMask(new Reference(new Input(0), Stream.VALUES)),
+                                new Reference(new Input(1), Stream.VALUES),
+                                new Reference(new Input(2), Stream.VALUES)),
+                        AllMask.ALL)),
+                List.of(new Reference(result, Stream.VALUES)));
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                new PrimitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), new BooleanVector(new boolean[] {true, false, false}),
+                        new Reference(new Input(0), Stream.NULLS), new BooleanVector(new boolean[] {false, true, false}),
+                        new Reference(new Input(0), Stream.ERRORS), conditionErrors,
+                        new Reference(new Input(1), Stream.VALUES), new I64Vector(new long[] {11, 12, 13}),
+                        new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {21, 22, 23}))),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams output = evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(3));
+        assertThat(((I64Vector) output.values()).values()).startsWith(11, 22);
+        ErrorVector errors = (ErrorVector) output.get(Stream.ERRORS);
+        assertThat(errors.values()).containsExactly(false, false, true);
+        assertThat(errors.error(2)).isEqualTo(diagnostic);
+    }
+
+    @Test
     void testConditionalEvaluatesNestedBranchesUnderBranchMasks()
     {
         PrimitiveRegistry primitiveRegistry = new PrimitiveRegistry();
@@ -2844,8 +2879,11 @@ public class TestPlanEvaluator
                 new Reference(new Input(2), Stream.VALUES), new I64Vector(new long[] {1, 1, 1, 1}),
                 new Reference(new Input(3), Stream.VALUES), new I64Vector(new long[] {2, 2, 2, 2}))), new Allocator(EngineResources.createDefault()));
 
-        I64Vector resultVector = (I64Vector) evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4)).get(Stream.VALUES);
-        assertThat(resultVector.values()).containsExactly(2L, 2L, 1L, 2L);
+        Streams output = evaluator.evaluate(new Reference(result, Stream.VALUES), Mask.all(4));
+        I64Vector resultVector = (I64Vector) output.get(Stream.VALUES);
+        // The value in an error row is undefined; only the error stream is observable there.
+        assertThat(resultVector.values()).endsWith(2L, 1L, 2L);
+        assertThat(((BooleanVector) output.get(Stream.ERRORS)).values()).containsExactly(true, false, false, false);
     }
 
     @Test

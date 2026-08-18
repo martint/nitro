@@ -21,6 +21,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TestErrorVector
 {
     @Test
+    void testInvalidatesAllFalseSummaryWhenErrorIsSet()
+    {
+        ErrorVector errors = new ErrorVector(2);
+        errors.markAllFalse();
+        assertThat(errors.isAllFalse()).isTrue();
+
+        errors.setError(1, new ErrorValue("test", 1, "FAILURE", "USER_ERROR", "failure"));
+
+        assertThat(errors.isAllFalse()).isFalse();
+    }
+
+    @Test
     void testCopiesDiagnosticsThroughGenericVectorOperations()
     {
         ErrorValue first = new ErrorValue("test", 1, "FIRST", "USER_ERROR", "first");
