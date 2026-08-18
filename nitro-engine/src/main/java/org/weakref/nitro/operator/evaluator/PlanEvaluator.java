@@ -775,10 +775,20 @@ public final class PlanEvaluator
 
     private Vector peelDictionaryCompatibleVector(Vector vector, int[] sharedIds, int rowCount, int baseLength)
     {
+        if (vector instanceof BooleanVector booleans && booleans.length() == rowCount) {
+            // BooleanVector caches constant-content classification. Null and error streams produced as
+            // known all-false vectors therefore stay O(1) here instead of being rescanned for every batch.
+            if (booleans.isAllFalse()) {
+                return fillBoolean(false, baseLength);
+            }
+            if (booleans.isAllTrue()) {
+                return fillBoolean(true, baseLength);
+            }
+            return null;
+        }
         return switch (vector) {
             case DictionaryVector dictionary when dictionary.length() == rowCount && dictionary.values().length() >= baseLength && sameDictionaryIds(sharedIds, dictionary.ids(), rowCount) -> dictionary.values();
             case RleVector rle when rle.counts().length == 1 -> executionContext.allocator().allocateSingleRunRle(allocationContext, baseLength, rle.values());
-            case BooleanVector booleans when booleans.length() == rowCount && isConstantBooleanVector(booleans) -> fillBoolean(booleans.values()[0], baseLength);
             default -> null;
         };
     }
@@ -811,20 +821,6 @@ public final class PlanEvaluator
     }
 
     private record DictionaryIdsMetadata(int length, int baseLength) {}
-
-    private static boolean isConstantBooleanVector(BooleanVector vector)
-    {
-        if (vector.length() == 0) {
-            return true;
-        }
-        boolean value = vector.values()[0];
-        for (int index = 1; index < vector.length(); index++) {
-            if (vector.values()[index] != value) {
-                return false;
-            }
-        }
-        return true;
-    }
 
     private Streams wrapDictionaryPeeledStreams(int[] sharedIds, int rowCount, Streams streams)
     {

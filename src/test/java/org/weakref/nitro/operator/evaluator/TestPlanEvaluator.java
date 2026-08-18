@@ -3626,6 +3626,65 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDictionaryPeelingUsesCachedBooleanStreamClassification()
+    {
+        AtomicInteger allFalseClassifications = new AtomicInteger();
+        BooleanVector knownAllFalse = new BooleanVector(new boolean[6])
+        {
+            @Override
+            public boolean isAllFalse()
+            {
+                allFalseClassifications.incrementAndGet();
+                return true;
+            }
+
+            @Override
+            public boolean isAllTrue()
+            {
+                throw new AssertionError("known all-false stream must not be classified again");
+            }
+        };
+        AtomicInteger evaluatedPositions = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("dictionary_identity", new PrimitiveFunction()
+        {
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                evaluatedPositions.set(mask.count());
+                return inputs.getFirst();
+            }
+
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return ALL_INPUT_STREAMS;
+            }
+        });
+
+        Variable result = new Variable(0);
+        Reference inputValues = new Reference(new Input(0), Stream.VALUES);
+        Reference resultValues = new Reference(result, Stream.VALUES);
+        int[] ids = {0, 1, 0, 1, 0, 1};
+        PlanEvaluator evaluator = planEvaluator(
+                new EvaluationPlan(
+                        List.of(new Assignment(result, new Call("dictionary_identity", List.of(inputValues)), AllMask.ALL)),
+                        List.of(resultValues)),
+                registry,
+                inputResolver(Map.of(
+                        inputValues, DictionaryVector.wrap(ids, new I64Vector(new long[] {11, 29})),
+                        new Reference(new Input(0), Stream.NULLS), knownAllFalse)),
+                new Allocator(EngineResources.createDefault()));
+
+        Streams streams = evaluator.evaluate(resultValues, Mask.all(ids.length));
+
+        assertThat(evaluatedPositions).hasValue(2);
+        assertThat(allFalseClassifications).hasValue(1);
+        assertThat(streams.values()).isInstanceOf(DictionaryVector.class);
+        assertThat(((DictionaryVector) streams.values()).ids()).isSameAs(ids);
+    }
+
+    @Test
     void testDictionaryLiteralLessThanOrEqualIncludesEqualValues()
     {
         Variable literal = new Variable(0);
