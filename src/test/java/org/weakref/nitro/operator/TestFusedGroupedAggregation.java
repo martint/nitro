@@ -448,6 +448,40 @@ class TestFusedGroupedAggregation
     }
 
     @Test
+    void keyOnlyDictionaryGroupingDiscardsLogicalGroupIds()
+    {
+        int size = 100_000;
+        int[] ids = new int[size];
+        for (int position = 0; position < size; position++) {
+            ids[position] = position & 3;
+        }
+        List<TableOperator.Page> pages = List.of(TableOperator.Page.values(
+                size,
+                new Vector[] {DictionaryVector.ofTrustedIds(ids, new I64Vector(new long[] {44, 11, 33, 22}))},
+                Mask.all(size)));
+
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        GroupedAggregationOperator operator = new GroupedAggregationOperator(
+                allocator,
+                List.of(0),
+                List.of(),
+                new TableOperator(1, pages));
+        List<Long> actual = new ArrayList<>();
+        try (operator) {
+            while (operator.hasNext()) {
+                try (Batch result = operator.next()) {
+                    VectorAccess.LongValues values = VectorAccess.longValues(result.output(0).borrow(Stream.VALUES));
+                    for (int position : result.borrowMask()) {
+                        actual.add(values.value(position));
+                    }
+                }
+            }
+        }
+        assertThat(actual).containsExactlyInAnyOrder(11L, 22L, 33L, 44L);
+        assertThat(operator.discardsInlineGroupIds()).isTrue();
+    }
+
+    @Test
     void fusedPlainAggregationWritesGroupsForFilteredAccumulator()
     {
         Map<Long, long[]> reference = new HashMap<>();

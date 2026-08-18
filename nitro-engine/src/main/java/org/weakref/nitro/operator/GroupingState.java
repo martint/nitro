@@ -666,6 +666,10 @@ final class GroupingState
             if (!initialized) {
                 initializeIfNecessary(values, nulls, mask);
             }
+            if (useLongGrouping && values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
+                assignDictionaryLongGroupsDiscardingResults(dictionary, nulls[0], mask);
+                return true;
+            }
             if (!discardMultiLongResults) {
                 return false;
             }
@@ -2613,6 +2617,50 @@ final class GroupingState
                 dictionaryGenerations[dictionaryId] = generation;
             }
             output[position] = dictionaryGroupsById[dictionaryId];
+        }
+    }
+
+    /**
+     * Resolves only dictionary values that occur when the caller does not consume row group IDs. Once every domain
+     * value has been observed (and NULL is either impossible or already known), the remaining logical rows cannot
+     * change grouping state and need not be visited.
+     */
+    private void assignDictionaryLongGroupsDiscardingResults(DictionaryVector dictionary, Vector nullVector, Mask mask)
+    {
+        int[] ids = dictionary.ids();
+        Vector dictionaryValues = dictionary.values();
+        VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
+        int domainSize = dictionaryValues.length();
+        ensureDictionaryCacheCapacity(domainSize);
+        int generation = currentDictionaryGeneration(dictionaryValues);
+        int unresolved = 0;
+        for (int dictionaryId = 0; dictionaryId < domainSize; dictionaryId++) {
+            if (dictionaryGenerations[dictionaryId] != generation) {
+                unresolved++;
+            }
+        }
+
+        boolean nullResolved = VectorAccess.isAllFalseNulls(nullVector) || nullGroup >= 0;
+        if (unresolved == 0 && nullResolved) {
+            return;
+        }
+        reserveAdditionalGroups(unresolved + (nullResolved ? 0L : 1L));
+        for (int position : mask) {
+            if (OperatorVectorSupport.isNull(nullVector, position)) {
+                nullGroup();
+                nullResolved = true;
+            }
+            else {
+                int dictionaryId = ids[position];
+                if (dictionaryGenerations[dictionaryId] != generation) {
+                    dictionaryGroupsById[dictionaryId] = groupForLongKey(values.value(dictionaryId));
+                    dictionaryGenerations[dictionaryId] = generation;
+                    unresolved--;
+                }
+            }
+            if (unresolved == 0 && nullResolved) {
+                return;
+            }
         }
     }
 
