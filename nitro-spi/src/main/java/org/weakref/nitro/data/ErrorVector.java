@@ -70,6 +70,24 @@ public final class ErrorVector
     }
 
     @Override
+    public long contentFingerprint()
+    {
+        long hash = super.contentFingerprint();
+        for (ErrorValue error : errors) {
+            hash = (hash ^ (error == null ? 0 : error.hashCode())) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        return other instanceof ErrorVector errorsVector &&
+                super.hasSameContent(errorsVector) &&
+                Arrays.equals(errors, errorsVector.errors);
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         ErrorVector copy = allocator.allocate(allocationContext, ErrorVector.class, length(), ErrorVector::new);

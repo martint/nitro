@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.core.function.EncodedDomainReuse;
 import org.weakref.nitro.core.type.TypeBinding;
 import org.weakref.nitro.core.type.TypeIdentity;
 import org.weakref.nitro.core.type.TypeOperators;
@@ -1047,6 +1048,88 @@ public class TestPlanEvaluator
         assertThat(utf8(extractedValues, 5)).isEqualTo("www.");
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.UTF8_STRING)).isTrue();
         assertThat(extractedValues.hasTrait(org.weakref.nitro.data.Utf8Traits.ASCII_ONLY)).isTrue();
+    }
+
+    @Test
+    void testReusesDeterministicImmutableDictionaryDomainAcrossBatches()
+    {
+        AtomicInteger invocations = new AtomicInteger();
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("counted_domain", new PrimitiveFunction()
+        {
+            @Override
+            public Set<Stream> requiredInputStreams(int inputIndex, Set<Stream> requestedOutputStreams)
+            {
+                return requestedOutputStreams.contains(Stream.VALUES) ? Set.of(Stream.VALUES) : Set.of();
+            }
+
+            @Override
+            public Streams apply(List<Streams> inputs, Mask mask, Set<Stream> requestedStreams, Streams output, PrimitiveExecutionContext context)
+            {
+                invocations.incrementAndGet();
+                VectorAccess.BinaryRegions values = VectorAccess.binaryRegions(inputs.getFirst().values());
+                long[] result = new long[mask.size()];
+                for (int position : mask) {
+                    result[position] = values.length(position) * 10L;
+                }
+                return Streams.ofValues(new I64Vector(result));
+            }
+        }, EncodedDomainReuse.ENABLED);
+
+        Variable result = new Variable(0);
+        Reference input = new Reference(new Input(0), Stream.VALUES);
+        Reference output = new Reference(result, Stream.VALUES);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(new Assignment(result, new Call("counted_domain", List.of(input)), AllMask.ALL)),
+                List.of(output));
+        BinaryVector domain = utf8Vector("cat", "giraffe");
+        domain.freezeContent();
+        AtomicReference<DictionaryVector> current = new AtomicReference<>(DictionaryVector.wrap(new int[] {0, 1, 0}, domain));
+        Allocator allocator = new Allocator(EngineResources.createDefault());
+        PlanEvaluator evaluator = planEvaluator(plan, registry, (reference, _) -> reference.equals(input) ? current.get() : null, allocator);
+
+        DictionaryVector first = (DictionaryVector) evaluator.evaluate(output, Mask.all(3)).values();
+        assertThat(readLongs(first)).containsExactly(30, 70, 30);
+        evaluator.resetForReuse();
+
+        BinaryVector equalDomain = utf8Vector("cat", "giraffe");
+        equalDomain.freezeContent();
+        current.set(DictionaryVector.wrap(new int[] {1, 1, 0, 1}, equalDomain));
+        DictionaryVector second = (DictionaryVector) evaluator.evaluate(output, Mask.all(4)).values();
+        assertThat(readLongs(second)).containsExactly(70, 70, 30, 70);
+        assertThat(invocations).hasValue(1);
+
+        evaluator.resetForReuse();
+        BinaryVector replacementDomain = utf8Vector("horse", "hippopotamus");
+        replacementDomain.freezeContent();
+        current.set(DictionaryVector.wrap(new int[] {0, 1}, replacementDomain));
+        DictionaryVector third = (DictionaryVector) evaluator.evaluate(output, Mask.all(2)).values();
+        assertThat(readLongs(third)).containsExactly(50, 120);
+        assertThat(invocations).hasValue(2);
+
+        evaluator.resetForReuse();
+        BinaryVector recurringDomain = utf8Vector("cat", "giraffe");
+        recurringDomain.freezeContent();
+        current.set(DictionaryVector.wrap(new int[] {1, 0}, recurringDomain));
+        DictionaryVector fourth = (DictionaryVector) evaluator.evaluate(output, Mask.all(2)).values();
+        assertThat(readLongs(fourth)).containsExactly(70, 30);
+        assertThat(invocations).hasValue(2);
+
+        evaluator.resetForReuse();
+        BinaryVector collisionDomain = utf8Vector("a".repeat(100));
+        collisionDomain.freezeContent();
+        current.set(DictionaryVector.wrap(new int[] {0}, collisionDomain));
+        evaluator.evaluate(output, Mask.all(1));
+        assertThat(invocations).hasValue(3);
+
+        evaluator.resetForReuse();
+        BinaryVector distinctCollisionDomain = utf8Vector("a".repeat(50) + "b" + "a".repeat(49));
+        distinctCollisionDomain.freezeContent();
+        assertThat(distinctCollisionDomain.contentFingerprint()).isEqualTo(collisionDomain.contentFingerprint());
+        current.set(DictionaryVector.wrap(new int[] {0}, distinctCollisionDomain));
+        evaluator.evaluate(output, Mask.all(1));
+        assertThat(invocations).hasValue(4);
+        evaluator.close();
     }
 
     @Test
@@ -4419,6 +4502,16 @@ public class TestPlanEvaluator
     private static PlanEvaluator.InputResolver inputResolver(Map<Reference, org.weakref.nitro.data.Vector> inputs)
     {
         return (reference, mask) -> inputs.get(reference);
+    }
+
+    private static long[] readLongs(org.weakref.nitro.data.Vector vector)
+    {
+        VectorAccess.LongValues values = VectorAccess.longValues(vector);
+        long[] result = new long[vector.length()];
+        for (int position = 0; position < result.length; position++) {
+            result[position] = values.value(position);
+        }
+        return result;
     }
 
     private static PrimitiveFunction maskedConstant(long value, Set<Integer> expectedPositions)

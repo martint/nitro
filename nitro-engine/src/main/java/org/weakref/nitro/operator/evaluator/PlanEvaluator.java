@@ -14,6 +14,7 @@
 package org.weakref.nitro.operator.evaluator;
 
 import it.unimi.dsi.fastutil.ints.Int2ByteOpenHashMap;
+import org.weakref.nitro.core.function.EncodedDomainReuse;
 import org.weakref.nitro.core.function.mask.DirectMaskInputProvider;
 import org.weakref.nitro.core.function.mask.MaskCodeProvider;
 import org.weakref.nitro.core.function.mask.RangeConstraint;
@@ -115,6 +116,11 @@ public final class PlanEvaluator
     private final Map<Reference, Mask> memoizedMasks = new HashMap<>();
     private final Map<MaskExpression, MaskTermStats> maskTermStats = new HashMap<>();
     private final Map<Call, ArrayList<Streams>> callInputFrames = new IdentityHashMap<>();
+    // A deterministic transform over an immutable dictionary domain remains valid when a later batch presents a
+    // different row-id mapping over the same domain. Keep only the last domain per call site, mirroring the bounded
+    // reuse window of a dictionary-aware projection without teaching the evaluator any function semantics.
+    private final Map<Call, ArrayList<DictionaryDomainCacheEntry>> dictionaryDomainCache = new IdentityHashMap<>();
+    private final Allocator.Context dictionaryDomainCacheContext = new Allocator.Context("PlanEvaluator.dictionaryDomainCache");
     // Dictionary peeling walks the same row-id mapping for every node in a projected expression DAG. Cache its
     // logical base cardinality for this evaluation cycle; the ids buffer can be recycled with different contents in
     // the next batch, so reset()/resetForReuse() must clear the cache.
@@ -122,6 +128,9 @@ public final class PlanEvaluator
     // Results peeled through an input dictionary can borrow that immutable row mapping while the input batch is live.
     // ProjectOperator calls prepareResultForTransfer before a result escapes the batch, which copies only then.
     private final Set<Vector> borrowedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Cached bases are evaluator-owned beyond the current batch. A result that escapes must copy that base instead
+    // of transferring it out of the cache context.
+    private final Set<Vector> cachedDictionaryResults = Collections.newSetFromMap(new IdentityHashMap<>());
     private TermOrderFrames termOrderFrames;
     private final ArrayList<Streams> maskInvocationInputs = new ArrayList<>();
     private final PrimitiveMaskInvocation maskInvocation = new PrimitiveMaskInvocation(maskInvocationInputs);
@@ -134,6 +143,13 @@ public final class PlanEvaluator
     private long primitiveMaskSuccesses;
     private long primitiveMaskFallbacks;
     private long materializedMaskFallbacks;
+    private long dictionaryDomainCacheHits;
+    private long dictionaryDomainCacheMisses;
+    private long dictionaryDomainCacheBypasses;
+    private long dictionaryDomainCacheChanges;
+    private long dictionaryDomainCacheOversizedBypasses;
+    private long dictionaryDomainCacheUnstableBypasses;
+    private long dictionaryDomainCacheStaticBypasses;
 
     public record MaskExecutionDiagnostics(
             int plannedAssignments,
@@ -148,7 +164,14 @@ public final class PlanEvaluator
             long primitiveMaskAttempts,
             long primitiveMaskSuccesses,
             long primitiveMaskFallbacks,
-            long materializedMaskFallbacks) {}
+            long materializedMaskFallbacks,
+            long dictionaryDomainCacheHits,
+            long dictionaryDomainCacheMisses,
+            long dictionaryDomainCacheBypasses,
+            long dictionaryDomainCacheChanges,
+            long dictionaryDomainCacheOversizedBypasses,
+            long dictionaryDomainCacheUnstableBypasses,
+            long dictionaryDomainCacheStaticBypasses) {}
 
     @FunctionalInterface
     public interface InputResolver
@@ -329,7 +352,14 @@ public final class PlanEvaluator
                 primitiveMaskAttempts,
                 primitiveMaskSuccesses,
                 primitiveMaskFallbacks,
-                materializedMaskFallbacks);
+                materializedMaskFallbacks,
+                dictionaryDomainCacheHits,
+                dictionaryDomainCacheMisses,
+                dictionaryDomainCacheBypasses,
+                dictionaryDomainCacheChanges,
+                dictionaryDomainCacheOversizedBypasses,
+                dictionaryDomainCacheUnstableBypasses,
+                dictionaryDomainCacheStaticBypasses);
     }
 
     public void reset()
@@ -338,6 +368,7 @@ public final class PlanEvaluator
         memoizedStreams.clear();
         dictionaryIdsMetadata.clear();
         borrowedDictionaryResults.clear();
+        cachedDictionaryResults.clear();
         // Drop, rather than pool, every buffer produced during this evaluation cycle. These contexts
         // hold the result vectors handed back to callers (e.g. projected scalar outputs, literal RLEs,
         // mask scratch). A produced result can still be referenced by a consumer once the evaluation
@@ -365,6 +396,7 @@ public final class PlanEvaluator
         memoizedStreams.clear();
         dictionaryIdsMetadata.clear();
         borrowedDictionaryResults.clear();
+        cachedDictionaryResults.clear();
         for (Allocator.Context context : primitiveAllocationContexts) {
             allocator.releaseIfPresent(context);
         }
@@ -392,7 +424,19 @@ public final class PlanEvaluator
         if (!(vector instanceof DictionaryVector dictionary) || !borrowedDictionaryResults.remove(vector)) {
             return vector;
         }
-        return allocator.allocateDictionary(allocationContext, dictionary.ids(), dictionary.length(), dictionary.values());
+        Vector values = dictionary.values();
+        if (cachedDictionaryResults.remove(vector)) {
+            values = values.copy(allocator, allocationContext);
+        }
+        return allocator.allocateDictionary(allocationContext, dictionary.ids(), dictionary.length(), values);
+    }
+
+    /** Releases evaluator-owned cross-batch dictionary domains. */
+    public void close()
+    {
+        dictionaryDomainCache.clear();
+        cachedDictionaryResults.clear();
+        allocator.releaseIfPresent(dictionaryDomainCacheContext);
     }
 
     private Streams evaluateUnmemoized(Reference reference, Mask mask, Streams output)
@@ -546,7 +590,7 @@ public final class PlanEvaluator
         // Both peels require a dictionary-encoded input to do anything, so skip the machinery entirely on the common
         // flat-input case with one cheap instanceof scan (rather than building and discarding a peeling per call).
         if (mask.all() && hasDictionaryValues(inputs)) {
-            Streams peeledResult = tryEvaluateDictionaryPeeledCall(function, inputs, requestedStreams);
+            Streams peeledResult = tryEvaluateDictionaryPeeledCall(call, function, inputs, requestedStreams);
             if (peeledResult == null) {
                 peeledResult = tryEvaluatePropagatingNullsPeeledCall(function, inputs, requestedStreams);
             }
@@ -609,7 +653,7 @@ public final class PlanEvaluator
         return false;
     }
 
-    private Streams tryEvaluateDictionaryPeeledCall(PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
+    private Streams tryEvaluateDictionaryPeeledCall(Call call, PrimitiveFunction function, List<Streams> inputs, Set<Stream> requestedStreams)
     {
         if (!function.deterministic()) {
             return null;
@@ -621,8 +665,28 @@ public final class PlanEvaluator
         }
 
         try {
+            boolean cacheEnabled = primitiveRegistry.capabilityOrNull(call, EncodedDomainReuse.class) != null;
+            DictionaryDomainCacheKey cacheKey = cacheEnabled ? dictionaryDomainCacheKey(call, peeling, requestedStreams) : null;
+            if (cacheEnabled && cacheKey == null) {
+                dictionaryDomainCacheBypasses++;
+            }
+            ArrayList<DictionaryDomainCacheEntry> cachedDomains = cacheKey == null ? null : dictionaryDomainCache.get(call);
+            DictionaryDomainCacheEntry cached = findCachedDomain(cachedDomains, cacheKey);
+            if (cached != null) {
+                dictionaryDomainCacheHits++;
+                return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), cached.result(), true);
+            }
+            if (cachedDomains != null && !cachedDomains.isEmpty()) {
+                dictionaryDomainCacheChanges++;
+            }
+            if (cacheKey != null) {
+                dictionaryDomainCacheMisses++;
+            }
             Streams baseResult = function.apply(inputsForPeeling(peeling), peeling.baseMask(), requestedStreams, null, executionContext);
-            return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), baseResult);
+            if (cacheKey != null) {
+                replaceDictionaryDomainCache(call, cacheKey, baseResult);
+            }
+            return wrapDictionaryPeeledStreams(peeling.ids(), peeling.rowCount(), baseResult, false);
         }
         finally {
             allocator.release(allocationContext, peeling.baseMask());
@@ -632,6 +696,148 @@ public final class PlanEvaluator
     private static List<Streams> inputsForPeeling(DictionaryPeeling peeling)
     {
         return peeling.inputs();
+    }
+
+    private DictionaryDomainCacheKey dictionaryDomainCacheKey(Call call, DictionaryPeeling peeling, Set<Stream> requestedStreams)
+    {
+        if (policy.dictionaryDomainCacheMaxEntries() == 0 || policy.dictionaryDomainCacheSlots() == 0 ||
+                peeling.baseMask().size() > policy.dictionaryDomainCacheMaxEntries()) {
+            dictionaryDomainCacheOversizedBypasses++;
+            return null;
+        }
+
+        List<StableVectorKey> vectors = new ArrayList<>();
+        boolean dynamic = false;
+        for (int inputIndex = 0; inputIndex < peeling.inputs().size(); inputIndex++) {
+            if (isStaticReference(call.arguments().get(inputIndex))) {
+                continue;
+            }
+            dynamic = true;
+            Streams input = peeling.inputs().get(inputIndex);
+            for (Stream stream : Stream.values()) {
+                Vector vector = input.getOrNull(stream);
+                StableVectorKey key = stableVectorKey(vector);
+                if (key == null) {
+                    dictionaryDomainCacheUnstableBypasses++;
+                    return null;
+                }
+                vectors.add(key);
+            }
+        }
+        if (!dynamic) {
+            dictionaryDomainCacheStaticBypasses++;
+            return null;
+        }
+        return new DictionaryDomainCacheKey(List.copyOf(vectors), Set.copyOf(requestedStreams));
+    }
+
+    private boolean isStaticReference(Reference reference)
+    {
+        if (!(reference.producer() instanceof Variable variable)) {
+            return false;
+        }
+        Assignment assignment = assignments.get(variable);
+        if (assignment == null) {
+            return false;
+        }
+        return switch (assignment.operation()) {
+            case Literal _ -> true;
+            case Copy(Reference source) -> isStaticReference(source);
+            default -> false;
+        };
+    }
+
+    private static StableVectorKey stableVectorKey(Vector vector)
+    {
+        if (vector == null) {
+            return StableVectorKey.absent();
+        }
+        if (vector instanceof BooleanVector booleans) {
+            if (booleans.isAllFalse()) {
+                return StableVectorKey.constant(false);
+            }
+            if (booleans.isAllTrue()) {
+                return StableVectorKey.constant(true);
+            }
+        }
+        long generation = vector.contentGeneration();
+        long fingerprint = vector.contentFingerprint();
+        if ((!vector.contentImmutable() || generation < 0) && fingerprint == Vector.NO_CONTENT_FINGERPRINT) {
+            return null;
+        }
+        return StableVectorKey.vector(vector, generation, fingerprint);
+    }
+
+    private void replaceDictionaryDomainCache(Call call, DictionaryDomainCacheKey key, Streams result)
+    {
+        ArrayList<DictionaryDomainCacheEntry> cachedDomains = dictionaryDomainCache.computeIfAbsent(call, _ -> new ArrayList<>());
+        if (cachedDomains.size() == policy.dictionaryDomainCacheSlots()) {
+            DictionaryDomainCacheEntry previous = cachedDomains.removeFirst();
+            releaseCachedKey(previous.key());
+            releaseCachedStreams(previous.result());
+        }
+
+        Streams.Builder copy = Streams.builder();
+        for (Stream stream : result.streams()) {
+            copy.put(stream, result.get(stream).copy(allocator, dictionaryDomainCacheContext).freezeContent());
+        }
+        cachedDomains.add(new DictionaryDomainCacheEntry(stabilizeDictionaryDomainCacheKey(key), copy.build()));
+    }
+
+    private static DictionaryDomainCacheEntry findCachedDomain(
+            List<DictionaryDomainCacheEntry> cachedDomains,
+            DictionaryDomainCacheKey key)
+    {
+        if (cachedDomains == null) {
+            return null;
+        }
+        for (DictionaryDomainCacheEntry cached : cachedDomains) {
+            if (cached.key().matches(key)) {
+                return cached;
+            }
+        }
+        return null;
+    }
+
+    private DictionaryDomainCacheKey stabilizeDictionaryDomainCacheKey(DictionaryDomainCacheKey key)
+    {
+        List<StableVectorKey> stable = new ArrayList<>(key.vectors().size());
+        for (StableVectorKey vectorKey : key.vectors()) {
+            if (vectorKey.kind() != StableVectorKey.VECTOR) {
+                stable.add(vectorKey);
+                continue;
+            }
+            if (vectorKey.fingerprint() == Vector.NO_CONTENT_FINGERPRINT) {
+                stable.add(vectorKey);
+                continue;
+            }
+            Vector copy = vectorKey.vector().copy(allocator, dictionaryDomainCacheContext).freezeContent();
+            stable.add(StableVectorKey.vector(copy, copy.contentGeneration(), copy.contentFingerprint()));
+        }
+        return new DictionaryDomainCacheKey(List.copyOf(stable), key.requestedStreams());
+    }
+
+    private void releaseCachedKey(DictionaryDomainCacheKey key)
+    {
+        Set<Vector> released = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (StableVectorKey vectorKey : key.vectors()) {
+            if (vectorKey.kind() == StableVectorKey.VECTOR &&
+                    vectorKey.fingerprint() != Vector.NO_CONTENT_FINGERPRINT &&
+                    released.add(vectorKey.vector())) {
+                allocator.release(dictionaryDomainCacheContext, vectorKey.vector());
+            }
+        }
+    }
+
+    private void releaseCachedStreams(Streams streams)
+    {
+        Set<Vector> released = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Stream stream : streams.streams()) {
+            Vector vector = streams.get(stream);
+            if (released.add(vector)) {
+                allocator.release(dictionaryDomainCacheContext, vector);
+            }
+        }
     }
 
     /**
@@ -824,9 +1030,18 @@ public final class PlanEvaluator
 
     private Streams wrapDictionaryPeeledStreams(int[] sharedIds, int rowCount, Streams streams)
     {
+        return wrapDictionaryPeeledStreams(sharedIds, rowCount, streams, false);
+    }
+
+    private Streams wrapDictionaryPeeledStreams(int[] sharedIds, int rowCount, Streams streams, boolean cached)
+    {
         Streams.Builder wrapped = Streams.builder();
         for (Stream stream : streams.streams()) {
-            wrapped.put(stream, wrapBorrowedDictionary(sharedIds, rowCount, streams.get(stream)));
+            DictionaryVector dictionary = wrapBorrowedDictionary(sharedIds, rowCount, streams.get(stream));
+            if (cached) {
+                cachedDictionaryResults.add(dictionary);
+            }
+            wrapped.put(stream, dictionary);
         }
         return wrapped.build();
     }
@@ -3413,6 +3628,71 @@ public final class PlanEvaluator
     }
 
     private record DictionaryPeeling(int[] ids, int rowCount, Mask baseMask, List<Streams> inputs) {}
+
+    private record DictionaryDomainCacheEntry(DictionaryDomainCacheKey key, Streams result) {}
+
+    private record DictionaryDomainCacheKey(List<StableVectorKey> vectors, Set<Stream> requestedStreams)
+    {
+        private boolean matches(DictionaryDomainCacheKey other)
+        {
+            if (!requestedStreams.equals(other.requestedStreams) || vectors.size() != other.vectors.size()) {
+                return false;
+            }
+            for (int index = 0; index < vectors.size(); index++) {
+                if (!vectors.get(index).matches(other.vectors.get(index))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private record StableVectorKey(Vector vector, long generation, long fingerprint, byte kind)
+    {
+        private static final byte VECTOR = 0;
+        private static final byte ABSENT = 1;
+        private static final byte CONSTANT_FALSE = 2;
+        private static final byte CONSTANT_TRUE = 3;
+
+        private static StableVectorKey vector(Vector vector, long generation, long fingerprint)
+        {
+            return new StableVectorKey(vector, generation, fingerprint, VECTOR);
+        }
+
+        private static StableVectorKey absent()
+        {
+            return new StableVectorKey(null, -1, Vector.NO_CONTENT_FINGERPRINT, ABSENT);
+        }
+
+        private static StableVectorKey constant(boolean value)
+        {
+            return new StableVectorKey(null, -1, Vector.NO_CONTENT_FINGERPRINT, value ? CONSTANT_TRUE : CONSTANT_FALSE);
+        }
+
+        private boolean matches(StableVectorKey other)
+        {
+            if (kind != other.kind) {
+                return false;
+            }
+            if (kind != VECTOR) {
+                return true;
+            }
+            if (vector == other.vector && generation == other.generation) {
+                return true;
+            }
+            return fingerprint != Vector.NO_CONTENT_FINGERPRINT &&
+                    fingerprint == other.fingerprint &&
+                    vector.hasSameContent(other.vector);
+        }
+
+        @Override
+        public String toString()
+        {
+            return kind == VECTOR
+                    ? vector.getClass().getSimpleName() + '@' + Integer.toHexString(System.identityHashCode(vector)) + ':' + generation + ':' + fingerprint
+                    : "constant:" + kind;
+        }
+    }
 
     private static final class PrimitiveMaskInvocation
     {

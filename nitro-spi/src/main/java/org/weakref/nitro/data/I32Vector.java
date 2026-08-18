@@ -60,6 +60,22 @@ public class I32Vector
     }
 
     @Override
+    public long contentFingerprint()
+    {
+        long hash = 0xcbf29ce484222325L;
+        for (int value : values) {
+            hash = (hash ^ value) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        return other instanceof I32Vector vector && java.util.Arrays.equals(values, vector.values);
+    }
+
+    @Override
     public int length()
     {
         return values.length;

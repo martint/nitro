@@ -50,6 +50,23 @@ public class BooleanVector
         return contentGeneration;
     }
 
+    @Override
+    public long contentFingerprint()
+    {
+        long hash = 0xcbf29ce484222325L;
+        for (boolean value : values) {
+            hash = (hash ^ (value ? 1 : 0)) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        return other != null && other.getClass() == getClass() &&
+                Arrays.equals(values, ((BooleanVector) other).values);
+    }
+
     /**
      * Returns true when every entry in the backing array is {@code false}. First call scans the array
      * in O(n); subsequent calls return the cached result in O(1). Intended for use as a pre-flight check

@@ -147,6 +147,34 @@ public final class DictionaryVector
         return values.contentImmutable();
     }
 
+    @Override
+    public long contentFingerprint()
+    {
+        long valuesFingerprint = values.contentFingerprint();
+        if (valuesFingerprint == NO_CONTENT_FINGERPRINT) {
+            return NO_CONTENT_FINGERPRINT;
+        }
+        long hash = valuesFingerprint;
+        for (int index = 0; index < length; index++) {
+            hash = (hash ^ ids[index]) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        if (!(other instanceof DictionaryVector dictionary) || length != dictionary.length) {
+            return false;
+        }
+        for (int index = 0; index < length; index++) {
+            if (ids[index] != dictionary.ids[index]) {
+                return false;
+            }
+        }
+        return values.hasSameContent(dictionary.values);
+    }
+
     /**
      * Creates a non-owning view over this exact immutable mapping and value vector. The shared identity lets a
      * downstream batch cache reuse derived position state without treating a recycled {@code int[]} identity as

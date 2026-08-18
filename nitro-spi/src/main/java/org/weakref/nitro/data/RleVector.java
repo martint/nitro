@@ -147,6 +147,28 @@ public final class RleVector
     }
 
     @Override
+    public long contentFingerprint()
+    {
+        long valuesFingerprint = values.contentFingerprint();
+        if (valuesFingerprint == NO_CONTENT_FINGERPRINT) {
+            return NO_CONTENT_FINGERPRINT;
+        }
+        long hash = valuesFingerprint;
+        for (int count : counts) {
+            hash = (hash ^ count) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        return other instanceof RleVector rle &&
+                Arrays.equals(counts, rle.counts) &&
+                values.hasSameContent(rle.values);
+    }
+
+    @Override
     public Vector copy(Allocator allocator, Allocator.Context allocationContext)
     {
         return allocator.allocateRle(allocationContext, counts, values.copy(allocator, allocationContext));

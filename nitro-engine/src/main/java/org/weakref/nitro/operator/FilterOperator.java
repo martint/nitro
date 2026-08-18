@@ -508,6 +508,7 @@ public class FilterOperator
             }
             source.close();
             planEvaluator.resetForReuse();
+            planEvaluator.close();
             allocator.release(allocationContext);
         }
         finally {

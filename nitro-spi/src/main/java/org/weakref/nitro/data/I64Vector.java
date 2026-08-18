@@ -61,6 +61,22 @@ public class I64Vector
         return contentGeneration;
     }
 
+    @Override
+    public long contentFingerprint()
+    {
+        long hash = 0xcbf29ce484222325L;
+        for (long value : values) {
+            hash = (hash ^ value) * 0x100000001b3L;
+        }
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        return other instanceof I64Vector vector && java.util.Arrays.equals(values, vector.values);
+    }
+
     /** Generated aggregation kernels use this common state update shape. */
     public void increment(int index, long value)
     {

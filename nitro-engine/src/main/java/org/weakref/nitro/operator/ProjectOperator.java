@@ -67,6 +67,13 @@ public class ProjectOperator
     public static final String DICTIONARY_FLATTENING_POSITIONS = "nitro.projection.dictionary-flattening-positions";
     public static final String DICTIONARY_NULL_EXPANSION_POSITIONS = "nitro.projection.dictionary-null-expansion-positions";
     public static final String OTHER_NULL_EXPANSION_POSITIONS = "nitro.projection.other-null-expansion-positions";
+    public static final String DICTIONARY_DOMAIN_CACHE_HITS = "nitro.projection.dictionary-domain-cache-hits";
+    public static final String DICTIONARY_DOMAIN_CACHE_MISSES = "nitro.projection.dictionary-domain-cache-misses";
+    public static final String DICTIONARY_DOMAIN_CACHE_BYPASSES = "nitro.projection.dictionary-domain-cache-bypasses";
+    public static final String DICTIONARY_DOMAIN_CACHE_CHANGES = "nitro.projection.dictionary-domain-cache-changes";
+    public static final String DICTIONARY_DOMAIN_CACHE_OVERSIZED_BYPASSES = "nitro.projection.dictionary-domain-cache-oversized-bypasses";
+    public static final String DICTIONARY_DOMAIN_CACHE_UNSTABLE_BYPASSES = "nitro.projection.dictionary-domain-cache-unstable-bypasses";
+    public static final String DICTIONARY_DOMAIN_CACHE_STATIC_BYPASSES = "nitro.projection.dictionary-domain-cache-static-bypasses";
 
     private final Allocator.Context allocationContext = new Allocator.Context("ProjectOperator");
     private final Allocator allocator;
@@ -458,6 +465,9 @@ public class ProjectOperator
                 currentBatchState = null;
             }
             source.close();
+            if (reusablePlanEvaluator != null) {
+                reusablePlanEvaluator.close();
+            }
             allocator.release(allocationContext);
         }
         finally {
@@ -517,6 +527,16 @@ public class ProjectOperator
         diagnostics.record(DICTIONARY_FLATTENING_POSITIONS, dictionaryFlatteningPositions);
         diagnostics.record(DICTIONARY_NULL_EXPANSION_POSITIONS, dictionaryNullExpansionPositions);
         diagnostics.record(OTHER_NULL_EXPANSION_POSITIONS, otherNullExpansionPositions);
+        if (reusablePlanEvaluator != null) {
+            PlanEvaluator.MaskExecutionDiagnostics evaluatorDiagnostics = reusablePlanEvaluator.maskExecutionDiagnostics();
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_HITS, evaluatorDiagnostics.dictionaryDomainCacheHits());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_MISSES, evaluatorDiagnostics.dictionaryDomainCacheMisses());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_BYPASSES, evaluatorDiagnostics.dictionaryDomainCacheBypasses());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_CHANGES, evaluatorDiagnostics.dictionaryDomainCacheChanges());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_OVERSIZED_BYPASSES, evaluatorDiagnostics.dictionaryDomainCacheOversizedBypasses());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_UNSTABLE_BYPASSES, evaluatorDiagnostics.dictionaryDomainCacheUnstableBypasses());
+            diagnostics.record(DICTIONARY_DOMAIN_CACHE_STATIC_BYPASSES, evaluatorDiagnostics.dictionaryDomainCacheStaticBypasses());
+        }
     }
 
     private final class BatchState

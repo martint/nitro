@@ -146,6 +146,56 @@ public final class BinaryVector
         return contentImmutable;
     }
 
+    @Override
+    public long contentFingerprint()
+    {
+        // This is only a prefilter: equal fingerprints are always followed by hasSameContent(). Sample the domain
+        // at fixed logical fractions so large dictionaries do not pay a serial byte-at-a-time hash on every batch;
+        // an occasional collision costs one vectorized exact comparison but cannot change results.
+        long hash = 0xcbf29ce484222325L;
+        int usedBytes = offsets[positionCount];
+        hash = (hash ^ positionCount) * 0x100000001b3L;
+        hash = (hash ^ usedBytes) * 0x100000001b3L;
+        hash = (hash ^ traits.hashCode()) * 0x100000001b3L;
+        hash = sampleFingerprint(hash, offsets, offsets.length);
+        hash = sampleFingerprint(hash, data, usedBytes);
+        return hash == NO_CONTENT_FINGERPRINT ? hash + 1 : hash;
+    }
+
+    private static long sampleFingerprint(long hash, int[] values, int length)
+    {
+        int samples = Math.min(length, 16);
+        for (int sample = 0; sample < samples; sample++) {
+            int index = samples == 1 ? 0 : (int) ((long) sample * (length - 1) / (samples - 1));
+            hash = (hash ^ values[index]) * 0x100000001b3L;
+        }
+        return hash;
+    }
+
+    private static long sampleFingerprint(long hash, byte[] values, int length)
+    {
+        int samples = Math.min(length, 16);
+        for (int sample = 0; sample < samples; sample++) {
+            int index = samples == 1 ? 0 : (int) ((long) sample * (length - 1) / (samples - 1));
+            hash = (hash ^ (values[index] & 0xff)) * 0x100000001b3L;
+        }
+        return hash;
+    }
+
+    @Override
+    public boolean hasSameContent(Vector other)
+    {
+        if (!(other instanceof BinaryVector binary) || positionCount != binary.positionCount || !traits.equals(binary.traits)) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(offsets, binary.offsets)) {
+            return false;
+        }
+        int usedBytes = offsets[positionCount];
+        return usedBytes == binary.offsets[binary.positionCount] &&
+                java.util.Arrays.equals(data, 0, usedBytes, binary.data, 0, usedBytes);
+    }
+
     public static Object poolFamily(int positionCount)
     {
         return new PoolFamily(positionCount);

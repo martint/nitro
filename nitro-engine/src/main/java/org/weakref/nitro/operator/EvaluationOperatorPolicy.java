@@ -18,6 +18,8 @@ package org.weakref.nitro.operator;
  */
 public record EvaluationOperatorPolicy(
         int dictionaryPeelSparseRatio,
+        int dictionaryDomainCacheMaxEntries,
+        int dictionaryDomainCacheSlots,
         boolean adaptiveMaskReordering,
         boolean orShortCircuitRemaining,
         boolean orEvaluateFinalTermOnFullMask,
@@ -34,6 +36,12 @@ public record EvaluationOperatorPolicy(
         if (dictionaryPeelSparseRatio <= 0) {
             throw new IllegalArgumentException("dictionaryPeelSparseRatio must be positive");
         }
+        if (dictionaryDomainCacheMaxEntries < 0) {
+            throw new IllegalArgumentException("dictionaryDomainCacheMaxEntries is negative");
+        }
+        if (dictionaryDomainCacheSlots < 0) {
+            throw new IllegalArgumentException("dictionaryDomainCacheSlots is negative");
+        }
         if (orFinalTermMinRemainingRows < 0) {
             throw new IllegalArgumentException("orFinalTermMinRemainingRows is negative");
         }
@@ -46,6 +54,8 @@ public record EvaluationOperatorPolicy(
     {
         return new EvaluationOperatorPolicy(
                 8,
+                4_096,
+                64,
                 true,
                 true,
                 false,
@@ -63,6 +73,8 @@ public record EvaluationOperatorPolicy(
         EvaluationOperatorPolicy defaults = defaults();
         return new EvaluationOperatorPolicy(
                 Integer.getInteger("nitro.expression.dictionaryPeelSparseRatio", defaults.dictionaryPeelSparseRatio()),
+                Integer.getInteger("nitro.expression.dictionaryDomainCacheMaxEntries", defaults.dictionaryDomainCacheMaxEntries()),
+                Integer.getInteger("nitro.expression.dictionaryDomainCacheSlots", defaults.dictionaryDomainCacheSlots()),
                 booleanProperty("nitro.expression.adaptiveMaskReordering", defaults.adaptiveMaskReordering()),
                 booleanProperty("nitro.expression.orShortCircuitRemaining", defaults.orShortCircuitRemaining()),
                 booleanProperty("nitro.expression.orEvaluateFinalTermOnFullMask", defaults.orEvaluateFinalTermOnFullMask()),

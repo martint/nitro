@@ -32,6 +32,8 @@ import java.util.function.Consumer;
  */
 public interface Vector
 {
+    long NO_CONTENT_FINGERPRINT = Long.MIN_VALUE;
+
     /**
      * Returns the logical row count represented by this vector.
      */
@@ -71,6 +73,21 @@ public interface Vector
     default boolean contentImmutable()
     {
         return false;
+    }
+
+    /**
+     * A representation-owned fingerprint for collision-checked encoded-domain reuse. Implementations return
+     * {@link #NO_CONTENT_FINGERPRINT} when they cannot compare logical contents cheaply and exactly.
+     */
+    default long contentFingerprint()
+    {
+        return NO_CONTENT_FINGERPRINT;
+    }
+
+    /** Exact logical-content comparison used only after matching non-sentinel fingerprints. */
+    default boolean hasSameContent(Vector other)
+    {
+        return this == other && contentGeneration() == other.contentGeneration();
     }
 
     /**
