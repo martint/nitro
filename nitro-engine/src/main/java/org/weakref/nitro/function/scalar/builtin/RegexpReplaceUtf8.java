@@ -44,11 +44,8 @@ public final class RegexpReplaceUtf8
         implements PrimitiveFunction
 {
     private final Allocator.Context allocationContext = new Allocator.Context("RegexpReplaceUtf8");
-    private static final Slice HOST_PATTERN = Slices.utf8Slice("^https?://(?:www\\.)?([^/]+)/.*$");
-    private static final Slice HOST_REPLACEMENT = Slices.utf8Slice("\\1");
     private final RegexpReplaceUtf8Policy policy;
     private final JoniRegexpPolicy joniPolicy;
-    private final ExtractHostUtf8 hostExtractor;
 
     public RegexpReplaceUtf8()
     {
@@ -64,16 +61,12 @@ public final class RegexpReplaceUtf8
     {
         this.policy = requireNonNull(policy, "policy is null");
         this.joniPolicy = requireNonNull(joniPolicy, "joniPolicy is null");
-        hostExtractor = policy.specializeHostExtraction() ? new ExtractHostUtf8() : null;
     }
 
     @Override
     public Set<Allocator.Context> allocationContexts()
     {
-        if (hostExtractor == null) {
-            return Set.of(allocationContext);
-        }
-        return Set.of(allocationContext, hostExtractor.allocationContext());
+        return Set.of(allocationContext);
     }
 
     @Override
@@ -93,15 +86,6 @@ public final class RegexpReplaceUtf8
         Vector valuesNulls = inputs.get(0).getOrNull(Stream.NULLS);
         Vector patternNulls = inputs.get(1).getOrNull(Stream.NULLS);
         Vector replacementNulls = inputs.get(2).getOrNull(Stream.NULLS);
-
-        if (policy.specializeHostExtraction() &&
-                patternValues instanceof RleVector patternRle && patternRle.counts().length == 1 &&
-                replacementValues instanceof RleVector replacementRle && replacementRle.counts().length == 1 &&
-                VectorAccess.isAllFalseNulls(patternNulls) && VectorAccess.isAllFalseNulls(replacementNulls) &&
-                utf8Slice(patternRle.values(), 0).equals(HOST_PATTERN) &&
-                utf8Slice(replacementRle.values(), 0).equals(HOST_REPLACEMENT)) {
-            return hostExtractor.apply(List.of(inputs.getFirst()), mask, requestedStreams, output, context);
-        }
 
         int requiredLength = maxLength(mask, values, patternValues, replacementValues);
 

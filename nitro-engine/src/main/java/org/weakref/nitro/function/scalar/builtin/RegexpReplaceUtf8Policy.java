@@ -17,18 +17,16 @@ package org.weakref.nitro.function.scalar.builtin;
  * Immutable specialization choices for {@link RegexpReplaceUtf8}.
  */
 public record RegexpReplaceUtf8Policy(
-        boolean constantArguments,
-        boolean specializeHostExtraction)
+        boolean constantArguments)
 {
     public static RegexpReplaceUtf8Policy defaults()
     {
-        return new RegexpReplaceUtf8Policy(true, true);
+        return new RegexpReplaceUtf8Policy(true);
     }
 
     public static RegexpReplaceUtf8Policy fromSystemProperties()
     {
         return new RegexpReplaceUtf8Policy(
-                Boolean.parseBoolean(System.getProperty("nitro.regexp.constantArguments", "true")),
-                Boolean.parseBoolean(System.getProperty("nitro.regexp.specializeHostExtraction", "true")));
+                Boolean.parseBoolean(System.getProperty("nitro.regexp.constantArguments", "true")));
     }
 }

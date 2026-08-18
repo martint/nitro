@@ -32,24 +32,23 @@ class TestScalarProviderResourceOwnership
     }
 
     @Test
-    void testSpecializedHelperContextIsOwnedAndPublishedByParentProvider()
+    void testRegexpContextIsProviderOwned()
     {
         RegexpReplaceUtf8 function = new RegexpReplaceUtf8();
 
         assertThat(function.allocationContexts())
-                .hasSize(2)
+                .hasSize(1)
                 .extracting(Allocator.Context::name)
-                .containsExactlyInAnyOrder("RegexpReplaceUtf8", "ExtractHostUtf8");
+                .containsExactly("RegexpReplaceUtf8");
     }
 
     @Test
-    void testRegexpPolicyOwnsSpecializedHelperAdmission()
+    void testRegexpPolicyOwnsConstantArgumentAdmission()
     {
         RegexpReplaceUtf8Policy policy = RegexpReplaceUtf8Policy.defaults();
         assertThat(policy.constantArguments()).isTrue();
-        assertThat(policy.specializeHostExtraction()).isTrue();
 
-        RegexpReplaceUtf8 function = new RegexpReplaceUtf8(new RegexpReplaceUtf8Policy(false, false));
+        RegexpReplaceUtf8 function = new RegexpReplaceUtf8(new RegexpReplaceUtf8Policy(false));
 
         assertThat(function.allocationContexts())
                 .extracting(Allocator.Context::name)
