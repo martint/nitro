@@ -1011,6 +1011,16 @@ public class Mask
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
         int count = 0;
+        if (keep.length <= Long.SIZE) {
+            long keepBits = dictionaryKeepBits(keep);
+            for (int index = 0; index < iterations; index++) {
+                int position = dense ? index : buffer[index];
+                buffer[count] = position;
+                count += ((keepBits >>> ids[position]) & 1L) != 0 ? 1 : 0;
+            }
+            setSelection(size, count, count == size);
+            return;
+        }
         for (int index = 0; index < iterations; index++) {
             int position = dense ? index : buffer[index];
             if (keep[ids[position]]) {
@@ -1037,6 +1047,17 @@ public class Mask
         int iterations = dense ? size : selectedCount;
         int count = 0;
         if (nulls == null) {
+            if (keep.length <= Long.SIZE) {
+                long keepBits = dictionaryKeepBits(keep);
+                long wantedBit = wanted ? 1 : 0;
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    buffer[count] = position;
+                    count += ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                }
+                setSelection(size, count, count == size);
+                return;
+            }
             for (int index = 0; index < iterations; index++) {
                 int position = dense ? index : buffer[index];
                 if (keep[ids[position]] == wanted) {
@@ -1045,6 +1066,17 @@ public class Mask
             }
         }
         else {
+            if (keep.length <= Long.SIZE) {
+                long keepBits = dictionaryKeepBits(keep);
+                long wantedBit = wanted ? 1 : 0;
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    buffer[count] = position;
+                    count += !nulls[position] && ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                }
+                setSelection(size, count, count == size);
+                return;
+            }
             for (int index = 0; index < iterations; index++) {
                 int position = dense ? index : buffer[index];
                 if (!nulls[position] && keep[ids[position]] == wanted) {
@@ -1053,6 +1085,17 @@ public class Mask
             }
         }
         setSelection(size, count, count == size);
+    }
+
+    private static long dictionaryKeepBits(boolean[] keep)
+    {
+        long bits = 0;
+        for (int index = 0; index < keep.length; index++) {
+            if (keep[index]) {
+                bits |= 1L << index;
+            }
+        }
+        return bits;
     }
 
     /**

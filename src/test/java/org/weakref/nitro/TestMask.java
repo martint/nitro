@@ -115,6 +115,30 @@ class TestMask
         assertThat(sparse).containsExactly(1, 3);
     }
 
+    @Test
+    void compactDictionaryComparisonPreservesDenseSparseComplementAndNullSemantics()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        boolean[] keep = {false, true, false, true};
+        boolean[] nulls = {false, false, false, false, true, false, true};
+
+        Mask dense = Mask.all(ids.length);
+        dense.retainDictionaryComparison(ids, keep);
+        assertThat(dense).containsExactly(0, 1, 4, 6);
+
+        Mask matches = Mask.all(ids.length);
+        matches.retainDictionaryComparison(ids, keep, nulls, true);
+        assertThat(matches).containsExactly(0, 1);
+
+        Mask complement = Mask.all(ids.length);
+        complement.retainDictionaryComparison(ids, keep, nulls, false);
+        assertThat(complement).containsExactly(2, 3, 5);
+
+        Mask sparse = Mask.sparse(new int[] {0, 2, 3, 6}, ids.length);
+        sparse.retainDictionaryComparison(ids, keep, null, true);
+        assertThat(sparse).containsExactly(0, 6);
+    }
+
     private static void assertPrimitivePositions(Mask mask, int... expected)
     {
         int[] actual = new int[mask.selectedCount()];
