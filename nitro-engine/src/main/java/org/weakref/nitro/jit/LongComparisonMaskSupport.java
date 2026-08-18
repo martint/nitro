@@ -127,82 +127,38 @@ final class LongComparisonMaskSupport
         return count;
     }
 
-    /** Split positions into true / null / error using the per-entry comparison; counts only when {@code fill} is false. */
-    private static void categorizeDictionary(DictionaryComparison comparison, Mask mask,
-            VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls,
-            VectorAccess.BooleanValues leftErrors, VectorAccess.BooleanValues rightErrors,
-            int[] truePositions, int[] nullPositions, int[] errorPositions, int[] outCounts, boolean fill)
-    {
-        boolean[] result = comparison.result();
-        int[] ids = comparison.ids();
-        int trueCount = 0;
-        int nullCount = 0;
-        int errorCount = 0;
-        if (mask.all()) {
-            int max = mask.maxPosition();
-            for (int position = 0; position <= max; position++) {
-                if (isError(leftErrors, position) || isError(rightErrors, position)) {
-                    if (fill) {
-                        errorPositions[errorCount] = position;
-                    }
-                    errorCount++;
-                }
-                else if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                    if (fill) {
-                        nullPositions[nullCount] = position;
-                    }
-                    nullCount++;
-                }
-                else if (result[ids[position]]) {
-                    if (fill) {
-                        truePositions[trueCount] = position;
-                    }
-                    trueCount++;
-                }
-            }
-        }
-        else {
-            for (int position : mask) {
-                if (isError(leftErrors, position) || isError(rightErrors, position)) {
-                    if (fill) {
-                        errorPositions[errorCount] = position;
-                    }
-                    errorCount++;
-                }
-                else if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
-                    if (fill) {
-                        nullPositions[nullCount] = position;
-                    }
-                    nullCount++;
-                }
-                else if (result[ids[position]]) {
-                    if (fill) {
-                        truePositions[trueCount] = position;
-                    }
-                    trueCount++;
-                }
-            }
-        }
-        outCounts[0] = trueCount;
-        outCounts[1] = nullCount;
-        outCounts[2] = errorCount;
-    }
-
     private static MaskOutcome dictionaryMaskOutcome(DictionaryComparison comparison, Mask mask,
             PrimitiveExecutionContext context, Allocator.Context allocationContext,
             VectorAccess.BooleanValues leftNulls, VectorAccess.BooleanValues rightNulls,
             VectorAccess.BooleanValues leftErrors, VectorAccess.BooleanValues rightErrors)
     {
-        int[] counts = new int[3];
-        categorizeDictionary(comparison, mask, leftNulls, rightNulls, leftErrors, rightErrors, null, null, null, counts, false);
-        int[] truePositions = new int[counts[0]];
-        int[] nullPositions = new int[counts[1]];
-        int[] errorPositions = new int[counts[2]];
-        categorizeDictionary(comparison, mask, leftNulls, rightNulls, leftErrors, rightErrors, truePositions, nullPositions, errorPositions, counts, true);
-        return new MaskOutcome(
-                context.allocator().allocateSparseMask(allocationContext, truePositions, counts[0], mask.size()),
-                context.allocator().allocateSparseMask(allocationContext, nullPositions, counts[1], mask.size()),
-                context.allocator().allocateSparseMask(allocationContext, errorPositions, counts[2], mask.size()));
+        int capacity = mask.count();
+        Mask trueMask = context.allocator().allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask nullMask = context.allocator().allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        Mask errorMask = context.allocator().allocateUninitializedSparseMask(allocationContext, capacity, mask.size());
+        int[] truePositions = trueMask.positionsArrayForOverwrite(capacity);
+        int[] nullPositions = nullMask.positionsArrayForOverwrite(capacity);
+        int[] errorPositions = errorMask.positionsArrayForOverwrite(capacity);
+        boolean[] result = comparison.result();
+        int[] ids = comparison.ids();
+        int trueCount = 0;
+        int nullCount = 0;
+        int errorCount = 0;
+        for (int position : mask) {
+            if (isError(leftErrors, position) || isError(rightErrors, position)) {
+                errorPositions[errorCount++] = position;
+            }
+            else if (isNull(leftNulls, position) || isNull(rightNulls, position)) {
+                nullPositions[nullCount++] = position;
+            }
+            else if (result[ids[position]]) {
+                truePositions[trueCount++] = position;
+            }
+        }
+        trueMask.finishRetain(trueCount);
+        nullMask.finishRetain(nullCount);
+        errorMask.finishRetain(errorCount);
+        return new MaskOutcome(trueMask, nullMask, errorMask);
     }
 
     public static MaskOutcome tryEvaluateMaskOutcome(List<Streams> inputs, Mask mask, PrimitiveExecutionContext context, Allocator.Context allocationContext, ComparisonKernel kernel)
