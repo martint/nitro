@@ -166,11 +166,19 @@ public record AllocatorPolicy(
 
     public record MaskFiltering(
             boolean vectorizedDenseIntConstantRange,
-            boolean branchlessDenseDoubleLessThan)
+            boolean branchlessDenseDoubleLessThan,
+            double dictionarySparseWriteMaximumSelectedDomainFraction)
     {
+        public MaskFiltering
+        {
+            if (dictionarySparseWriteMaximumSelectedDomainFraction < 0 || dictionarySparseWriteMaximumSelectedDomainFraction > 1) {
+                throw new IllegalArgumentException("dictionarySparseWriteMaximumSelectedDomainFraction is outside [0, 1]");
+            }
+        }
+
         public static MaskFiltering defaults()
         {
-            return new MaskFiltering(true, true);
+            return new MaskFiltering(true, true, 0.5);
         }
 
         private static MaskFiltering fromSystemProperties()
@@ -182,7 +190,10 @@ public record AllocatorPolicy(
                             defaults.vectorizedDenseIntConstantRange()),
                     booleanProperty(
                             "nitro.mask.branchlessDenseDoubleLessThan",
-                            defaults.branchlessDenseDoubleLessThan()));
+                            defaults.branchlessDenseDoubleLessThan()),
+                    Double.parseDouble(System.getProperty(
+                            "nitro.mask.dictionarySparseWriteMaximumSelectedDomainFraction",
+                            Double.toString(defaults.dictionarySparseWriteMaximumSelectedDomainFraction()))));
         }
     }
 

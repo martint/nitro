@@ -700,7 +700,7 @@ class TestAllocator
                 false,
                 false,
                 new AllocatorPolicy.BooleanCopies(false, false, false),
-                new AllocatorPolicy.MaskFiltering(false, false),
+                new AllocatorPolicy.MaskFiltering(false, false, 0),
                 4,
                 false,
                 true,

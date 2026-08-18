@@ -1013,10 +1013,20 @@ public class Mask
         int count = 0;
         if (keep.length <= Long.SIZE) {
             long keepBits = dictionaryKeepBits(keep);
-            for (int index = 0; index < iterations; index++) {
-                int position = dense ? index : buffer[index];
-                buffer[count] = position;
-                count += ((keepBits >>> ids[position]) & 1L) != 0 ? 1 : 0;
+            if (dictionarySparseWrites(keep.length, keepBits, true)) {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    if (((keepBits >>> ids[position]) & 1L) != 0) {
+                        buffer[count++] = position;
+                    }
+                }
+            }
+            else {
+                for (int index = 0; index < iterations; index++) {
+                    int position = dense ? index : buffer[index];
+                    buffer[count] = position;
+                    count += ((keepBits >>> ids[position]) & 1L) != 0 ? 1 : 0;
+                }
             }
             setSelection(size, count, count == size);
             return;
@@ -1050,10 +1060,20 @@ public class Mask
             if (keep.length <= Long.SIZE) {
                 long keepBits = dictionaryKeepBits(keep);
                 long wantedBit = wanted ? 1 : 0;
-                for (int index = 0; index < iterations; index++) {
-                    int position = dense ? index : buffer[index];
-                    buffer[count] = position;
-                    count += ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                if (dictionarySparseWrites(keep.length, keepBits, wanted)) {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = dense ? index : buffer[index];
+                        if (((keepBits >>> ids[position]) & 1L) == wantedBit) {
+                            buffer[count++] = position;
+                        }
+                    }
+                }
+                else {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = dense ? index : buffer[index];
+                        buffer[count] = position;
+                        count += ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                    }
                 }
                 setSelection(size, count, count == size);
                 return;
@@ -1069,10 +1089,20 @@ public class Mask
             if (keep.length <= Long.SIZE) {
                 long keepBits = dictionaryKeepBits(keep);
                 long wantedBit = wanted ? 1 : 0;
-                for (int index = 0; index < iterations; index++) {
-                    int position = dense ? index : buffer[index];
-                    buffer[count] = position;
-                    count += !nulls[position] && ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                if (dictionarySparseWrites(keep.length, keepBits, wanted)) {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = dense ? index : buffer[index];
+                        if (!nulls[position] && ((keepBits >>> ids[position]) & 1L) == wantedBit) {
+                            buffer[count++] = position;
+                        }
+                    }
+                }
+                else {
+                    for (int index = 0; index < iterations; index++) {
+                        int position = dense ? index : buffer[index];
+                        buffer[count] = position;
+                        count += !nulls[position] && ((keepBits >>> ids[position]) & 1L) == wantedBit ? 1 : 0;
+                    }
                 }
                 setSelection(size, count, count == size);
                 return;
@@ -1096,6 +1126,14 @@ public class Mask
             }
         }
         return bits;
+    }
+
+    private boolean dictionarySparseWrites(int dictionarySize, long keepBits, boolean wanted)
+    {
+        long domainBits = dictionarySize == Long.SIZE ? -1L : (1L << dictionarySize) - 1;
+        long selectedBits = wanted ? keepBits : ~keepBits & domainBits;
+        return Long.bitCount(selectedBits) <=
+                dictionarySize * filteringPolicy.dictionarySparseWriteMaximumSelectedDomainFraction();
     }
 
     /**

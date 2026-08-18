@@ -137,6 +137,10 @@ class TestMask
         Mask sparse = Mask.sparse(new int[] {0, 2, 3, 6}, ids.length);
         sparse.retainDictionaryComparison(ids, keep, null, true);
         assertThat(sparse).containsExactly(0, 6);
+
+        Mask denseDomain = Mask.all(ids.length);
+        denseDomain.retainDictionaryComparison(ids, new boolean[] {true, true, true, false}, null, true);
+        assertThat(denseDomain).containsExactly(1, 2, 3, 5, 6);
     }
 
     private static void assertPrimitivePositions(Mask mask, int... expected)
