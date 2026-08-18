@@ -118,6 +118,15 @@ public class BooleanVector
     public void markAllFalse()
     {
         Arrays.fill(values, false);
+        declareAllFalse();
+    }
+
+    /**
+     * Records an all-false result already established while producing this vector, without scanning or clearing its
+     * storage a second time. The caller must have written every element and proved that none is true.
+     */
+    public void declareAllFalse()
+    {
         isAllFalseCache = Boolean.TRUE;
         isAllTrueCache = values.length == 0 ? Boolean.TRUE : Boolean.FALSE;
         sharedAllFalseOwner = null;

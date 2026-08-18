@@ -73,6 +73,13 @@ public class TestBatchRuntime
         values.markAllFalse();
         assertThat(values.isAllTrue()).isFalse();
         assertThat(values.isAllFalse()).isTrue();
+
+        values.clearForReuse();
+        values.declareAllFalse();
+        assertThat(values.isAllFalse()).isTrue();
+        values.clearForReuse();
+        values.values()[2] = true;
+        assertThat(values.isAllFalse()).isFalse();
     }
 
     @Test

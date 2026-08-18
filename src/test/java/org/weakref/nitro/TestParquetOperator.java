@@ -151,6 +151,7 @@ public class TestParquetOperator
     }
 
     private static final TypeBinding BIGINT = new TestingTypeBinding(new TypeIdentity("testing:bigint"), long.class);
+    private static final TypeBinding VARCHAR = new TestingTypeBinding(new TypeIdentity("testing:varchar"), byte[].class);
     private static final ParquetScanBatchPolicy LEGACY_PARQUET_SCAN_BATCH_POLICY = new ParquetScanBatchPolicy(512);
     private static final ParquetPageNavigationPolicy GENERIC_PAGE_NAVIGATION =
             new ParquetPageNavigationPolicy(false, 0, 101, Integer.MAX_VALUE, false, 0, Integer.MAX_VALUE, false);
@@ -320,6 +321,32 @@ public class TestParquetOperator
             assertThat(metrics.completedBytes().orElseThrow()).isPositive();
             assertThat(metrics.completedPositions()).hasValue(3);
             assertThat(source.poll()).isSameAs(SourcePoll.Finished.FINISHED);
+        }
+    }
+
+    @Test
+    void testNitroParquetSourceCarriesPhysicalNullFreeProofIntoNullableSchema()
+            throws IOException
+    {
+        List<BinaryParquetRow> rows = new ArrayList<>();
+        for (int position = 0; position < 1_024; position++) {
+            rows.add(new BinaryParquetRow("name-" + (position & 3), bytes(1 + (position & 1), 2)));
+        }
+        java.nio.file.Path file = writeBinaryParquetFile("nitro-optional-binary-null-proof.parquet", true, rows);
+        assertDictionaryEncoding(file, "payload");
+        Schema schema = new Schema(List.of(new Field("payload", VARCHAR, true)));
+
+        try (AllocationResources allocationResources = AllocationResources.createDefault();
+                Allocator allocator = new Allocator(allocationResources);
+                NitroParquetBatchSource source = new NitroParquetBatchSource(
+                        NitroParquetScanResources.createDefault(),
+                        allocator,
+                        List.of(file),
+                        schema);
+                var batch = ((SourcePoll.Ready) source.poll()).batch()) {
+            assertThat(batch.column(0).borrow(Stream.VALUES)).isInstanceOf(DictionaryVector.class);
+            BooleanVector nulls = (BooleanVector) batch.column(0).borrow(Stream.NULLS);
+            assertThat(nulls.isAllFalse()).isTrue();
         }
     }
 
@@ -2344,6 +2371,8 @@ public class TestParquetOperator
                 boolean[] optionalNulls = new boolean[batchSize];
                 org.weakref.nitro.data.Vector requiredValues = required.readBinary(allocator, context, null, batchSize);
                 org.weakref.nitro.data.Vector optionalValues = optional.readBinary(allocator, context, optionalNulls, batchSize);
+                assertThat(required.lastReadNullsProvenAbsent()).isTrue();
+                assertThat(optional.lastReadNullsProvenAbsent()).isFalse();
 
                 try {
                     BinaryVector requiredDictionary = binaryValues(requiredValues);

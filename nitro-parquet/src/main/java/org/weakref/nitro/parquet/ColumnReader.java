@@ -211,6 +211,7 @@ public final class ColumnReader
     // uses pageDictIds because it needs random positions within a page.
     private boolean pageBinaryDictionaryStreaming;
     private boolean pageBinaryDictionaryNullFree;
+    private boolean lastReadNullsProvenAbsent;
     // The chunk dictionary materialized as a BinaryVector, cached by generation so a DictionaryVector can wrap a
     // stable instance across batches and a flat fallback can expand ids of an earlier generation after a chunk change.
     private final java.util.HashMap<Integer, org.weakref.nitro.data.BinaryVector> dictionaryVectorCache = new java.util.HashMap<>();
@@ -660,6 +661,12 @@ public final class ColumnReader
     public boolean optional()
     {
         return optional;
+    }
+
+    /** Whether the preceding value read proved, while decoding, that its output null vector contains no nulls. */
+    public boolean lastReadNullsProvenAbsent()
+    {
+        return lastReadNullsProvenAbsent;
     }
 
     /** Enables direct null-free fixed-width page materialization for an execution-admitted scan group. */
@@ -2027,6 +2034,7 @@ public final class ColumnReader
      */
     private org.weakref.nitro.data.Vector readBinaryDirect(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
     {
+        boolean nullsProvenAbsent = true;
         boolean dictionaryEligible = materializationPolicy.binaryDictionary();
         boolean directOwnedCandidate = materializationPolicy.ownedDictionaryIds() &&
                 materializationPolicy.directOwnedDictionaryIds() &&
@@ -2069,6 +2077,7 @@ public final class ColumnReader
             int n = Math.min(pageValueCount - pageCursor, count - produced);
             boolean pageIsDictionary = pageBinaryDeferred;
             boolean streamingDictionary = pageBinaryDictionaryStreaming;
+            nullsProvenAbsent &= !optional || (streamingDictionary && pageBinaryDictionaryNullFree);
             if (streamingDictionary) {
                 readStreamingBinaryDictionaryIds(batchIds, produced, n, nullsOut);
             }
@@ -2155,23 +2164,28 @@ public final class ColumnReader
                 allocator.release(allocationContext, result);
             }
             if (stagedOwnedIds != null) {
+                lastReadNullsProvenAbsent = nullsProvenAbsent;
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(stagedOwnedIds, count, escapedDictionary(batchGeneration));
             }
             if (materializationPolicy.ownedDictionaryIds()) {
                 org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(batchIds, 0, ids.values(), 0, count);
+                lastReadNullsProvenAbsent = nullsProvenAbsent;
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }
+            lastReadNullsProvenAbsent = nullsProvenAbsent;
             return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(batchIds, count, escapedDictionary(batchGeneration));
         }
         if (stagedOwnedIds != null) {
             allocator.release(allocationContext, stagedOwnedIds);
         }
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
         return result;
     }
 
     private org.weakref.nitro.data.Vector readBinaryInternal(Allocator allocator, Allocator.Context allocationContext, boolean[] nullsOut, int count)
     {
+        boolean nullsProvenAbsent = true;
         if (binaryOutOffsets.length < count + 1) {
             binaryOutOffsets = replaceInts(binaryOutOffsets, count + 1);
         }
@@ -2191,6 +2205,7 @@ public final class ColumnReader
             int n = Math.min(pageValueCount - pageCursor, count - produced);
             boolean pageIsDictionary = pageBinaryDeferred;
             boolean streamingDictionary = pageBinaryDictionaryStreaming;
+            nullsProvenAbsent &= !optional || (streamingDictionary && pageBinaryDictionaryNullFree);
             if (streamingDictionary) {
                 readStreamingBinaryDictionaryIds(binaryBatchIds, produced, n, nullsOut);
             }
@@ -2222,8 +2237,10 @@ public final class ColumnReader
             if (materializationPolicy.ownedDictionaryIds() && allocator != null) {
                 org.weakref.nitro.data.I32Vector ids = org.weakref.nitro.data.I32Vector.allocate(allocator, allocationContext, count);
                 System.arraycopy(binaryBatchIds, 0, ids.values(), 0, count);
+                lastReadNullsProvenAbsent = nullsProvenAbsent;
                 return org.weakref.nitro.data.DictionaryVector.wrapOwnedIds(ids, count, escapedDictionary(batchGeneration));
             }
+            lastReadNullsProvenAbsent = nullsProvenAbsent;
             return org.weakref.nitro.data.DictionaryVector.ofTrustedIds(binaryBatchIds, count, escapedDictionary(batchGeneration));
         }
         org.weakref.nitro.data.BinaryVector result;
@@ -2236,6 +2253,7 @@ public final class ColumnReader
             System.arraycopy(binaryOutData, 0, result.data(), 0, dataLength);
         }
         result.addTraits(java.util.Set.of(org.weakref.nitro.data.Utf8Traits.UTF8_STRING));
+        lastReadNullsProvenAbsent = nullsProvenAbsent;
         return result;
     }
 

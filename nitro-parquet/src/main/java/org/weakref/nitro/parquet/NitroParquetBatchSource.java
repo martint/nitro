@@ -1090,7 +1090,11 @@ public final class NitroParquetBatchSource
                     yield reader.readNumeric(allocator, allocationContext, nulls, count, false);
                 }
                 case BINARY -> {
-                    yield reader.readBinary(allocator, allocationContext, nulls, count);
+                    Vector vector = reader.readBinary(allocator, allocationContext, nulls, count);
+                    if (nullVector != null && reader.lastReadNullsProvenAbsent()) {
+                        nullVector.declareAllFalse();
+                    }
+                    yield vector;
                 }
             };
             recordFullDecode(c, count);
@@ -1307,6 +1311,9 @@ public final class NitroParquetBatchSource
         // a binary column is therefore always read before constrain or never (filter columns are numeric).
         if (!skip) {
             currentValues[column] = decodeFullColumn(column, reader, nulls, count);
+            if (nullVector != null && reader.kind() == ColumnReader.Kind.BINARY && reader.lastReadNullsProvenAbsent()) {
+                nullVector.declareAllFalse();
+            }
             currentNulls[column] = nullVector;
             recordFullDecode(column, count);
             recordPublished(column, count);
