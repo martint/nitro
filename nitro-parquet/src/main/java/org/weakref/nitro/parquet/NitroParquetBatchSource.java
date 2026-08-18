@@ -2301,7 +2301,7 @@ public final class NitroParquetBatchSource
         }
         adaptiveDecided = true;
         double selectedFraction = (double) adaptiveSelectedRows / adaptiveObservedRows;
-        if (selectedFraction <= batchPolicy.adaptiveMaximumSelectedFraction()) {
+        if (batchPolicy.adaptiveGrowth().admits(selectedFraction, batchPolicy.adaptiveSelectedFractionThreshold())) {
             int outputVectors = readers.length;
             for (boolean columnNullable : nullable) {
                 if (columnNullable) {

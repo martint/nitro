@@ -23,9 +23,24 @@ public record ParquetScanBatchPolicy(
         int initialRows,
         int maxRows,
         long adaptiveObservationRows,
-        double adaptiveMaximumSelectedFraction,
+        AdaptiveGrowth adaptiveGrowth,
+        double adaptiveSelectedFractionThreshold,
         long adaptiveMaximumVectorCells)
 {
+    public enum AdaptiveGrowth
+    {
+        SPARSE,
+        DENSE;
+
+        boolean admits(double selectedFraction, double threshold)
+        {
+            return switch (this) {
+                case SPARSE -> selectedFraction <= threshold;
+                case DENSE -> selectedFraction >= threshold;
+            };
+        }
+    }
+
     public ParquetScanBatchPolicy
     {
         if (initialRows <= 0) {
@@ -37,8 +52,11 @@ public record ParquetScanBatchPolicy(
         if (adaptiveObservationRows < 0) {
             throw new IllegalArgumentException("adaptiveObservationRows is negative");
         }
-        if (adaptiveMaximumSelectedFraction < 0 || adaptiveMaximumSelectedFraction > 1) {
-            throw new IllegalArgumentException("adaptiveMaximumSelectedFraction is outside [0, 1]");
+        if (adaptiveGrowth == null) {
+            throw new IllegalArgumentException("adaptiveGrowth is null");
+        }
+        if (adaptiveSelectedFractionThreshold < 0 || adaptiveSelectedFractionThreshold > 1) {
+            throw new IllegalArgumentException("adaptiveSelectedFractionThreshold is outside [0, 1]");
         }
         if (adaptiveMaximumVectorCells <= 0) {
             throw new IllegalArgumentException("adaptiveMaximumVectorCells must be positive");
@@ -47,7 +65,7 @@ public record ParquetScanBatchPolicy(
 
     public ParquetScanBatchPolicy(int maxRows)
     {
-        this(maxRows, maxRows, 0, 0, Long.MAX_VALUE);
+        this(maxRows, maxRows, 0, AdaptiveGrowth.SPARSE, 0, Long.MAX_VALUE);
     }
 
     public ParquetScanBatchPolicy(
@@ -56,7 +74,17 @@ public record ParquetScanBatchPolicy(
             long adaptiveObservationRows,
             double adaptiveMaximumSelectedFraction)
     {
-        this(initialRows, maxRows, adaptiveObservationRows, adaptiveMaximumSelectedFraction, Long.MAX_VALUE);
+        this(initialRows, maxRows, adaptiveObservationRows, AdaptiveGrowth.SPARSE, adaptiveMaximumSelectedFraction, Long.MAX_VALUE);
+    }
+
+    public ParquetScanBatchPolicy(
+            int initialRows,
+            int maxRows,
+            long adaptiveObservationRows,
+            double adaptiveMaximumSelectedFraction,
+            long adaptiveMaximumVectorCells)
+    {
+        this(initialRows, maxRows, adaptiveObservationRows, AdaptiveGrowth.SPARSE, adaptiveMaximumSelectedFraction, adaptiveMaximumVectorCells);
     }
 
     public static ParquetScanBatchPolicy defaults()
@@ -72,7 +100,16 @@ public record ParquetScanBatchPolicy(
      */
     public static ParquetScanBatchPolicy adaptiveHostBoundaryDefaults()
     {
-        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, 0.25, 1_000_000);
+        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, AdaptiveGrowth.SPARSE, 0.25, 1_000_000);
+    }
+
+    /**
+     * Grows dense batches that remain inside a Nitro pipeline while retaining smaller encoded-domain-friendly
+     * batches as soon as downstream evaluation narrows the selection.
+     */
+    public static ParquetScanBatchPolicy adaptiveInternalPipelineDefaults()
+    {
+        return new ParquetScanBatchPolicy(10_000, 40_000, 20_000, AdaptiveGrowth.DENSE, 1.0, 1_000_000);
     }
 
     public static ParquetScanBatchPolicy fromSystemProperties()
