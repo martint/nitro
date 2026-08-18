@@ -79,7 +79,8 @@ public final class OperatorResources
         this.filter = new FilterOperatorResources(
                 codeGeneration.projectionMask(),
                 project.evaluationPolicy(),
-                requireNonNull(filterPolicy, "filterPolicy is null"));
+                requireNonNull(filterPolicy, "filterPolicy is null"),
+                requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null"));
         this.fullJoinPolicy = requireNonNull(fullJoinPolicy, "fullJoinPolicy is null");
         this.groupIdPolicy = requireNonNull(groupIdPolicy, "groupIdPolicy is null");
         this.aggregation = requireNonNull(aggregation, "aggregation is null");
@@ -87,7 +88,7 @@ public final class OperatorResources
         this.joinBufferPolicy = requireNonNull(joinBufferPolicy, "joinBufferPolicy is null");
         this.nestedLoopJoinPolicy = requireNonNull(nestedLoopJoinPolicy, "nestedLoopJoinPolicy is null");
         this.semiJoinPolicy = requireNonNull(semiJoinPolicy, "semiJoinPolicy is null");
-        this.dynamicFilterPolicy = requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
+        this.dynamicFilterPolicy = dynamicFilterPolicy;
         this.hashJoin = requireNonNull(hashJoin, "hashJoin is null");
         this.genericJoinIndexes = new GenericJoinIndexFactory(
                 codeGeneration,

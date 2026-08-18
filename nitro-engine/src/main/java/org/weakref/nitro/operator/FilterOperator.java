@@ -13,6 +13,7 @@
  */
 package org.weakref.nitro.operator;
 
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.weakref.nitro.core.execution.ExecutionDiagnostics;
 import org.weakref.nitro.core.function.mask.StaticLongEqualityProvider;
 import org.weakref.nitro.core.type.Schema;
@@ -169,6 +170,14 @@ public class FilterOperator
                             source.pushStaticFilter(candidate.filter()))));
         }
         if (policy.pushStaticLongEquality()) {
+            staticLongEqualityDomainCandidates(
+                    evaluationPlan,
+                    predicateMask,
+                    primitiveRegistry,
+                    resources.dynamicFilterPolicy()).forEach(candidate ->
+                    pushdowns.add(new StaticPredicatePushdown(
+                            candidate.terms(),
+                            source.pushStaticFilter(candidate.filter()))));
             staticLongEqualityCandidates(evaluationPlan, predicateMask, primitiveRegistry).forEach(candidate ->
                     pushdowns.add(new StaticPredicatePushdown(
                             candidate.terms(),
@@ -212,7 +221,69 @@ public class FilterOperator
                 .toList();
     }
 
+    /**
+     * Extracts each disjunction of exact long equalities over one input as one source domain. Function identity and
+     * argument order come from registry metadata; the operator only combines compatible semantic capabilities.
+     */
+    static List<DynamicFilter> staticLongEqualityDomains(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry,
+            DynamicFilterPolicy dynamicFilterPolicy)
+    {
+        return staticLongEqualityDomainCandidates(plan, predicateMask, primitiveRegistry, dynamicFilterPolicy).stream()
+                .map(StaticFilterCandidate::filter)
+                .toList();
+    }
+
+    private static List<StaticFilterCandidate> staticLongEqualityDomainCandidates(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry,
+            DynamicFilterPolicy dynamicFilterPolicy)
+    {
+        return conjunctiveTerms(predicateMask)
+                .map(term -> staticLongEqualityDomainCandidate(plan, term, primitiveRegistry, dynamicFilterPolicy).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+    }
+
+    private static Optional<StaticFilterCandidate> staticLongEqualityDomainCandidate(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry,
+            DynamicFilterPolicy dynamicFilterPolicy)
+    {
+        if (!(predicateMask instanceof org.weakref.nitro.operator.evaluator.ir.OrMask(List<MaskExpression> terms))) {
+            return Optional.empty();
+        }
+        int input = -1;
+        LongOpenHashSet values = new LongOpenHashSet(terms.size());
+        for (MaskExpression term : terms) {
+            StaticLongEquality equality = staticLongEquality(plan, term, primitiveRegistry).orElse(null);
+            if (equality == null || (input >= 0 && input != equality.input())) {
+                return Optional.empty();
+            }
+            input = equality.input();
+            values.add(equality.value());
+        }
+        return Optional.of(new StaticFilterCandidate(
+                DynamicFilter.fromValues(input, values, dynamicFilterPolicy),
+                List.of(predicateMask)));
+    }
+
     private static Optional<StaticFilterCandidate> staticLongEqualityCandidate(
+            EvaluationPlan plan,
+            MaskExpression predicateMask,
+            PrimitiveRegistry primitiveRegistry)
+    {
+        return staticLongEquality(plan, predicateMask, primitiveRegistry)
+                .map(equality -> new StaticFilterCandidate(
+                        DynamicFilter.fromRange(equality.input(), equality.value(), equality.value()),
+                        List.of(predicateMask)));
+    }
+
+    private static Optional<StaticLongEquality> staticLongEquality(
             EvaluationPlan plan,
             MaskExpression predicateMask,
             PrimitiveRegistry primitiveRegistry)
@@ -232,17 +303,24 @@ public class FilterOperator
         return provider.orElseThrow()
                 .staticLongEquality(new EvaluatorFunctionCallSite(call, plan, primitiveRegistry))
                 .filter(equality -> equality.inputArgument() < call.arguments().size())
-                .flatMap(equality -> dynamicFilter(call.arguments().get(equality.inputArgument()), equality.value()))
-                .map(filter -> new StaticFilterCandidate(filter, List.of(predicateMask)));
+                .flatMap(equality -> inputIndex(call.arguments().get(equality.inputArgument()))
+                        .map(input -> new StaticLongEquality(input, equality.value())));
     }
 
-    private static Optional<DynamicFilter> dynamicFilter(Reference inputReference, long value)
+    private static Optional<Integer> inputIndex(Reference inputReference)
     {
         if (!(inputReference instanceof Reference(Input(int input), Stream stream)) || stream != Stream.VALUES) {
             return Optional.empty();
         }
-        return Optional.of(DynamicFilter.fromRange(input, value, value));
+        return Optional.of(input);
     }
+
+    private static Optional<DynamicFilter> dynamicFilter(Reference inputReference, long value)
+    {
+        return inputIndex(inputReference).map(input -> DynamicFilter.fromRange(input, value, value));
+    }
+
+    private record StaticLongEquality(int input, long value) {}
 
     private static Assignment assignment(EvaluationPlan plan, Variable output)
     {

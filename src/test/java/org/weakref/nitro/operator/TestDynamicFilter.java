@@ -30,6 +30,7 @@ import org.weakref.nitro.operator.evaluator.ir.EvaluationPlan;
 import org.weakref.nitro.operator.evaluator.ir.Input;
 import org.weakref.nitro.operator.evaluator.ir.Literal;
 import org.weakref.nitro.operator.evaluator.ir.NotMask;
+import org.weakref.nitro.operator.evaluator.ir.OrMask;
 import org.weakref.nitro.operator.evaluator.ir.Reference;
 import org.weakref.nitro.operator.evaluator.ir.ReferenceMask;
 import org.weakref.nitro.operator.evaluator.ir.Variable;
@@ -192,6 +193,72 @@ class TestDynamicFilter
         assertThat(filters.get(0).accepts(42)).isTrue();
         assertThat(filters.get(1).column()).isEqualTo(5);
         assertThat(filters.get(1).accepts(7)).isTrue();
+    }
+
+    @Test
+    void extractsStaticLongEqualityDisjunctionAsOneExactDomain()
+    {
+        Variable firstLiteral = new Variable(0);
+        Variable secondLiteral = new Variable(1);
+        Variable firstEquals = new Variable(2);
+        Variable secondEquals = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(firstLiteral, new Literal(42L), AllMask.ALL),
+                new Assignment(secondLiteral, new Literal(7L), AllMask.ALL),
+                new Assignment(firstEquals, new Call("eq", List.of(
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(firstLiteral, Stream.VALUES))), AllMask.ALL),
+                new Assignment(secondEquals, new Call("eq", List.of(
+                        new Reference(secondLiteral, Stream.VALUES),
+                        new Reference(new Input(3), Stream.VALUES))), AllMask.ALL)), List.of());
+        OrMask predicate = new OrMask(List.of(
+                new ReferenceMask(new Reference(firstEquals, Stream.VALUES)),
+                new ReferenceMask(new Reference(secondEquals, Stream.VALUES))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("eq", new EqualI64(), new EqualI64Optimization());
+
+        List<DynamicFilter> filters = FilterOperator.staticLongEqualityDomains(
+                plan,
+                predicate,
+                registry,
+                DynamicFilterPolicy.defaults());
+
+        assertThat(filters).hasSize(1);
+        DynamicFilter filter = filters.getFirst();
+        assertThat(filter.column()).isEqualTo(3);
+        assertThat(filter.size()).isEqualTo(2);
+        assertThat(filter.accepts(7)).isTrue();
+        assertThat(filter.accepts(42)).isTrue();
+        assertThat(filter.accepts(8)).isFalse();
+    }
+
+    @Test
+    void doesNotCombineStaticLongEqualitiesOverDifferentInputs()
+    {
+        Variable firstLiteral = new Variable(0);
+        Variable secondLiteral = new Variable(1);
+        Variable firstEquals = new Variable(2);
+        Variable secondEquals = new Variable(3);
+        EvaluationPlan plan = new EvaluationPlan(List.of(
+                new Assignment(firstLiteral, new Literal(42L), AllMask.ALL),
+                new Assignment(secondLiteral, new Literal(7L), AllMask.ALL),
+                new Assignment(firstEquals, new Call("eq", List.of(
+                        new Reference(new Input(3), Stream.VALUES),
+                        new Reference(firstLiteral, Stream.VALUES))), AllMask.ALL),
+                new Assignment(secondEquals, new Call("eq", List.of(
+                        new Reference(new Input(4), Stream.VALUES),
+                        new Reference(secondLiteral, Stream.VALUES))), AllMask.ALL)), List.of());
+        OrMask predicate = new OrMask(List.of(
+                new ReferenceMask(new Reference(firstEquals, Stream.VALUES)),
+                new ReferenceMask(new Reference(secondEquals, Stream.VALUES))));
+        PrimitiveRegistry registry = new PrimitiveRegistry();
+        registry.register("eq", new EqualI64(), new EqualI64Optimization());
+
+        assertThat(FilterOperator.staticLongEqualityDomains(
+                plan,
+                predicate,
+                registry,
+                DynamicFilterPolicy.defaults())).isEmpty();
     }
 
     @Test

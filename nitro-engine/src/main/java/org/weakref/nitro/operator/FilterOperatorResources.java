@@ -23,12 +23,14 @@ import static java.util.Objects.requireNonNull;
 public record FilterOperatorResources(
         ProjectionMaskCompiler projectionMaskCompiler,
         EvaluationOperatorPolicy evaluationPolicy,
-        FilterOperatorPolicy policy)
+        FilterOperatorPolicy policy,
+        DynamicFilterPolicy dynamicFilterPolicy)
 {
     public FilterOperatorResources
     {
         requireNonNull(projectionMaskCompiler, "projectionMaskCompiler is null");
         requireNonNull(evaluationPolicy, "evaluationPolicy is null");
         requireNonNull(policy, "policy is null");
+        requireNonNull(dynamicFilterPolicy, "dynamicFilterPolicy is null");
     }
 }
