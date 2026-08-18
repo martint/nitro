@@ -445,6 +445,12 @@ class TestGroupedAggregationSession
                 session.addInput(input);
             }
             assertThat(session.retainedBytes()).isLessThan(firstAggregationBytes);
+
+            // Output transfer can leave no incidental idle buffers behind. Seed the allocator pool explicitly so
+            // this assertion tests the diagnostic contract rather than depending on a particular output path.
+            Allocator.Context poolContext = new Allocator.Context("retained-bytes-pool");
+            I64Vector pooled = allocator.allocate(poolContext, I64Vector.class, 1_024, I64Vector::new);
+            allocator.release(poolContext, pooled);
             assertThat(allocator.residentBytes()).isGreaterThan(session.retainedBytes());
         }
     }

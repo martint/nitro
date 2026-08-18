@@ -75,6 +75,26 @@ class TestAllocator
     }
 
     @Test
+    void testStorageFreeWrapperOwnershipFollowsItsChildren()
+    {
+        try (EngineResources resources = EngineResources.createDefault();
+                Allocator first = new Allocator(resources, new TestingMemoryReservation());
+                Allocator second = new Allocator(resources, new TestingMemoryReservation())) {
+            Allocator.Context context = new Allocator.Context("ownership");
+            I64Vector ownedValues = first.allocate(context, I64Vector.class, 2, I64Vector::new);
+            I64Vector foreignValues = second.allocate(context, I64Vector.class, 2, I64Vector::new);
+            int[] borrowedIds = {0, 1, 0};
+
+            DictionaryVector ownedTree = first.allocateDictionarySharedIds(context, borrowedIds, borrowedIds.length, ownedValues);
+            DictionaryVector foreignTree = first.allocateDictionarySharedIds(context, borrowedIds, borrowedIds.length, foreignValues);
+
+            assertThat(ownedTree.retainedBytes()).isZero();
+            assertThat(first.ownsVectorTree(ownedTree)).isTrue();
+            assertThat(first.ownsVectorTree(foreignTree)).isFalse();
+        }
+    }
+
+    @Test
     void testSparseVariableWidthCopyIsCompactAndIndependent()
     {
         try (Allocator allocator = new Allocator(EngineResources.createDefault())) {

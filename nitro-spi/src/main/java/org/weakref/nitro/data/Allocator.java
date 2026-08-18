@@ -1241,7 +1241,7 @@ public class Allocator
         List<Vector> vectors = new java.util.ArrayList<>();
         collectVectorTree(root, visited, vectors);
         for (Vector vector : vectors) {
-            if (isSharedAllFalseBoolean(vector) || vectorLeases.containsKey(vector) || asyncVectorLeases.containsKey(vector)) {
+            if (!requiresTracking(vector) || isSharedAllFalseBoolean(vector) || vectorLeases.containsKey(vector) || asyncVectorLeases.containsKey(vector)) {
                 continue;
             }
             boolean owned = states.values().stream().anyMatch(state -> state.inUseVectors.contains(vector));
@@ -1250,6 +1250,11 @@ public class Allocator
             }
         }
         return true;
+    }
+
+    private static boolean requiresTracking(Vector vector)
+    {
+        return vector.poolFamily() != null || vector.retainedBytes() != 0 || vector instanceof DynamicRetainedBytesVector;
     }
 
     /**
@@ -1860,15 +1865,16 @@ public class Allocator
 
         public void trackVector(Vector vector, boolean reused)
         {
+            long retainedBytes = vector.retainedBytes();
             if (!borrowedVectorResident) {
-                allocator.reserveResident(vector.retainedBytes());
+                allocator.reserveResident(retainedBytes);
             }
             borrowedVectorResident = false;
-            // Only track vectors that participate in pooling. Non-pooled vectors (e.g. DictionaryVector
-            // wrapping borrowed data) can be left to GC without going through the IdentityHashMap on
-            // adoption, which avoids per-position overhead in join output materialization.
+            // Storage-free wrappers own neither reusable storage nor resident bytes. Their children remain tracked
+            // independently, so recording the wrapper in the identity map adds lifecycle work without protecting a
+            // resource. Dynamically sized vectors remain tracked even when their initial retained size is zero.
             Object family = vector.poolFamily();
-            if ((family != null || allocator.memoryReservation != null) && inUseVectors.add(vector)) {
+            if (requiresTracking(vector) && inUseVectors.add(vector)) {
                 if (family != null) {
                     int inUse = inUseVectorCounts.merge(family, 1, Integer::sum);
                     if (allocator.policy.adaptiveVectorPoolHighWater()) {
@@ -1876,9 +1882,9 @@ public class Allocator
                     }
                 }
             }
-            stats.acquire(vector.retainedBytes(), reused);
-            if (!reused && vector.retainedBytes() > 0) {
-                allocatedVectorBytesByType.merge(vector.getClass().getSimpleName(), vector.retainedBytes(), Math::addExact);
+            stats.acquire(retainedBytes, reused);
+            if (!reused && retainedBytes > 0) {
+                allocatedVectorBytesByType.merge(vector.getClass().getSimpleName(), retainedBytes, Math::addExact);
             }
             if (vector instanceof DynamicRetainedBytesVector dynamicRetainedBytesVector) {
                 dynamicRetainedBytesVector.bindRetainedBytesAccounting(allocator, context);
