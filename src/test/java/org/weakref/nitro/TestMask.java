@@ -14,6 +14,8 @@
 package org.weakref.nitro;
 
 import org.junit.jupiter.api.Test;
+import org.weakref.nitro.data.DictionaryVector;
+import org.weakref.nitro.data.I64Vector;
 import org.weakref.nitro.data.Mask;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -141,6 +143,25 @@ class TestMask
         Mask denseDomain = Mask.all(ids.length);
         denseDomain.retainDictionaryComparison(ids, new boolean[] {true, true, true, false}, null, true);
         assertThat(denseDomain).containsExactly(1, 2, 3, 5, 6);
+    }
+
+    @Test
+    void compactDictionaryComparisonRetainsAlignedDomainUntilPositionsAreRequired()
+    {
+        int[] ids = {3, 1, 2, 0, 3, 2, 1};
+        DictionaryVector dictionary = DictionaryVector.wrap(ids, ids.length, new I64Vector(new long[] {10, 20, 30, 40}));
+        Mask mask = Mask.all(ids.length);
+
+        mask.retainDictionaryComparison(ids, new boolean[] {false, true, false, true});
+
+        Mask.DictionaryDomainSelection selection = mask.dictionaryDomainSelection(dictionary);
+        assertThat(selection).isNotNull();
+        assertThat(selection.selectedDomainBits()).isEqualTo(0b1010);
+        assertThat(mask.count()).isEqualTo(4);
+        assertThat(mask.maxPosition()).isEqualTo(6);
+
+        assertThat(mask.selectedPositions()).startsWith(0, 1, 4, 6);
+        assertThat(mask.dictionaryDomainSelection(dictionary)).isNull();
     }
 
     private static void assertPrimitivePositions(Mask mask, int... expected)

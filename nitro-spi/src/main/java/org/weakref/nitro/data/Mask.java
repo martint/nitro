@@ -45,6 +45,26 @@ public class Mask
     private int[] positions;
     private int positionCount;
     private boolean excludedPositions;
+    private DictionaryDomainSelection dictionaryDomainSelection;
+
+    /**
+     * A compact, row-aligned dictionary-domain selection retained without expanding it to logical row positions.
+     * The mapping array is borrowed from the input vector and is valid for the mask's batch lifetime.
+     */
+    public record DictionaryDomainSelection(int[] ids, int length, int domainSize, long selectedDomainBits)
+    {
+        public DictionaryDomainSelection
+        {
+            requireNonNull(ids, "ids is null");
+            checkArgument(length >= 0 && length <= ids.length, "invalid mapping length");
+            checkArgument(domainSize >= 0 && domainSize <= Long.SIZE, "invalid dictionary domain size");
+        }
+
+        public boolean selects(int dictionaryId)
+        {
+            return ((selectedDomainBits >>> dictionaryId) & 1L) != 0;
+        }
+    }
 
     public static Mask all(int size)
     {
@@ -224,6 +244,14 @@ public class Mask
         if (allSelected) {
             return size - 1;
         }
+        if (dictionaryDomainSelection != null) {
+            for (int position = size - 1; position >= 0; position--) {
+                if (dictionaryDomainSelection.selects(dictionaryDomainSelection.ids()[position])) {
+                    return position;
+                }
+            }
+            throw new IllegalStateException("Non-empty dictionary selection has no selected position");
+        }
         if (excludedPositions) {
             int position = size - 1;
             for (int index = positionCount - 1; index >= 0 && positions[index] == position; index--) {
@@ -240,6 +268,7 @@ public class Mask
         if (allSelected) {
             return index;
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             int position = index;
             while (true) {
@@ -273,6 +302,7 @@ public class Mask
         allSelected = true;
         positionCount = 0;
         excludedPositions = false;
+        dictionaryDomainSelection = null;
     }
 
     public void clear(int size)
@@ -283,15 +313,18 @@ public class Mask
         allSelected = false;
         positionCount = 0;
         excludedPositions = false;
+        dictionaryDomainSelection = null;
     }
 
     public void copyFrom(Mask other)
     {
+        other.materializeSelectedPositions();
         size = other.size;
         selectedCount = other.selectedCount;
         allSelected = other.allSelected;
         positionCount = other.positionCount;
         excludedPositions = other.excludedPositions;
+        dictionaryDomainSelection = null;
         if (!allSelected) {
             ensureCapacity(positionCount);
             System.arraycopy(other.positions, 0, positions, 0, positionCount);
@@ -313,6 +346,8 @@ public class Mask
             copyFrom(other);
             return;
         }
+        materializeSelectedPositions();
+        other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
             Mask result = difference(difference(other));
             copyFrom(result);
@@ -355,6 +390,8 @@ public class Mask
             clear(size);
             return;
         }
+        materializeSelectedPositions();
+        other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
             Mask result = difference(other);
             copyFrom(result);
@@ -1007,6 +1044,10 @@ public class Mask
         if (none()) {
             return;
         }
+        if (allSelected && keep.length <= Long.SIZE) {
+            retainDictionaryDomain(ids, dictionaryKeepBits(keep), keep.length);
+            return;
+        }
         int[] buffer = positionsArray(allSelected ? size : selectedCount);
         boolean dense = allSelected;
         int iterations = dense ? size : selectedCount;
@@ -1050,6 +1091,12 @@ public class Mask
     public void retainDictionaryComparison(int[] ids, boolean[] keep, boolean[] nulls, boolean wanted)
     {
         if (none()) {
+            return;
+        }
+        if (allSelected && nulls == null && keep.length <= Long.SIZE) {
+            long keepBits = dictionaryKeepBits(keep);
+            long domainBits = keep.length == Long.SIZE ? -1L : (1L << keep.length) - 1;
+            retainDictionaryDomain(ids, wanted ? keepBits : ~keepBits & domainBits, keep.length);
             return;
         }
         int[] buffer = positionsArray(allSelected ? size : selectedCount);
@@ -1128,6 +1175,41 @@ public class Mask
         return bits;
     }
 
+    private void retainDictionaryDomain(int[] ids, long selectedDomainBits, int domainSize)
+    {
+        checkArgument(ids.length >= size, "Dictionary ids are too short for mask domain");
+        int count = 0;
+        for (int position = 0; position < size; position++) {
+            count += (int) ((selectedDomainBits >>> ids[position]) & 1L);
+        }
+        if (count == size) {
+            selectAll(size);
+            return;
+        }
+        if (count == 0) {
+            clear(size);
+            return;
+        }
+        selectedCount = count;
+        allSelected = false;
+        positionCount = 0;
+        excludedPositions = false;
+        dictionaryDomainSelection = new DictionaryDomainSelection(ids, size, domainSize, selectedDomainBits);
+    }
+
+    /**
+     * Returns the encoded selection when {@code dictionary} is aligned to the exact mapping that produced it.
+     * Otherwise returns {@code null}; callers must use ordinary logical positions.
+     */
+    public DictionaryDomainSelection dictionaryDomainSelection(DictionaryVector dictionary)
+    {
+        DictionaryDomainSelection selection = dictionaryDomainSelection;
+        if (selection == null || dictionary == null || selection.length() != dictionary.length() || selection.ids() != dictionary.ids()) {
+            return null;
+        }
+        return selection;
+    }
+
     private boolean dictionarySparseWrites(int dictionarySize, long keepBits, boolean wanted)
     {
         long domainBits = dictionarySize == Long.SIZE ? -1L : (1L << dictionarySize) - 1;
@@ -1197,6 +1279,7 @@ public class Mask
         if (allSelected) {
             return start < size && end >= 0;
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             int first = Math.max(0, start);
             int last = Math.min(size - 1, end);
@@ -1226,6 +1309,7 @@ public class Mask
         if (allSelected) {
             return "ALL(" + size + ")";
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             int[] selected = new int[selectedCount];
             int index = 0;
@@ -1245,6 +1329,7 @@ public class Mask
         if (n <= 0) {
             return none(size, filteringPolicy);
         }
+        materializeSelectedPositions();
         int[] result = new int[n];
         if (allSelected) {
             for (int index = 0; index < n; index++) {
@@ -1270,6 +1355,7 @@ public class Mask
         if (n <= 0) {
             return none(size, filteringPolicy);
         }
+        materializeSelectedPositions();
         int[] result = new int[n];
         if (allSelected) {
             for (int index = 0; index < n; index++) {
@@ -1291,6 +1377,7 @@ public class Mask
     @Override
     public PrimitiveIterator.OfInt iterator()
     {
+        materializeSelectedPositions();
         return new PrimitiveIterator.OfInt()
         {
             private int index;
@@ -1337,6 +1424,8 @@ public class Mask
         if (allSelected) {
             return other.complement(filteringPolicy);
         }
+        materializeSelectedPositions();
+        other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
             return genericDifference(other);
         }
@@ -1378,6 +1467,8 @@ public class Mask
         if (none()) {
             return other.copy(filteringPolicy);
         }
+        materializeSelectedPositions();
+        other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
             return genericUnion(other);
         }
@@ -1420,6 +1511,7 @@ public class Mask
         if (allSelected) {
             return true;
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             return Arrays.binarySearch(positions, 0, positionCount, position) < 0;
         }
@@ -1442,6 +1534,8 @@ public class Mask
         if (other.all()) {
             return false;
         }
+        materializeSelectedPositions();
+        other.materializeSelectedPositions();
         if (excludedPositions || other.excludedPositions) {
             for (int position : other) {
                 if (!contains(position)) {
@@ -1474,6 +1568,7 @@ public class Mask
         if (other.length() == 0 || none()) {
             return none(size, filteringPolicy);
         }
+        materializeSelectedPositions();
 
         int[] result = new int[selectedCount];
         int outputIndex = 0;
@@ -1513,6 +1608,7 @@ public class Mask
         if (other.length() == 0 || none()) {
             return copy();
         }
+        materializeSelectedPositions();
 
         int[] result = new int[selectedCount];
         int outputIndex = 0;
@@ -1554,6 +1650,7 @@ public class Mask
         if (none()) {
             return all(size, resultPolicy);
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             return create(size, positions, positionCount, resultPolicy);
         }
@@ -1576,6 +1673,7 @@ public class Mask
         if (allSelected) {
             return all(size, resultPolicy);
         }
+        materializeSelectedPositions();
         if (excludedPositions) {
             return new Mask(size, selectedCount, false, Arrays.copyOf(positions, positionCount), positionCount, true, resultPolicy);
         }
@@ -1652,6 +1750,23 @@ public class Mask
 
     private void materializeSelectedPositions()
     {
+        if (dictionaryDomainSelection != null) {
+            DictionaryDomainSelection selection = dictionaryDomainSelection;
+            ensureCapacity(selectedCount);
+            int outputIndex = 0;
+            for (int position = 0; position < selection.length(); position++) {
+                if (selection.selects(selection.ids()[position])) {
+                    positions[outputIndex++] = position;
+                }
+            }
+            if (outputIndex != selectedCount) {
+                throw new IllegalStateException("Dictionary selection count changed while borrowed");
+            }
+            positionCount = selectedCount;
+            excludedPositions = false;
+            dictionaryDomainSelection = null;
+            return;
+        }
         if (!excludedPositions) {
             return;
         }
@@ -1749,6 +1864,7 @@ public class Mask
      */
     public int[] positionsArrayForOverwrite(int requiredCapacity)
     {
+        materializeSelectedPositions();
         ensureCapacity(requiredCapacity);
         return positions;
     }
@@ -1776,6 +1892,7 @@ public class Mask
         this.allSelected = allSelected;
         this.positionCount = allSelected ? 0 : selectedCount;
         this.excludedPositions = false;
+        this.dictionaryDomainSelection = null;
     }
 
     void setExclusion(int size, int excludedCount)
@@ -1784,6 +1901,7 @@ public class Mask
         checkArgument(excludedCount >= 0, "excludedCount is negative");
         checkArgument(excludedCount <= size, "excludedCount exceeds size");
         checkArgument(positions.length >= excludedCount, "positions capacity is too small");
+        dictionaryDomainSelection = null;
 
         if (excludedCount == 0) {
             selectAll(size);

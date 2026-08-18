@@ -545,7 +545,8 @@ public class ProjectOperator
         private final PlanEvaluator planEvaluator;
         private final Map<Producer, Streams> evaluatedOutputBundles = new HashMap<>();
         private final Map<Producer, Streams> schemaBundles = new HashMap<>();
-        private final Mask schemaMask;
+        private final Mask schemaSourceMask;
+        private Mask schemaMask;
         private Mask mask;
         private Streams[] fusedResults;
         private boolean fusedResultsComputed;
@@ -554,10 +555,7 @@ public class ProjectOperator
         {
             this.sourceBatch = sourceBatch;
             this.mask = sourceBatch.borrowMask();
-            this.schemaMask = switch (this.mask.count()) {
-                case 0 -> this.mask;
-                default -> allocator.allocateRangeMask(allocationContext, this.mask.position(0), 1);
-            };
+            this.schemaSourceMask = this.mask;
             this.planEvaluator = reusablePlanEvaluator != null
                     ? reusablePlanEvaluator
                     : newPlanEvaluator((reference, currentMask) -> switch (reference.producer()) {
@@ -647,6 +645,11 @@ public class ProjectOperator
 
         private Mask schemaMask()
         {
+            if (schemaMask == null) {
+                schemaMask = schemaSourceMask.none()
+                        ? schemaSourceMask
+                        : allocator.allocateRangeMask(allocationContext, schemaSourceMask.position(0), 1);
+            }
             return schemaMask;
         }
 
