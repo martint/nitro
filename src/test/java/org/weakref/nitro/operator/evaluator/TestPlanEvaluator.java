@@ -3711,6 +3711,58 @@ public class TestPlanEvaluator
     }
 
     @Test
+    void testDirectUtf8MaskCompletesDerivedValueArguments()
+    {
+        Variable start = new Variable(0);
+        Variable length = new Variable(1);
+        Variable leftPrefix = new Variable(2);
+        Variable rightPrefix = new Variable(3);
+        Variable equals = new Variable(4);
+        EvaluationPlan plan = new EvaluationPlan(
+                List.of(
+                        new Assignment(start, new Literal(1L), AllMask.ALL),
+                        new Assignment(length, new Literal(5L), AllMask.ALL),
+                        new Assignment(
+                                leftPrefix,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(0), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(
+                                rightPrefix,
+                                new Call("substring_utf8", List.of(
+                                        new Reference(new Input(1), Stream.VALUES),
+                                        new Reference(start, Stream.VALUES),
+                                        new Reference(length, Stream.VALUES))),
+                                AllMask.ALL),
+                        new Assignment(
+                                equals,
+                                new Call("eq_utf8", List.of(
+                                        new Reference(leftPrefix, Stream.VALUES),
+                                        new Reference(rightPrefix, Stream.VALUES))),
+                                AllMask.ALL)),
+                List.of());
+
+        PlanEvaluator evaluator = planEvaluator(
+                plan,
+                primitiveRegistry(),
+                inputResolver(Map.of(
+                        new Reference(new Input(0), Stream.VALUES), utf8Vector("12345-a", "54321-a", "99999-a"),
+                        new Reference(new Input(1), Stream.VALUES), utf8Vector("12345-b", "00000-b", "99999-b"))),
+                new Allocator(EngineResources.createDefault()));
+
+        // Seed a narrower cached materialization, as happens when a preceding join/filter branch requests one
+        // derived argument before the enclosing predicate is evaluated over the complete surviving mask.
+        evaluator.evaluate(new Reference(leftPrefix, Stream.VALUES), Mask.sparse(new int[] {1}, 3));
+
+        Mask result = evaluator.evaluate(
+                new NotMask(new ReferenceMask(new Reference(equals, Stream.VALUES))),
+                Mask.all(3));
+        assertThat(result).containsExactly(1);
+    }
+
+    @Test
     void testDictionaryLiteralCallIsPeeledAndRewrappedByEvaluator()
     {
         Variable literal = new Variable(0);

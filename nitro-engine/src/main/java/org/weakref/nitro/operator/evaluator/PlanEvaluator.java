@@ -1093,7 +1093,10 @@ public final class PlanEvaluator
                 continue;
             }
 
-            Streams streams = allowAvailableCompanionStreams
+            // The argument's primary stream carries the value being consumed and must cover the entire invocation
+            // mask. Only companion streams may be reused opportunistically: a derived VALUES stream cached from a
+            // narrower branch mask contains unwritten lanes and is not a valid input to a direct-mask primitive.
+            Streams streams = allowAvailableCompanionStreams && stream != argument.stream()
                     ? evaluateAvailableReference(requestedReference, mask)
                     : evaluate(requestedReference, mask);
             if (streams.has(requestedReference.stream())) {

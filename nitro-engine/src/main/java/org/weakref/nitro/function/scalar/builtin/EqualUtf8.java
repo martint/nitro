@@ -65,7 +65,7 @@ public final class EqualUtf8
     @Override
     public boolean requiresCompletedInputCompanionStreamsForMask()
     {
-        return false;
+        return true;
     }
 
     @Override

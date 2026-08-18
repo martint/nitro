@@ -32,4 +32,11 @@ class TestUtf8BinaryDispatchPolicy
         assertThat(policy.directDictionaryPath()).isTrue();
         assertThat(policy.sparseDictionaryContains()).isTrue();
     }
+
+    @Test
+    void testEqualityMaskCompletesDerivedInputBundles()
+    {
+        assertThat(new EqualUtf8(Utf8BinaryDispatchPolicy.defaults())
+                .requiresCompletedInputCompanionStreamsForMask()).isTrue();
+    }
 }
