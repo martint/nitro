@@ -1953,6 +1953,32 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSingleLongDictionaryGroupsReuseDictionaryEntries()
+    {
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        I64Vector groups = new I64Vector(8);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {0, 1, 0, 2, 1, 2, 0, 1}, 8, new I64Vector(new long[] {11, 22, 33}))},
+                new Vector[] {null},
+                Mask.all(8),
+                groups);
+
+        assertThat(state.usesSingleLongGrouping()).isTrue();
+        assertThat(state.groupCount()).isEqualTo(3);
+        assertThat(groups.values()).containsExactly(0, 1, 0, 2, 1, 2, 0, 1);
+
+        I64Vector repeated = new I64Vector(4);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(new int[] {2, 0, 1, 2}, 4, new I64Vector(new long[] {11, 22, 33}))},
+                new Vector[] {null},
+                Mask.all(4),
+                repeated);
+        assertThat(repeated.values()).containsExactly(2, 0, 1, 2);
+        assertThat(state.groupCount()).isEqualTo(3);
+        state.releaseBuffers();
+    }
+
+    @Test
     void testDictionaryValueIdsObserveInPlaceBinaryRefillGeneration()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

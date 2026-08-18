@@ -740,6 +740,13 @@ final class GroupingState
             }
         }
         reserveAdditionalGroups(mask.count() + 1L);
+        // A dictionary-encoded long key is still represented by the single-long table so grouped-key output and
+        // later flat batches share one exact state.  Resolve each dictionary entry into that table once per
+        // content generation, then make the hot row loop an id lookup instead of hashing every occurrence.
+        if (useLongGrouping && values[0] instanceof DictionaryVector dictionary) {
+            assignDictionaryLongGroups(dictionary, nulls[0], mask, result);
+            return;
+        }
         if (useLongGrouping) {
             assignLongGroups(values[0], nulls[0], mask, result);
             return;
@@ -2582,6 +2589,79 @@ final class GroupingState
                 dictionaryGenerations[dictionaryId] = generation;
             }
             result.values()[position] = dictionaryGroupsById[dictionaryId];
+        }
+    }
+
+    private void assignDictionaryLongGroups(DictionaryVector dictionary, Vector nullVector, Mask mask, I64Vector result)
+    {
+        int[] ids = dictionary.ids();
+        Vector dictionaryValues = dictionary.values();
+        VectorAccess.LongValues values = VectorAccess.longValues(dictionaryValues);
+        ensureDictionaryCacheCapacity(dictionaryValues.length());
+        int generation = currentDictionaryGeneration(dictionaryValues);
+        long[] output = result.values();
+
+        for (int position : mask) {
+            if (OperatorVectorSupport.isNull(nullVector, position)) {
+                output[position] = nullGroup();
+                continue;
+            }
+
+            int dictionaryId = ids[position];
+            if (dictionaryGenerations[dictionaryId] != generation) {
+                dictionaryGroupsById[dictionaryId] = groupForLongKey(values.value(dictionaryId));
+                dictionaryGenerations[dictionaryId] = generation;
+            }
+            output[position] = dictionaryGroupsById[dictionaryId];
+        }
+    }
+
+    private int groupForLongKey(long key)
+    {
+        if (useLongDirectGrouping) {
+            long directKey = useCompressedLongDirectGrouping ? Long.compress(key, longDirectCompressionMask) : key;
+            boolean compatible = key >= 0 &&
+                    (!useCompressedLongDirectGrouping || (key & ~longDirectCompressionMask) == longDirectConstantBits) &&
+                    directKey < longGroupIds.length;
+            if (compatible) {
+                int encodedGroup = longGroupIds[(int) directKey];
+                if (encodedGroup != 0) {
+                    return encodedGroup - 1;
+                }
+                int groupId = (int) nextGroupId++;
+                longGroupIds[(int) directKey] = groupId + 1;
+                ensureLongGroupingCapacity(groupId);
+                longKeysByGroup[groupId] = key;
+                longGroupCount++;
+                return groupId;
+            }
+            disableLongDirectGrouping();
+            longDirectGroupingDisabled = true;
+        }
+
+        int hash = hashLong(key);
+        int slot = hash & longGroupMask;
+        while (true) {
+            int encoded = longGroupIds[slot];
+            if (useIdIndexedLongGrouping ? encoded == 0 : encoded == -1) {
+                int groupId = (int) nextGroupId++;
+                if (!useIdIndexedLongGrouping) {
+                    longGroupKeys[slot] = key;
+                }
+                longGroupIds[slot] = useIdIndexedLongGrouping ? encodeIdIndexedLongGroup(hash, groupId) : groupId;
+                ensureLongGroupingCapacity(groupId);
+                longKeysByGroup[groupId] = key;
+                if (++longGroupCount >= longGroupMaxFill) {
+                    rehashLongGroupTable();
+                }
+                return groupId;
+            }
+            int groupId = useIdIndexedLongGrouping ? decodeIdIndexedLongGroup(encoded) : encoded;
+            if ((!useIdIndexedLongGrouping || encoded >>> ID_INDEXED_LONG_HASH_SHIFT == hash >>> ID_INDEXED_LONG_HASH_SHIFT) &&
+                    (useIdIndexedLongGrouping ? longKeysByGroup[groupId] : longGroupKeys[slot]) == key) {
+                return groupId;
+            }
+            slot = (slot + 1) & longGroupMask;
         }
     }
 
