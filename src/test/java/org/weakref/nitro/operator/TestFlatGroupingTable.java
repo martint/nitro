@@ -1979,6 +1979,38 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testSingleFlatDictionaryGroupsReuseEntriesAndKeepNullOutsideTable()
+    {
+        GroupingState state = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        I64Vector firstGroups = new I64Vector(7);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(
+                        new int[] {0, 1, 0, 2, 1, 2, 0},
+                        7,
+                        new F64Vector(new double[] {1.5, 2.5, 3.5}))},
+                new Vector[] {new BooleanVector(new boolean[] {false, false, false, false, true, false, false})},
+                Mask.all(7),
+                firstGroups);
+
+        assertThat(state.usesSingleLongGrouping()).isFalse();
+        assertThat(state.groupCount()).isEqualTo(4);
+        assertThat(firstGroups.values()).containsExactly(0, 1, 0, 2, 3, 2, 0);
+
+        I64Vector secondGroups = new I64Vector(5);
+        state.assignGroups(
+                new Vector[] {DictionaryVector.wrap(
+                        new int[] {0, 1, 2, 0, 1},
+                        5,
+                        new F64Vector(new double[] {3.5, 4.5, 1.5}))},
+                new Vector[] {null},
+                Mask.all(5),
+                secondGroups);
+        assertThat(secondGroups.values()).containsExactly(2, 4, 0, 2, 4);
+        assertThat(state.groupCount()).isEqualTo(5);
+        state.releaseBuffers();
+    }
+
+    @Test
     void testDictionaryValueIdsObserveInPlaceBinaryRefillGeneration()
     {
         Allocator allocator = new Allocator(EngineResources.createDefault());

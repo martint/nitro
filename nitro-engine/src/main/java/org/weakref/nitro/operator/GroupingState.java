@@ -768,6 +768,10 @@ final class GroupingState
             assignMultiLongGroups(values, nulls, mask, result);
             return;
         }
+        if (useFlatGrouping && values.length == 1 && values[0] instanceof DictionaryVector dictionary) {
+            assignFlatDictionaryGroups(dictionary, nulls[0], mask, result);
+            return;
+        }
         if (useFlatGrouping) {
             long previousGroupCount = nextGroupId;
             assignFlatGroups(values, nulls, mask, result);
@@ -2597,6 +2601,54 @@ final class GroupingState
     }
 
     /**
+     * Resolves each physical dictionary entry through the authoritative flat table once per dictionary generation,
+     * then maps logical rows through their ids. Single-key flat tables keep NULL outside the table, so their generic
+     * table-local dictionary cache cannot safely assume dense identity group ids; this owner-level path preserves
+     * that null contract while avoiding a full hash probe for every repeated logical row. The flat table is bound
+     * to the base values rather than the dictionary wrapper, so correctness never depends on dictionary identity
+     * caches or on callers reporting raw-content mutation through {@link Vector#contentGeneration()}.
+     */
+    private void assignFlatDictionaryGroups(DictionaryVector dictionary, Vector nullVector, Mask mask, I64Vector result)
+    {
+        int[] ids = dictionary.ids();
+        Vector dictionaryValues = dictionary.values();
+        ensureDictionaryCacheCapacity(dictionaryValues.length());
+        int generation = nextDictionaryGeneration();
+        Vector[] domainValues = {dictionaryValues};
+        Vector[] domainNulls = {null};
+        long[] output = result.values();
+
+        flatGroupingTable.beginBatch(domainValues, domainNulls);
+        try {
+            for (int position : mask) {
+                if (OperatorVectorSupport.isNull(nullVector, position)) {
+                    output[position] = nullGroup();
+                    continue;
+                }
+
+                int dictionaryId = ids[position];
+                if (dictionaryGenerations[dictionaryId] != generation) {
+                    long newGroupId = nextGroupId;
+                    long groupId = flatGroupingTable.assignGroup(
+                            domainValues,
+                            domainNulls,
+                            dictionaryId,
+                            newGroupId);
+                    if (groupId == newGroupId) {
+                        nextGroupId++;
+                    }
+                    dictionaryGroupsById[dictionaryId] = groupId;
+                    dictionaryGenerations[dictionaryId] = generation;
+                }
+                output[position] = dictionaryGroupsById[dictionaryId];
+            }
+        }
+        finally {
+            flatGroupingTable.endBatch();
+        }
+    }
+
+    /**
      * Counts a single dictionary key's logical occurrences and resolves each used physical value to a group once.
      * The extra domain slot represents top-level nulls.  This deliberately lives beside the grouping
      * representations: callers need not know whether the key was admitted to a primitive, flat, or object table.
@@ -2821,6 +2873,17 @@ final class GroupingState
             return ++dictionaryGeneration;
         }
         return dictionaryGeneration;
+    }
+
+    private int nextDictionaryGeneration()
+    {
+        cachedDictionaryValues = null;
+        cachedDictionaryContentGeneration = -1;
+        if (dictionaryGeneration == Integer.MAX_VALUE) {
+            Arrays.fill(dictionaryGenerations, 0);
+            dictionaryGeneration = 0;
+        }
+        return ++dictionaryGeneration;
     }
 
     public Streams groupedValues(int groupedColumnIndex, Mask mask, Streams output, Allocator allocator, Allocator.Context allocationContext)
