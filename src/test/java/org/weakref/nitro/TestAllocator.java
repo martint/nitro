@@ -638,6 +638,23 @@ class TestAllocator
     }
 
     @Test
+    void testDictionaryRetainedBytesDistinguishOwnedAndBorrowedMappings()
+    {
+        int[] ids = {0, 1, 0};
+        I64Vector values = new I64Vector(new long[] {11, 29});
+
+        assertThat(new DictionaryVector(ids, values).retainedBytes()).isEqualTo(3L * Integer.BYTES);
+        assertThat(DictionaryVector.ofTrustedIds(ids, values).retainedBytes()).isEqualTo(3L * Integer.BYTES);
+        assertThat(DictionaryVector.wrap(ids, values).retainedBytes()).isZero();
+
+        DictionaryVector nested = DictionaryVector.ofTrustedIds(new int[] {1, 0}, values);
+        assertThat(DictionaryVector.wrap(ids, nested).retainedBytes()).isEqualTo(3L * Integer.BYTES);
+
+        I32Vector ownedIds = new I32Vector(ids.clone());
+        assertThat(DictionaryVector.wrapOwnedIds(ownedIds, ids.length, values).retainedBytes()).isZero();
+    }
+
+    @Test
     void testAllocatorUsesOwnerSuppliedPolicy()
     {
         AllocatorPolicy policy = new AllocatorPolicy(

@@ -23,6 +23,7 @@ public final class DictionaryVector
 {
     private final int[] ids;
     private final I32Vector ownedIds;
+    private final boolean ownsRawIds;
     private final int length;
     private final Vector values;
     private final Object mappingIdentity;
@@ -30,7 +31,7 @@ public final class DictionaryVector
 
     public DictionaryVector(int[] ids, Vector values)
     {
-        this(ids, null, ids.length, values, true, true, null);
+        this(ids, null, ids.length, values, true, true, true, null);
     }
 
     /**
@@ -45,7 +46,7 @@ public final class DictionaryVector
 
     public static DictionaryVector ofTrustedIds(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, true, false, null);
+        return new DictionaryVector(ids, null, length, values, true, true, false, null);
     }
 
     /**
@@ -70,7 +71,7 @@ public final class DictionaryVector
      */
     public static DictionaryVector wrapNested(int[] ids, int length, Vector values)
     {
-        return new DictionaryVector(ids, null, length, values, false, false, null);
+        return new DictionaryVector(ids, null, length, values, false, false, false, null);
     }
 
     /**
@@ -84,7 +85,7 @@ public final class DictionaryVector
     public static DictionaryVector wrapOwnedIds(I32Vector ids, int length, Vector values)
     {
         checkArgument(ids != null, "ids is null");
-        return new DictionaryVector(ids.values(), ids, length, values, false, false, null);
+        return new DictionaryVector(ids.values(), ids, length, values, false, false, false, null);
     }
 
     private static DictionaryVector wrap(int[] ids, int length, Vector values, boolean copyIds)
@@ -104,18 +105,27 @@ public final class DictionaryVector
                 baseValues = nestedDictionary.values();
             }
             // composed ids are derived from already-validated id arrays, so bounds are guaranteed
-            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, false, null);
+            return new DictionaryVector(composedIds, null, composedIds.length, baseValues, false, true, false, null);
         }
         // callers of wrap are expected to supply bounds-valid ids; skip validation in the hot path
-        return new DictionaryVector(ids, null, length, values, copyIds, false, null);
+        return new DictionaryVector(ids, null, length, values, copyIds, copyIds, false, null);
     }
 
-    private DictionaryVector(int[] ids, I32Vector ownedIds, int length, Vector values, boolean copyIds, boolean validate, Object mappingIdentity)
+    private DictionaryVector(
+            int[] ids,
+            I32Vector ownedIds,
+            int length,
+            Vector values,
+            boolean copyIds,
+            boolean ownsRawIds,
+            boolean validate,
+            Object mappingIdentity)
     {
         checkArgument(length >= 0, "length is negative");
         checkArgument(length <= ids.length, "length exceeds ids capacity");
         this.ids = copyIds ? Arrays.copyOf(ids, length) : ids;
         this.ownedIds = ownedIds;
+        this.ownsRawIds = ownsRawIds;
         this.length = length;
         this.values = values;
         this.mappingIdentity = mappingIdentity == null ? this : mappingIdentity;
@@ -182,7 +192,7 @@ public final class DictionaryVector
      */
     public DictionaryVector sharedMappingView()
     {
-        return new DictionaryVector(ids, null, length, values, false, false, mappingIdentity);
+        return new DictionaryVector(ids, null, length, values, false, false, false, mappingIdentity);
     }
 
     /**
@@ -295,7 +305,7 @@ public final class DictionaryVector
     @Override
     public long retainedBytes()
     {
-        return ownedIds == null ? (long) ids.length * Integer.BYTES : 0;
+        return ownedIds == null && ownsRawIds ? (long) ids.length * Integer.BYTES : 0;
     }
 
     @Override
