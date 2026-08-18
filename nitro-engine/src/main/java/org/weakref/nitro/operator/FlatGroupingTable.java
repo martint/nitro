@@ -1603,7 +1603,9 @@ final class FlatGroupingTable
         nextRecordIndex++;
         if (identityGroupIds) {
             if (groupId != recordIndex) {
-                throw new IllegalArgumentException("Identity group id does not match record index");
+                throw new IllegalArgumentException("Identity group id does not match record index: groupId=" + groupId +
+                        ", recordIndex=" + recordIndex + ", records=" + nextRecordIndex + ", hashIndex=" + index +
+                        ", inputPosition=" + position);
             }
         }
         else {

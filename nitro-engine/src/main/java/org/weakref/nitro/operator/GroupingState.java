@@ -1505,7 +1505,8 @@ final class GroupingState
         // representation. The table is still empty, so replace it once with an immutable nullable identity layout.
         // A later NULL becomes an ordinary record and cannot introduce a logical-id hole or a steady-state mode
         // branch.
-        boolean largeBatch = mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
+        boolean largeBatch = nextGroupId == 0 &&
+                mask.count() >= compositePolicy.flatSingleKeyRecordIdentityMinBatchRows();
         FlatKeyLayout identityLayout = largeBatch
                 ? FlatKeyLayout.tryCreate(values, true, arrayPool, codeGeneration, flatKeyTablePolicy, keyTypes)
                 : null;

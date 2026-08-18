@@ -2534,6 +2534,32 @@ class TestFlatGroupingTable
     }
 
     @Test
+    void testRecordIdentityAdmissionDoesNotReplacePopulatedDictionaryTable()
+    {
+        GroupingState grouping = new GroupingState(arrayPool, codeGeneration, groupingResources, adaptiveLongGroupingPolicy, flatKeyTablePolicy);
+        DictionaryVector dictionary = new DictionaryVector(
+                new int[] {0, 1, 0, 1},
+                utf8("dictionary-a", "dictionary-b"));
+        I64Vector dictionaryGroups = new I64Vector(dictionary.length());
+        grouping.assignGroups(new Vector[] {dictionary}, new Vector[] {null}, Mask.all(dictionary.length()), dictionaryGroups);
+
+        int size = 1 << 12;
+        String[] distinctValues = new String[size];
+        for (int position = 0; position < size; position++) {
+            distinctValues[position] = "flat-key-" + position;
+        }
+        I64Vector flatGroups = new I64Vector(size);
+        grouping.assignGroups(new Vector[] {utf8(distinctValues)}, new Vector[] {null}, Mask.all(size), flatGroups);
+
+        assertThat(grouping.usesFlatSingleRecordIdentity()).isFalse();
+        assertThat(grouping.groupCount()).isEqualTo(size + 2);
+        assertThat(dictionaryGroups.values()).containsExactly(0, 1, 0, 1);
+        assertThat(flatGroups.values()[0]).isEqualTo(2);
+        assertThat(flatGroups.values()[size - 1]).isEqualTo(size + 1L);
+        grouping.releaseBuffers();
+    }
+
+    @Test
     void testNullableRecordIdentityPreservesNullOrder()
     {
         org.weakref.nitro.data.BooleanVector firstNulls = new org.weakref.nitro.data.BooleanVector(4);
