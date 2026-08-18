@@ -259,7 +259,11 @@ public class Mask
             }
             return position;
         }
-        return positions[selectedCount - 1];
+        int maximum = positions[0];
+        for (int index = 1; index < selectedCount; index++) {
+            maximum = Math.max(maximum, positions[index]);
+        }
+        return maximum;
     }
 
     public int position(int index)

@@ -35,6 +35,15 @@ class TestMask
     }
 
     @Test
+    void maxPositionPreservesUnorderedSparseIteration()
+    {
+        Mask mask = Mask.sparse(new int[] {7, 1, 4}, 9);
+
+        assertThat(mask.maxPosition()).isEqualTo(7);
+        assertPrimitivePositions(mask, 7, 1, 4);
+    }
+
+    @Test
     void denseIntegerConstantRangePreservesStrictBounds()
     {
         int[] values = new int[257];
